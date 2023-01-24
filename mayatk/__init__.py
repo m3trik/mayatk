@@ -5,6 +5,7 @@ from mayatk.mashtk import *
 from mayatk.nodetk import Node
 from mayatk.cmpttk import Cmpt
 from mayatk.edittk import Edit
+from mayatk.macrotk import Macro
 from mayatk.scripttk import Script
 from mayatk.rigtk import Rig
 from mayatk.xformtk import Xform
