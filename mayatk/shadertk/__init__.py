@@ -10,8 +10,8 @@ import inspect
 
 
 # --------------------------------------------------------------------------------------------
-from tentacle import import_submodules
-import_submodules(__name__)
+# from tentacle import import_submodules
+# import_submodules(__name__)
 
 
 

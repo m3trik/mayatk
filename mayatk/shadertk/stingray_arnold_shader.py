@@ -9,7 +9,7 @@ import pymel.core as pm
 from pythontk import File, Img, Str, Json
 from mayatk import Node, getMainWindow
 from tentacle.switchboard import Switchboard
-from tentacle.ui.widgets import rwidgets
+from tentacle.widgets import rwidgets
 
 __version__ = '0.5.3'
 
@@ -223,9 +223,10 @@ class Stingray_arnold_shader(QtCore.QObject):
 class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
 	def __init__(self, **kwargs):
+		super().__init__(**kwargs)
 		'''
 		'''
-		self.ui = self.sb.currentUi #slot classes used with the switchboard module inherit the 'sb' attribute by default.
+		self.ui = self.sb.stingray_arnold_shader #slot classes used with the switchboard module inherit the 'sb' attribute by default.
 
 		self.imageFiles = None
 
@@ -408,15 +409,13 @@ class Stingray_arnold_shader_main(Stingray_arnold_shader):
 	def __init__(self, parent=None):
 		super().__init__(parent)
 
-		if not parent:
-			self.setParent(getMainWindow())
-
 		self.sb = Switchboard(self, uiLoc='stingray_arnold_shader.ui', widgetLoc=rwidgets, slotLoc=Stingray_arnold_shader_slots)
 
-		self.ui = self.sb.stingray_arnold_shader
-		self.sb.setStyle(self.ui.widgets)
-		self.ui.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
-		self.ui.show()
+		ui = self.sb.stingray_arnold_shader
+		print('slots:', self.sb.getSlots(ui))
+		self.sb.setStyle(ui.widgets)
+		ui.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
+		ui.show()
 
 # -----------------------------------------------------------------------------
 
@@ -432,7 +431,8 @@ class Stingray_arnold_shader_main(Stingray_arnold_shader):
 
 if __name__ == "__main__":
 
-	main = Stingray_arnold_shader_main()
+	parent = getMainWindow()
+	main = Stingray_arnold_shader_main(parent)
 
 	# sys.exit(main.app.exec_()) # run app, show window, wait for input, then terminate program with a status code returned from app.
 

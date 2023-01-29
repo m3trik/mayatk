@@ -1,6 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-import pymel.core as pm
+try:
+	import pymel.core as pm
+except ImportError as error:
+	print (__file__, error)
 
 
 class Macro():
