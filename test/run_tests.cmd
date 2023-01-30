@@ -10,11 +10,11 @@ set mayapy="%programfiles%\Autodesk\Maya%version%\bin\mayapy.exe"
 rem %mayapy% -c "import maya.standalone; maya.standalone.initialize(name='python')"
 
 
-%mayapy% mayatk_test.py
-rem %mayapy% edittk_test.py
-rem %mayapy% comptk_test.py
-rem %mayapy% rigtk_test.py
-rem %mayapy% xformtk_test.py
+%mayapy% core_test.py
+rem %mayapy% edit_test.py
+rem %mayapy% comp_test.py
+rem %mayapy% rig_test.py
+rem %mayapy% xform_test.py
 
 
 PAUSE

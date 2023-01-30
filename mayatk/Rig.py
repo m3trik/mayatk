@@ -7,7 +7,7 @@ except ImportError as error:
 
 from pythontk import Str, Iter
 #from this package:
-from mayatk.nodetk import Node
+from mayatk import Node
 
 
 class Rig(object):

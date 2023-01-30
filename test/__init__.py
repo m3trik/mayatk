@@ -33,17 +33,6 @@ class Main(unittest.TestCase):
 
 
 
-# -----------------------------------------------------------------------------
-
-if __name__=='__main__':
-
-	appendPaths('O:/Cloud/Code/_scripts/tentacle', verbose=False)
-
-	from tentacle import import_submodules
-	import test
-	import_submodules('test')
-
-	unittest.main(exit=False)
 
 
 

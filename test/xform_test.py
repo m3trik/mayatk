@@ -6,7 +6,7 @@ import inspect
 
 import pymel.core as pm
 
-from tentacle.slots.maya.mayatk import *
+from mayatk import *
 import test
 
 
@@ -36,7 +36,7 @@ class Main(unittest.TestCase):
 			)
 
 
-class Xformtk_test(Main, Xformtk):
+class Xform_test(Main, Xform):
 	'''
 	'''
 	# Tear down the any previous test by creating a new scene:
@@ -169,7 +169,7 @@ class Xformtk_test(Main, Xformtk):
 			# "self.alignVertices()": None,
 		})
 
-# --------------------------------
+# -----------------------------------------------------------------------------
 
 if __name__=='__main__':
 
@@ -180,9 +180,9 @@ if __name__=='__main__':
 
 
 
-# --------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------
+# -----------------------------------------------------------------------------
 
 # """
 # def test_(self):

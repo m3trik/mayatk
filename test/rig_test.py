@@ -36,7 +36,7 @@ class Main(unittest.TestCase):
 			)
 
 
-class Rigtk_test(Main, Rigtk):
+class Rig_test(Main, Rig):
 	'''
 	'''
 	#Tear down the any previous test by creating a new scene:

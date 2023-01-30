@@ -8,7 +8,7 @@ except ImportError as error:
 from pythontk import Iter, Math
 #from this package:
 from mayatk.core import mfnMeshGenerator, viewportMessage, undo
-from mayatk.cmpttk import Cmpt
+from mayatk.Cmpt import Cmpt
 
 
 class Xform(object):

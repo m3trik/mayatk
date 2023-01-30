@@ -1,14 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
 from mayatk.core import *
-from mayatk.mashtk import *
-from mayatk.nodetk import Node
-from mayatk.cmpttk import Cmpt
-from mayatk.edittk import Edit
-from mayatk.macrotk import Macro
-from mayatk.scripttk import Script
-from mayatk.rigtk import Rig
-from mayatk.xformtk import Xform
+from mayatk.Mash import *
+from mayatk.Node import Node
+from mayatk.Cmpt import Cmpt
+from mayatk.Edit import Edit
+from mayatk.Macro import Macro
+from mayatk.Script import Script
+from mayatk.Rig import Rig
+from mayatk.Xform import Xform
 
 
 name = 'mayatk'

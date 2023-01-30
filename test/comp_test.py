@@ -37,7 +37,7 @@ class Main(unittest.TestCase):
 
 
 
-class Comptk_test(Main, Comptk):
+class Comp_test(Main, Comp):
 	'''
 	set object mode:
 		pm.selectMode(object=1)

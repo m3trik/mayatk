@@ -60,7 +60,7 @@ def wrapControl(controlName, container):
 
 	layout = QtWidgets.QVBoxLayout(container)
 	layout.setContentsMargins(0,0,0,0)
-	layoutName = Str.setCase(container.objectName()+'Layout', 'camelCase') # results in '<objectName>Layout' or 'layout' if container objectName is ''
+	layoutName = Str.setCase(container.objectName()+'Layout', 'camel') # results in '<objectName>Layout' or 'layout' if container objectName is ''
 	layout.setObjectName(layoutName)
 	pm.setParent(layoutName)
 

@@ -7,10 +7,7 @@ except ImportError as error:
 
 from pythontk import Str, Iter, areSimilar
 #from this package:
-from mayatk.core import mfnMeshGenerator, viewportMessage, undo
-from mayatk.nodetk import Node
-from mayatk.cmpttk import Cmpt
-from mayatk.xformtk import Xform
+from mayatk import Node, Cmpt, Xform, mfnMeshGenerator, viewportMessage, undo
 
 
 class Edit():
@@ -48,9 +45,9 @@ class Edit():
 
 		#get the short names from the long in order to correctly format. ex. 'NUT_' from: 'CENTER_HINGE_FEMALE_GRP|NUT_'
 		long_names = [obj.name() for obj in objects]
-		short_names = [ii if ii else i for i, ii in strtk.splitAtChars(long_names)] #split the long names at the last '|' to get the short name.
+		short_names = [ii if ii else i for i, ii in Str.splitAtChars(long_names)] #split the long names at the last '|' to get the short name.
 
-		names = strtk.findStrAndFormat(short_names, to, fltr, regEx=regEx, ignoreCase=ignoreCase, returnOldNames=True)
+		names = Str.findStrAndFormat(short_names, to, fltr, regEx=regEx, ignoreCase=ignoreCase, returnOldNames=True)
 		print ('# Rename: Found {} matches. #'.format(len(names)))
 
 		for i, (oldName, newName) in enumerate(names):
@@ -502,7 +499,7 @@ class Edit():
 			return []
 
 		elif not pm.nodeType(objects)=='mesh': #if the objects are not faces.
-			duplicates = itertk.flatten([cls.getOverlappingFaces(obj.faces) for obj in pm.ls(objects, objectsOnly=1)])
+			duplicates = Iter.flatten([cls.getOverlappingFaces(obj.faces) for obj in pm.ls(objects, objectsOnly=1)])
 			return list(duplicates)
 
 		face, *otherFaces = pm.ls(objects)

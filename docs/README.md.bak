@@ -22,6 +22,6 @@ Node.isLocator(<obj>)
 ```
 ###### You can also import a function directly.
 ```
-from mayatk.Node import isGroup
+from mayatk.nodetk import isGroup
 isGroup(<obj>)
 ```

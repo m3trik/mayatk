@@ -62,7 +62,7 @@ class Main(unittest.TestCase):
 			)
 
 
-class Mayatk_test(Main, Mayatk):
+class core_test(Main):
 	'''
 	set object mode:
 		pm.selectMode(object=1)
