@@ -1,4 +1,4 @@
-#### A collection of backend utilities for Autodesk Maya.
+### mayattk is a collection of backend utilities for Autodesk Maya.
 
 ---
 
