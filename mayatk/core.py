@@ -64,7 +64,7 @@ def wrapControl(controlName, container):
 	layout.setObjectName(layoutName)
 	pm.setParent(layoutName)
 
-	from tentacle.switchboard import Switchboard
+	from uitk.switchboard import Switchboard
 	derivedClass = Switchboard.getDerivedType(container)
 
 	ptr = MQtUtil.findControl(controlName) #get a pointer to the maya api paneLayout.

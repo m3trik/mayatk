@@ -10,7 +10,7 @@ import inspect
 
 
 # --------------------------------------------------------------------------------------------
-# from tentacle import import_submodules
+# from uitk import import_submodules
 # import_submodules(__name__)
 
 

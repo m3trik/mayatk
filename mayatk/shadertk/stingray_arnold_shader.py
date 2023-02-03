@@ -8,8 +8,8 @@ import pymel.core as pm
 
 from pythontk import File, Img, Str, Json
 from mayatk import Node, getMainWindow
-from tentacle.switchboard import Switchboard
-from tentacle.widgets import rwidgets
+from uitk.switchboard import Switchboard
+from uitk.widgets import rwidgets
 
 __version__ = '0.5.3'
 
