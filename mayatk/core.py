@@ -32,13 +32,11 @@ def getMainWindow():
 
 	app = QApplication.instance()
 	if not app:
-		print ('{} in getMainWindow\n\t# Warning: Could not find QApplication instance. #'.format(__file__))
-		return None
+		return print(f'# Warning: {__file__} in getMainWindow\n#\tCould not find QApplication instance.')
 
 	main_window = next(iter(w for w in app.topLevelWidgets() if w.objectName()=='MayaWindow'), None)
 	if not main_window:
-		print ('{} in getMainWindow\n\t# Warning: Could not find main window instance. #'.format(__file__))
-		return None
+		return print(f'# Warning: {__file__} in getMainWindow\n#\tCould not find main window instance.')
 
 	return main_window
 
@@ -114,7 +112,7 @@ def getArrayType(lst):
 	try:
 		o = Iter.makeList(lst)[0]
 	except IndexError as error:
-		# print ('{}\n# Error: getArrayType: Operation requires at least one object. #\n	{}'.format(__file__, error))
+		# print (f'# Error: {__file__} in getArrayType:\n#\tOperation requires at least one object.\n#\t{error}')
 		return ''
 
 	return 'str' if isinstance(o, str) else 'int' if isinstance(o, int) else 'obj'
@@ -162,7 +160,7 @@ def convertArrayType(lst, returnType='str', flatten=False):
 				else:
 					result[obj] = [componentNum]
 			except ValueError as error: #incompatible object type.
-				print ('{} in convertArrayType\n\t# Error: unable to convert {} {} to int. #\n\t{}'.format(__file__, obj, num, error))
+				print(f'# Error: {__file__} in convertArrayType\n#\tunable to convert {obj} {num} to int.\n#\t{error}')
 				break
 
 		objects = set(pm.ls(lst, objectsOnly=True))
