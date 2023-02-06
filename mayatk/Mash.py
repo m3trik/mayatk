@@ -17,12 +17,12 @@ def MTcreateNetwork(network, objects, networkName='MASH#', geometry='Mesh', dist
 	'''This proceedure creates a new MASH network.
 
 	:Parameters:
-		network (obj) = A mash api network instance. ie. mapi.Network()
-		objects (str)(obj)(list) = The maya objects to construct the network for.
-		networkName (str) = The network name. (default:'MASH#')
-		geometry (str) = Particle instancer or mesh instancer (Repro node). (valid: 'Mesh' (default), 'Instancer')
-		distType (str) = Distribution type. (valid: "linearNetwork", radialNetwork", "gridNetwork", "initialNetwork", "zeroNetwork")
-		hideOnCreate (bool) = Hide the original object(s) on network creation.
+		network (obj): A mash api network instance. ie. mapi.Network()
+		objects (str)(obj)(list): The maya objects to construct the network for.
+		networkName (str): The network name. (default:'MASH#')
+		geometry (str): Particle instancer or mesh instancer (Repro node). (valid: 'Mesh' (default), 'Instancer')
+		distType (str): Distribution type. (valid: "linearNetwork", radialNetwork", "gridNetwork", "initialNetwork", "zeroNetwork")
+		hideOnCreate (bool): Hide the original object(s) on network creation.
 
 	:Return:
 		The names of the created Waiter, Instancer and Distribute Node.
@@ -115,16 +115,16 @@ def MTbakeInstancer(network, instancer, bakeTranslate=True, bakeRotation=True, b
 	'''Takes an instancer, and coverts all the particles being fed into it to actual geometry.
 
 	:Parameters:
-		network (obj) = A mash api network instance. ie. mapi.Network()
-		instancer (str)(obj) = Instancer node or name of an instancer node.
-		bakeAnimation (bool) = True=bake entire playback range, False=bake current frame.
-		bakeTranslate (bool) = Bake translation.
-		bakeRotation (bool) = Bake rotation.
-		bakeScale (bool) = Bake scale.
-		bakeVisibility (bool) = Bake visibility.
-		bakeToInstances (bool) = Bake to instances rather than separate objects.
-		upstreamNodes (bool) = The upstream nodes leading upto the selected nodes (along with their connections) are also duplicated.
-		_getMObjectFromName (str) = Node name. Returns a maya.OpenMaya.MObject from the given instancer node name. Internal use only.
+		network (obj): A mash api network instance. ie. mapi.Network()
+		instancer (str)(obj): Instancer node or name of an instancer node.
+		bakeAnimation (bool): True=bake entire playback range, False=bake current frame.
+		bakeTranslate (bool): Bake translation.
+		bakeRotation (bool): Bake rotation.
+		bakeScale (bool): Bake scale.
+		bakeVisibility (bool): Bake visibility.
+		bakeToInstances (bool): Bake to instances rather than separate objects.
+		upstreamNodes (bool): The upstream nodes leading upto the selected nodes (along with their connections) are also duplicated.
+		_getMObjectFromName (str): Node name. Returns a maya.OpenMaya.MObject from the given instancer node name. Internal use only.
 
 	:Return:
 		(list) Baked objects.
@@ -292,10 +292,39 @@ except NameError as error: #import mapi failed.
 
 
 
-# print (__name__) #module name
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
+
+	:Parameters:
+		attr (str): The name of the attribute to search for.
+	
+	:Return:
+		(obj) The found attribute.
+
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
+
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
+
+# --------------------------------------------------------------------------------------------
+
+if __name__=='__main__':
+	pass
+
 # --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
 
 
-# deprecated: -----------------------------------
+
+# --------------------------------------------------------------------------------------------
+# deprecated:
+# --------------------------------------------------------------------------------------------

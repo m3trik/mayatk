@@ -6,12 +6,11 @@ import inspect
 
 import pymel.core as pm
 
-from mayatk import *
-import test
+from mayatk import Xform
 
 
-sfr = pm.melGlobals['cmdScrollFieldReporter']
-pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
+# sfr = pm.melGlobals['cmdScrollFieldReporter']
+# pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
 
 
 class Main(unittest.TestCase):
@@ -32,8 +31,9 @@ class Main(unittest.TestCase):
 			self.assertEqual(
 				result, 
 				expected_result, 
-				"\n\nError: {}\n  Call:     {}\n  Expected: {} {}\n  Returned: {} {}".format(path, expression.replace('self.', '', 1), type(expected_result), expected_result, type(result), result)
+				f"\n\n# Error: {path}\n#\tCall: {expression.replace('self.', '', 1)}\n#\tExpected: {type(expected_result)} {expected_result}\n#\tReturned: {type(result)} {result}"
 			)
+
 
 
 class Xform_test(Main, Xform):

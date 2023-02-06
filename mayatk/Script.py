@@ -19,7 +19,7 @@ class Script():
 		'''Get global MEL variables.
 
 		:Parameters:
-			keyword (str) = search string.
+			keyword (str): search string.
 
 		:Return:
 			(list)
@@ -38,15 +38,15 @@ class Script():
 		'''Convert a string representing mel code into a string representing python code.
 
 		:Parameters:
-			mel (str) = string containing mel code.
-			excludeFromInput (list) (list) = of strings specifying series of chars to strip from the Input.
-			excludeFromOutput (list) (list) = of strings specifying series of chars to strip from the Output.
+			mel (str): string containing mel code.
+			excludeFromInput (list) (list): of strings specifying series of chars to strip from the Input.
+			excludeFromOutput (list) (list): of strings specifying series of chars to strip from the Output.
 		
 		mel2PyStr Parameters:
-			currentModule (str) = The name of the module that the hypothetical code is executing in. In most cases you will leave it at its default, the __main__ namespace.
-			pymelNamespace (str) = The namespace into which pymel will be imported. the default is '', which means from pymel.all import *
-			forceCompatibility (bool) = If True, the translator will attempt to use non-standard python types in order to produce python code which more exactly reproduces the behavior of the original mel file, but which will produce 'uglier' code. Use this option if you wish to produce the most reliable code without any manual cleanup.
-			verbosity (int) = Set to non-zero for a lot of feedback.
+			currentModule (str): The name of the module that the hypothetical code is executing in. In most cases you will leave it at its default, the __main__ namespace.
+			pymelNamespace (str): The namespace into which pymel will be imported. the default is '', which means from pymel.all import *
+			forceCompatibility (bool): If True, the translator will attempt to use non-standard python types in order to produce python code which more exactly reproduces the behavior of the original mel file, but which will produce 'uglier' code. Use this option if you wish to produce the most reliable code without any manual cleanup.
+			verbosity (int): Set to non-zero for a lot of feedback.
 		'''
 		from pymel.tools import mel2py
 		import re
@@ -69,7 +69,7 @@ class Script():
 
 	@staticmethod
 	def commandHelp(command): #mel command help
-		#:Parameters: command (str) = mel command
+		#:Parameters: command (str): mel command
 		command = ('help ' + command)
 		modtext = (pm.mel.eval(command))
 		outputscrollField (modtext, "command help", 1.0, 1.0) #text, window_title, width, height
@@ -77,7 +77,7 @@ class Script():
 
 	@staticmethod
 	def keywordSearch (keyword): #keyword command search
-		#:Parameters: keyword (str) = 
+		#:Parameters: keyword (str): 
 		keyword = ('help -list' + '"*' + keyword + '*"')
 		array = sorted(pm.mel.eval(keyword))
 		outputTextField(array, "keyword search")
@@ -165,24 +165,45 @@ class Script():
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr):
-	'''Attempt to get a class attribute.
 
+
+
+
+
+
+
+
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
+
+	:Parameters:
+		attr (str): The name of the attribute to search for.
+	
 	:Return:
-		(obj)
-	'''
-	try:
-		return getattr(Script, attr)
-	except AttributeError as error:
-		raise AttributeError(f'{__file__} in __getattr__\n\t{error} ({type(attr).__name__})')
+		(obj) The found attribute.
 
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
 
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
 
+# --------------------------------------------------------------------------------------------
 
-# print (__package__, __file__)
+if __name__=='__main__':
+	pass
+
 # --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
+
 
 
 # --------------------------------------------------------------------------------------------

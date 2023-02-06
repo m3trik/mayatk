@@ -383,8 +383,8 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def callback(self, string, progress=None, clear=False):
 		'''
 		:Parameters:
-			string (str) = The text to output to a textEdit widget.
-			progress (int)(list) = The progress amount to register with the progressBar.
+			string (str): The text to output to a textEdit widget.
+			progress (int)(list): The progress amount to register with the progressBar.
 				Can be given as an int or a tuple as: (progress, total_len) 
 		'''
 		if clear:

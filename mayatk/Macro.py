@@ -9,7 +9,7 @@ except ImportError as error:
 class Macro():
 	"""Assign macro functions to hotkeys.
 
-	ex. call:
+	:Example:
 	class MSlots(Macro):
 		'''A class that inherits from `Macro` and holds any macro functions.
 		'''
@@ -43,7 +43,7 @@ class Macro():
 		'''Extends setMacro to accept a dictionary.
 
 		:Parameters:
-			macros (dict) = Command names as keys, with dict values containing any keyword args for 'setMacro'. 
+			macros (dict): Command names as keys, with dict values containing any keyword args for 'setMacro'. 
 			ex. {'m_group': {'k':'ctl+g', 'cat':'Edit'}}
 		'''
 		for name, kwargs in macros.items():
@@ -55,10 +55,10 @@ class Macro():
 		'''Sets a default runtime command with a keyboard shortcut.
 
 		:Parameters:
-			name (str) = The command name you provide must be unique. (alphanumeric characters, or underscores)
-			cat (str) = catagory - Category for the command.
-			ann (str) = annotation - Description of the command.
-			k (str) = keyShortcut - Specify what key is being set.
+			name (str): The command name you provide must be unique. (alphanumeric characters, or underscores)
+			cat (str): catagory - Category for the command.
+			ann (str): annotation - Description of the command.
+			k (str): keyShortcut - Specify what key is being set.
 						key modifier values are set by adding a '+' between chars. ie. 'sht+z'.
 						modifiers:
 							alt, ctl, sht
@@ -69,7 +69,7 @@ class Macro():
 							F1 to F12
 							Tab (Will only work when modifiers are specified)
 							Delete, Backspace (Will only work when modifiers are specified)
-			default (bool) = Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
+			default (bool): Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
 			deleteExisting = Delete any existing (non-default) runtime commands of the given name.
 		'''
 		command = f"if 'm_slots' not in globals(): from {cls.__module__} import {cls.__name__}; global m_slots; m_slots = {cls.__name__}();\nm_slots.{name}();"
@@ -119,7 +119,7 @@ class Macro():
 		# print(name, char, ctl, alt, sht)
 		pm.hotkey(keyShortcut=key, name=nameCommand, ctl=ctl, alt=alt, sht=sht) #set only the key press.
 
-# -----------------------------------------------
+# --------------------------------------------------------------------------------------------
 
 
 
@@ -129,9 +129,36 @@ class Macro():
 
 
 
-# -----------------------------------------------
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
+
+	:Parameters:
+		attr (str): The name of the attribute to search for.
+	
+	:Return:
+		(obj) The found attribute.
+
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
+
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
+
+# --------------------------------------------------------------------------------------------
+
+if __name__=='__main__':
+	pass
+
+# --------------------------------------------------------------------------------------------
 # Notes
-# -----------------------------------------------
+# --------------------------------------------------------------------------------------------
 
 '''
 #create wrapper
@@ -253,8 +280,9 @@ pm.runTimeCommand(
 '''
 
 
-
-# Depricated: -------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------
+# deprecated:
+# --------------------------------------------------------------------------------------------
 
 
 ## command = self.formatSource(name, removeTabs=1) #remove 1 tab space.
@@ -265,7 +293,7 @@ pm.runTimeCommand(
 
 # 		:Parameters:
 # 			cmd = module, class, method, function, traceback, frame, or code object.
-# 			removeTabs (int) = remove x instances of '\t' from each line.
+# 			removeTabs (int): remove x instances of '\t' from each line.
 
 # 		:Return:
 # 			A Multi-line string.

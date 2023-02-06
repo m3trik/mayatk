@@ -8,8 +8,8 @@ import pymel.core as pm
 
 from pythontk import File, Img, Str, Json
 from mayatk import Node, getMainWindow
-from tentacle.switchboard import Switchboard
-from tentacle.widgets import rwidgets
+from uitk.switchboard import Switchboard
+from uitk.widgets import rwidgets
 
 __version__ = '0.5.3'
 
@@ -383,7 +383,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def callback(self, string, progress=None, clear=False):
 		'''
 		:Parameters:
-			string (str) = The text to output to a textEdit widget.
+			string (str): The text to output to a textEdit widget.
 			progress (int)(list) = The progress amount to register with the progressBar.
 				Can be given as an int or a tuple as: (progress, total_len) 
 		'''

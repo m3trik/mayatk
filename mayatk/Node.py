@@ -16,7 +16,7 @@ class Node():
 		'''Check if the node exists in the current scene.
 
 		:Parameters:
-			search (str) = The search parameters. valid: 'name', 'type', 'exactType'
+			search (str): The search parameters. valid: 'name', 'type', 'exactType'
 
 		:Return:
 			(bool)
@@ -34,7 +34,7 @@ class Node():
 		'''Get the object type as a string.
 
 		:Parameters:
-			objects (str)(obj)(list) = The object(s) to query.
+			objects (str)(obj)(list): The object(s) to query.
 
 		:Return:
 			(str)(list) The node type. A list is always returned when 'objects' is given as a list.
@@ -77,7 +77,7 @@ class Node():
 		A group is defined as a transform with children.
 
 		:Parameters:
-			nodes (str)(obj)(list) = The object(s) to query.
+			nodes (str)(obj)(list): The object(s) to query.
 
 		:Return:
 			(bool)(list) A list is always returned when 'objects' is given as a list.
@@ -101,7 +101,7 @@ class Node():
 		'''Get all groups in the scene.
 
 		:Parameters:
-			empty (bool) = Return only empty groups.
+			empty (bool): Return only empty groups.
 
 		:Return:
 			(bool)
@@ -150,10 +150,10 @@ class Node():
 		'''Get transform node(s) or node attributes.
 
 		:Parameters:
-			nodes (str)(obj)(list) = A relative of a transform Node.
-			returnType (str) = The desired returned object type. Not valid with the `attributes` parameter.
+			nodes (str)(obj)(list): A relative of a transform Node.
+			returnType (str): The desired returned object type. Not valid with the `attributes` parameter.
 				(valid: 'str'(default), 'obj').
-			attributes (bool) = Return the attributes of the node, rather then the node itself.
+			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
@@ -190,10 +190,10 @@ class Node():
 		'''Get shape node(s) or node attributes.
 
 		:Parameters:
-			nodes (str)(obj)(list) = A relative of a shape Node.
-			returnType (str) = The desired returned object type. 
+			nodes (str)(obj)(list): A relative of a shape Node.
+			returnType (str): The desired returned object type. 
 				(valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
-			attributes (bool) = Return the attributes of the node, rather then the node itself.
+			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
@@ -230,10 +230,10 @@ class Node():
 		'''Get history node(s) or node attributes.
 
 		:Parameters:
-			nodes (str)(obj)(list) = A relative of a history Node.
-			returnType (str) = The desired returned object type. 
+			nodes (str)(obj)(list): A relative of a history Node.
+			returnType (str): The desired returned object type. 
 				(valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
-			attributes (bool) = Return the attributes of the node, rather then the node itself.
+			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
@@ -269,19 +269,19 @@ class Node():
 		'''Procedure to create the node classified as specified by the inputs.
 
 		:Parameters:
-			nodeType (str) = The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
-			flag (str) = A flag specifying which how to classify the node created.
+			nodeType (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
+			flag (str): A flag specifying which how to classify the node created.
 				valid:	as2DTexture, as3DTexture, asEnvTexture, asShader, asLight, asUtility
-			flag2 (str) = A secondary flag used to make decisions in combination with 'asType'
+			flag2 (str): A secondary flag used to make decisions in combination with 'asType'
 				valid:	-asBump : defines a created texture as a bump
 						-asNoShadingGroup : for materials; create without a shading group
 						-asDisplacement : for anything; map the created node to a displacement material.
 						-asUtility : for anything; do whatever the $as flag says, but also classify as a utility
 						-asPostProcess : for any postprocess node
-			name (str) = The desired node name.
-			tex (str) = The path to a texture file for those nodes that support one.
-			place2dTexture (bool) = If not needed, the place2dTexture node will be deleted after creation.
-			postCommand (str) = A command entered by the user when invoking createRenderNode.
+			name (str): The desired node name.
+			tex (str): The path to a texture file for those nodes that support one.
+			place2dTexture (bool): If not needed, the place2dTexture node will be deleted after creation.
+			postCommand (str): A command entered by the user when invoking createRenderNode.
 					The command will substitute the string %node with the name of the
 					node it creates.  createRenderWindow will be closed if a command
 					is not the null string ("").
@@ -290,9 +290,9 @@ class Node():
 		:Return:
 			(obj) node
 
-		ex. call: createRenderNode('StingrayPBS')
-		ex. call: createRenderNode('file', flag='as2DTexture', tex=f, place2dTexture=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
-		ex. call: createRenderNode('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
+		:Example: createRenderNode('StingrayPBS')
+		:Example: createRenderNode('file', flag='as2DTexture', tex=f, place2dTexture=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
+		:Example: createRenderNode('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
 		'''
 		node = pm.PyNode(pm.mel.createRenderNodeCB('-'+flag, flag2, nodeType, postCommand)) # node = pm.shadingNode(typ, asTexture=True)
 
@@ -321,14 +321,14 @@ class Node():
 		'''Get the first connected node of the given type with an incoming connection to the given node.
 
 		:Parameters:
-			node (str)(obj) = A node with incoming connections.
-			typ (str) = The node type to search for. ie. 'StingrayPBS'
-			exact (bool) = Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+			node (str)(obj): A node with incoming connections.
+			typ (str): The node type to search for. ie. 'StingrayPBS'
+			exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
 		:Return:
 			(obj)(None) node if found.
 
-		ex. call: env_file_node = getIncomingNodeByType(env_node, 'file') #get the incoming file node.
+		:Example: env_file_node = getIncomingNodeByType(env_node, 'file') #get the incoming file node.
 		'''
 		nodes = pm.listConnections(node, type=typ, source=True, exactType=exact)
 		return Iter.formatReturn([pm.PyNode(n) for n in nodes])
@@ -339,14 +339,14 @@ class Node():
 		'''Get the connected node of the given type with an outgoing connection to the given node.
 
 		:Parameters:
-			node (str)(obj) = A node with outgoing connections.
-			typ (str) = The node type to search for. ie. 'file'
-			exact (bool) = Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+			node (str)(obj): A node with outgoing connections.
+			typ (str): The node type to search for. ie. 'file'
+			exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
 		:Return:
 			(list)(obj)(None) node(s)
 
-		ex. call: srSG_node = getOutgoingNodeByType(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
+		:Example: srSG_node = getOutgoingNodeByType(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
 		'''
 		nodes = pm.listConnections(node, type=typ, destination=True, exactType=exact)
 		return Iter.formatReturn([pm.PyNode(n) for n in nodes])
@@ -357,9 +357,9 @@ class Node():
 		'''Get node attributes and their corresponding values as a dict.
 
 		:Parameters:
-			node (obj) = The node to get attributes for.
-			inc (list) = Attributes to include. All other will be omitted. Exclude takes dominance over include. Meaning, if the same attribute is in both lists, it will be excluded.
-			exc (list) = Attributes to exclude from the returned dictionay. ie. ['Position','Rotation','Scale','renderable','isHidden','isFrozen','selected']
+			node (obj): The node to get attributes for.
+			inc (list): Attributes to include. All other will be omitted. Exclude takes dominance over include. Meaning, if the same attribute is in both lists, it will be excluded.
+			exc (list): Attributes to exclude from the returned dictionay. ie. ['Position','Rotation','Scale','renderable','isHidden','isFrozen','selected']
 
 		:Return:
 			(dict) {'string attribute': current value}
@@ -380,9 +380,9 @@ class Node():
 		'''Set node attribute values.
 
 		:Parameters:
-			nodes (str)(obj)(list) = The node(s) to set attributes for.
-			verbose (bool) = Print feedback messages such as errors to the console.
-			attributes (dict) = Attributes and their correponding value to set. ie. {'string attribute': value}
+			nodes (str)(obj)(list): The node(s) to set attributes for.
+			verbose (bool): Print feedback messages such as errors to the console.
+			attributes (dict): Attributes and their correponding value to set. ie. {'string attribute': value}
 
 		ex call: setAttributesMEL(node, translateY=6)
 		'''
@@ -407,7 +407,7 @@ class Node():
 			place () = 
 			file () = 
 
-		ex. call:
+		:Example:
 		Use convenience command to connect attributes which share 
 		their names for both the placement and file nodes.
 			connectAttributes('coverage', 'place2d', fileNode')
@@ -433,9 +433,9 @@ class Node():
 		'''Connect multiple node attributes at once.
 
 		:Parameters:
-			args (tuple) = Attributes as two element tuples. ie. (<connect from attribute>, <connect to attribute>)
+			args (tuple): Attributes as two element tuples. ie. (<connect from attribute>, <connect to attribute>)
 
-		ex. call: connectMultiAttr(
+		:Example: connectMultiAttr(
 			(node1.outColor, node2.aiSurfaceShader),
 			(node1.outColor, node3.baseColor),
 			(node4.outNormal, node5.normalCamera),
@@ -449,44 +449,64 @@ class Node():
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr):
-	'''Attempt to get a class attribute.
 
+
+
+
+
+
+
+
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
+
+	:Parameters:
+		attr (str): The name of the attribute to search for.
+	
 	:Return:
-		(obj)
-	'''
-	try:
-		return getattr(Node, attr)
-	except AttributeError as error:
-		raise AttributeError(f'{__file__} in __getattr__\n\t{error} ({type(attr).__name__})')
+		(obj) The found attribute.
 
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
 
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
 
+# --------------------------------------------------------------------------------------------
 
+if __name__=='__main__':
+	pass
 
-
-
-# print (__name__) #module name
 # --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
 
 
-# deprecated: -----------------------------------
+
+# --------------------------------------------------------------------------------------------
+# deprecated:
+# --------------------------------------------------------------------------------------------
 
 
 # def filterComponents(cls, frm, inc=[], exc=[]):
 # 		'''Filter the given 'frm' list for the items in 'exc'.
 
 # 		:Parameters:
-# 			frm (str)(obj)(list) = The components(s) to filter.
-# 			inc (str)(obj)(list) = The component(s) to include.
-# 			exc (str)(obj)(list) = The component(s) to exclude.
+# 			frm (str)(obj)(list): The components(s) to filter.
+# 			inc (str)(obj)(list): The component(s) to include.
+# 			exc (str)(obj)(list): The component(s) to exclude.
 # 								(exlude take precidence over include)
 # 		:Return:
 # 			(list)
 
-# 		ex. call: filterComponents('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
+# 		:Example: filterComponents('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
 # 		'''
 # 		exc = pm.ls(exc, flatten=True)
 # 		if not exc:

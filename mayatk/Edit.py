@@ -19,23 +19,23 @@ class Edit():
 		'''Rename scene objects.
 
 		:Parameters:
-			objects (str)(obj)(list) = The object(s to rename. If nothing is given, all scene objects will be renamed.
-			to (str) = Desired name: An optional asterisk modifier can be used for formatting
+			objects (str)(obj)(list): The object(s to rename. If nothing is given, all scene objects will be renamed.
+			to (str): Desired name: An optional asterisk modifier can be used for formatting
 				chars - replace all.
 				*chars* - replace only.
 				*chars - replace suffix.
 				**chars - append suffix.
 				chars* - replace prefix.
 				chars** - append prefix.
-			fltr (str) = Optionally, filter which the given objects to rename using the following: 
+			fltr (str): Optionally, filter which the given objects to rename using the following: 
 				An asterisk denotes startswith*, *endswith, *contains*, and multiple search strings can be separated by pipe ('|') chars.
 				chars - Search exact.
 				*chars* - Search contains chars.
 				*chars - Search endswith chars.
 				chars* - Search startswith chars.
 				chars|chars - Search any of.  can be used in conjuction with other modifiers.
-			regEx (bool) = If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
-			ignoreCase (bool) = Ignore case when searching. Applies only to the 'fltr' parameter's search.
+			regEx (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
+			ignoreCase (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
 
 		ex. rename(r'Cube', '*001', regEx=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
 		ex. rename(r'Cube', '**001', regEx=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
@@ -72,11 +72,11 @@ class Edit():
 		'''Rename objects following the given case.
 
 		:Parameters:
-			objects (str)(list) = The objects to rename. default:all scene objects
-			case (str) = Desired case using python case operators. 
+			objects (str)(list): The objects to rename. default:all scene objects
+			case (str): Desired case using python case operators. 
 				valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
 
-		ex. call: setCase(pm.ls(sl=1), 'upper')
+		:Example: setCase(pm.ls(sl=1), 'upper')
 		'''
 		# pm.undoInfo(openChunk=1)
 		for obj in pm.ls(objects):
@@ -97,11 +97,11 @@ class Edit():
 		'''Rename objects with a suffix defined by its location from origin.
 
 		:Parameters:
-			objects (str)(int)(list) = The object(s) to rename.
-			alphanumeric (str) = When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
-			stripTrailingInts (bool) = Strip any trailing integers. ie. 'cube123'
-			stripTrailingAlpha (bool) = Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
-			reverse (bool) = Reverse the naming order. (Farthest object first)
+			objects (str)(int)(list): The object(s) to rename.
+			alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
+			stripTrailingInts (bool): Strip any trailing integers. ie. 'cube123'
+			stripTrailingAlpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
+			reverse (bool): Reverse the naming order. (Farthest object first)
 		'''
 		import string
 		import re
@@ -140,10 +140,10 @@ class Edit():
 		'''Snap the vertices from object one to the closest verts on object two.
 
 		:Parameters:
-			obj1 (obj) = The object in which the vertices are moved from.
-			obj2 (obj) = The object in which the vertices are moved to.
+			obj1 (obj): The object in which the vertices are moved from.
+			obj2 (obj): The object in which the vertices are moved to.
 			tolerance (float) = Maximum search distance.
-			freezeTransforms (bool) = Reset the selected transform and all of its children down to the shape level.
+			freezeTransforms (bool): Reset the selected transform and all of its children down to the shape level.
 		'''
 		vertices = Cmpt.getComponents(obj1, 'vertices')
 		closestVerts = Cmpt.getClosestVertex(vertices, obj2, tolerance=tolerance, freezeTransforms=freezeTransforms)
@@ -170,8 +170,8 @@ class Edit():
 		'''Merge Vertices on the given objects.
 
 		:Parameters:
-			objects (str)(obj)(list) = The object(s) to merge vertices on.
-			selected (bool) = Merge only the currently selected components.
+			objects (str)(obj)(list): The object(s) to merge vertices on.
+			selected (bool): Merge only the currently selected components.
 			tolerance (float) = The maximum merge distance.
 		'''
 		for obj in pm.ls(objects):
@@ -196,9 +196,9 @@ class Edit():
 		'''Get all faces on a specified axis.
 
 		:Parameters:
-			obj (str)(obj) = The name of the geometry.
-			axis (str) = The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-			localspace (bool) = Specify world or local space.
+			obj (str)(obj): The name of the geometry.
+			axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
+			localspace (bool): Specify world or local space.
 
 		ex call: getAllFacesOnAxis('polyObject', 'y')
 		'''
@@ -223,8 +223,8 @@ class Edit():
 		'''Delete components of the given mesh object along the specified axis.
 
 		:Parameters:
-			obj (obj) = Mesh object.
-			axis (str) = Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted. 
+			obj (obj): Mesh object.
+			axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted. 
 		'''
 		from mayatk import viewportMessage
 
@@ -245,9 +245,9 @@ class Edit():
 		'''Select or remove unwanted geometry from a polygon mesh.
 
 		:Parameters:
-			objects (str)(obj)(list) = The polygon objects to clean.
-			allMeshes (bool) = Clean all geomtry in the scene instead of only the current selection.
-			repair (bool) = Attempt to repair instead of just selecting geometry.
+			objects (str)(obj)(list): The polygon objects to clean.
+			allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
+			repair (bool): Attempt to repair instead of just selecting geometry.
 		'''
 		arg_list = '"{0}","{1}","{2}","{3}","{4}","{5}","{6}","{7}","{8}","{9}","{10}","{11}","{12}","{13}","{14}","{15}","{16}","{17}"'.format(
 				allMeshes, 1 if repair else 2, historyOn, quads, nsided, concave, holed, nonplanar, zeroGeom, zeroGeomTol, 
@@ -269,10 +269,10 @@ class Edit():
 		'''Find any duplicate overlapping geometry at the object level.
 
 		:Parameters:
-			objects (list) = A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
-			omitInitialObjects (bool) = Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
-			select (bool) = Select any found duplicate objects.
-			verbose (bool) = Print each found object to console.
+			objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
+			omitInitialObjects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
+			select (bool): Select any found duplicate objects.
+			verbose (bool): Print each found object to console.
 
 		:Return:
 			(set)
@@ -317,8 +317,8 @@ class Edit():
 		'''Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
 		:Parameters:
-			objects (str)(obj)(list) = A polygon mesh, or a list of meshes.
-			select (int) = Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
+			objects (str)(obj)(list): A polygon mesh, or a list of meshes.
+			select (int): Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
 
 		:Return:
 			(set) any found non-manifold verts.
@@ -377,8 +377,8 @@ class Edit():
 		'''Separate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
 		:Parameters:
-			vertex (str)(obj) = A single polygon vertex.
-			select (bool) = Select the vertex after the operation. (default is True)
+			vertex (str)(obj): A single polygon vertex.
+			select (bool): Select the vertex after the operation. (default is True)
 		'''
 		pm.undoInfo(openChunk=True)
 		connected_faces = pm.polyListComponentConversion(vertex, fromVertex=1, toFace=1) #pm.mel.PolySelectConvert(1) #convert to faces
@@ -429,8 +429,8 @@ class Edit():
 		'''Get any N-Gons from the given object using selection contraints.
 
 		:Parameters:
-			objects (str)(obj)(list) = The objects to query.
-			repair (bool) = Repair any found N-gons.
+			objects (str)(obj)(list): The objects to query.
+			repair (bool): Repair any found N-gons.
 
 		:Return:
 			(list)
@@ -454,7 +454,7 @@ class Edit():
 		'''Query the given objects for overlapping vertices.
 
 		:Parameters:
-			objects (str)(obj)(list) = The objects to query.
+			objects (str)(obj)(list): The objects to query.
 			threshold (float) = The maximum allowed distance.
 
 		:Return:
@@ -488,12 +488,12 @@ class Edit():
 		'''Get any duplicate overlapping faces of the given objects.
 
 		::Parameters:
-			objects (str)(obj)(list) = Faces or polygon objects.
+			objects (str)(obj)(list): Faces or polygon objects.
 
 		:Return:
 			(list) duplicate overlapping faces.
 
-		ex. call: pm.select(getOverlappingFaces(selection))
+		:Example: pm.select(getOverlappingFaces(selection))
 		'''
 		if not objects:
 			return []
@@ -524,17 +524,17 @@ class Edit():
 		'''Find similar geometry objects using the polyEvaluate command.
 		Default behaviour is to compare all flags.
 
-		:parameters:
-			obj (str)(obj)(list) = The object to find similar for.
+		:Parameters:
+			obj (str)(obj)(list): The object to find similar for.
 			tol (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
-			includeOrig (bool) = Include the original given obj with the return results.
-			kwargs (bool) = Any keyword argument 'polyEvaluate' takes. Used to filter the results.
+			includeOrig (bool): Include the original given obj with the return results.
+			kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
 				ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d, 
 				vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
-		:return:
+		:Return:
 			(list) Similar objects.
 
-		ex. call: getSimilarMesh(selection, vertex=1, area=1)
+		:Example: getSimilarMesh(selection, vertex=1, area=1)
 		'''
 		lst = lambda x: list(x) if isinstance(x, (list, tuple, set)) else list(x.values()) if isinstance(x, dict) else [x] #assure the returned result from polyEvaluate is a list of values.
 
@@ -551,12 +551,12 @@ class Edit():
 		'''Find similar geometry objects using the polyCompare command.
 		Default behaviour is to compare all flags.
 
-		:parameters:
-			obj (str)(obj)(list) = The object to find similar for.
-			includeOrig (bool) = Include the original given obj with the return results.
-			kwargs (bool) = Any keyword argument 'polyCompare' takes. Used to filter the results.
+		:Parameters:
+			obj (str)(obj)(list): The object to find similar for.
+			includeOrig (bool): Include the original given obj with the return results.
+			kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
 				ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals
-		:return:
+		:Return:
 			(list) Similar objects.
 		'''
 		obj, *other = pm.filterExpand(pm.ls(obj, long=True, tr=True), selectionMask=12) #polygon selection mask.
@@ -567,30 +567,47 @@ class Edit():
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr):
-	'''Attempt to get a class attribute.
+
+
+
+
+
+
+
+
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
 
 	:Parameters:
-		attr (str): A name of a class attribute.
-
+		attr (str): The name of the attribute to search for.
+	
 	:Return:
-		(obj) The attribute.
-	'''
-	try:
-		return getattr(Edit, attr)
-	except AttributeError as error:
-		raise AttributeError(f'{__file__} in __getattr__\n\t{error} ({type(attr).__name__})')
+		(obj) The found attribute.
 
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
 
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
 
+# --------------------------------------------------------------------------------------------
 
+if __name__=='__main__':
+	pass
 
-
-
-# print (__name__) #module name
 # --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
 
 
-# deprecated: -----------------------------------
+
+# --------------------------------------------------------------------------------------------
+# deprecated:
+# --------------------------------------------------------------------------------------------

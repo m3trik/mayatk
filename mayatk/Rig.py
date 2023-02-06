@@ -18,8 +18,8 @@ class Rig(object):
 		'''Create a locator with the given scale.
 
 		:Parameters:
-			name (str) = Name the locator.
-			pos (tuple) = The desired location in world space.
+			name (str): Name the locator.
+			pos (tuple): The desired location in world space.
 			scale (float) = The desired scale of the locator.
 
 		:Return:
@@ -42,7 +42,7 @@ class Rig(object):
 		'''Remove a parented locator from the child object.
 
 		:Parameters:
-			obj (str)(obj)(list) = The child object or the locator itself.
+			obj (str)(obj)(list): The child object or the locator itself.
 		'''
 		errorMsg = lambda: pm.inViewMessage(
 			statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(__file__), 
@@ -180,10 +180,10 @@ class Rig(object):
 		A 'True' value locks the attribute, 'False' unlocks, while 'None' leaves the state unchanged.
 
 		:Parameters:
-			objects (str)(obj)(list) = The object(s) to lock/unlock attributes of.
-			translate (bool) = Lock/Unlock all translate x,y,z values at once.
-			rotate (bool) = Lock/Unlock all rotate x,y,z values at once.
-			scale (bool) = Lock/Unlock all scale x,y,z values at once.
+			objects (str)(obj)(list): The object(s) to lock/unlock attributes of.
+			translate (bool): Lock/Unlock all translate x,y,z values at once.
+			rotate (bool): Lock/Unlock all rotate x,y,z values at once.
+			scale (bool): Lock/Unlock all scale x,y,z values at once.
 		'''
 		objects = pm.ls(objects, transforms=1, long=True)
 
@@ -214,11 +214,11 @@ class Rig(object):
 		'''Create a group containing any given objects.
 
 		:Parameters:
-			objects (str)(obj)(list) = The object(s) to group.
-			name (str) = Name the group.
-			zeroTranslation (bool) = Freeze translation before parenting.
-			zeroRotation (bool) = Freeze rotation before parenting.
-			zeroScale (bool) = Freeze scale before parenting.
+			objects (str)(obj)(list): The object(s) to group.
+			name (str): Name the group.
+			zeroTranslation (bool): Freeze translation before parenting.
+			zeroRotation (bool): Freeze rotation before parenting.
+			zeroScale (bool): Freeze scale before parenting.
 
 		:Return:
 			(obj) the group.
@@ -248,9 +248,9 @@ class Rig(object):
 		'''Creates a group using the first object to define the local rotation axis.
 
 		:Parameters:
-			objects (str)(obj)(list) = The objects to group. The first object will be used to define the groups LRA.
-			name (str) = The group name.
-			makeIdentity (bool) = Freeze transforms on group child objects.
+			objects (str)(obj)(list): The objects to group. The first object will be used to define the groups LRA.
+			name (str): The group name.
+			makeIdentity (bool): Freeze transforms on group child objects.
 		'''
 		try:
 			obj, *other = pm.ls(objects, transforms=1)
@@ -300,22 +300,22 @@ class Rig(object):
 		If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
 
 		:Parameters:
-			objects (str)(obj)(list) = A list of objects, or an object name to create locators at.
-			parent (bool) = Parent the object to the locator. (default=False)
-			freezeTransforms (bool) = Freeze transforms on the locator. (default=True)
-			bakeChildPivot (bool) = Bake pivot positions on the child object. (default=True)
-			grpSuffix (str) = A string appended to the end of the created groups name. (default: '_GRP#')
-			locSuffix (str) = A string appended to the end of the created locators name. (default: '_LOC#')
-			objSuffix (str) = A string appended to the end of the existing objects name. (default: '_GEO#')
-			stripDigits (bool) = Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-			stripSuffix (str) = Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
+			objects (str)(obj)(list): A list of objects, or an object name to create locators at.
+			parent (bool): Parent the object to the locator. (default=False)
+			freezeTransforms (bool): Freeze transforms on the locator. (default=True)
+			bakeChildPivot (bool): Bake pivot positions on the child object. (default=True)
+			grpSuffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
+			locSuffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
+			objSuffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
+			stripDigits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
+			stripSuffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
 			scale (float) = The scale of the locator. (default=1)
-			lockTranslate (bool) = Lock the translate values of the child object. (default=False)
-			lockRotation (bool) = Lock the rotation values of the child object. (default=False)
-			lockScale (bool) = Lock the scale values of the child object. (default=False)
-			remove (bool) = Removes the locator and any child locks. (not valid with component selections) (default=False)
+			lockTranslate (bool): Lock the translate values of the child object. (default=False)
+			lockRotation (bool): Lock the rotation values of the child object. (default=False)
+			lockScale (bool): Lock the scale values of the child object. (default=False)
+			remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
 
-		ex. call: createLocatorAtSelection(strip='_GEO', suffix='', stripDigits=True, parent=True, lockTranslate=True, lockRotation=True)
+		:Example: createLocatorAtSelection(strip='_GEO', suffix='', stripDigits=True, parent=True, lockTranslate=True, lockRotation=True)
 		'''
 		getSuffix = lambda o: locSuffix if Node.isLocator(o) else grpSuffix if Node.isGroup(o) else objSuffix #match the correct suffix to the object type.
 
@@ -371,19 +371,35 @@ class Rig(object):
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr):
-	'''Attempt to get a class attribute.
 
+
+
+
+
+
+
+
+# --------------------------------------------------------------------------------------------
+
+def __getattr__(attr:str):
+	"""Searches for an attribute in this module's classes and returns it.
+
+	:Parameters:
+		attr (str): The name of the attribute to search for.
+	
 	:Return:
-		(obj)
-	'''
-	try:
-		return getattr(Rig, attr)
-	except AttributeError as error:
-		raise AttributeError(f'{__file__} in __getattr__\n\t{error} ({type(attr).__name__})')
+		(obj) The found attribute.
 
+	:Raises:
+		AttributeError: If the given attribute is not found in any of the classes in the module.
+	"""
+	import sys
+	from pythontk import searchClassesForAttr
 
-
+	attr = searchClassesForAttr(sys.modules[__name__], attr)
+	if not attr:
+		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
+	return attr
 
 # --------------------------------------------------------------------------------------------
 
@@ -407,19 +423,11 @@ if __name__=='__main__':
 	)
 
 # --------------------------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-# print (__name__) #module name
-# --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
 
 
-# deprecated: -----------------------------------
+
+# --------------------------------------------------------------------------------------------
+# deprecated:
+# --------------------------------------------------------------------------------------------

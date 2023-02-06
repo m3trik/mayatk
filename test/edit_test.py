@@ -4,41 +4,13 @@ import os, sys
 import unittest
 import inspect
 
-
-# ------------------------------------------------------------------------------------
-# this is the missing stuff when running python.exe compared with mayapy.exe
-
-# mayaver = 2022
-# pythonver = 37
-
-# mayapath = '%ProgramFiles%/Autodesk/Maya{}'.format(mayaver)
-
-# os.environ['MAYA_LOCATION'] = mayapath
-# os.environ['PYTHONHOME'] = mayapath+'/Python{}'.format(mayaver, pythonver)
-# os.environ['PATH'] = mayapath+'/bin;'.format(mayaver) + os.environ['PATH']
-
-# from pythontk import File
-# for d in [
-# 	'{}/bin'.format(mayapath), 
-# 	'{}/bin3'.format(mayapath), 
-# 	'{}/Python{}'.format(mayapath, pythonver)
-# 	]:
-# 	for dd in File.getDirContents(d, 'dirpaths', excDirs='Python27',  recursive=True):
-# 		print (dd)
-# 		sys.path.append(dd)
-
-# import maya.standalone
-# maya.standalone.initialize(name='python')
-
 import pymel.core as pm
-# # ------------------------------------------------------------------------------------
 
-from mayatk import *
-import test
+from mayatk.Edit import Edit
 
 
-sfr = pm.melGlobals['cmdScrollFieldReporter']
-pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
+# sfr = pm.melGlobals['cmdScrollFieldReporter']
+# pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
 
 
 class Main(unittest.TestCase):
@@ -59,7 +31,7 @@ class Main(unittest.TestCase):
 			self.assertEqual(
 				result, 
 				expected_result, 
-				"\n\nError: {}\n  Call:     {}\n  Expected: {} {}\n  Returned: {} {}".format(path, expression.replace('self.', '', 1), type(expected_result), expected_result, type(result), result)
+				f"\n\n# Error: {path}\n#\tCall: {expression.replace('self.', '', 1)}\n#\tExpected: {type(expected_result)} {expected_result}\n#\tReturned: {type(result)} {result}"
 			)
 
 
