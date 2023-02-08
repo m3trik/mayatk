@@ -7,8 +7,7 @@ except ImportError as error:
 
 from pythontk import Iter, Math
 #from this package:
-from mayatk.core import mfnMeshGenerator, viewportMessage, undo
-from mayatk.Cmpt import Cmpt
+from mayatk import Core, Cmpt
 
 
 class Xform(object):
@@ -35,7 +34,7 @@ class Xform(object):
 
 
 	@staticmethod
-	@undo
+	@Core.undo
 	def dropToGrid(objects, align='Mid', origin=False, centerPivot=False, freezeTransforms=False):
 		'''Align objects to Y origin on the grid using a helper plane.
 
@@ -48,7 +47,7 @@ class Xform(object):
 
 		ex. dropToGrid(obj, align='Min') #set the object onto the grid.
 		'''
-		# pm.undoInfo(openChunk=1)
+		# pm.Core.undoInfo(openChunk=1)
 		for obj in pm.ls(objects, transforms=1):
 			osPivot = pm.xform(obj, query=1, rotatePivot=1, objectSpace=1) #save the object space obj pivot.
 			wsPivot = pm.xform(obj, query=1, rotatePivot=1, worldSpace=1) #save the world space obj pivot.
@@ -67,24 +66,24 @@ class Xform(object):
 
 			if freezeTransforms:
 				pm.makeIdentity(obj, apply=True)
-		# pm.undoInfo (closeChunk=1)
+		# pm.Core.undoInfo (closeChunk=1)
 
 
 	@classmethod
-	@undo
+	@Core.undo
 	def resetTranslation(cls, objects):
 		'''Reset the translation transformations on the given object(s).
 
 		:Parameters:
 			objects (str)(obj)(list): The object(s) to reset the translation values for.
 		'''
-		# pm.undoInfo(openChunk=1)
+		# pm.Core.undoInfo(openChunk=1)
 		for obj in pm.ls(objects):
 			pos = pm.objectCenter(obj) #get the object's current position.
 			cls.dropToGrid(obj, origin=1, centerPivot=1) #move to origin and center pivot.
 			pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1) #bake transforms
 			pm.xform(obj, translation=pos) #move the object back to it's original position.
-		# pm.undoInfo(closeChunk=1)
+		# pm.Core.undoInfo(closeChunk=1)
 
 
 	@staticmethod
@@ -101,7 +100,7 @@ class Xform(object):
 
 
 	@staticmethod
-	@undo
+	@Core.undo
 	def alignPivotToSelection(alignFrom=[], alignTo=[], translate=True):
 		'''Align one objects pivot point to another using 3 point align.
 
@@ -110,7 +109,7 @@ class Xform(object):
 			alignTo (list): The object to align with.
 			translate (bool): Move the object with it's pivot.
 		'''
-		# pm.undoInfo(openChunk=1)
+		# pm.Core.undoInfo(openChunk=1)
 		pos = pm.xform(alignTo, q=1, translation=True, worldSpace=True)
 		center_pos = [ #Get center by averaging of all x,y,z points.
 			sum(pos[0::3]) / len(pos[0::3]), 
@@ -134,11 +133,11 @@ class Xform(object):
 				pm.xform(obj, translation=center_pos, worldSpace=True)
 				
 			pm.delete(plane)
-		# pm.undoInfo(closeChunk=1)
+		# pm.Core.undoInfo(closeChunk=1)
 
 
 	@staticmethod
-	@undo
+	@Core.undo
 	def aimObjectAtPoint(objects, target_pos, aim_vect=(1,0,0), up_vect=(0,1,0)):
 		'''Aim the given object(s) at the given world space position.
 
@@ -162,7 +161,7 @@ class Xform(object):
 
 
 	@classmethod
-	@undo
+	@Core.undo
 	def rotateAxis(cls, objects, target_pos):
 		''' Aim the given object at the given world space position.
 		All rotations in rotated channel, geometry is transformed so 
@@ -204,7 +203,7 @@ class Xform(object):
 			world_matrix = pm.xform(obj, q=True, matrix=True, worldSpace=True)
 			rAxis = pm.getAttr(obj.rotateAxis)
 			if any((rAxis[0], rAxis[1], rAxis[2])):
-				print('# Warning: {} has a modified .rotateAxis of {} which is included in the result. #'.format(obj, rAxis))
+				print(f'# Warning: {obj} has a modified .rotateAxis of {rAxis} which is included in the result. #')
 
 			if returnType=='vector':
 				from maya.api.OpenMaya import MVector
@@ -320,7 +319,6 @@ class Xform(object):
 		valueAndObjs=[]
 		for obj in pm.ls(objects, flatten=False):
 			v = cls.getBoundingBoxValue(obj, value)
-			print (0, obj, v)
 			valueAndObjs.append((v, obj))
 
 		sorted_ = sorted(valueAndObjs, key=lambda x: int(x[0]), reverse=descending)
@@ -500,7 +498,7 @@ class Xform(object):
 		space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
 		result=[]
-		for mesh in mfnMeshGenerator(objects):
+		for mesh in Core.mfnMeshGenerator(objects):
 			points = om.MPointArray()
 			mesh.getPoints(points, space)
 
@@ -575,7 +573,7 @@ class Xform(object):
 
 
 	@staticmethod
-	@undo
+	@Core.undo
 	def alignVertices(mode, average=False, edgeloop=False):
 		'''Align vertices.
 
@@ -586,7 +584,7 @@ class Xform(object):
 
 		:Example: alignVertices(mode=3, average=True, edgeloop=True)
 		'''
-		# pm.undoInfo (openChunk=True)
+		# pm.Core.undoInfo (openChunk=True)
 		selectTypeEdge = pm.selectType(query=True, edge=True)
 
 		if edgeloop:
@@ -612,8 +610,8 @@ class Xform(object):
 
 		if len(selection)<2:
 			if len(selection)==0:
-				viewportMessage("No vertices selected")
-			viewportMessage("Selection must contain at least two vertices")
+				Core.viewportMessage("No vertices selected")
+			Core.viewportMessage("Selection must contain at least two vertices")
 
 		for vertex in selection:
 			vertexXYZ = pm.xform(vertex, query=1, translation=1, worldSpace=1)
@@ -635,7 +633,7 @@ class Xform(object):
 
 		if selectTypeEdge:
 			pm.selectType (edge=True)
-		# pm.undoInfo (closeChunk=True)
+		# pm.Core.undoInfo (closeChunk=True)
 
 # --------------------------------------------------------------------------------------------
 
@@ -661,13 +659,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Xform, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 

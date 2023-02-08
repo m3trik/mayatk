@@ -148,7 +148,7 @@ class Edit():
 		vertices = Cmpt.getComponents(obj1, 'vertices')
 		closestVerts = Cmpt.getClosestVertex(vertices, obj2, tolerance=tolerance, freezeTransforms=freezeTransforms)
 
-		progressBar = "$gMainProgressBar"
+		progressBar = "mainProgressBar"
 		pm.progressBar(progressBar, edit=True, beginProgress=True, isInterruptable=True, status="Snapping Vertices ...", maxValue=len(closestVerts)) 
 
 		pm.undoInfo(openChunk=True)
@@ -589,13 +589,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Edit, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 

@@ -65,7 +65,7 @@ class Rig(object):
 
 			if not Node.isLocator(obj):
 				try: #if the 'obj' is not a locator, check if it's parent is.
-					obj = Node.getType(obj)
+					obj = Node.getParent(obj)
 					if not Node.isLocator(obj):
 						errorMsg()
 						continue
@@ -73,17 +73,12 @@ class Rig(object):
 					errorMsg()
 					continue
 
-			try: #remove from group
-				grp = Node.getType(obj)
-			except IndexError as error:
-				errorMsg()
-				continue
-			if Node.isGroup(grp):
-				if grp.split('_')[0]==obj.split('_')[0]:
-					pm.ungroup(grp)
+			#unparent child object
+			children = Node.getChildren(obj)
+			for child in children:
+				pm.parent(child, world=True)
 
 			#remove locator
-			pm.ungroup(obj)
 			pm.delete(obj)
 
 		pm.undoInfo(closeChunk=1)
@@ -227,7 +222,7 @@ class Rig(object):
 		try:
 			pm.parent(grp, objects)
 		except Exception as error:
-			print ('{} in createGroup\n\t# Error: Unable to parent object(s): {} #'.format(__file__, error))
+			print (f'{__file__} in createGroup\n\t# Error: Unable to parent object(s): {error} #')
 
 		if zeroTranslation:
 			for attr in ('tx','ty','tz'):
@@ -255,7 +250,7 @@ class Rig(object):
 		try:
 			obj, *other = pm.ls(objects, transforms=1)
 		except IndexError as error:
-			print('{} in createGroupLRA\n\t# Error: Operation requires at least one object. #'.format(__file__))
+			print(f'{__file__} in createGroupLRA\n\t# Error: Operation requires at least one object. #')
 			return None
 
 		pm.undoInfo(openChunk=1)
@@ -393,13 +388,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Rig, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 
@@ -431,3 +424,55 @@ if __name__=='__main__':
 # --------------------------------------------------------------------------------------------
 # deprecated:
 # --------------------------------------------------------------------------------------------
+
+
+#the following was replaced with chatgpt code that fixed a: RuntimeError: Can't ungroup leaf-level transforms, but is not tested aside from a few unit test cases.
+# def removeLocator(cls, objects):
+# 		'''Remove a parented locator from the child object.
+
+# 		:Parameters:
+# 			obj (str)(obj)(list): The child object or the locator itself.
+# 		'''
+# 		errorMsg = lambda: pm.inViewMessage(
+# 			statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(__file__), 
+# 			pos='topCenter', 
+# 			fade=True
+# 		)
+
+# 		pm.undoInfo(openChunk=1)
+
+# 		for obj in pm.ls(objects, long=True, objectsOnly=True):
+# 			if not pm.objExists(obj):
+# 				continue
+
+# 			elif Node.isLocator(obj) and not Node.getType(obj) and not Node.getChildren(obj):
+# 				pm.delete(obj)
+# 				continue
+
+# 			#unlock attributes
+# 			cls.setAttrLockState(obj, translate=False, rotate=False, scale=False) #unlock all.
+
+# 			if not Node.isLocator(obj):
+# 				try: #if the 'obj' is not a locator, check if it's parent is.
+# 					obj = Node.getType(obj)
+# 					if not Node.isLocator(obj):
+# 						errorMsg()
+# 						continue
+# 				except IndexError as error:
+# 					errorMsg()
+# 					continue
+
+# 			try: #remove from group
+# 				grp = Node.getType(obj)
+# 			except IndexError as error:
+# 				errorMsg()
+# 				continue
+# 			if Node.isGroup(grp):
+# 				if grp.split('_')[0]==obj.split('_')[0]:
+# 					pm.ungroup(grp)
+
+# 			#remove locator
+# 			pm.ungroup(obj)
+# 			pm.delete(obj)
+
+# 		pm.undoInfo(closeChunk=1)

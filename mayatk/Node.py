@@ -6,6 +6,7 @@ except ImportError as error:
 	print (__file__, error)
 
 from pythontk import Iter
+from mayatk import Core, Cmpt
 
 
 class Node():
@@ -47,7 +48,7 @@ class Node():
 			elif cls.isLocator(obj):
 				typ = 'locator'
 			else:
-				typ = comptk.getComponentType(obj)
+				typ = Cmpt.getComponentType(obj)
 			if not typ:
 				typ = pm.objectType(obj)
 			types.append(typ)
@@ -158,8 +159,6 @@ class Node():
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
-		from mayatk import convertArrayType
-
 		result=[]
 		for node in pm.ls(nodes):
 			transforms = pm.ls(node, type='transform')
@@ -178,7 +177,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = convertArrayType(result, returnType=returnType, flatten=True)
+		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -198,8 +197,6 @@ class Node():
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
-		from mayatk import convertArrayType
-
 		result=[]
 		for node in pm.ls(nodes):
 			shapes = pm.listRelatives(node, children=1, shapes=1) #get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]
@@ -218,7 +215,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = convertArrayType(result, returnType=returnType, flatten=True)
+		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -238,8 +235,6 @@ class Node():
 		:Return:
 			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
-		from mayatk import convertArrayType
-
 		result=[]
 		for node in pm.ls(nodes):
 			shapes = pm.listRelatives(node, children=1, shapes=1) #get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]
@@ -257,7 +252,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = convertArrayType(result, returnType=returnType, flatten=True)
+		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -471,13 +466,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Node, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 
@@ -540,6 +533,6 @@ if __name__=='__main__':
 # 			typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
 # 			inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-# 		inc = convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
-# 		exc = convertArrayType(exc, returnType=rtn, flatten=True)
+# 		inc = Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
+# 		exc = Core.convertArrayType(exc, returnType=rtn, flatten=True)
 # 		return [i for i in components if i not in exc and (inc and i in inc)]

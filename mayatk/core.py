@@ -5,9 +5,10 @@ import os, sys
 try:
 	import pymel.core as pm
 except ImportError as error:
-	print (f'# Error: {__file__!r}: {error}')
+	print (f'# Error: {__file__}: {error}')
 
 from pythontk import Iter
+from mayatk import Node
 
 
 class Core():
@@ -38,11 +39,11 @@ class Core():
 
 		app = QApplication.instance()
 		if not app:
-			return print(f'# Warning: {__file__!r} in getMainWindow\n#\tCould not find QApplication instance.')
+			return print(f'# Warning: {__file__} in getMainWindow\n#\tCould not find QApplication instance.')
 
 		main_window = next(iter(w for w in app.topLevelWidgets() if w.objectName()=='MayaWindow'), None)
 		if not main_window:
-			return print(f'# Warning: {__file__!r} in getMainWindow\n#\tCould not find main window instance.')
+			return print(f'# Warning: {__file__} in getMainWindow\n#\tCould not find main window instance.')
 
 		return main_window
 
@@ -59,7 +60,7 @@ class Core():
 		"""
 		maya_install_path = os.environ.get("MAYA_LOCATION") #Get the Maya installation path.
 		if not maya_install_path:
-			return print(f"# Error: {__file__!r} in appendMayaPaths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set.")
+			return print(f"# Error: {__file__} in appendMayaPaths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set.")
 
 		#Add the Maya libraries to the Python path.
 		os.environ["PYTHONHOME"] = os.path.join(maya_install_path, "Python")
@@ -121,7 +122,7 @@ class Core():
 		import maya.OpenMaya as om
 
 		selectionList = om.MSelectionList()
-		for mesh in getShapeNode(pm.ls(objects)):
+		for mesh in Node.getShapeNode(pm.ls(objects)):
 			selectionList.add(mesh)
 
 		for i in range(selectionList.length()):    
@@ -150,7 +151,7 @@ class Core():
 		try:
 			o = Iter.makeList(lst)[0]
 		except IndexError as error:
-			# print (f'# Error: {__file__!r} in getArrayType:\n#\tOperation requires at least one object.\n#\t{error}')
+			# print (f'# Error: {__file__} in getArrayType:\n#\tOperation requires at least one object.\n#\t{error}')
 			return ''
 
 		return 'str' if isinstance(o, str) else 'int' if isinstance(o, int) else 'obj'
@@ -199,7 +200,7 @@ class Core():
 					else:
 						result[obj] = [componentNum]
 				except ValueError as error: #incompatible object type.
-					print(f'# Error: {__file__!r} in convertArrayType\n#\tunable to convert {obj} {num} to int.\n#\t{error}')
+					print(f'# Error: {__file__} in convertArrayType\n#\tunable to convert {obj} {num} to int.\n#\t{error}')
 					break
 
 			objects = set(pm.ls(lst, objectsOnly=True))
@@ -463,13 +464,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Core, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 

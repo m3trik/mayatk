@@ -19,14 +19,6 @@ class Stingray_arnold_shader(QtCore.QObject):
 	If Opaque is enabled, opacity will not work at all. Transmission will work however any shadows cast by 
 	the object will always be solid and not pick up the Transparent Color or density of the shader.
 	'''
-	msg_intro = '''<u>To setup the material:</u>
-		<br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use,
-		<br>and click the <b>Create Network</b> button to create the shader connections.
-		<br>• The HDR map, it's visiblity, and rotation can be changed after creation.
-	'''
-	msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
-
-	proj_root_dir = File.getFilepath(__file__)
 	hdr_env_name = 'aiSkyDomeLight_'
 
 	def __init__(self, parent=None):
@@ -222,6 +214,15 @@ class Stingray_arnold_shader(QtCore.QObject):
 
 class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
+	msg_intro = '''<u>To setup the material:</u>
+		<br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
+		<br>• Click the <b>Create Network</b> button to create the shader connections.
+		<br>• The HDR map, it's visiblity, and rotation can be changed after creation.
+	'''
+	msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
+
+	proj_root_dir = File.getFilepath(__file__)
+
 	def __init__(self, **kwargs):
 		super().__init__(**kwargs)
 		'''
@@ -398,7 +399,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
 		if progress is not None:
 			self.ui.progressBar.setValue(progress)
-			self.sb.app.processEvents()
+			QtWidgets.QApplication.instance().processEvents()
 
 
 class Stingray_arnold_shader_main(Stingray_arnold_shader):
@@ -410,12 +411,21 @@ class Stingray_arnold_shader_main(Stingray_arnold_shader):
 		super().__init__(parent)
 
 		self.sb = Switchboard(self, uiLoc='stingray_arnold_shader.ui', widgetLoc=rwidgets, slotLoc=Stingray_arnold_shader_slots)
+		self.ui = self.sb.stingray_arnold_shader
 
-		ui = self.sb.stingray_arnold_shader
-		print('slots:', self.sb.getSlots(ui))
-		self.sb.setStyle(ui.widgets)
-		ui.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
-		ui.show()
+		self.ui.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint|QtCore.Qt.Tool|QtCore.Qt.FramelessWindowHint)
+		self.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+
+		for w in self.ui.widgets:
+			if w.name=='mainWindow':
+				w.setStyleSheet("background-color: rgba(100, 100, 100, 150);")
+			else:
+				self.sb.setStyle(w)
+
+		self.ui.isInitialized = True
+
+	def show(self):
+		self.ui.show()
 
 # -----------------------------------------------------------------------------
 
@@ -433,8 +443,11 @@ if __name__ == "__main__":
 
 	parent = getMainWindow()
 	main = Stingray_arnold_shader_main(parent)
+	main.show()
 
-	# sys.exit(main.app.exec_()) # run app, show window, wait for input, then terminate program with a status code returned from app.
+	exit_code = main.app.exec_()
+	if exit_code != -1:
+		sys.exit(exit_code) # run app, show window, wait for input, then terminate program with a status code returned from app.
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -6,6 +6,7 @@ except ImportError as error:
 	print (__file__, error)
 
 from pythontk import Iter, Math, randomize
+from mayatk import Core
 
 
 class _GetComponents():
@@ -131,7 +132,7 @@ class _GetComponents():
 		if not typ in d:
 			return components
 		components = pm.polyListComponentConversion(components, **{d[typ.lower()]:True})
-		return convertArrayType(components, returnType=returnType, flatten=flatten)
+		return Core.convertArrayType(components, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -162,7 +163,7 @@ class _GetComponents():
 		else:
 			result = ['{}.{}[{}]'.format(objName, componentType, c) for c in integers]
 
-		return convertArrayType(result, returnType=returnType, flatten=flatten)
+		return Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -183,12 +184,10 @@ class _GetComponents():
 		filterComponents('cyl.vtx[:]', 'cyl.vtx[:2]', 'cyl.vtx[1:23]') #returns: ['cyl.vtx[0]']
 		filterComponents('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
 		'''
-		from mayatk import getArrayType, convertArrayType
-
 		typ = cls.getComponentType(components)
-		etyp = getArrayType(components)
-		etyp_inc = getArrayType(inc)
-		etyp_exc = getArrayType(exc)
+		etyp = Core.getArrayType(components)
+		etyp_inc = Core.getArrayType(inc)
+		etyp_exc = Core.getArrayType(exc)
 
 		if etyp_inc=='int' or etyp_exc=='int':
 			try:
@@ -208,7 +207,7 @@ class _GetComponents():
 		components = pm.ls(components, flatten=True)
 
 		filtered = Iter.filterList(components, inc=inc, exc=exc)
-		result = convertArrayType(filtered, returnType=etyp, flatten=flatten)
+		result = Core.convertArrayType(filtered, returnType=etyp, flatten=flatten)
 		return result
 
 
@@ -247,7 +246,7 @@ class _GetComponents():
 		if randomize:
 			components = randomize(pm.ls(components, flatten=1), randomize)
 
-		result = convertArrayType(components, returnType=returnType, flatten=flatten)
+		result = Core.convertArrayType(components, returnType=returnType, flatten=flatten)
 		return result
 
 
@@ -448,7 +447,7 @@ class Cmpt(_GetComponents):
 					result.append(edge)
 
 		result = cls.convertComponentType(result, componentType) #convert back to the original component type and flatten /un-flatten list.
-		result = convertArrayType(result, returnType=returnType, flatten=flatten)
+		result = Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 		return result
 
 
@@ -468,8 +467,8 @@ class Cmpt(_GetComponents):
 		'''
 		from operator import itemgetter
 
-		set1 = convertArrayType(set1, returnType='str', flatten=True)
-		set2 = convertArrayType(set2, returnType='str', flatten=True)
+		set1 = Core.convertArrayType(set1, returnType='str', flatten=True)
+		set2 = Core.convertArrayType(set2, returnType='str', flatten=True)
 		vertPairsAndDistance={}
 		for v1 in set1:
 			v1Pos = pm.pointPosition(v1, world=1)
@@ -505,7 +504,7 @@ class Cmpt(_GetComponents):
 		getClosestVertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
 		getClosestVertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
 		'''
-		vertices = convertArrayType(vertices, returnType='str', flatten=True)
+		vertices = Core.convertArrayType(vertices, returnType='str', flatten=True)
 		pm.undoInfo(openChunk=True)
 
 		if freezeTransforms:
@@ -527,7 +526,7 @@ class Cmpt(_GetComponents):
 			v2Pos = pm.pointPosition(v2, world=True)
 			distance = Math.getDistBetweenTwoPoints(v1Pos, v2Pos)
 
-			v2_convertedType = convertArrayType(v2, returnType=returnType)[0]
+			v2_convertedType = Core.convertArrayType(v2, returnType=returnType)[0]
 			if not tolerance:
 				closestVerts[v1] = v2_convertedType
 			elif distance < tolerance:
@@ -590,7 +589,7 @@ class Cmpt(_GetComponents):
 
 		objName = obj.name()
 		result = Iter.removeDuplicates(['{}.e[{}]'.format(objName, e) for e in edgesLong])
-		return convertArrayType(result, returnType=returnType, flatten=flatten)
+		return Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -723,7 +722,7 @@ class Cmpt(_GetComponents):
 			if n>=lowRange and n<=highRange:
 				result.append(c)
 
-		result = convertArrayType(result, returnType=returnType)
+		result = Core.convertArrayType(result, returnType=returnType)
 		return result
 
 
@@ -749,7 +748,7 @@ class Cmpt(_GetComponents):
 		dagPath = selectionList.getDagPath(0) #create empty dag path object.
 		mesh = om.MFnMesh(dagPath) #get mesh.
 
-		vtxID = convertArrayType(vertex, 'int')[0]
+		vtxID = Core.convertArrayType(vertex, 'int')[0]
 		return mesh.getVertexNormal(vtxID, angleWeighted, space=om.MSpace.kWorld) #get vertex normal and use om.MSpace.kObject for object space.
 
 
@@ -794,13 +793,11 @@ def __getattr__(attr:str):
 	:Raises:
 		AttributeError: If the given attribute is not found in any of the classes in the module.
 	"""
-	import sys
-	from pythontk import searchClassesForAttr
+	try:
+		return getattr(Cmpt, attr)
 
-	attr = searchClassesForAttr(sys.modules[__name__], attr)
-	if not attr:
+	except AttributeError as error:
 		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-	return attr
 
 # --------------------------------------------------------------------------------------------
 
@@ -862,6 +859,6 @@ if __name__=='__main__':
 # 			typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
 # 			inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-# 		inc = convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
-# 		exc = convertArrayType(exc, returnType=rtn, flatten=True)
+# 		inc = Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
+# 		exc = Core.convertArrayType(exc, returnType=rtn, flatten=True)
 # 		return [i for i in components if i not in exc and (inc and i in inc)]

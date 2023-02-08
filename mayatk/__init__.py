@@ -1,11 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
 import sys
-import importlib
 
 
 __package__ = 'mayatk'
-__version__ = '0.5.5'
+__version__ = '0.5.7'
 
 
 def __getattr__(attr):
