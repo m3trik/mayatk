@@ -4,7 +4,8 @@ import sys, os
 
 from PySide2 import QtCore, QtWidgets
 
-import pymel.core as pm
+try: import pymel.core as pm
+except ImportError as error: print (__file__, error)
 
 from pythontk import File, Img, Str, Json
 from mayatk import Node, getMainWindow
@@ -13,17 +14,13 @@ from uitk.widgets import rwidgets
 
 __version__ = '0.5.3'
 
-class Stingray_arnold_shader(QtCore.QObject):
+class Stingray_arnold_shader():
 	'''
 	To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
 	If Opaque is enabled, opacity will not work at all. Transmission will work however any shadows cast by 
 	the object will always be solid and not pick up the Transparent Color or density of the shader.
 	'''
 	hdr_env_name = 'aiSkyDomeLight_'
-
-	def __init__(self, parent=None):
-		super().__init__(parent)
-
 
 	@property
 	def hdr_env(self) -> object:
@@ -225,10 +222,8 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
 	def __init__(self, **kwargs):
 		super().__init__(**kwargs)
+		'''Slot classes defined in a switchboard instance inherit an `sb` (switchboard) attribute by default.
 		'''
-		'''
-		self.ui = self.sb.stingray_arnold_shader #slot classes used with the switchboard module inherit the 'sb' attribute by default.
-
 		self.imageFiles = None
 
 		#set json file location.
@@ -239,24 +234,24 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		hdr_path = '{}/resources/hdr'.format(self.proj_root_dir)
 		hdr_filenames = File.getDirContents(hdr_path, 'filenames', incFiles='*.exr')
 		hdr_fullpaths = File.getDirContents(hdr_path, 'filepaths', incFiles='*.exr')
-		self.ui.cmb000.addItems_(dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False)
+		self.sb.ui.cmb000.addItems_(dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False)
 
 		#initialize widgets with any saved values.
-		self.ui.txt000.setText(Json.getJson('mat_name'))
-		self.ui.txt001.setText(self.msg_intro)
+		self.sb.ui.txt000.setText(Json.getJson('mat_name'))
+		self.sb.ui.txt001.setText(self.msg_intro)
 		hdr_map_visibility = Json.getJson('hdr_map_visibility')
 		if hdr_map_visibility:
-			self.ui.chk000.setChecked(hdr_map_visibility)
+			self.sb.ui.chk000.setChecked(hdr_map_visibility)
 		hdr_map = Json.getJson('hdr_map')
 		if hdr_map:
-			self.ui.cmb000.setCurrentItem(hdr_map)
+			self.sb.ui.cmb000.setCurrentItem(hdr_map)
 		normal_map_type = Json.getJson('normal_map_type')
 		if normal_map_type:
-			self.ui.cmb001.setCurrentItem(normal_map_type)
+			self.sb.ui.cmb001.setCurrentItem(normal_map_type)
 		node = self.hdr_env_transform
 		if node:
 			rotation = node.rotateY.get()
-			self.ui.slider000.setSliderPosition(rotation)
+			self.sb.ui.slider000.setSliderPosition(rotation)
 
 
 	@property
@@ -266,7 +261,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		:Return:
 			(str)
 		'''
-		text = self.ui.txt000.text()
+		text = self.sb.ui.txt000.text()
 		return text
 
 
@@ -277,7 +272,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		:Return:
 			(str) data as string.
 		'''
-		data = self.ui.cmb000.currentData()
+		data = self.sb.ui.cmb000.currentData()
 		return data
 
 
@@ -288,7 +283,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		:Return:
 			(bool)
 		'''
-		state = self.ui.chk000.isChecked()
+		state = self.sb.ui.chk000.isChecked()
 		return state
 
 
@@ -299,14 +294,14 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		:Return:
 			(str)
 		'''
-		text = self.ui.cmb001.currentText()
+		text = self.sb.ui.cmb001.currentText()
 		return text
 
 
 	def cmb000(self, index):
 		'''HDR map selection.
 		'''
-		cmb = self.ui.cmb000
+		cmb = self.sb.ui.cmb000
 		text = cmb.currentText()
 		data = cmb.currentData()
 
@@ -317,7 +312,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def chk000(self, state):
 		'''
 		'''
-		chk = self.ui.chk000
+		chk = self.sb.ui.chk000
 
 		self.setHdrMapVisibility(state) #set the HDR map visibility.
 		Json.setJson('hdr_map_visibility', state)
@@ -326,7 +321,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def cmb001(self, index):
 		'''Normal map output selection.
 		'''
-		cmb = self.ui.cmb001
+		cmb = self.sb.ui.cmb001
 		text = cmb.currentText()
 		Json.setJson('normal_map_type', text)
 
@@ -334,7 +329,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def txt000(self, text=None):
 		'''Material name.
 		'''
-		txt = self.ui.txt000
+		txt = self.sb.ui.txt000
 		text = txt.text()
 		Json.setJson('mat_name', text)
 
@@ -353,7 +348,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		if self.imageFiles:
 			# pm.mel.HypershadeWindow() #open the hypershade window.
 
-			self.ui.txt001.clear()
+			self.sb.ui.txt001.clear()
 			self.callback('Creating network ..<br>')
 
 			self.createNetwork(self.imageFiles, self.mat_name, hdrMap=self.hdr_map,
@@ -370,15 +365,15 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		imageFiles = Img.getImageFiles()
 		if imageFiles:
 			self.imageFiles = imageFiles
-			self.ui.txt001.clear()
+			self.sb.ui.txt001.clear()
 
 			msg_mat_selection = self.imageFiles
 			for i in msg_mat_selection: #format msg_intro using the mapTypes in imtools.
 				self.callback(Str.truncate(i, 60))
 
-			self.ui.b000.setDisabled(False)
+			self.sb.ui.b000.setDisabled(False)
 		elif not self.imageFiles:
-			self.ui.b000.setDisabled(True)
+			self.sb.ui.b000.setDisabled(True)
 
 
 	def callback(self, string, progress=None, clear=False):
@@ -389,21 +384,21 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 				Can be given as an int or a tuple as: (progress, total_len) 
 		'''
 		if clear:
-			self.ui.txt003.clear()
+			self.sb.ui.txt003.clear()
 
 		if isinstance(progress, (list, tuple, set)):
 			p, l = progress
 			progress = (p/l) *100
 
-		self.ui.txt001.append(string)
+		self.sb.ui.txt001.append(string)
 
 		if progress is not None:
-			self.ui.progressBar.setValue(progress)
+			self.sb.ui.progressBar.setValue(progress)
 			QtWidgets.QApplication.instance().processEvents()
 
 
-class Stingray_arnold_shader_main(Stingray_arnold_shader):
-	'''
+class Stingray_arnold_shader_main(QtWidgets.QMainWindow):
+	'''Constructs the main ui window for `Stingray_arnold_shader` class.
 	'''
 	app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv) #return the existing QApplication object, or create a new one if none exists.
 
@@ -411,21 +406,18 @@ class Stingray_arnold_shader_main(Stingray_arnold_shader):
 		super().__init__(parent)
 
 		self.sb = Switchboard(self, uiLoc='stingray_arnold_shader.ui', widgetLoc=rwidgets, slotLoc=Stingray_arnold_shader_slots)
-		self.ui = self.sb.stingray_arnold_shader
+		self.sb.stingray_arnold_shader.alias = 'ui' #set an alternate attribute name that can be used to access the ui.
 
-		self.ui.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint|QtCore.Qt.Tool|QtCore.Qt.FramelessWindowHint)
-		self.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+		self.setCentralWidget(self.sb.ui)
+		self.sb.setStyle(self.sb.ui.widgets)
+		self.sb.ui.draggable_header.hide()
 
-		for w in self.ui.widgets:
-			if w.name=='mainWindow':
-				w.setStyleSheet("background-color: rgba(100, 100, 100, 150);")
-			else:
-				self.sb.setStyle(w)
-
-		self.ui.isInitialized = True
-
-	def show(self):
-		self.ui.show()
+		try:
+			self.sb.ui.connected = True
+		except Exception as error:
+			print (f'# Error: {__file__} in Stingray_arnold_shader_main\n#\tCould not establish slot connections for `{self.sb.ui.name}`\n#\t{error}')
+		self.sb.ui.isInitialized = True
+		self.activateWindow()
 
 # -----------------------------------------------------------------------------
 

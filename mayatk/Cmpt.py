@@ -1,9 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-try:
-	import pymel.core as pm
-except ImportError as error:
-	print (__file__, error)
+try: import pymel.core as pm
+except ImportError as error: print (__file__, error)
 
 from pythontk import Iter, Math, randomize
 from mayatk import Core
