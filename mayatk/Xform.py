@@ -17,7 +17,7 @@ class Xform(object):
 	def moveTo(source, target, targetCenter=True):
 		'''Move an object(s) to the given target.
 
-		:Parameters:
+		Parameters:
 			source (str)(obj)(list): The objects to move.
 			target (str)(obj): The object to move to.
 			targetCenter (bool): Move to target pivot pos, or the bounding box center of the target.
@@ -38,7 +38,7 @@ class Xform(object):
 	def dropToGrid(objects, align='Mid', origin=False, centerPivot=False, freezeTransforms=False):
 		'''Align objects to Y origin on the grid using a helper plane.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The objects to translate.
 			align (bool): Specify which point of the object's bounding box to align with the grid. (valid: 'Max','Mid'(default),'Min')
 			origin (bool): Move to world grid's center.
@@ -74,7 +74,7 @@ class Xform(object):
 	def resetTranslation(cls, objects):
 		'''Reset the translation transformations on the given object(s).
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s) to reset the translation values for.
 		'''
 		# pm.Core.undoInfo(openChunk=1)
@@ -90,7 +90,7 @@ class Xform(object):
 	def setTranslationToPivot(node):
 		'''Set an object’s translation value from its pivot location.
 
-		:Parameters:
+		Parameters:
 			node (str)(obj)(list): An object, or it's name.
 		'''
 		x, y, z = pivot = pm.xform(node, query=True, worldSpace=True, rotatePivot=True)
@@ -104,7 +104,7 @@ class Xform(object):
 	def alignPivotToSelection(alignFrom=[], alignTo=[], translate=True):
 		'''Align one objects pivot point to another using 3 point align.
 
-		:Parameters:
+		Parameters:
 			alignFrom (list): At minimum; 1 object, 1 Face, 2 Edges, or 3 Vertices.
 			alignTo (list): The object to align with.
 			translate (bool): Move the object with it's pivot.
@@ -147,7 +147,7 @@ class Xform(object):
 			aim_vect (tuple): The vector in local coordinates that points at the target.
 			up_vect (tuple): The vector in local coordinates that aligns with the world up vector.
 
-		:Example: aimObjectAtPoint(['cube1', 'cube2'], (0, 15, 15))
+		Example: aimObjectAtPoint(['cube1', 'cube2'], (0, 15, 15))
 		'''
 		if isinstance(target_pos, (tuple, set, list)):
 			target = pm.createNode('transform', name='target_helper')
@@ -167,7 +167,7 @@ class Xform(object):
 		All rotations in rotated channel, geometry is transformed so 
 		it does not appear to move during this transformation
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): Transform node(s) of the objects to orient.
 			target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
 		'''
@@ -190,11 +190,11 @@ class Xform(object):
 	def getOrientation(objects, returnType='point'):
 		'''Get an objects orientation as a point or vector.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s) to get the orientation of.
 			returnType (str): The desired returned value type. (valid: 'point'(default), 'vector')
 
-		:Return:
+		Return:
 			(tuple)(list) If 'objects' given as a list, a list of tuples will be returned.
 		'''
 		result=[]
@@ -228,11 +228,11 @@ class Xform(object):
 	def getDistanceBetweenTwoObjects(objA, objB):
 		'''Get the magnatude of a vector using the center points of two given objects.
 
-		:Parameters:
+		Parameters:
 			objA (obj)(str): Object, object name, or point (x,y,z).
 			objB (obj)(str): Object, object name, or point (x,y,z).
 
-		:Return:
+		Return:
 			(float)
 
 		# xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(startAndEndCurves)
@@ -250,10 +250,10 @@ class Xform(object):
 	def getCenterPoint(objects):
 		'''Get the bounding box center point of any given object(s).
 		
-		:Parameters:
+		Parameters:
 			objects (str)(obj(list): The objects or components to get the center of.
 
-		:Return:
+		Return:
 			(tuple) position as xyz float values.
 		'''
 		objects = pm.ls(objects, flatten=True)
@@ -270,7 +270,7 @@ class Xform(object):
 	def getBoundingBoxValue(cls, objects, value='sizeX|sizeY|sizeZ'):
 		'''Get information of the given object(s) combined bounding box.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s) or component(s) to query.
 				Multiple objects will be treated as a combined bounding box.
 			value (str): The type of value to return. Multiple types can be given
@@ -278,11 +278,11 @@ class Xform(object):
 				valid (case insensitive): 'xmin', 'xmax', 'ymin', 'ymax', 
 				'zmin', 'zmax', 'sizex', 'sizey', 'sizez', 'volume', 'center'
 
-		:Return:
+		Return:
 			(float)(tuple) Dependant on args.
 
-		:Example: getBoundingBoxValue(sel, 'center|volume') #returns: [[171.9106216430664, 93.622802734375, -1308.4896240234375], 743.2855185396038]
-		:Example: getBoundingBoxValue(sel, 'sizeY') #returns: 144.71902465820312
+		Example: getBoundingBoxValue(sel, 'center|volume') #returns: [[171.9106216430664, 93.622802734375, -1308.4896240234375], 743.2855185396038]
+		Example: getBoundingBoxValue(sel, 'sizeY') #returns: 144.71902465820312
 		'''
 		if '|' in value: #use recursion to construct the list using each value.
 			return tuple(cls.getBoundingBoxValue(objects, i) for i in value.split('|'))
@@ -306,14 +306,14 @@ class Xform(object):
 	def sortByBoundingBoxValue(cls, objects, value='volume', descending=True, returnWithValue=False):
 		'''Sort the given objects by their bounding box value.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The objects or components to sort.
 			value (str): See 'getBoundingBoxInfo' 'value' parameter.
 					ex. 'xmin', 'xmax', 'sizex', 'volume', 'center' etc.
 			descending (bool): Sort the list from the largest value down.
 			returnWithValue (bool): Instead of just the object; return a 
 					list of two element tuples as [(<value>, <obj>)].
-		:Return:
+		Return:
 			(list)
 		'''
 		valueAndObjs=[]
@@ -331,13 +331,13 @@ class Xform(object):
 	def matchScale(objectsA, objectsB, scale=True, average=False):
 		'''Scale each of the given objects to the combined bounding box of a second set of objects.
 
-		:Parameters:
+		Parameters:
 			objectsA (str)(obj)(list): The object(s) to scale.
 			objectsB (str)(obj)(list): The object(s) to get a bounding box size from.
 			scale (bool): Scale the objects. Else, just return the scale value.
 			average (bool): Average the result across all axes.
 
-		:Return:
+		Return:
 			(list) scale values as [x,y,z,x,y,z...]
 		'''
 		to = pm.ls(objectsA, flatten=True)
@@ -376,7 +376,7 @@ class Xform(object):
 	def snap3PointsTo3Points(vertices):
 		'''Move and align the object defined by the first 3 points to the last 3 points.
 
-		:Parameters:
+		Parameters:
 			vertices (list): The first 3 points must be on the same object (i.e. it is the 
 						object to be transformed). The second set of points define 
 						the position and plane to transform to.
@@ -467,12 +467,12 @@ class Xform(object):
 	def isOverlapping(objA, objB, tolerance=0.001):
 		'''Check if the vertices in objA and objB are overlapping within the given tolerance.
 
-		:Parameters:
+		Parameters:
 			objA (str)(obj): The first object to check. Object can be a component.
 			objB (str)(obj): The second object to check. Object can be a component.
 			tolerance (float) = The maximum search distance before a vertex is considered not overlapping.
 
-		:Return:
+		Return:
 			(bool)
 		'''
 		vert_setA = pm.ls(pm.polyListComponentConversion(objA, toVertex=1), flatten=1)
@@ -487,11 +487,11 @@ class Xform(object):
 	def getVertPositions(objects, worldSpace=True):
 		'''Get all vertex positions for the given objects.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The polygon object(s).
 			worldSpace (bool): Sample in world or object space.
 
-		:Return:
+		Return:
 			(list) Nested lists if multiple objects given.
 		'''
 		import maya.OpenMaya as om
@@ -510,13 +510,13 @@ class Xform(object):
 	def hashPoints(points, precision=4):
 		'''Hash the given list of point values.
 
-		:Parameters:
+		Parameters:
 			points (list): A list of point values as tuples.
 			precision (int): determines the number of decimal places that are retained 
 				in the fixed-point representation. For example, with a value of 4, the 
 				fixed-point representation would retain 4 decimal place.
 
-		:Return:
+		Return:
 			(list) list(s) of hashed tuples.
 		'''
 		nested = Iter.nestedDepth(points)>1
@@ -534,12 +534,12 @@ class Xform(object):
 	def getMatchingVerts(cls, meshA, meshB, worldSpace=False):
 		'''Find any vertices which point locations match between two given mesh.
 
-		:Parameters:
+		Parameters:
 			meshA (str)(obj)(list): The first polygon object.
 			meshA (str)(obj)(list): A second polygon object.
 			worldSpace (bool): Sample in world or object space.
 
-		:Return:
+		Return:
 			(list) nested tuples with int values representing matching vertex pairs.
 		'''
 		vertPosA, vertPosB = cls.getVertPositions([meshA, meshB], worldSpace)
@@ -553,11 +553,11 @@ class Xform(object):
 	@staticmethod
 	def orderByDistance(objects, point=[0, 0, 0], reverse=False):
 		'''Order the given objects by their distance from the given point.
-		:Parameters:
+		Parameters:
 			objects (str)(int)(list): The object(s) to order.
 			point (list): A three value float list x, y, z.
 			reverse (bool): Reverse the naming order. (Farthest object first)
-		:Return:
+		Return:
 			(list) ordered objects
 		'''
 		distance={}
@@ -577,12 +577,12 @@ class Xform(object):
 	def alignVertices(mode, average=False, edgeloop=False):
 		'''Align vertices.
 
-		:Parameters:
+		Parameters:
 			mode (int): possible values are align: 0-YZ, 1-XZ, 2-XY, 3-X, 4-Y, 5-Z, 6-XYZ 
 			average (bool): align to average of all selected vertices. else, align to last selected
 			edgeloop (bool): align vertices in edgeloop from a selected edge
 
-		:Example: alignVertices(mode=3, average=True, edgeloop=True)
+		Example: alignVertices(mode=3, average=True, edgeloop=True)
 		'''
 		# pm.Core.undoInfo (openChunk=True)
 		selectTypeEdge = pm.selectType(query=True, edge=True)
@@ -650,10 +650,10 @@ class Xform(object):
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:
@@ -685,7 +685,7 @@ if __name__=='__main__':
 # 		'''Match transform and rotation on like objects by using 3 vertices from each object.
 # 		The vertex order is transferred to the target object(s).
 
-# 		:Parameters:
+# 		Parameters:
 # 			source (str)(obj): The object to move from.
 # 			target (str)(obj): The object to move to.
 # 		'''
@@ -700,11 +700,11 @@ if __name__=='__main__':
 # 	def getComponentPoint(component, alignToNormal=False):
 # 		'''Get the center point from the given component.
 
-# 		:Parameters:
+# 		Parameters:
 # 			component (str)(obj): Object component.
 # 			alignToNormal (bool): Constain to normal vector.
 
-# 		:Return:
+# 		Return:
 # 			(tuple) coordinate as xyz float values.
 # 		'''
 # 		if ".vtx" in str(component):

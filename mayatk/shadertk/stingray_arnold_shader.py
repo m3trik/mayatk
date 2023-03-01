@@ -8,7 +8,7 @@ try: import pymel.core as pm
 except ImportError as error: print (__file__, error)
 
 from pythontk import File, Img, Str, Json
-from mayatk import Node, getMainWindow
+from mayatk import Node, getMainWindow, undo
 from uitk.switchboard import Switchboard
 from uitk.widgets import rwidgets
 
@@ -69,11 +69,10 @@ class Stingray_arnold_shader():
 			node.camera.set(state)
 
 
+	@undo
 	def createNetwork(self, textures, name='', hdrMap='', hdrMapVisibility=False, normalMapType='OpenGL', callback=print):
 		'''
 		'''
-		pm.undoChunk(open=True)
-
 		normal_map_created_from_other_type = False
 		normalMapType = 'Normal_'+normalMapType.strip('Normal_') #assure normalMapType is formatted as 'Normal_OpenGL' whether given as 'OpenGL' or 'Normal_OpenGL'
 
@@ -205,7 +204,6 @@ class Stingray_arnold_shader():
 
 		self.hdr_env = hdrMap
 		self.setHdrMapVisibility(hdrMapVisibility)
-		pm.undoChunk(close=True)
 
 
 
@@ -258,7 +256,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def mat_name(self) -> str:
 		'''Get the mat name from the user input text field.
 
-		:Return:
+		Return:
 			(str)
 		'''
 		text = self.sb.ui.txt000.text()
@@ -269,7 +267,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def hdr_map(self) -> str:
 		'''Get the hdr map filepath from the comboBoxes current text.
 
-		:Return:
+		Return:
 			(str) data as string.
 		'''
 		data = self.sb.ui.cmb000.currentData()
@@ -280,7 +278,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def hdr_map_visibility(self) -> bool:
 		'''Get the hdr map visibility state from the checkBoxes current state.
 
-		:Return:
+		Return:
 			(bool)
 		'''
 		state = self.sb.ui.chk000.isChecked()
@@ -291,7 +289,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	def normal_map_type(self) -> str:
 		'''Get the normal map type from the comboBoxes current text.
 
-		:Return:
+		Return:
 			(str)
 		'''
 		text = self.sb.ui.cmb001.currentText()
@@ -378,7 +376,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
 	def callback(self, string, progress=None, clear=False):
 		'''
-		:Parameters:
+		Parameters:
 			string (str): The text to output to a textEdit widget.
 			progress (int)(list): The progress amount to register with the progressBar.
 				Can be given as an int or a tuple as: (progress, total_len) 
@@ -397,27 +395,31 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 			QtWidgets.QApplication.instance().processEvents()
 
 
-class Stingray_arnold_shader_main(QtWidgets.QMainWindow):
+class Stingray_arnold_shader_main(Switchboard):
 	'''Constructs the main ui window for `Stingray_arnold_shader` class.
 	'''
-	app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv) #return the existing QApplication object, or create a new one if none exists.
+	def __init__(self, parent=None, **kwargs):
+		super().__init__(parent, **kwargs)
 
-	def __init__(self, parent=None):
-		super().__init__(parent)
+		self.uiLoc='stingray_arnold_shader.ui'
+		self.widgetLoc=rwidgets
+		self.slotLoc=Stingray_arnold_shader_slots
 
-		self.sb = Switchboard(self, uiLoc='stingray_arnold_shader.ui', widgetLoc=rwidgets, slotLoc=Stingray_arnold_shader_slots)
-		self.sb.stingray_arnold_shader.alias = 'ui' #set an alternate attribute name that can be used to access the ui.
+		self.style = {
+			'BACKGROUND'		: 'rgb(100,100,100)',
+			'BACKGROUND_ALPHA'	: 'rgba(100,100,100,75)',
+			'PRESSED'			: 'rgb(125,125,125)',
+			'HIGHLIGHT'			: 'yellow',
+			'HOVER'				: 'rgb(82,133,166)',
+			'TEXT'				: 'white',
+			'TEXT_CHECKED'		: 'black',
+			'TEXT_DISABLED'		: 'gray',
+			'TEXT_HOVER'		: 'white',
+			'TEXT_BACKGROUND'	: 'rgb(50,50,50)',
+			'BORDER'			: 'rgb(50,50,50)',
+		}
 
-		self.setCentralWidget(self.sb.ui)
-		self.sb.setStyle(self.sb.ui.widgets)
-		self.sb.ui.draggable_header.hide()
-
-		try:
-			self.sb.ui.connected = True
-		except Exception as error:
-			print (f'# Error: {__file__} in Stingray_arnold_shader_main\n#\tCould not establish slot connections for `{self.sb.ui.name}`\n#\t{error}')
-		self.sb.ui.isInitialized = True
-		self.activateWindow()
+		self.ui.draggable_header.hide()
 
 # -----------------------------------------------------------------------------
 
@@ -435,7 +437,7 @@ if __name__ == "__main__":
 
 	parent = getMainWindow()
 	main = Stingray_arnold_shader_main(parent)
-	main.show()
+	main.ui.show()
 
 	exit_code = main.app.exec_()
 	if exit_code != -1:

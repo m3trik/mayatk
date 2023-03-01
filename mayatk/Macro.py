@@ -9,7 +9,7 @@ except ImportError as error:
 class Macro():
 	"""Assign macro functions to hotkeys.
 
-	:Example:
+	Example:
 	class MSlots(Macro):
 		'''A class that inherits from `Macro` and holds any macro functions.
 		'''
@@ -39,26 +39,52 @@ class Macro():
 	}
 	"""
 	@classmethod
-	def setMacros(cls, macros={}):
-		'''Extends setMacro to accept a dictionary.
+	def setMacros(cls, *args):
+		"""Extends `setMacro` to accept a list of strings representing positional and keyword arguments.
 
-		:Parameters:
-			macros (dict): Command names as keys, with dict values containing any keyword args for 'setMacro'. 
-			ex. {'m_group': {'k':'ctl+g', 'cat':'Edit'}}
-		'''
-		for name, kwargs in macros.items():
-			cls.setMacro(name, **kwargs)
+		Parameters:
+			*args (str): A variable number of strings, each containing the arguments for a single macro. Each string 
+					should be in the format "<macro name>, <positional arg1>, <positional arg2>, ..., <keyword arg1>=<value1>,
+					<keyword arg2>=<value2>, ..."
+		Example:
+			setMacros('m_back_face_culling, key=1, cat=Display', 'm_smooth_preview, key=2, cat=Display') #Calls `setMacro` with the parsed arguments for each macro in `args`.
+		"""
+		for string in args:
+			cls.call_with_input(cls.setMacro, string)
+
+
+	@staticmethod
+	def call_with_input(func, input_string):
+		"""Parses an input string into positional and keyword arguments, and
+		calls the given function with those arguments.
+
+		Parameters:
+			func (callable): The function to call.
+			input_string (str): The input string containing the arguments.
+
+		Returns:
+			The result of calling `func` with the parsed arguments.
+		"""
+		args, kwargs = [], {}
+		for i in input_string.split(','):
+			try:
+				key, value = i.split('=')
+				kwargs[key.strip()] = value.strip()
+			except ValueError:
+				args.append(i.strip())
+
+		return func(*args, **kwargs)
 
 
 	@classmethod
-	def setMacro(cls, name, k=None, cat=None, ann=None, default=False, deleteExisting=True):
+	def setMacro(cls, name, key=None, cat=None, ann=None, default=False, deleteExisting=True):
 		'''Sets a default runtime command with a keyboard shortcut.
 
-		:Parameters:
+		Parameters:
 			name (str): The command name you provide must be unique. (alphanumeric characters, or underscores)
 			cat (str): catagory - Category for the command.
 			ann (str): annotation - Description of the command.
-			k (str): keyShortcut - Specify what key is being set.
+			key (str): keyShortcut - Specify what key is being set.
 						key modifier values are set by adding a '+' between chars. ie. 'sht+z'.
 						modifiers:
 							alt, ctl, sht
@@ -106,7 +132,7 @@ class Macro():
 		#set hotkey
 		#modifiers
 		ctl=False; alt=False; sht=False
-		for char in k.split('+'):
+		for char in key.split('+'):
 			if char=='ctl':
 				ctl = True
 			elif char=='alt':
@@ -134,10 +160,10 @@ class Macro():
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:
@@ -289,11 +315,11 @@ pm.runTimeCommand(
 # 		The source code is returned as a single string.
 # 		Removes lines containing '@' or 'def ' ie. @staticmethod.
 
-# 		:Parameters:
+# 		Parameters:
 # 			cmd = module, class, method, function, traceback, frame, or code object.
 # 			removeTabs (int): remove x instances of '\t' from each line.
 
-# 		:Return:
+# 		Return:
 # 			A Multi-line string.
 # 		'''
 # 		from inspect import getsource

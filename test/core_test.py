@@ -20,10 +20,10 @@ class Main(unittest.TestCase):
 	def replace_mem_address(obj):
 		'''Replace memory addresses in a string representation of an object with a fixed format of '0x00000000000'.
 
-		:Parameters:
+		Parameters:
 			obj (object): The input object. The function first converts this object to a string using the `str` function.
 
-		:Return:
+		Return:
 			(str) The string representation of the object with all memory addresses replaced.
 
 		Example:

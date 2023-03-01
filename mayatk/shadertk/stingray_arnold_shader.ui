@@ -9,20 +9,14 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>541</width>
-    <height>292</height>
+    <width>427</width>
+    <height>230</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
-    <width>111</width>
-    <height>0</height>
-   </size>
-  </property>
-  <property name="maximumSize">
-   <size>
-    <width>999</width>
-    <height>999</height>
+    <width>427</width>
+    <height>175</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -38,6 +32,12 @@
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
   <widget class="QWidget" name="mainWindow">
+   <property name="minimumSize">
+    <size>
+     <width>0</width>
+     <height>215</height>
+    </size>
+   </property>
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
      <layout class="QVBoxLayout" name="verticalLayout_3">
@@ -78,6 +78,12 @@
       </item>
       <item>
        <widget class="QGroupBox" name="groupBox_5">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>158</height>
+         </size>
+        </property>
         <property name="title">
          <string/>
         </property>
@@ -392,6 +398,8 @@
                </widget>
               </item>
              </layout>
+             <zorder>chk000</zorder>
+             <zorder>cmb000</zorder>
             </widget>
            </item>
            <item row="3" column="3">
@@ -497,26 +505,38 @@
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="QTextEdit" name="txt001">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>1</height>
+           </size>
+          </property>
+          <property name="frameShape">
+           <enum>QFrame::NoFrame</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Plain</enum>
+          </property>
+          <property name="verticalScrollBarPolicy">
+           <enum>Qt::ScrollBarAlwaysOff</enum>
+          </property>
+          <property name="horizontalScrollBarPolicy">
+           <enum>Qt::ScrollBarAlwaysOff</enum>
+          </property>
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
        </layout>
-      </item>
-      <item>
-       <widget class="QTextEdit" name="txt001">
-        <property name="frameShape">
-         <enum>QFrame::NoFrame</enum>
-        </property>
-        <property name="frameShadow">
-         <enum>QFrame::Plain</enum>
-        </property>
-        <property name="verticalScrollBarPolicy">
-         <enum>Qt::ScrollBarAlwaysOff</enum>
-        </property>
-        <property name="horizontalScrollBarPolicy">
-         <enum>Qt::ScrollBarAlwaysOff</enum>
-        </property>
-        <property name="readOnly">
-         <bool>true</bool>
-        </property>
-       </widget>
       </item>
      </layout>
     </item>

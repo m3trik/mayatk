@@ -44,7 +44,7 @@ class _GetComponents():
 	def getComponentType(cls, component, nom='abv'):
 		'''Get the type of a given component.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): A single maya component.
 				If multiple components are given, only the first will be sampled.
 			nom (str): Specify the desired return value type. (default: 'str')
@@ -52,10 +52,10 @@ class _GetComponents():
 						'int' - maya mask value as an integer.
 						'hex' - hex value. ie. 0x0001
 						'abv' - abreviated object type as a string. ie. 'vtx'
-		:Return:
+		Return:
 			(str)(int) dependant on 'nom' arg.
 
-		:Example:
+		Example:
 		getComponentType('cyl.e[:]') #returns: 'e'
 		getComponentType('cyl.vtx[:]', 'abv') #returns: 'vtx'
 		getComponentType('cyl.e[:]', 'int') #returns: 32
@@ -81,15 +81,15 @@ class _GetComponents():
 		ie. a hex value of 0x0001 for 'vertex'
 		If nothing is found, a value of 'None' will be returned.
 
-		:Parameters:
+		Parameters:
 			componentType () = A component type. ex. 'vertex', 'vtx', 31, or 0x0001
 			nom (str): The desired returned alias.  (default: 'abv')
 				(valid: 'abv', 'singular', 'plural', 'str', 'int', 'hex')
 
-		:Return:
+		Return:
 			(str)(int)(hex)(None) dependant on 'nom' argument.
 
-		:Example:
+		Example:
 		convertAlias('vertex', 'hex') #returns: 0x0001
 		convertAlias(0x0001, 'str') #returns: 'Polygon Vertex'
 		'''
@@ -106,7 +106,7 @@ class _GetComponents():
 	def convertComponentType(cls, components, componentType, returnType='str', flatten=False):
 		'''Convert component(s) to it's sub-components of the given type.
 
-		:Parameters:
+		Parameters:
 			components (str)(obj)(list): The components(s) to convert.
 			componentType (str): The desired returned component type. 
 				valid: 'vtx' (or 'vertex', 'vertices', 'Polygon Vertex', 31, 0x0001), 
@@ -115,10 +115,10 @@ class _GetComponents():
 				(valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list)(dict)
 
-		:Example:
+		Example:
 		convertComponentType('obj.vtx[:2]', 'vertex') #returns: ['obj.vtx[0:2]']
 		convertComponentType('obj.vtx[:2]', 'face') #returns: ['obj.f[0:2]', 'obj.f[11:14]', 'obj.f[23]']
 		convertComponentType('obj.vtx[:2]', 'edge') #returns: ['obj.e[0:2]', 'obj.e[11]', 'obj.e[24:26]', 'obj.e[36:38]']
@@ -137,7 +137,7 @@ class _GetComponents():
 	def convertIntToComponent(cls, obj, integers, componentType, returnType='str', flatten=False):
 		'''Convert the given integers to components of the given object.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): The object to convert to vertices of.
 			integers (list): The integer(s) to convert.
 			componentType (str): The desired returned component type. 
@@ -147,10 +147,10 @@ class _GetComponents():
 				(valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list)
 
-		:Example: convertIntToComponent('cyl', range(4), 'f') #returns: ['cylShape.f[0:3]']
+		Example: convertIntToComponent('cyl', range(4), 'f') #returns: ['cylShape.f[0:3]']
 		'''
 		obj = pm.ls(obj, objectsOnly=True)[0]
 		objName = obj.name()
@@ -168,17 +168,17 @@ class _GetComponents():
 	def filterComponents(cls, components, inc=[], exc=[], flatten=False):
 		'''Filter the given components.
 
-		:Parameters:
+		Parameters:
 			components (str)(obj)(list): The components(s) to filter.
 			inc (str)(int)(obj)(list): The component(s) to include.
 			exc (str)(int)(obj)(list): The component(s) to exclude.
 						(exlude take precidence over include)
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list)
 
-		:Example:
+		Example:
 		filterComponents('cyl.vtx[:]', 'cyl.vtx[:2]', 'cyl.vtx[1:23]') #returns: ['cyl.vtx[0]']
 		filterComponents('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
 		'''
@@ -214,7 +214,7 @@ class _GetComponents():
 		'''Get the components of the given type from the given object(s).
 		If no objects are given the current selection will be used.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s) to get the components of. (Polygon, Polygon components)(default: current selection)
 			componentType (str)(int): The component type to return. (valid: any type allowed in the 'convertAlias' method)
 			returnType (str): The desired returned object type.
@@ -225,10 +225,10 @@ class _GetComponents():
 								A value of 0.5 will return a 50% of the components of an object in random order.
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list)(dict) Dependant on flags.
 
-		:Example:
+		Example:
 		getComponents('obj', 'vertex', 'str', '', 'obj.vtx[2:23]') #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[24]', 'objShape.vtx[25]']
 		getComponents('obj', 'vertex', 'obj', '', 'obj.vtx[:23]') #returns: [MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
 		getComponents('obj', 'f', 'int') #returns: {nt.Mesh('objShape'): [(0, 35)]}
@@ -256,13 +256,13 @@ class Cmpt(_GetComponents):
 	def getContigiousEdges(cls, components):
 		'''Get a list containing sets of adjacent edges.
 
-		:Parameters:
+		Parameters:
 			components (list): Polygon components to be filtered for adjacent edges.
 
-		:Return:
+		Return:
 			(list) adjacent edge sets.
 
-		:Example:
+		Example:
 		getContigiousEdges(['obj.e[:2]']) #returns: [{'objShape.e[1]', 'objShape.e[0]', 'objShape.e[2]'}]
 		getContigiousEdges(['obj.f[0]']) #returns: [{'objShape.e[24]', 'objShape.e[0]', 'objShape.e[25]', 'objShape.e[12]'}]
 		'''
@@ -302,14 +302,14 @@ class Cmpt(_GetComponents):
 	def getContigiousIslands(cls, faces, faceIslands=[]):
 		'''Get a list containing sets of adjacent polygon faces grouped by islands.
 
-		:Parameters:
+		Parameters:
 			faces (str)(obj)(list): The polygon faces to be filtered for adjacent.
 			faceIslands (list): optional. list of sets. ability to add faces from previous calls to the return value.
 
-		:Return:
+		Return:
 			(list) of sets of adjacent faces.
 
-		:Example: getContigiousIslands('obj.f[21:26]') #returns: [{'objShape.f[22]', 'objShape.f[21]', 'objShape.f[23]'}, {'objShape.f[26]', 'objShape.f[24]', 'objShape.f[25]'}]
+		Example: getContigiousIslands('obj.f[21:26]') #returns: [{'objShape.f[22]', 'objShape.f[21]', 'objShape.f[23]'}, {'objShape.f[26]', 'objShape.f[24]', 'objShape.f[25]'}]
 		'''
 		sets=[]
 		faces = pm.ls(faces, flatten=1)
@@ -346,15 +346,15 @@ class Cmpt(_GetComponents):
 	def getIslands(obj, returnType='str', flatten=False):
 		'''Get the group of components in each separate island of a combined mesh.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): The object to get shells from.
 			returnType (bool): Return the shell faces as a list of type: 'str' (default), 'int', or 'obj'.
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(generator)
 
-		:Example: getIslands('combined_obj') #returns: [['combined_obj.f[0]', 'combined_obj.f[5]', ..etc, ['combined_obj.f[15]', ..etc]] 
+		Example: getIslands('combined_obj') #returns: [['combined_obj.f[0]', 'combined_obj.f[5]', ..etc, ['combined_obj.f[15]', ..etc]] 
 		'''
 		num_shells = pm.polyEvaluate(obj, shell=True)
 		num_faces = pm.polyEvaluate(obj, face=True)
@@ -383,7 +383,7 @@ class Cmpt(_GetComponents):
 		'''Get any object border components from given component(s) or a polygon object.
 		A border is defined as a hole or detached edge.
 
-		:Parameters:
+		Parameters:
 			x (str)(obj)(list): Component(s) (or a polygon object) to find any border components for.
 			componentType (str): The desired returned component type. (valid: 'vertex','edge','face', '',
 				An empty string returns the same type as the first given component, or edges if an object is given)
@@ -393,10 +393,10 @@ class Cmpt(_GetComponents):
 				(valid: 'component', 'object'(default))
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list) components that border an open edge.
 
-		:Example:
+		Example:
 		getBorderComponents('pln', 'vtx') #returns: ['plnShape.vtx[0:4]', 'plnShape.vtx[7:8]', 'plnShape.vtx[11:15]'],
 		getBorderComponents('pln') #returns: ['plnShape.e[0:2]', 'plnShape.e[4]', 'plnShape.e[6]', 'plnShape.e[8]', 'plnShape.e[13]', 'plnShape.e[15]', 'plnShape.e[20:23]'],
 		getBorderComponents('pln.e[:]') #returns: ['plnShape.e[0:2]', 'plnShape.e[4]', 'plnShape.e[6]', 'plnShape.e[8]', 'plnShape.e[13]', 'plnShape.e[15]', 'plnShape.e[20:23]'],
@@ -453,15 +453,15 @@ class Cmpt(_GetComponents):
 	def getClosestVerts(cls, set1, set2, tolerance=1000):
 		'''Find the two closest vertices between the two sets of vertices.
 
-		:Parameters:
+		Parameters:
 			set1 (str)(list): The first set of vertices.
 			set2 (str)(list): The second set of vertices.
 			tolerance (float) = Maximum search distance.
 
-		:Return:
+		Return:
 			(list) closest vertex pairs by order of distance (excluding those not meeting the tolerance). (<vertex from set1>, <vertex from set2>).
 
-		:Example: getClosestVerts('pln.vtx[:10]', 'pln.vtx[11:]', 6.667) #returns: [('plnShape.vtx[7]', 'plnShape.vtx[11]'), ('plnShape.vtx[8]', 'plnShape.vtx[12]'), ('plnShape.vtx[9]', 'plnShape.vtx[13]'), ('plnShape.vtx[10]', 'plnShape.vtx[11]'), ('plnShape.vtx[10]', 'plnShape.vtx[14]')]
+		Example: getClosestVerts('pln.vtx[:10]', 'pln.vtx[11:]', 6.667) #returns: [('plnShape.vtx[7]', 'plnShape.vtx[11]'), ('plnShape.vtx[8]', 'plnShape.vtx[12]'), ('plnShape.vtx[9]', 'plnShape.vtx[13]'), ('plnShape.vtx[10]', 'plnShape.vtx[11]'), ('plnShape.vtx[10]', 'plnShape.vtx[14]')]
 		'''
 		from operator import itemgetter
 
@@ -486,7 +486,7 @@ class Cmpt(_GetComponents):
 	def getClosestVertex(cls, vertices, obj, tolerance=0.0, freezeTransforms=False, returnType='str'):
 		'''Find the closest vertex of the given object for each vertex in the list of given vertices.
 
-		:Parameters:
+		Parameters:
 			vertices (list): A set of vertices.
 			obj (str)(obj)(list): The reference object in which to find the closest vertex for each vertex in the list of given vertices.
 			tolerance (float) = Maximum search distance. Default is 0.0, which turns off the tolerance flag.
@@ -494,10 +494,10 @@ class Cmpt(_GetComponents):
 			returnType (str): The desired returned object type. This only affects the dict value (found vertex), 
 					the key (orig vertex) is always a string. ex. {'planeShape.vtx[0]': 'objShape.vtx[3]'} vs. {'planeShape.vtx[0]': MeshVertex('objShape.vtx[3]')}
 					(valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
-		:Return:
+		Return:
 			(dict) closest vertex pairs {<vertex from set1>:<vertex from set2>}.
 
-		:Example:
+		Example:
 		getClosestVertex('plnShape.vtx[0]', 'cyl', returnType='int') #returns: {'plnShape.vtx[0]': 3},
 		getClosestVertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
 		getClosestVertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
@@ -541,7 +541,7 @@ class Cmpt(_GetComponents):
 		'''Query the polySelect command for the components along different edge paths.
 		Supports components from a single object.
 
-		:Parameters:
+		Parameters:
 			components (str)(obj)(list): The components used for the query (dependant on the operation type).
 			path (str): The desired return type. valid: 'edgeLoop': Select an edge loop starting at the given edge.
 				'edgeRing': Select an edge ring starting at the given edge.
@@ -551,10 +551,10 @@ class Cmpt(_GetComponents):
 				(valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list) The components comprising the path.
 
-		:Example:
+		Example:
 		getEdgePath('sph.e[12]', 'edgeLoop') #returns: ['sphShape.e[12]', 'sphShape.e[17]', 'sphShape.e[16]', 'sphShape.e[15]', 'sphShape.e[14]', 'sphShape.e[13]']
 		getEdgePath('sph.e[12]', 'edgeLoop', 'int') #returns: [12, 17, 16, 15, 14, 13]
 		getEdgePath('sph.e[12]', 'edgeRing') #returns: ['sphShape.e[0]', 'sphShape.e[6]', 'sphShape.e[12]', 'sphShape.e[18]', 'sphShape.e[24]']
@@ -594,16 +594,16 @@ class Cmpt(_GetComponents):
 	def getShortestPath(cls, components, returnType='str', flatten=False):
 		'''Get the shortest path between two components.
 
-		:Parameters:
+		Parameters:
 			components (obj): A Pair of vertices or edges.
 			returnType (str): The desired returned object type. 
 				valid: 'str'(default), 'obj', 'int'(valid only at sub-object level)
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list) the components that comprise the path as strings.
 
-		:Example:
+		Example:
 		getEdgePath('sph.e[12]', 'edgeLoop') #returns: ['sphShape.e[12]', 'sphShape.e[17]', 'sphShape.e[16]', 'sphShape.e[15]', 'sphShape.e[14]', 'sphShape.e[13]']
 		getEdgePath('sph.e[12]', 'edgeLoop', 'int') #returns: [12, 17, 16, 15, 14, 13]
 		getEdgePath('sph.e[12]', 'edgeRing') #returns: ['sphShape.e[0]', 'sphShape.e[6]', 'sphShape.e[12]', 'sphShape.e[18]', 'sphShape.e[24]']
@@ -655,7 +655,7 @@ class Cmpt(_GetComponents):
 	def getEdgesByNormalAngle(cls, objects, lowAngle=50, highAngle=130, returnType='str', flatten=False):
 		'''Get a list of edges having normals between the given high and low angles using maya's polySelectConstraint.
 
-		:Parameters:
+		Parameters:
 			objects (str)(list)(obj): The object(s) to get edges of.
 			lowAngle (int): Normal angle low range.
 			highAngle (int): Normal angle high range.
@@ -663,10 +663,10 @@ class Cmpt(_GetComponents):
 				valid: 'str'(default), 'obj', 'int'(valid only at sub-object level)
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list) Polygon edges.
 
-		:Example: getEdgesByNormalAngle('cyl', 50, 130) #returns: ['cylShape.e[0:23]']
+		Example: getEdgesByNormalAngle('cyl', 50, 130) #returns: ['cylShape.e[0:23]']
 		'''
 		orig_selection = pm.ls(sl=1) #get currently selected objects in order to re-select them after the contraint operation.
 
@@ -688,14 +688,14 @@ class Cmpt(_GetComponents):
 	def getComponentsByNumberOfConnected(cls, components, num_of_connected=(0,2), connectedType='', returnType='str'):
 		'''Get a list of components filtered by the number of their connected components.
 
-		:Parameters:
+		Parameters:
 			components (str)(list)(obj): The components to filter.
 			num_of_connected (int)(tuple): The number of connected components. Can be given as a range. (Default: (0,2))
 			connectedType (str)(int): The desired component mask. (valid: 'vtx','vertex','vertices','Polygon Vertex',31,0x0001(vertices), 'e','edge','edges','Polygon Edge',32,0x8000(edges), 'f','face','faces','Polygon Face',34,0x0008(faces), 'uv','texture','texture coordinates','Polygon UV',35,0x0010(texture coordiantes).
 			returnType (str): The desired returned object type. 
 				valid: 'str'(default), 'obj', 'int'(valid only at sub-object level)
 
-		:Return:
+		Return:
 			(list) flattened list.
 
 		ex. faces = getComponentsByNumberOfConnected('sph.f[:]', 4, 'e') #returns faces with four connected edges (four sided faces).
@@ -729,12 +729,12 @@ class Cmpt(_GetComponents):
 		'''Return the normal at the given vertex. The returned normal is a single 
 		per-vertex normal, so unshared normals at a vertex will be averaged.
 
-		:Parameters:
+		Parameters:
 			vertex (str)(obj)(list): A polygon vertex.
 			angleWeighted (bool): Weight by the angle subtended by the face at the vertex. 
 				If angleWeighted is set to false, a simple average of surround face normals is returned.
 				The simple average evaluation is significantly faster than the angle-weighted average.
-		:Return:
+		Return:
 			(MVector)
 		'''
 		import maya.api.OpenMaya as om
@@ -754,10 +754,10 @@ class Cmpt(_GetComponents):
 	def getVectorFromComponents(components):
 		'''Get a vector representing the averaged and normalized vertex-face normals.
 
-		:Parameters:
+		Parameters:
 			components (list): A list of component to get normals of.
 
-		:Return:
+		Return:
 			(tuple) vector ie. (-4.5296159711938344e-08, 1.0, 1.6846732009412335e-08)
 		'''
 		vertices = pm.polyListComponentConversion(components, toVertex=1)
@@ -782,10 +782,10 @@ class Cmpt(_GetComponents):
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:
@@ -815,15 +815,15 @@ if __name__=='__main__':
 # def filterComponents(cls, frm, inc=[], exc=[]):
 # 		'''Filter the given 'frm' list for the items in 'exc'.
 
-# 		:Parameters:
+# 		Parameters:
 # 			frm (str)(obj)(list): The components(s) to filter.
 # 			inc (str)(obj)(list): The component(s) to include.
 # 			exc (str)(obj)(list): The component(s) to exclude.
 # 								(exlude take precidence over include)
-# 		:Return:
+# 		Return:
 # 			(list)
 
-# 		:Example: filterComponents('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
+# 		Example: filterComponents('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
 # 		'''
 # 		exc = pm.ls(exc, flatten=True)
 # 		if not exc:

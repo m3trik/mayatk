@@ -18,7 +18,7 @@ class Core():
 		'''A decorator to place a function into Maya's undo chunk.
 		Prevents the undo queue from breaking entirely if an exception is raised within the given function.
 
-		:Parameters:
+		Parameters:
 			fn (obj): The decorated python function that will be placed into the undo que as a single entry.
 		'''
 		def wrapper(*args, **kwargs):
@@ -32,7 +32,7 @@ class Core():
 	def getMainWindow():
 		'''Get maya's main window object.
 
-		:Return:
+		Return:
 			(QWidget)
 		'''
 		from PySide2.QtWidgets import QApplication
@@ -52,10 +52,10 @@ class Core():
 	def appendMayaPaths(maya_version=2023):
 		"""Adds the required library paths for Maya to the system's Python path.
 
-		:Parameters:
+		Parameters:
 			maya_version (int, str, optional): The version of Maya to add the paths for. Defaults to 2023.
 
-		:Return:
+		Return:
 			(None)
 		"""
 		maya_install_path = os.environ.get("MAYA_LOCATION") #Get the Maya installation path.
@@ -81,11 +81,11 @@ class Core():
 	def wrapControl(controlName, container):
 		'''Embed a Maya Native UI Object.
 
-		:Parameters:
+		Parameters:
 			controlName (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
 			container (obj): A widget instance in which to wrap the control.
 
-		:Example:
+		Example:
 			modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
 			wrapControl(modelPanelName, QtWidgets.QtWidget())
 		'''
@@ -113,10 +113,10 @@ class Core():
 	def mfnMeshGenerator(objects):
 		'''Generate mfn mesh from the given list of objects.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj(list): The objects to convert to mfn mesh.
 
-		:Return:
+		Return:
 			(generator)
 		'''
 		import maya.OpenMaya as om
@@ -138,13 +138,13 @@ class Core():
 		'''Determine if the given element(s) type.
 		Samples only the first element.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): The components(s) to query.
 
-		:Return:
+		Return:
 			(list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
 
-		:Example:
+		Example:
 		getArrayType('cyl.vtx[0]') #returns: 'transform'
 		getArrayType('cylShape.vtx[:]') #returns: 'str'
 		'''
@@ -161,16 +161,16 @@ class Core():
 	def convertArrayType(lst, returnType='str', flatten=False):
 		'''Convert the given element(s) to <obj>, 'str', or int values.
 
-		:Parameters:
+		Parameters:
 			lst (str)(obj)(list): The components(s) to convert.
 			returnType (str): The desired returned array element type.
 				valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
-		:Return:
+		Return:
 			(list)(dict) return a dict only with a return type of 'int' and more that one object given.
 
-		:Example:
+		Example:
 		convertArrayType('obj.vtx[:2]', 'str') #returns: ['objShape.vtx[0:2]']
 		convertArrayType('obj.vtx[:2]', 'str', True) #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[2]']
 		convertArrayType('obj.vtx[:2]', 'obj') #returns: [MeshVertex('objShape.vtx[0:2]')]
@@ -221,14 +221,14 @@ class Core():
 	def getParameterValuesMEL(node, cmd, parameters):
 		'''Query a Maya command, and return a key:value pair for each of the given parameters.
 
-		:Parameters:
+		Parameters:
 			node (str)(obj)(list): The object to query attributes of.
 			parameters (list): The command parameters to query. ie. ['enableTranslationX','translationX']
 
-		:Return:
+		Return:
 			(dict) {'parameter name':<value>} ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
-		:Example: getParameterValuesMEL(obj, 'transformLimits', ['enableTranslationX','translationX'])
+		Example: getParameterValuesMEL(obj, 'transformLimits', ['enableTranslationX','translationX'])
 		'''
 		cmd = getattr(pm, cmd)
 		node = pm.ls(node)[0]
@@ -246,11 +246,11 @@ class Core():
 	def setParameterValuesMEL(node, cmd, parameters):
 		'''Set parameters using a maya command.
 
-		:Parameters:
+		Parameters:
 			node (str)(obj)(list): The object to query attributes of.
 			parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
-		:Example: setParameterValuesMEL(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
+		Example: setParameterValuesMEL(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
 		'''
 		cmd = getattr(pm, cmd)
 		node = pm.ls(node)[0]
@@ -263,7 +263,7 @@ class Core():
 	def getSelectedChannels():
 		'''Get any attributes (channels) that are selected in the channel box.
 
-		:Return:
+		Return:
 			(str) list of any selected attributes as strings. (ie. ['tx', ry', 'sz'])
 		'''
 		channelBox = pm.mel.eval('global string $gChannelBoxName; $temp=$gChannelBoxName;') #fetch maya's main channelbox
@@ -279,10 +279,10 @@ class Core():
 		'''Returns panel and panel configuration information.
 		A fix for the broken pymel command of the same name.
 
-		:Parameters:
+		Parameters:
 			[allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
 
-		:Return:
+		Return:
 			(str) An array of panel names.
 		'''
 		from maya.cmds import getPanel #pymel getPanel is broken in ver: 2022.
@@ -296,7 +296,7 @@ class Core():
 	def mainProgressBar(size, name="progressBar#", stepAmount=1):
 		'''#add esc key pressed return False
 
-		:Parameters:
+		Parameters:
 			size (int): total amount
 			name (str): name of progress bar created
 			stepAmount(int): increment amount
@@ -327,7 +327,7 @@ class Core():
 	@staticmethod
 	def viewportMessage(message='', statusMessage='', assistMessage='', position='topCenter'):
 		'''
-		:Parameters:
+		Parameters:
 			message (str): The message to be displayed, (accepts html formatting). General message, inherited by -amg/assistMessage and -smg/statusMessage.
 			statusMessage (str): The status info message to be displayed (accepts html formatting).
 			assistMessage (str): The user assistance message to be displayed, (accepts html formatting).
@@ -455,10 +455,10 @@ class Core():
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:

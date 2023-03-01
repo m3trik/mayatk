@@ -4,22 +4,22 @@ import sys
 
 
 __package__ = 'mayatk'
-__version__ = '0.5.7'
+__version__ = '0.5.8'
 
 
 def __getattr__(attr):
 	"""This function dynamically imports a module and returns an attribute from the module. 
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to be imported. The name should be in the format 
 					'module_name.attribute_name' or just 'attribute_name'.
-	:Return:
+	Return:
 		(obj) The attribute specified by the `attr` argument.
 
 	:Raises:
 		AttributeError: If the specified attribute is not found in either the original module 
 						or the 'Core' module within the package.
-	:Example:
+	Example:
 		<package>.__getattr__('module1.attribute1') #returns: <attribute1 value>
 		<package>.__getattr__('attribute1') #returns: <attribute1 value>
 	"""

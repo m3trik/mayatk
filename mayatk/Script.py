@@ -18,10 +18,10 @@ class Script():
 	def getMelGlobals(keyword=None, caseSensitive=False):
 		'''Get global MEL variables.
 
-		:Parameters:
+		Parameters:
 			keyword (str): search string.
 
-		:Return:
+		Return:
 			(list)
 		'''
 		variables = [
@@ -37,7 +37,7 @@ class Script():
 	def convertMelToPy(mel, excludeFromInput=[], excludeFromOutput=['from pymel.all import *','s pm']):
 		'''Convert a string representing mel code into a string representing python code.
 
-		:Parameters:
+		Parameters:
 			mel (str): string containing mel code.
 			excludeFromInput (list) (list): of strings specifying series of chars to strip from the Input.
 			excludeFromOutput (list) (list): of strings specifying series of chars to strip from the Output.
@@ -69,7 +69,7 @@ class Script():
 
 	@staticmethod
 	def commandHelp(command): #mel command help
-		#:Parameters: command (str): mel command
+		#Parameters: command (str): mel command
 		command = ('help ' + command)
 		modtext = (pm.mel.eval(command))
 		outputscrollField (modtext, "command help", 1.0, 1.0) #text, window_title, width, height
@@ -77,7 +77,7 @@ class Script():
 
 	@staticmethod
 	def keywordSearch (keyword): #keyword command search
-		#:Parameters: keyword (str): 
+		#Parameters: keyword (str): 
 		keyword = ('help -list' + '"*' + keyword + '*"')
 		array = sorted(pm.mel.eval(keyword))
 		outputTextField(array, "keyword search")
@@ -178,10 +178,10 @@ class Script():
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:

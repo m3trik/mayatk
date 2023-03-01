@@ -6,7 +6,7 @@ import importlib
 def run_test_cases(test_module):
 	"""Runs all test cases within a test module.
 
-	:Parameters:
+	Parameters:
 		test_module (str)(module): A module object or a string representing the module name.
 
 	"""
@@ -25,7 +25,7 @@ def run_test_cases(test_module):
 def run_tests(module_names):
 	"""Reloads the non-test and test modules and runs the test cases within the test modules.
 
-	:Parameters:
+	Parameters:
 		module_names (list): A list of strings representing the names of the non-test modules.
 
 	"""

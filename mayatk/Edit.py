@@ -18,7 +18,7 @@ class Edit():
 	def rename(objects, to, fltr='', regEx=False, ignoreCase=False):
 		'''Rename scene objects.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s to rename. If nothing is given, all scene objects will be renamed.
 			to (str): Desired name: An optional asterisk modifier can be used for formatting
 				chars - replace all.
@@ -71,12 +71,12 @@ class Edit():
 	def setCase(objects=[], case='caplitalize'):
 		'''Rename objects following the given case.
 
-		:Parameters:
+		Parameters:
 			objects (str)(list): The objects to rename. default:all scene objects
 			case (str): Desired case using python case operators. 
 				valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
 
-		:Example: setCase(pm.ls(sl=1), 'upper')
+		Example: setCase(pm.ls(sl=1), 'upper')
 		'''
 		# pm.undoInfo(openChunk=1)
 		for obj in pm.ls(objects):
@@ -96,7 +96,7 @@ class Edit():
 	def setSuffixByObjLocation(objects, alphanumeric=False, stripTrailingInts=True, stripTrailingAlpha=True, reverse=False):
 		'''Rename objects with a suffix defined by its location from origin.
 
-		:Parameters:
+		Parameters:
 			objects (str)(int)(list): The object(s) to rename.
 			alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
 			stripTrailingInts (bool): Strip any trailing integers. ie. 'cube123'
@@ -139,7 +139,7 @@ class Edit():
 	def snapClosestVerts(obj1, obj2, tolerance=10.0, freezeTransforms=False):
 		'''Snap the vertices from object one to the closest verts on object two.
 
-		:Parameters:
+		Parameters:
 			obj1 (obj): The object in which the vertices are moved from.
 			obj2 (obj): The object in which the vertices are moved to.
 			tolerance (float) = Maximum search distance.
@@ -169,7 +169,7 @@ class Edit():
 	def mergeVertices(objects, selected=False, tolerance=0.001):
 		'''Merge Vertices on the given objects.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The object(s) to merge vertices on.
 			selected (bool): Merge only the currently selected components.
 			tolerance (float) = The maximum merge distance.
@@ -195,7 +195,7 @@ class Edit():
 	def getAllFacesOnAxis(obj, axis="-x", localspace=False):
 		'''Get all faces on a specified axis.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj): The name of the geometry.
 			axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
 			localspace (bool): Specify world or local space.
@@ -222,7 +222,7 @@ class Edit():
 	def deleteAlongAxis(cls, obj, axis="-x"):
 		'''Delete components of the given mesh object along the specified axis.
 
-		:Parameters:
+		Parameters:
 			obj (obj): Mesh object.
 			axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted. 
 		'''
@@ -244,7 +244,7 @@ class Edit():
 					sharedUVs=False, nonmanifold=False, lamina=False, invalidComponents=False, splitNonManifoldVertex=False, historyOn=True):
 		'''Select or remove unwanted geometry from a polygon mesh.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The polygon objects to clean.
 			allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
 			repair (bool): Attempt to repair instead of just selecting geometry.
@@ -268,13 +268,13 @@ class Edit():
 	def getOverlappingDupObjects(objects=[], omitInitialObjects=False, select=False, verbose=False):
 		'''Find any duplicate overlapping geometry at the object level.
 
-		:Parameters:
+		Parameters:
 			objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
 			omitInitialObjects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
 			select (bool): Select any found duplicate objects.
 			verbose (bool): Print each found object to console.
 
-		:Return:
+		Return:
 			(set)
 
 		ex call: duplicates = getOverlappingDupObjects(omitInitialObjects=True, select=True, verbose=True)
@@ -316,11 +316,11 @@ class Edit():
 	def findNonManifoldVertex(objects, select=1):
 		'''Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): A polygon mesh, or a list of meshes.
 			select (int): Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
 
-		:Return:
+		Return:
 			(set) any found non-manifold verts.
 		'''
 		pm.undoInfo(openChunk=True)
@@ -376,7 +376,7 @@ class Edit():
 	def splitNonManifoldVertex(vertex, select=True):
 		'''Separate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
-		:Parameters:
+		Parameters:
 			vertex (str)(obj): A single polygon vertex.
 			select (bool): Select the vertex after the operation. (default is True)
 		'''
@@ -428,11 +428,11 @@ class Edit():
 	def getNGons(objects, repair=False):
 		'''Get any N-Gons from the given object using selection contraints.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The objects to query.
 			repair (bool): Repair any found N-gons.
 
-		:Return:
+		Return:
 			(list)
 		'''
 		pm.select(objects)
@@ -453,11 +453,11 @@ class Edit():
 	def getOverlappingVertices(objects, threshold=0.0003):
 		'''Query the given objects for overlapping vertices.
 
-		:Parameters:
+		Parameters:
 			objects (str)(obj)(list): The objects to query.
 			threshold (float) = The maximum allowed distance.
 
-		:Return:
+		Return:
 			(list)
 		'''
 		import maya.OpenMaya as om
@@ -487,13 +487,13 @@ class Edit():
 	def getOverlappingFaces(cls, objects):
 		'''Get any duplicate overlapping faces of the given objects.
 
-		::Parameters:
+		:Parameters:
 			objects (str)(obj)(list): Faces or polygon objects.
 
-		:Return:
+		Return:
 			(list) duplicate overlapping faces.
 
-		:Example: pm.select(getOverlappingFaces(selection))
+		Example: pm.select(getOverlappingFaces(selection))
 		'''
 		if not objects:
 			return []
@@ -524,17 +524,17 @@ class Edit():
 		'''Find similar geometry objects using the polyEvaluate command.
 		Default behaviour is to compare all flags.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): The object to find similar for.
 			tol (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
 			includeOrig (bool): Include the original given obj with the return results.
 			kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
 				ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d, 
 				vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
-		:Return:
+		Return:
 			(list) Similar objects.
 
-		:Example: getSimilarMesh(selection, vertex=1, area=1)
+		Example: getSimilarMesh(selection, vertex=1, area=1)
 		'''
 		lst = lambda x: list(x) if isinstance(x, (list, tuple, set)) else list(x.values()) if isinstance(x, dict) else [x] #assure the returned result from polyEvaluate is a list of values.
 
@@ -551,12 +551,12 @@ class Edit():
 		'''Find similar geometry objects using the polyCompare command.
 		Default behaviour is to compare all flags.
 
-		:Parameters:
+		Parameters:
 			obj (str)(obj)(list): The object to find similar for.
 			includeOrig (bool): Include the original given obj with the return results.
 			kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
 				ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals
-		:Return:
+		Return:
 			(list) Similar objects.
 		'''
 		obj, *other = pm.filterExpand(pm.ls(obj, long=True, tr=True), selectionMask=12) #polygon selection mask.
@@ -580,10 +580,10 @@ class Edit():
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:

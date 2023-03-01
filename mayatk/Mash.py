@@ -16,7 +16,7 @@ except ImportError as error:
 def MTcreateNetwork(network, objects, networkName='MASH#', geometry='Mesh', distType='linearNetwork', hideOnCreate=True):
 	'''This proceedure creates a new MASH network.
 
-	:Parameters:
+	Parameters:
 		network (obj): A mash api network instance. ie. mapi.Network()
 		objects (str)(obj)(list): The maya objects to construct the network for.
 		networkName (str): The network name. (default:'MASH#')
@@ -24,7 +24,7 @@ def MTcreateNetwork(network, objects, networkName='MASH#', geometry='Mesh', dist
 		distType (str): Distribution type. (valid: "linearNetwork", radialNetwork", "gridNetwork", "initialNetwork", "zeroNetwork")
 		hideOnCreate (bool): Hide the original object(s) on network creation.
 
-	:Return:
+	Return:
 		The names of the created Waiter, Instancer and Distribute Node.
 
 	ex. mashNW = mapi.Network() #network instance
@@ -114,7 +114,7 @@ def MTbakeInstancer(network, instancer, bakeTranslate=True, bakeRotation=True, b
 	bakeAnimation=False, bakeVisibility=True, bakeToIntances=False, upstreamNodes=False, _getMObjectFromName=None):
 	'''Takes an instancer, and coverts all the particles being fed into it to actual geometry.
 
-	:Parameters:
+	Parameters:
 		network (obj): A mash api network instance. ie. mapi.Network()
 		instancer (str)(obj): Instancer node or name of an instancer node.
 		bakeAnimation (bool): True=bake entire playback range, False=bake current frame.
@@ -126,7 +126,7 @@ def MTbakeInstancer(network, instancer, bakeTranslate=True, bakeRotation=True, b
 		upstreamNodes (bool): The upstream nodes leading upto the selected nodes (along with their connections) are also duplicated.
 		_getMObjectFromName (str): Node name. Returns a maya.OpenMaya.MObject from the given instancer node name. Internal use only.
 
-	:Return:
+	Return:
 		(list) Baked objects.
 	'''
 	if _getMObjectFromName:
@@ -297,10 +297,10 @@ except NameError as error: #import mapi failed.
 def __getattr__(attr:str):
 	"""Searches for an attribute in this module's classes and returns it.
 
-	:Parameters:
+	Parameters:
 		attr (str): The name of the attribute to search for.
 	
-	:Return:
+	Return:
 		(obj) The found attribute.
 
 	:Raises:
