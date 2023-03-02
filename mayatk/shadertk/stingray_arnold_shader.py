@@ -10,7 +10,7 @@ except ImportError as error: print (__file__, error)
 from pythontk import File, Img, Str, Json
 from mayatk import Node, getMainWindow, undo
 from uitk.switchboard import Switchboard
-from uitk.widgets import rwidgets
+
 
 __version__ = '0.5.3'
 
@@ -399,11 +399,10 @@ class Stingray_arnold_shader_main(Switchboard):
 	'''Constructs the main ui window for `Stingray_arnold_shader` class.
 	'''
 	def __init__(self, parent=None, **kwargs):
-		super().__init__(parent, **kwargs)
+		super().__init__(parent)
 
-		self.uiLoc='stingray_arnold_shader.ui'
-		self.widgetLoc=rwidgets
-		self.slotLoc=Stingray_arnold_shader_slots
+		self.dynui='stingray_arnold_shader.ui'
+		self.slots=Stingray_arnold_shader_slots
 
 		self.style = {
 			'BACKGROUND'		: 'rgb(100,100,100)',
@@ -420,6 +419,17 @@ class Stingray_arnold_shader_main(Switchboard):
 		}
 
 		self.ui.draggable_header.hide()
+		self.ui.txt001.hide()
+		self.ui.expand_area.clicked.connect(self.toggleTextEdit)
+
+
+	def toggleTextEdit(self):
+		if self.ui.txt001.isVisible():
+			self.ui.txt001.hide()
+			self.ui.resize(self.ui.minimumSizeHint())
+		else:
+			self.ui.txt001.show()
+			self.ui.resize(self.ui.sizeHint())
 
 # -----------------------------------------------------------------------------
 
