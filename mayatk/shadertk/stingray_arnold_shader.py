@@ -219,9 +219,10 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 	proj_root_dir = File.getFilepath(__file__)
 
 	def __init__(self, **kwargs):
-		super().__init__(**kwargs)
-		'''Slot classes defined in a switchboard instance inherit an `sb` (switchboard) attribute by default.
+		super().__init__()
 		'''
+		'''
+		self.sb = self.get_switchboard_instance()
 		self.imageFiles = None
 
 		#set json file location.
@@ -361,6 +362,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		'''Get texture maps.
 		'''
 		imageFiles = Img.getImageFiles()
+
 		if imageFiles:
 			self.imageFiles = imageFiles
 			self.sb.ui.txt001.clear()
@@ -395,41 +397,32 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 			QtWidgets.QApplication.instance().processEvents()
 
 
-class Stingray_arnold_shader_main(Switchboard):
+class Stingray_arnold_shader_sb(Switchboard):
 	'''Constructs the main ui window for `Stingray_arnold_shader` class.
 	'''
 	def __init__(self, parent=None, **kwargs):
 		super().__init__(parent)
 
-		self.dynui='stingray_arnold_shader.ui'
-		self.slots=Stingray_arnold_shader_slots
-
-		self.style = {
-			'BACKGROUND'		: 'rgb(100,100,100)',
-			'BACKGROUND_ALPHA'	: 'rgba(100,100,100,75)',
-			'PRESSED'			: 'rgb(125,125,125)',
-			'HIGHLIGHT'			: 'yellow',
-			'HOVER'				: 'rgb(82,133,166)',
-			'TEXT'				: 'white',
-			'TEXT_CHECKED'		: 'black',
-			'TEXT_DISABLED'		: 'gray',
-			'TEXT_HOVER'		: 'white',
-			'TEXT_BACKGROUND'	: 'rgb(50,50,50)',
-			'BORDER'			: 'rgb(50,50,50)',
-		}
+		self.ui_location = 'stingray_arnold_shader.ui'
+		self.slots_location = Stingray_arnold_shader_slots
 
 		self.ui.draggable_header.hide()
 		self.ui.txt001.hide()
-		self.ui.expand_area.clicked.connect(self.toggleTextEdit)
+		self.ui.toggle_expand.clicked.connect(self.toggleTextEdit)
+
+		self.ui.resize(self.ui.sizeHint())
 
 
 	def toggleTextEdit(self):
-		if self.ui.txt001.isVisible():
-			self.ui.txt001.hide()
-			self.ui.resize(self.ui.minimumSizeHint())
+		txt = self.ui.txt001
+		if txt.isVisible():
+			self._height_open = self.ui.height()
+			txt.hide()
+			self.ui.resize(self.ui.width(), self._height_closed)
 		else:
-			self.ui.txt001.show()
-			self.ui.resize(self.ui.sizeHint())
+			self._height_closed = self.ui.height()
+			txt.show()
+			self.ui.resize(self.ui.width(), self._height_open if hasattr(self, '_height_open') else self.ui.sizeHint().height())
 
 # -----------------------------------------------------------------------------
 
@@ -446,10 +439,10 @@ class Stingray_arnold_shader_main(Switchboard):
 if __name__ == "__main__":
 
 	parent = getMainWindow()
-	main = Stingray_arnold_shader_main(parent)
-	main.ui.show()
+	sb = Stingray_arnold_shader_sb(parent)
+	sb.ui.show()
 
-	exit_code = main.app.exec_()
+	exit_code = sb.app.exec_()
 	if exit_code != -1:
 		sys.exit(exit_code) # run app, show window, wait for input, then terminate program with a status code returned from app.
 

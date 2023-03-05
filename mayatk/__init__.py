@@ -4,7 +4,7 @@ import sys
 
 
 __package__ = 'mayatk'
-__version__ = '0.5.9'
+__version__ = '0.6.1'
 
 
 def __getattr__(attr):
