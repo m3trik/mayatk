@@ -5,7 +5,7 @@ try:
 except ImportError as error:
 	print (__file__, error)
 
-from pythontk import Iter, Math
+from pythontk import Iter, Math, formatReturn
 #from this package:
 from mayatk import Core, Cmpt
 
@@ -221,7 +221,7 @@ class Xform(object):
 				)
 			result.append(ori)
 
-		return Iter.formatReturn(result, objects)
+		return formatReturn(result, objects)
 
 
 	@staticmethod
@@ -503,7 +503,7 @@ class Xform(object):
 			mesh.getPoints(points, space)
 
 			result.append([(points[i][0], points[i][1], points[i][2]) for i in range(points.length())])
-		return Iter.formatReturn(result, objects)
+		return formatReturn(result, objects)
 
 
 	@staticmethod
@@ -527,7 +527,7 @@ class Xform(object):
 			clamp = lambda p: int(p * 10**precision)
 
 			result.append([hash(tuple(map(clamp, i))) for i in pset])
-		return Iter.formatReturn(result, nested)
+		return formatReturn(result, nested)
 
 
 	@classmethod

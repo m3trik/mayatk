@@ -5,7 +5,7 @@ try:
 except ImportError as error:
 	print (__file__, error)
 
-from pythontk import Iter
+from pythontk import Iter, formatReturn
 from mayatk import Core, Cmpt
 
 
@@ -53,7 +53,7 @@ class Node():
 				typ = pm.objectType(obj)
 			types.append(typ)
 
-		return Iter.formatReturn(types, objects)
+		return formatReturn(types, objects)
 
 
 	@classmethod
@@ -94,7 +94,7 @@ class Node():
 				q = False
 			result.append(q)
 
-		return Iter.formatReturn(result, objects)
+		return formatReturn(result, objects)
 
 
 	@classmethod
@@ -181,7 +181,7 @@ class Node():
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
-		return Iter.formatReturn(list(set(result)), nodes)
+		return formatReturn(list(set(result)), nodes)
 
 
 	@classmethod
@@ -219,7 +219,7 @@ class Node():
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
-		return Iter.formatReturn(list(set(result)), nodes)
+		return formatReturn(list(set(result)), nodes)
 
 
 	@staticmethod
@@ -256,7 +256,7 @@ class Node():
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
-		return Iter.formatReturn(list(set(result)), nodes)
+		return formatReturn(list(set(result)), nodes)
 
 
 	@classmethod
@@ -326,7 +326,7 @@ class Node():
 		Example: env_file_node = getIncomingNodeByType(env_node, 'file') #get the incoming file node.
 		'''
 		nodes = pm.listConnections(node, type=typ, source=True, exactType=exact)
-		return Iter.formatReturn([pm.PyNode(n) for n in nodes])
+		return formatReturn([pm.PyNode(n) for n in nodes])
 
 
 	@staticmethod
@@ -344,7 +344,7 @@ class Node():
 		Example: srSG_node = getOutgoingNodeByType(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
 		'''
 		nodes = pm.listConnections(node, type=typ, destination=True, exactType=exact)
-		return Iter.formatReturn([pm.PyNode(n) for n in nodes])
+		return formatReturn([pm.PyNode(n) for n in nodes])
 
 
 	@staticmethod
