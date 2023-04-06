@@ -1,10 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
 import sys, os
-
 import importlib
 import inspect
-
 try:
 	import pymel.core as pm
 except ImportError as error:
@@ -172,26 +170,6 @@ class Script():
 
 
 
-
-# --------------------------------------------------------------------------------------------
-
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Script, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
 
 # --------------------------------------------------------------------------------------------
 

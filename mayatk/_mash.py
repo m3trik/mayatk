@@ -1,12 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-
 try:
 	import pymel.core as pm
 	import maya.OpenMaya as om
 	import maya.OpenMayaFX as omfx
-
 	import MASH.api as mapi
 
 except ImportError as error:
@@ -18,7 +16,7 @@ def MTcreateNetwork(network, objects, networkName='MASH#', geometry='Mesh', dist
 
 	Parameters:
 		network (obj): A mash api network instance. ie. mapi.Network()
-		objects (str)(obj)(list): The maya objects to construct the network for.
+		objects (str/obj/list): The maya objects to construct the network for.
 		networkName (str): The network name. (default:'MASH#')
 		geometry (str): Particle instancer or mesh instancer (Repro node). (valid: 'Mesh' (default), 'Instancer')
 		distType (str): Distribution type. (valid: "linearNetwork", radialNetwork", "gridNetwork", "initialNetwork", "zeroNetwork")
@@ -116,7 +114,7 @@ def MTbakeInstancer(network, instancer, bakeTranslate=True, bakeRotation=True, b
 
 	Parameters:
 		network (obj): A mash api network instance. ie. mapi.Network()
-		instancer (str)(obj): Instancer node or name of an instancer node.
+		instancer (str/obj): Instancer node or name of an instancer node.
 		bakeAnimation (bool): True=bake entire playback range, False=bake current frame.
 		bakeTranslate (bool): Bake translation.
 		bakeRotation (bool): Bake rotation.
@@ -291,26 +289,6 @@ except NameError as error: #import mapi failed.
 
 
 
-
-# --------------------------------------------------------------------------------------------
-
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Mash, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
 
 # --------------------------------------------------------------------------------------------
 

@@ -6,7 +6,7 @@ import inspect
 
 import pymel.core as pm
 
-from mayatk.Node import Node
+from mayatk import Node
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -136,18 +136,18 @@ class Node_test(Main, Node):
 			"self.getChildren('cyl')": [],
 		})
 
-	def test_getAttributesMEL(self):
+	def test_getNodeAttributes(self):
 		'''
 		'''
 		self.perform_test({
-			# "self.getAttributesMEL()": None,
+			# "self.getNodeAttributes()": None,
 		})
 
-	def test_setAttributesMEL(self):
+	def test_setNodeAttributes(self):
 		'''
 		'''
 		self.perform_test({
-			# "self.setAttributesMEL()": None,
+			# "self.setNodeAttributes()": None,
 		})
 
 	def test_connectAttributes(self):
@@ -190,6 +190,13 @@ class Node_test(Main, Node):
 		'''
 		self.perform_test({
 			# "self.nodeExists()": None,
+		})
+
+	def test_createAssembly(self):
+		'''
+		'''
+		self.perform_test({
+			# "self.createAssembly()": None,
 		})
 
 # -----------------------------------------------------------------------------

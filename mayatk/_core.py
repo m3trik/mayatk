@@ -1,14 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
 import os, sys
-
 try:
 	import pymel.core as pm
 except ImportError as error:
 	print (f'# Error: {__file__}: {error}')
 
 from pythontk import Iter
-from mayatk import Node
+#from this package:
+from mayatk import _node
 
 
 class Core():
@@ -122,7 +122,7 @@ class Core():
 		import maya.OpenMaya as om
 
 		selectionList = om.MSelectionList()
-		for mesh in Node.getShapeNode(pm.ls(objects)):
+		for mesh in _node.Node.getShapeNode(pm.ls(objects)):
 			selectionList.add(mesh)
 
 		for i in range(selectionList.length()):    
@@ -139,7 +139,7 @@ class Core():
 		Samples only the first element.
 
 		Parameters:
-			obj (str)(obj)(list): The components(s) to query.
+			obj (str/obj/list): The components(s) to query.
 
 		Return:
 			(list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
@@ -162,7 +162,7 @@ class Core():
 		'''Convert the given element(s) to <obj>, 'str', or int values.
 
 		Parameters:
-			lst (str)(obj)(list): The components(s) to convert.
+			lst (str/obj/list): The components(s) to convert.
 			returnType (str): The desired returned array element type.
 				valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
@@ -222,7 +222,7 @@ class Core():
 		'''Query a Maya command, and return a key:value pair for each of the given parameters.
 
 		Parameters:
-			node (str)(obj)(list): The object to query attributes of.
+			node (str/obj/list): The object to query attributes of.
 			parameters (list): The command parameters to query. ie. ['enableTranslationX','translationX']
 
 		Return:
@@ -247,7 +247,7 @@ class Core():
 		'''Set parameters using a maya command.
 
 		Parameters:
-			node (str)(obj)(list): The object to query attributes of.
+			node (str/obj/list): The object to query attributes of.
 			parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
 		Example: setParameterValuesMEL(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
@@ -449,26 +449,6 @@ class Core():
 
 
 
-
-# --------------------------------------------------------------------------------------------
-
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Core, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
 
 # --------------------------------------------------------------------------------------------
 

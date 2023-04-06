@@ -7,19 +7,19 @@ except ImportError as error:
 
 from pythontk import Str, Iter, areSimilar
 #from this package:
-from mayatk import Node, Cmpt, Xform, mfnMeshGenerator, viewportMessage, undo
+from mayatk import _core, _node, _cmpt, _xform
 
 
 class Edit():
 	'''
 	'''
 	@staticmethod
-	@undo
+	@_core.Core.undo
 	def rename(objects, to, fltr='', regEx=False, ignoreCase=False):
 		'''Rename scene objects.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s to rename. If nothing is given, all scene objects will be renamed.
+			objects (str/obj/list): The object(s to rename. If nothing is given, all scene objects will be renamed.
 			to (str): Desired name: An optional asterisk modifier can be used for formatting
 				chars - replace all.
 				*chars* - replace only.
@@ -67,12 +67,12 @@ class Edit():
 
 
 	@staticmethod
-	@undo
+	@_core.Core.undo
 	def setCase(objects=[], case='caplitalize'):
 		'''Rename objects following the given case.
 
 		Parameters:
-			objects (str)(list): The objects to rename. default:all scene objects
+			objects (str/list): The objects to rename. default:all scene objects
 			case (str): Desired case using python case operators. 
 				valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
 
@@ -92,12 +92,12 @@ class Edit():
 
 
 	@staticmethod
-	@undo
+	@_core.Core.undo
 	def setSuffixByObjLocation(objects, alphanumeric=False, stripTrailingInts=True, stripTrailingAlpha=True, reverse=False):
 		'''Rename objects with a suffix defined by its location from origin.
 
 		Parameters:
-			objects (str)(int)(list): The object(s) to rename.
+			objects (str)(int/list): The object(s) to rename.
 			alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
 			stripTrailingInts (bool): Strip any trailing integers. ie. 'cube123'
 			stripTrailingAlpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
@@ -113,7 +113,7 @@ class Edit():
 		else:
 			suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
-		ordered_objs = Xform.orderByDistance(objects, reverse=reverse)
+		ordered_objs = _xform.Xform.orderByDistance(objects, reverse=reverse)
 
 		newNames={} #the object with the new name set as a key.
 		for n, obj in enumerate(ordered_objs):
@@ -145,8 +145,8 @@ class Edit():
 			tolerance (float) = Maximum search distance.
 			freezeTransforms (bool): Reset the selected transform and all of its children down to the shape level.
 		'''
-		vertices = Cmpt.getComponents(obj1, 'vertices')
-		closestVerts = Cmpt.getClosestVertex(vertices, obj2, tolerance=tolerance, freezeTransforms=freezeTransforms)
+		vertices = _cmpt.Cmpt.getComponents(obj1, 'vertices')
+		closestVerts = _cmpt.Cmpt.getClosestVertex(vertices, obj2, tolerance=tolerance, freezeTransforms=freezeTransforms)
 
 		progressBar = "mainProgressBar"
 		pm.progressBar(progressBar, edit=True, beginProgress=True, isInterruptable=True, status="Snapping Vertices ...", maxValue=len(closestVerts)) 
@@ -170,7 +170,7 @@ class Edit():
 		'''Merge Vertices on the given objects.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to merge vertices on.
+			objects (str/obj/list): The object(s) to merge vertices on.
 			selected (bool): Merge only the currently selected components.
 			tolerance (float) = The maximum merge distance.
 		'''
@@ -196,7 +196,7 @@ class Edit():
 		'''Get all faces on a specified axis.
 
 		Parameters:
-			obj (str)(obj): The name of the geometry.
+			obj (str/obj): The name of the geometry.
 			axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
 			localspace (bool): Specify world or local space.
 
@@ -226,8 +226,6 @@ class Edit():
 			obj (obj): Mesh object.
 			axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted. 
 		'''
-		from mayatk import viewportMessage
-
 		for node in [n for n in pm.listRelatives(obj, allDescendents=1) if pm.objectType(n, isType='mesh')]: #get any mesh type child nodes of obj.
 			faces = cls.getAllFacesOnAxis(node, axis)
 			if len(faces)==pm.polyEvaluate(node, face=1): #if all faces fall on the specified axis.
@@ -235,7 +233,7 @@ class Edit():
 			else:
 				pm.delete(faces) #else, delete any individual faces.
 
-		viewportMessage("Delete faces on <hl>"+axis.upper()+"</hl>.")
+		_core.Core.mfnMeshGenerator("Delete faces on <hl>"+axis.upper()+"</hl>.")
 
 
 	@classmethod
@@ -245,7 +243,7 @@ class Edit():
 		'''Select or remove unwanted geometry from a polygon mesh.
 
 		Parameters:
-			objects (str)(obj)(list): The polygon objects to clean.
+			objects (str/obj/list): The polygon objects to clean.
 			allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
 			repair (bool): Attempt to repair instead of just selecting geometry.
 		'''
@@ -282,7 +280,7 @@ class Edit():
 		scene_objs = pm.ls(transforms=1, geometry=1) #get all scene geometry
 
 		#attach a unique identifier consisting each objects polyEvaluate attributes, and it's bounding box center point in world space.
-		scene_objs = {i:str(pm.objectCenter(i))+str(pm.polyEvaluate(i)) for i in scene_objs if not Node.isGroup(i)}
+		scene_objs = {i:str(pm.objectCenter(i))+str(pm.polyEvaluate(i)) for i in scene_objs if not _node.Node.isGroup(i)}
 		selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
 		objs_inverted={} #invert the dict, combining objects with like identifiers.
@@ -317,7 +315,7 @@ class Edit():
 		'''Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
 		Parameters:
-			objects (str)(obj)(list): A polygon mesh, or a list of meshes.
+			objects (str/obj/list): A polygon mesh, or a list of meshes.
 			select (int): Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
 
 		Return:
@@ -326,7 +324,7 @@ class Edit():
 		pm.undoInfo(openChunk=True)
 		nonManifoldVerts=set()
 
-		vertices = Cmpt.getComponents(objects, 'vertices')
+		vertices = _cmpt.Cmpt.getComponents(objects, 'vertices')
 		for vertex in vertices:
 
 			connected_faces = pm.polyListComponentConversion(vertex, fromVertex=1, toFace=1) #pm.mel.PolySelectConvert(1) #convert to faces
@@ -377,7 +375,7 @@ class Edit():
 		'''Separate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
 		Parameters:
-			vertex (str)(obj): A single polygon vertex.
+			vertex (str/obj): A single polygon vertex.
 			select (bool): Select the vertex after the operation. (default is True)
 		'''
 		pm.undoInfo(openChunk=True)
@@ -429,7 +427,7 @@ class Edit():
 		'''Get any N-Gons from the given object using selection contraints.
 
 		Parameters:
-			objects (str)(obj)(list): The objects to query.
+			objects (str/obj/list): The objects to query.
 			repair (bool): Repair any found N-gons.
 
 		Return:
@@ -454,17 +452,16 @@ class Edit():
 		'''Query the given objects for overlapping vertices.
 
 		Parameters:
-			objects (str)(obj)(list): The objects to query.
+			objects (str/obj/list): The objects to query.
 			threshold (float) = The maximum allowed distance.
 
 		Return:
 			(list)
 		'''
 		import maya.OpenMaya as om
-		from mayatk import mfnMeshGenerator
 
 		result=[]
-		for mfnMesh in mfnMeshGenerator(objects):
+		for mfnMesh in _core.Core.mfnMeshGenerator(objects):
 			points = om.MPointArray()
 			mfnMesh.getPoints(points, om.MSpace.kWorld)
 
@@ -488,7 +485,7 @@ class Edit():
 		'''Get any duplicate overlapping faces of the given objects.
 
 		:Parameters:
-			objects (str)(obj)(list): Faces or polygon objects.
+			objects (str/obj/list): Faces or polygon objects.
 
 		Return:
 			(list) duplicate overlapping faces.
@@ -525,7 +522,7 @@ class Edit():
 		Default behaviour is to compare all flags.
 
 		Parameters:
-			obj (str)(obj)(list): The object to find similar for.
+			obj (str/obj/list): The object to find similar for.
 			tol (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
 			includeOrig (bool): Include the original given obj with the return results.
 			kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
@@ -552,7 +549,7 @@ class Edit():
 		Default behaviour is to compare all flags.
 
 		Parameters:
-			obj (str)(obj)(list): The object to find similar for.
+			obj (str/obj/list): The object to find similar for.
 			includeOrig (bool): Include the original given obj with the return results.
 			kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
 				ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals

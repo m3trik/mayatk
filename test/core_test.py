@@ -6,7 +6,7 @@ import inspect
 
 import pymel.core as pm
 
-from mayatk.Core import Core
+from mayatk import Core
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -73,7 +73,7 @@ class Core_test(Main, Core):
 	#test imports:
 	import mayatk as mtk
 	from mayatk import Cmpt
-	from mayatk.Cmpt import getComponents
+	from mayatk import getComponents
 
 	#Tear down the any previous test by creating a new scene:
 	pm.mel.file(new=True, force=True)

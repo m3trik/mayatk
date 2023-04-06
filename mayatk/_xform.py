@@ -7,7 +7,7 @@ except ImportError as error:
 
 from pythontk import Iter, Math, formatReturn
 #from this package:
-from mayatk import Core, Cmpt
+from mayatk import _core, _cmpt
 
 
 class Xform(object):
@@ -18,8 +18,8 @@ class Xform(object):
 		'''Move an object(s) to the given target.
 
 		Parameters:
-			source (str)(obj)(list): The objects to move.
-			target (str)(obj): The object to move to.
+			source (str/obj/list): The objects to move.
+			target (str/obj): The object to move to.
 			targetCenter (bool): Move to target pivot pos, or the bounding box center of the target.
 		'''
 		if targetCenter: #temporarily move the targets pivot to it's bounding box center.
@@ -34,12 +34,12 @@ class Xform(object):
 
 
 	@staticmethod
-	@Core.undo
+	@_core.Core.undo
 	def dropToGrid(objects, align='Mid', origin=False, centerPivot=False, freezeTransforms=False):
 		'''Align objects to Y origin on the grid using a helper plane.
 
 		Parameters:
-			objects (str)(obj)(list): The objects to translate.
+			objects (str/obj/list): The objects to translate.
 			align (bool): Specify which point of the object's bounding box to align with the grid. (valid: 'Max','Mid'(default),'Min')
 			origin (bool): Move to world grid's center.
 			centerPivot (bool): Center the object's pivot.
@@ -47,7 +47,7 @@ class Xform(object):
 
 		ex. dropToGrid(obj, align='Min') #set the object onto the grid.
 		'''
-		# pm.Core.undoInfo(openChunk=1)
+		# pm._core.Core.undoInfo(openChunk=1)
 		for obj in pm.ls(objects, transforms=1):
 			osPivot = pm.xform(obj, query=1, rotatePivot=1, objectSpace=1) #save the object space obj pivot.
 			wsPivot = pm.xform(obj, query=1, rotatePivot=1, worldSpace=1) #save the world space obj pivot.
@@ -66,24 +66,24 @@ class Xform(object):
 
 			if freezeTransforms:
 				pm.makeIdentity(obj, apply=True)
-		# pm.Core.undoInfo (closeChunk=1)
+		# pm._core.Core.undoInfo (closeChunk=1)
 
 
 	@classmethod
-	@Core.undo
+	@_core.Core.undo
 	def resetTranslation(cls, objects):
 		'''Reset the translation transformations on the given object(s).
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to reset the translation values for.
+			objects (str/obj/list): The object(s) to reset the translation values for.
 		'''
-		# pm.Core.undoInfo(openChunk=1)
+		# pm._core.Core.undoInfo(openChunk=1)
 		for obj in pm.ls(objects):
 			pos = pm.objectCenter(obj) #get the object's current position.
 			cls.dropToGrid(obj, origin=1, centerPivot=1) #move to origin and center pivot.
 			pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1) #bake transforms
 			pm.xform(obj, translation=pos) #move the object back to it's original position.
-		# pm.Core.undoInfo(closeChunk=1)
+		# pm._core.Core.undoInfo(closeChunk=1)
 
 
 	@staticmethod
@@ -91,7 +91,7 @@ class Xform(object):
 		'''Set an object’s translation value from its pivot location.
 
 		Parameters:
-			node (str)(obj)(list): An object, or it's name.
+			node (str/obj/list): An object, or it's name.
 		'''
 		x, y, z = pivot = pm.xform(node, query=True, worldSpace=True, rotatePivot=True)
 		pm.xform(node, relative=True, translation=[-x,-y,-z])
@@ -100,7 +100,7 @@ class Xform(object):
 
 
 	@staticmethod
-	@Core.undo
+	@_core.Core.undo
 	def alignPivotToSelection(alignFrom=[], alignTo=[], translate=True):
 		'''Align one objects pivot point to another using 3 point align.
 
@@ -109,7 +109,7 @@ class Xform(object):
 			alignTo (list): The object to align with.
 			translate (bool): Move the object with it's pivot.
 		'''
-		# pm.Core.undoInfo(openChunk=1)
+		# pm._core.Core.undoInfo(openChunk=1)
 		pos = pm.xform(alignTo, q=1, translation=True, worldSpace=True)
 		center_pos = [ #Get center by averaging of all x,y,z points.
 			sum(pos[0::3]) / len(pos[0::3]), 
@@ -133,16 +133,16 @@ class Xform(object):
 				pm.xform(obj, translation=center_pos, worldSpace=True)
 				
 			pm.delete(plane)
-		# pm.Core.undoInfo(closeChunk=1)
+		# pm._core.Core.undoInfo(closeChunk=1)
 
 
 	@staticmethod
-	@Core.undo
+	@_core.Core.undo
 	def aimObjectAtPoint(objects, target_pos, aim_vect=(1,0,0), up_vect=(0,1,0)):
 		'''Aim the given object(s) at the given world space position.
 
 		:Paramters:
-			objects (str)(obj)(list): Transform node(s) of the objects to orient.
+			objects (str/obj/list): Transform node(s) of the objects to orient.
 			target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
 			aim_vect (tuple): The vector in local coordinates that points at the target.
 			up_vect (tuple): The vector in local coordinates that aligns with the world up vector.
@@ -161,14 +161,14 @@ class Xform(object):
 
 
 	@classmethod
-	@Core.undo
+	@_core.Core.undo
 	def rotateAxis(cls, objects, target_pos):
 		''' Aim the given object at the given world space position.
 		All rotations in rotated channel, geometry is transformed so 
 		it does not appear to move during this transformation
 
 		Parameters:
-			objects (str)(obj)(list): Transform node(s) of the objects to orient.
+			objects (str/obj/list): Transform node(s) of the objects to orient.
 			target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
 		'''
 		for obj in pm.ls(objects, objectsOnly=True):
@@ -191,7 +191,7 @@ class Xform(object):
 		'''Get an objects orientation as a point or vector.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to get the orientation of.
+			objects (str/obj/list): The object(s) to get the orientation of.
 			returnType (str): The desired returned value type. (valid: 'point'(default), 'vector')
 
 		Return:
@@ -267,25 +267,24 @@ class Xform(object):
 
 
 	@classmethod
-	def getBoundingBoxValue(cls, objects, value='sizeX|sizeY|sizeZ'):
+	def getBoundingBox(cls, objects, value=''):
 		'''Get information of the given object(s) combined bounding box.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) or component(s) to query.
+			objects (str/obj/list): The object(s) or component(s) to query.
 				Multiple objects will be treated as a combined bounding box.
 			value (str): The type of value to return. Multiple types can be given
 				separated by '|'. The order given determines the return order.
-				valid (case insensitive): 'xmin', 'xmax', 'ymin', 'ymax', 
-				'zmin', 'zmax', 'sizex', 'sizey', 'sizez', 'volume', 'center'
-
+				valid (case insensitive): 'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'size', 
+				'x' or 'sizex', 'y' or 'sizey', 'z' or 'sizez', 'volume', 'center' or 'centroid'
 		Return:
 			(float)(tuple) Dependant on args.
 
-		Example: getBoundingBoxValue(sel, 'center|volume') #returns: [[171.9106216430664, 93.622802734375, -1308.4896240234375], 743.2855185396038]
-		Example: getBoundingBoxValue(sel, 'sizeY') #returns: 144.71902465820312
+		Example: getBoundingBox(sel, 'center|volume') #returns: [[171.9106216430664, 93.622802734375, -1308.4896240234375], 743.2855185396038]
+		Example: getBoundingBox(sel, 'sizeY') #returns: 144.71902465820312
 		'''
 		if '|' in value: #use recursion to construct the list using each value.
-			return tuple(cls.getBoundingBoxValue(objects, i) for i in value.split('|'))
+			return tuple(cls.getBoundingBox(objects, i) for i in value.split('|'))
 
 		v = value.lower()
 		xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(objects)
@@ -295,11 +294,15 @@ class Xform(object):
 		elif v=='ymax': return ymax
 		elif v=='zmin': return zmin
 		elif v=='zmax': return zmax
-		elif v=='sizex': return xmax-xmin
-		elif v=='sizey': return ymax-ymin
-		elif v=='sizez': return zmax-zmin
+		elif v=='size': return (xmax-xmin, ymax-ymin, zmax-zmin)
+		elif v=='sizex' or v=='x': return xmax-xmin
+		elif v=='sizey' or v=='y': return ymax-ymin
+		elif v=='sizez' or v=='z': return zmax-zmin
+		elif v=='minsize': return min(xmax-xmin, ymax-ymin, zmax-zmin)
+		elif v=='maxsize': return max(xmax-xmin, ymax-ymin, zmax-zmin)
 		elif v=='volume': return (xmax-xmin)*(ymax-ymin)*(zmax-zmin)
-		elif v=='center': return ((xmin+xmax)/2.0, (ymin+ymax)/2.0, (zmin+zmax)/2.0)
+		elif v=='center' or v=='centroid': return ((xmin+xmax)/2.0, (ymin+ymax)/2.0, (zmin+zmax)/2.0)
+		else: (xmin, ymin, zmin, xmax, ymax, zmax)
 
 
 	@classmethod
@@ -307,7 +310,7 @@ class Xform(object):
 		'''Sort the given objects by their bounding box value.
 
 		Parameters:
-			objects (str)(obj)(list): The objects or components to sort.
+			objects (str/obj/list): The objects or components to sort.
 			value (str): See 'getBoundingBoxInfo' 'value' parameter.
 					ex. 'xmin', 'xmax', 'sizex', 'volume', 'center' etc.
 			descending (bool): Sort the list from the largest value down.
@@ -318,7 +321,7 @@ class Xform(object):
 		'''
 		valueAndObjs=[]
 		for obj in pm.ls(objects, flatten=False):
-			v = cls.getBoundingBoxValue(obj, value)
+			v = cls.getBoundingBox(obj, value)
 			valueAndObjs.append((v, obj))
 
 		sorted_ = sorted(valueAndObjs, key=lambda x: int(x[0]), reverse=descending)
@@ -332,8 +335,8 @@ class Xform(object):
 		'''Scale each of the given objects to the combined bounding box of a second set of objects.
 
 		Parameters:
-			objectsA (str)(obj)(list): The object(s) to scale.
-			objectsB (str)(obj)(list): The object(s) to get a bounding box size from.
+			objectsA (str/obj/list): The object(s) to scale.
+			objectsB (str/obj/list): The object(s) to get a bounding box size from.
 			scale (bool): Scale the objects. Else, just return the scale value.
 			average (bool): Average the result across all axes.
 
@@ -468,8 +471,8 @@ class Xform(object):
 		'''Check if the vertices in objA and objB are overlapping within the given tolerance.
 
 		Parameters:
-			objA (str)(obj): The first object to check. Object can be a component.
-			objB (str)(obj): The second object to check. Object can be a component.
+			objA (str/obj): The first object to check. Object can be a component.
+			objB (str/obj): The second object to check. Object can be a component.
 			tolerance (float) = The maximum search distance before a vertex is considered not overlapping.
 
 		Return:
@@ -478,7 +481,7 @@ class Xform(object):
 		vert_setA = pm.ls(pm.polyListComponentConversion(objA, toVertex=1), flatten=1)
 		vert_setB = pm.ls(pm.polyListComponentConversion(objB, toVertex=1), flatten=1)
 
-		closestVerts = Cmpt.getClosestVerts(vert_setA, vert_setB, tolerance=tolerance)
+		closestVerts = _cmpt.Cmpt.getClosestVerts(vert_setA, vert_setB, tolerance=tolerance)
 
 		return True if vert_setA and len(closestVerts)==len(vert_setA) else False
 
@@ -488,7 +491,7 @@ class Xform(object):
 		'''Get all vertex positions for the given objects.
 
 		Parameters:
-			objects (str)(obj)(list): The polygon object(s).
+			objects (str/obj/list): The polygon object(s).
 			worldSpace (bool): Sample in world or object space.
 
 		Return:
@@ -498,7 +501,7 @@ class Xform(object):
 		space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
 		result=[]
-		for mesh in Core.mfnMeshGenerator(objects):
+		for mesh in _core.Core.mfnMeshGenerator(objects):
 			points = om.MPointArray()
 			mesh.getPoints(points, space)
 
@@ -535,8 +538,8 @@ class Xform(object):
 		'''Find any vertices which point locations match between two given mesh.
 
 		Parameters:
-			meshA (str)(obj)(list): The first polygon object.
-			meshA (str)(obj)(list): A second polygon object.
+			meshA (str/obj/list): The first polygon object.
+			meshA (str/obj/list): A second polygon object.
 			worldSpace (bool): Sample in world or object space.
 
 		Return:
@@ -554,7 +557,7 @@ class Xform(object):
 	def orderByDistance(objects, point=[0, 0, 0], reverse=False):
 		'''Order the given objects by their distance from the given point.
 		Parameters:
-			objects (str)(int)(list): The object(s) to order.
+			objects (str)(int/list): The object(s) to order.
 			point (list): A three value float list x, y, z.
 			reverse (bool): Reverse the naming order. (Farthest object first)
 		Return:
@@ -573,7 +576,7 @@ class Xform(object):
 
 
 	@staticmethod
-	@Core.undo
+	@_core.Core.undo
 	def alignVertices(mode, average=False, edgeloop=False):
 		'''Align vertices.
 
@@ -584,7 +587,7 @@ class Xform(object):
 
 		Example: alignVertices(mode=3, average=True, edgeloop=True)
 		'''
-		# pm.Core.undoInfo (openChunk=True)
+		# pm._core.Core.undoInfo (openChunk=True)
 		selectTypeEdge = pm.selectType(query=True, edge=True)
 
 		if edgeloop:
@@ -610,8 +613,8 @@ class Xform(object):
 
 		if len(selection)<2:
 			if len(selection)==0:
-				Core.viewportMessage("No vertices selected")
-			Core.viewportMessage("Selection must contain at least two vertices")
+				_core.Core.viewportMessage("No vertices selected")
+			_core.Core.viewportMessage("Selection must contain at least two vertices")
 
 		for vertex in selection:
 			vertexXYZ = pm.xform(vertex, query=1, translation=1, worldSpace=1)
@@ -633,7 +636,7 @@ class Xform(object):
 
 		if selectTypeEdge:
 			pm.selectType (edge=True)
-		# pm.Core.undoInfo (closeChunk=True)
+		# pm._core.Core.undoInfo (closeChunk=True)
 
 # --------------------------------------------------------------------------------------------
 
@@ -644,26 +647,6 @@ class Xform(object):
 
 
 
-
-# --------------------------------------------------------------------------------------------
-
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Xform, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
 
 # --------------------------------------------------------------------------------------------
 
@@ -686,8 +669,8 @@ if __name__=='__main__':
 # 		The vertex order is transferred to the target object(s).
 
 # 		Parameters:
-# 			source (str)(obj): The object to move from.
-# 			target (str)(obj): The object to move to.
+# 			source (str/obj): The object to move from.
+# 			target (str/obj): The object to move to.
 # 		'''
 # 		pm.polyTransfer(source, alternateObject=target, vertices=2) #vertices positions are copied from the target object.
 
@@ -701,7 +684,7 @@ if __name__=='__main__':
 # 		'''Get the center point from the given component.
 
 # 		Parameters:
-# 			component (str)(obj): Object component.
+# 			component (str/obj): Object component.
 # 			alignToNormal (bool): Constain to normal vector.
 
 # 		Return:

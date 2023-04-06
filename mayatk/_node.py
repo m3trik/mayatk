@@ -6,7 +6,8 @@ except ImportError as error:
 	print (__file__, error)
 
 from pythontk import Iter, formatReturn
-from mayatk import Core, Cmpt
+#from this package:
+from mayatk import _core, _cmpt
 
 
 class Node():
@@ -35,10 +36,10 @@ class Node():
 		'''Get the object type as a string.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to query.
+			objects (str/obj/list): The object(s) to query.
 
 		Return:
-			(str)(list) The node type. A list is always returned when 'objects' is given as a list.
+			(str/list) The node type. A list is always returned when 'objects' is given as a list.
 		'''
 		types=[]
 		for obj in pm.ls(objects):
@@ -48,7 +49,7 @@ class Node():
 			elif cls.isLocator(obj):
 				typ = 'locator'
 			else:
-				typ = Cmpt.getComponentType(obj)
+				typ = _cmpt.Cmpt.getComponentType(obj)
 			if not typ:
 				typ = pm.objectType(obj)
 			types.append(typ)
@@ -78,7 +79,7 @@ class Node():
 		A group is defined as a transform with children.
 
 		Parameters:
-			nodes (str)(obj)(list): The object(s) to query.
+			nodes (str/obj/list): The object(s) to query.
 
 		Return:
 			(bool)(list) A list is always returned when 'objects' is given as a list.
@@ -147,17 +148,47 @@ class Node():
 
 
 	@staticmethod
+	def getUniqueChildren(objects):
+		"""Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves.
+
+		This function takes a list of objects in the scene and, if any object is a group, retrieves
+		its children. The resulting list includes the unique children of the groups, but not the groups themselves.
+		If an object is not a group, it will be included in the list.
+
+		Parameters:
+			objects (str/obj/list): A string, PyNode, or list of PyNodes representing the objects in the scene.
+
+		Returns:
+			list: A list containing the unique children of the groups (if any) and other objects.
+
+		Example:
+			>>> getUniqueChildren(<group>) # Returns: [nt.Transform(u'pCube1'), nt.Transform(u'pCube2')]
+		"""
+		objects = pm.ls(objects, flatten=True)
+
+		final_set = {  # Combine the selected objects and their children into a single set.
+			child for obj in objects
+			for child in (
+				pm.listRelatives(obj, children=True, type='transform')
+				if obj.nodeType() == 'transform' and pm.listRelatives(obj, children=True, type='transform')
+				else ([obj] if obj.nodeType() != 'transform' or obj.listRelatives(children=True) else [])
+			)
+		}
+		return list(final_set)  # Convert the set back to a list.
+
+
+	@staticmethod
 	def getTransformNode(nodes, returnType='obj', attributes=False, inc=[], exc=[]):
 		'''Get transform node(s) or node attributes.
 
 		Parameters:
-			nodes (str)(obj)(list): A relative of a transform Node.
+			nodes (str/obj/list): A relative of a transform Node.
 			returnType (str): The desired returned object type. Not valid with the `attributes` parameter.
 				(valid: 'str'(default), 'obj').
 			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		Return:
-			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+			(obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
 		result=[]
 		for node in pm.ls(nodes):
@@ -177,7 +208,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
+		result = _core.Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -189,13 +220,13 @@ class Node():
 		'''Get shape node(s) or node attributes.
 
 		Parameters:
-			nodes (str)(obj)(list): A relative of a shape Node.
+			nodes (str/obj/list): A relative of a shape Node.
 			returnType (str): The desired returned object type. 
 				(valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
 			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		Return:
-			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+			(obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
 		result=[]
 		for node in pm.ls(nodes):
@@ -215,7 +246,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
+		result = _core.Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -227,13 +258,13 @@ class Node():
 		'''Get history node(s) or node attributes.
 
 		Parameters:
-			nodes (str)(obj)(list): A relative of a history Node.
+			nodes (str/obj/list): A relative of a history Node.
 			returnType (str): The desired returned object type. 
 				(valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
 			attributes (bool): Return the attributes of the node, rather then the node itself.
 
 		Return:
-			(obj)(list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+			(obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
 		'''
 		result=[]
 		for node in pm.ls(nodes):
@@ -252,7 +283,7 @@ class Node():
 			result = pm.listAttr(result, read=1, hasData=1)
 
 		#convert element type.
-		result = Core.convertArrayType(result, returnType=returnType, flatten=True)
+		result = _core.Core.convertArrayType(result, returnType=returnType, flatten=True)
 		#filter
 		result = Iter.filterList(result, inc, exc)
 		#return as list if `nodes` was given as a list.
@@ -307,7 +338,7 @@ class Node():
 			except RuntimeError as error:
 				print ('# Error:', __file__, error, '#')
 
-		cls.setAttributesMEL(node, **kwargs)
+		cls.setNodeAttributes(node, **kwargs)
 		return node
 
 
@@ -316,7 +347,7 @@ class Node():
 		'''Get the first connected node of the given type with an incoming connection to the given node.
 
 		Parameters:
-			node (str)(obj): A node with incoming connections.
+			node (str/obj): A node with incoming connections.
 			typ (str): The node type to search for. ie. 'StingrayPBS'
 			exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
@@ -334,7 +365,7 @@ class Node():
 		'''Get the connected node of the given type with an outgoing connection to the given node.
 
 		Parameters:
-			node (str)(obj): A node with outgoing connections.
+			node (str/obj): A node with outgoing connections.
 			typ (str): The node type to search for. ie. 'file'
 			exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
@@ -348,49 +379,139 @@ class Node():
 
 
 	@staticmethod
-	def getAttributesMEL(node, inc=[], exc=[]):
-		'''Get node attributes and their corresponding values as a dict.
+	def getNodeAttributes(node, inc=[], exc=[], mapping=False):
+		"""Get node attributes and their corresponding values as a dict.
 
 		Parameters:
-			node (obj): The node to get attributes for.
-			inc (list): Attributes to include. All other will be omitted. Exclude takes dominance over include. Meaning, if the same attribute is in both lists, it will be excluded.
-			exc (list): Attributes to exclude from the returned dictionay. ie. ['Position','Rotation','Scale','renderable','isHidden','isFrozen','selected']
+			node (obj): The node to get attributes of.
+			include (str/list): Attributes to include. All others will be omitted. Exclude takes precedence over include.
+			exclude (str/list): Attributes to exclude from the returned dictionary.
+			mapping (bool): Return a dictionary that maps the attributes to their values.
 
 		Return:
 			(dict) {'string attribute': current value}
-		'''
-		# print('node:', node); print('attr:', , read=1, hasData=1))
-		attributes={}
-		for attr in Iter.filterList(pm.listAttr(node, read=1, hasData=1), inc, exc):
-			try:
-				attributes[attr] = pm.getAttr(getattr(node, attr), silent=True) #get the attribute's value.
-			except Exception as error:
-				print (error)
+		"""
+		filtered_attrs = Iter.filterList(pm.listAttr(node, read=1, hasData=1), inc, exc)
 
-		return attributes
+		result = {attr: pm.getAttr(f"{node}.{attr}", silent=True) for attr in filtered_attrs}
+		return result if mapping else result.values()
 
 
-	@staticmethod
-	def setAttributesMEL(nodes, verbose=False, **attributes):
-		'''Set node attribute values.
+	@classmethod
+	def setNodeAttributes(cls, node, **attributes):
+		"""Set node attribute values. If the attribute doesn't exist, it will be created.
 
 		Parameters:
-			nodes (str)(obj)(list): The node(s) to set attributes for.
-			verbose (bool): Print feedback messages such as errors to the console.
-			attributes (dict): Attributes and their correponding value to set. ie. {'string attribute': value}
+			node (str/obj): The node to set attributes of.
+			attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+		"""
+		for attr, value in attributes.items():
+			try:
+				pm.setAttr(f"{node}.{attr}", value)
+			except Exception:
+				cls.setNodeCustomAttributes(node, **{attr:value})
 
-		ex call: setAttributesMEL(node, translateY=6)
-		'''
-		for node in pm.ls(nodes):
 
-			for attr, value in attributes.items():
-				try:
-					a = getattr(node, attr)
-					pm.setAttr(a, value) #ie. pm.setAttr('polyCube1.subdivisionsDepth', 5)
-				except (AttributeError, TypeError) as error:
-					if verbose:
-						print ('# Error:', __file__, error, node, attr, value, '#')
-					pass
+	@classmethod
+	def getMayaAttributeType(cls, value):
+		"""Gets the corresponding Maya attribute type for a given value.
+
+		This method determines the Maya attribute type based on the type and structure of the input value.
+		It supports basic data types like bool, int, float, and str, as well as more complex types like
+		lists, tuples, sets, and matrices.
+
+		Parameters:
+			value: The value to determine the Maya attribute type for.
+
+		Returns:
+			str: The corresponding Maya attribute type as a string.
+
+		Raises:
+			TypeError: If the input value's type is not supported.
+
+		Examples:
+			>>> getMayaAttributeType(True) #Returns: 'bool'
+			>>> getMayaAttributeType(42) #Returns: 'long'
+			>>> getMayaAttributeType([1.0, 2.0, 3.0]) #Returns: 'double3'
+			>>> getMayaAttributeType([["a", "b"], ["c", "d"]]) #Returns: 'stringArray'
+			>>> getMayaAttributeType(Matrix([[1.0, 0.0], [0.0, 1.0]], type='float')) #Returns: 'fltMatrix'
+
+		Notes:
+			- To support additional data types, add more cases in the method as necessary.
+			- Replace 'Matrix' with the correct class for a matrix in your environment.
+		"""
+		if isinstance(value, bool):
+			return 'bool'
+		elif isinstance(value, int):
+			return 'long'
+		elif isinstance(value, float):
+			return 'double'
+		elif isinstance(value, str):
+			return 'string'
+		elif isinstance(value, (list, tuple, set)):
+			element_type = cls.getMayaAttributeType(value[0])
+			length = len(value)
+			# Handle compound and array cases
+			if element_type in ['double', 'float', 'long', 'short']:
+				if length == 2:
+					return f'{element_type}2'
+				elif length == 3:
+					return f'{element_type}3'
+				else:
+					return f'{element_type}Array'
+			elif element_type == 'string':
+				return 'stringArray'
+			elif element_type == 'vector':
+				return 'vectorArray'
+			elif element_type == 'point':
+				return 'pointArray'
+			else:
+				return 'compound'
+		# Add more cases for other data types if necessary
+		elif isinstance(value, Matrix):  # Replace Matrix with the correct class for a matrix in your environment
+			if value.type == 'float':
+				return 'fltMatrix'
+			elif value.type == 'double':
+				return 'matrix'
+
+
+	@classmethod
+	def setNodeCustomAttributes(cls, node, **attributes):
+		"""Set node attribute values. If the attribute doesn't exist, it will be created.
+
+		Parameters:
+			node (str/obj): The node to set attributes of.
+			attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+		"""
+		if isinstance(node, str):
+			node = pm.PyNode(node)
+
+		for attr, value in attributes.items():
+			attr_type = cls.getMayaAttributeType(value)
+			print('attr_type', attr_type)
+
+			if not pm.attributeQuery(attr, node=node, exists=True):
+				if attr_type.endswith('3') or attr_type.endswith('2'):  # Check if the attribute type is a compound attribute
+					node.addAttr(attr, numberOfChildren=len(value), attributeType='compound')
+					component_suffixes = ['X', 'Y', 'Z'] if attr_type.endswith('3') else ['X', 'Y']
+					child_attr_type = attr_type[:-1] #remove the 2 or 3 suffix.
+					for i, component in enumerate(value):
+						component_name = f"{attr}{component_suffixes[i]}"
+						node.addAttr(component_name, attributeType=child_attr_type, parent=attr)
+					for i, component in enumerate(value):  # Separate loop to set attribute values
+						component_name = f"{attr}{component_suffixes[i]}"
+						pm.setAttr(f"{node}.{component_name}", component)
+				else:
+					node.addAttr(attr, defaultValue=value, keyable=True, dataType=attr_type)
+					pm.setAttr(f"{node}.{attr}", value)  # Set attribute value immediately after creation
+			else:
+				if isinstance(value, (list, tuple)):  # Handle compound attributes
+					component_suffixes = ['X', 'Y', 'Z'] if len(value) == 3 else ['X', 'Y']
+					for i, component in enumerate(value):
+						component_name = f"{attr}{component_suffixes[i]}"
+						pm.setAttr(f"{node}.{component_name}", component)
+				else:
+					pm.setAttr(f"{node}.{attr}", value)
 
 
 	@staticmethod
@@ -442,6 +563,33 @@ class Node():
 			except Exception as error:
 				print ('# Error:', __file__, error, '#')
 
+
+	@staticmethod
+	def createAssembly(nodes, assembly_name='assembly#', duplicate=False):
+		"""Create an assembly by parenting the input nodes to a new assembly node.
+
+		Parameters:
+			nodes (list): A list of nodes to include in the assembly.
+			assembly_name (str, optional): The name of the assembly node. Defaults to 'assembly#'.
+			duplicate (bool, optional): If True, duplicates the input nodes before parenting. Defaults to False.
+
+		Returns:
+			pm.PyNode: The assembly node with added properties:
+				- addChild (function): Adds a new child to the assembly node.
+				- children (function): Returns the list of children under the assembly node.
+		"""
+		assembly_node = pm.assembly(name=assembly_name)
+
+		for node in nodes:
+			if duplicate:
+				node = pm.duplicate(node)[0]
+			pm.parent(node, assembly_node)
+
+		assembly_node.addChild = lambda child: pm.parent(child, assembly_node)
+		assembly_node.children = lambda: pm.listRelatives(assembly_node, children=True)
+
+		return assembly_node
+
 # --------------------------------------------------------------------------------------------
 
 
@@ -451,26 +599,6 @@ class Node():
 
 
 
-
-# --------------------------------------------------------------------------------------------
-
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Node, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
 
 # --------------------------------------------------------------------------------------------
 
@@ -492,9 +620,9 @@ if __name__=='__main__':
 # 		'''Filter the given 'frm' list for the items in 'exc'.
 
 # 		Parameters:
-# 			frm (str)(obj)(list): The components(s) to filter.
-# 			inc (str)(obj)(list): The component(s) to include.
-# 			exc (str)(obj)(list): The component(s) to exclude.
+# 			frm (str/obj/list): The components(s) to filter.
+# 			inc (str/obj/list): The component(s) to include.
+# 			exc (str/obj/list): The component(s) to exclude.
 # 								(exlude take precidence over include)
 # 		Return:
 # 			(list)
@@ -533,6 +661,6 @@ if __name__=='__main__':
 # 			typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
 # 			inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-# 		inc = Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
-# 		exc = Core.convertArrayType(exc, returnType=rtn, flatten=True)
+# 		inc = _core.Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
+# 		exc = _core.Core.convertArrayType(exc, returnType=rtn, flatten=True)
 # 		return [i for i in components if i not in exc and (inc and i in inc)]

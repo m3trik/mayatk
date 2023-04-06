@@ -4,7 +4,8 @@ try: import pymel.core as pm
 except ImportError as error: print (__file__, error)
 
 from pythontk import Iter, Math, randomize
-from mayatk import Core
+#from this package:
+from mayatk import _core
 
 
 class _GetComponents():
@@ -45,7 +46,7 @@ class _GetComponents():
 		'''Get the type of a given component.
 
 		Parameters:
-			obj (str)(obj)(list): A single maya component.
+			obj (str/obj/list): A single maya component.
 				If multiple components are given, only the first will be sampled.
 			nom (str): Specify the desired return value type. (default: 'str')
 				(valid: 'full' - object type as a string.
@@ -107,7 +108,7 @@ class _GetComponents():
 		'''Convert component(s) to it's sub-components of the given type.
 
 		Parameters:
-			components (str)(obj)(list): The components(s) to convert.
+			components (str/obj/list): The components(s) to convert.
 			componentType (str): The desired returned component type. 
 				valid: 'vtx' (or 'vertex', 'vertices', 'Polygon Vertex', 31, 0x0001), 
 					and the same for each: 'edge', 'uv', 'face'.
@@ -130,7 +131,7 @@ class _GetComponents():
 		if not typ in d:
 			return components
 		components = pm.polyListComponentConversion(components, **{d[typ.lower()]:True})
-		return Core.convertArrayType(components, returnType=returnType, flatten=flatten)
+		return _core.Core.convertArrayType(components, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -138,7 +139,7 @@ class _GetComponents():
 		'''Convert the given integers to components of the given object.
 
 		Parameters:
-			obj (str)(obj)(list): The object to convert to vertices of.
+			obj (str/obj/list): The object to convert to vertices of.
 			integers (list): The integer(s) to convert.
 			componentType (str): The desired returned component type. 
 				valid: 'vtx' (or 'vertex', 'vertices', 'Polygon Vertex', 31, 0x0001), 
@@ -161,7 +162,7 @@ class _GetComponents():
 		else:
 			result = ['{}.{}[{}]'.format(objName, componentType, c) for c in integers]
 
-		return Core.convertArrayType(result, returnType=returnType, flatten=flatten)
+		return _core.Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -169,9 +170,9 @@ class _GetComponents():
 		'''Filter the given components.
 
 		Parameters:
-			components (str)(obj)(list): The components(s) to filter.
-			inc (str)(int)(obj)(list): The component(s) to include.
-			exc (str)(int)(obj)(list): The component(s) to exclude.
+			components (str/obj/list): The components(s) to filter.
+			inc (str)(int)(obj/list): The component(s) to include.
+			exc (str)(int)(obj/list): The component(s) to exclude.
 						(exlude take precidence over include)
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
@@ -183,9 +184,9 @@ class _GetComponents():
 		filterComponents('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
 		'''
 		typ = cls.getComponentType(components)
-		etyp = Core.getArrayType(components)
-		etyp_inc = Core.getArrayType(inc)
-		etyp_exc = Core.getArrayType(exc)
+		etyp = _core.Core.getArrayType(components)
+		etyp_inc = _core.Core.getArrayType(inc)
+		etyp_exc = _core.Core.getArrayType(exc)
 
 		if etyp_inc=='int' or etyp_exc=='int':
 			try:
@@ -205,7 +206,7 @@ class _GetComponents():
 		components = pm.ls(components, flatten=True)
 
 		filtered = Iter.filterList(components, inc=inc, exc=exc)
-		result = Core.convertArrayType(filtered, returnType=etyp, flatten=flatten)
+		result = _core.Core.convertArrayType(filtered, returnType=etyp, flatten=flatten)
 		return result
 
 
@@ -215,12 +216,12 @@ class _GetComponents():
 		If no objects are given the current selection will be used.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to get the components of. (Polygon, Polygon components)(default: current selection)
+			objects (str/obj/list): The object(s) to get the components of. (Polygon, Polygon components)(default: current selection)
 			componentType (str)(int): The component type to return. (valid: any type allowed in the 'convertAlias' method)
 			returnType (str): The desired returned object type.
 				(valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
-			inc (str)(obj)(list): The component(s) to include.
-			exc (str)(obj)(list): The component(s) to exclude. (exlude take precidence over include)
+			inc (str/obj/list): The component(s) to include.
+			exc (str/obj/list): The component(s) to exclude. (exlude take precidence over include)
 			randomize (float) = If a 0.1-1 value is given, random components will be returned with a quantity determined by the given ratio. 
 								A value of 0.5 will return a 50% of the components of an object in random order.
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
@@ -244,7 +245,7 @@ class _GetComponents():
 		if randomize:
 			components = randomize(pm.ls(components, flatten=1), randomize)
 
-		result = Core.convertArrayType(components, returnType=returnType, flatten=flatten)
+		result = _core.Core.convertArrayType(components, returnType=returnType, flatten=flatten)
 		return result
 
 
@@ -303,7 +304,7 @@ class Cmpt(_GetComponents):
 		'''Get a list containing sets of adjacent polygon faces grouped by islands.
 
 		Parameters:
-			faces (str)(obj)(list): The polygon faces to be filtered for adjacent.
+			faces (str/obj/list): The polygon faces to be filtered for adjacent.
 			faceIslands (list): optional. list of sets. ability to add faces from previous calls to the return value.
 
 		Return:
@@ -347,7 +348,7 @@ class Cmpt(_GetComponents):
 		'''Get the group of components in each separate island of a combined mesh.
 
 		Parameters:
-			obj (str)(obj)(list): The object to get shells from.
+			obj (str/obj/list): The object to get shells from.
 			returnType (bool): Return the shell faces as a list of type: 'str' (default), 'int', or 'obj'.
 			flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
@@ -384,7 +385,7 @@ class Cmpt(_GetComponents):
 		A border is defined as a hole or detached edge.
 
 		Parameters:
-			x (str)(obj)(list): Component(s) (or a polygon object) to find any border components for.
+			x (str/obj/list): Component(s) (or a polygon object) to find any border components for.
 			componentType (str): The desired returned component type. (valid: 'vertex','edge','face', '',
 				An empty string returns the same type as the first given component, or edges if an object is given)
 			returnType (str): The desired returned object type.
@@ -445,7 +446,7 @@ class Cmpt(_GetComponents):
 					result.append(edge)
 
 		result = cls.convertComponentType(result, componentType) #convert back to the original component type and flatten /un-flatten list.
-		result = Core.convertArrayType(result, returnType=returnType, flatten=flatten)
+		result = _core.Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 		return result
 
 
@@ -454,8 +455,8 @@ class Cmpt(_GetComponents):
 		'''Find the two closest vertices between the two sets of vertices.
 
 		Parameters:
-			set1 (str)(list): The first set of vertices.
-			set2 (str)(list): The second set of vertices.
+			set1 (str/list): The first set of vertices.
+			set2 (str/list): The second set of vertices.
 			tolerance (float) = Maximum search distance.
 
 		Return:
@@ -465,8 +466,8 @@ class Cmpt(_GetComponents):
 		'''
 		from operator import itemgetter
 
-		set1 = Core.convertArrayType(set1, returnType='str', flatten=True)
-		set2 = Core.convertArrayType(set2, returnType='str', flatten=True)
+		set1 = _core.Core.convertArrayType(set1, returnType='str', flatten=True)
+		set2 = _core.Core.convertArrayType(set2, returnType='str', flatten=True)
 		vertPairsAndDistance={}
 		for v1 in set1:
 			v1Pos = pm.pointPosition(v1, world=1)
@@ -488,7 +489,7 @@ class Cmpt(_GetComponents):
 
 		Parameters:
 			vertices (list): A set of vertices.
-			obj (str)(obj)(list): The reference object in which to find the closest vertex for each vertex in the list of given vertices.
+			obj (str/obj/list): The reference object in which to find the closest vertex for each vertex in the list of given vertices.
 			tolerance (float) = Maximum search distance. Default is 0.0, which turns off the tolerance flag.
 			freezeTransforms (bool): Reset the selected transform and all of its children down to the shape level.
 			returnType (str): The desired returned object type. This only affects the dict value (found vertex), 
@@ -502,7 +503,7 @@ class Cmpt(_GetComponents):
 		getClosestVertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
 		getClosestVertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
 		'''
-		vertices = Core.convertArrayType(vertices, returnType='str', flatten=True)
+		vertices = _core.Core.convertArrayType(vertices, returnType='str', flatten=True)
 		pm.undoInfo(openChunk=True)
 
 		if freezeTransforms:
@@ -524,7 +525,7 @@ class Cmpt(_GetComponents):
 			v2Pos = pm.pointPosition(v2, world=True)
 			distance = Math.getDistBetweenTwoPoints(v1Pos, v2Pos)
 
-			v2_convertedType = Core.convertArrayType(v2, returnType=returnType)[0]
+			v2_convertedType = _core.Core.convertArrayType(v2, returnType=returnType)[0]
 			if not tolerance:
 				closestVerts[v1] = v2_convertedType
 			elif distance < tolerance:
@@ -542,7 +543,7 @@ class Cmpt(_GetComponents):
 		Supports components from a single object.
 
 		Parameters:
-			components (str)(obj)(list): The components used for the query (dependant on the operation type).
+			components (str/obj/list): The components used for the query (dependant on the operation type).
 			path (str): The desired return type. valid: 'edgeLoop': Select an edge loop starting at the given edge.
 				'edgeRing': Select an edge ring starting at the given edge.
 				'edgeRingPath', Given two edges that are on the same edge ring, this will select the shortest path between them on the ring.
@@ -587,7 +588,7 @@ class Cmpt(_GetComponents):
 
 		objName = obj.name()
 		result = Iter.removeDuplicates(['{}.e[{}]'.format(objName, e) for e in edgesLong])
-		return Core.convertArrayType(result, returnType=returnType, flatten=flatten)
+		return _core.Core.convertArrayType(result, returnType=returnType, flatten=flatten)
 
 
 	@classmethod
@@ -656,7 +657,7 @@ class Cmpt(_GetComponents):
 		'''Get a list of edges having normals between the given high and low angles using maya's polySelectConstraint.
 
 		Parameters:
-			objects (str)(list)(obj): The object(s) to get edges of.
+			objects (str/list)(obj): The object(s) to get edges of.
 			lowAngle (int): Normal angle low range.
 			highAngle (int): Normal angle high range.
 			returnType (str): The desired returned object type. 
@@ -689,7 +690,7 @@ class Cmpt(_GetComponents):
 		'''Get a list of components filtered by the number of their connected components.
 
 		Parameters:
-			components (str)(list)(obj): The components to filter.
+			components (str/list)(obj): The components to filter.
 			num_of_connected (int)(tuple): The number of connected components. Can be given as a range. (Default: (0,2))
 			connectedType (str)(int): The desired component mask. (valid: 'vtx','vertex','vertices','Polygon Vertex',31,0x0001(vertices), 'e','edge','edges','Polygon Edge',32,0x8000(edges), 'f','face','faces','Polygon Face',34,0x0008(faces), 'uv','texture','texture coordinates','Polygon UV',35,0x0010(texture coordiantes).
 			returnType (str): The desired returned object type. 
@@ -720,7 +721,7 @@ class Cmpt(_GetComponents):
 			if n>=lowRange and n<=highRange:
 				result.append(c)
 
-		result = Core.convertArrayType(result, returnType=returnType)
+		result = _core.Core.convertArrayType(result, returnType=returnType)
 		return result
 
 
@@ -730,7 +731,7 @@ class Cmpt(_GetComponents):
 		per-vertex normal, so unshared normals at a vertex will be averaged.
 
 		Parameters:
-			vertex (str)(obj)(list): A polygon vertex.
+			vertex (str/obj/list): A polygon vertex.
 			angleWeighted (bool): Weight by the angle subtended by the face at the vertex. 
 				If angleWeighted is set to false, a simple average of surround face normals is returned.
 				The simple average evaluation is significantly faster than the angle-weighted average.
@@ -746,7 +747,7 @@ class Cmpt(_GetComponents):
 		dagPath = selectionList.getDagPath(0) #create empty dag path object.
 		mesh = om.MFnMesh(dagPath) #get mesh.
 
-		vtxID = Core.convertArrayType(vertex, 'int')[0]
+		vtxID = _core.Core.convertArrayType(vertex, 'int')[0]
 		return mesh.getVertexNormal(vtxID, angleWeighted, space=om.MSpace.kWorld) #get vertex normal and use om.MSpace.kObject for object space.
 
 
@@ -779,26 +780,6 @@ class Cmpt(_GetComponents):
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Cmpt, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-
-# --------------------------------------------------------------------------------------------
-
 if __name__=='__main__':
 	pass
 
@@ -816,9 +797,9 @@ if __name__=='__main__':
 # 		'''Filter the given 'frm' list for the items in 'exc'.
 
 # 		Parameters:
-# 			frm (str)(obj)(list): The components(s) to filter.
-# 			inc (str)(obj)(list): The component(s) to include.
-# 			exc (str)(obj)(list): The component(s) to exclude.
+# 			frm (str/obj/list): The components(s) to filter.
+# 			inc (str/obj/list): The component(s) to include.
+# 			exc (str/obj/list): The component(s) to exclude.
 # 								(exlude take precidence over include)
 # 		Return:
 # 			(list)
@@ -857,6 +838,6 @@ if __name__=='__main__':
 # 			typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
 # 			inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-# 		inc = Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
-# 		exc = Core.convertArrayType(exc, returnType=rtn, flatten=True)
+# 		inc = _core.Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
+# 		exc = _core.Core.convertArrayType(exc, returnType=rtn, flatten=True)
 # 		return [i for i in components if i not in exc and (inc and i in inc)]

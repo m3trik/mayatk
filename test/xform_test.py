@@ -127,11 +127,11 @@ class Xform_test(Main, Xform):
 		})
 
 
-	def test_getBoundingBoxValue(self):
+	def test_getBoundingBox(self):
 		'''
 		'''
 		self.perform_test({
-			"self.getBoundingBoxValue('sph')": (10, 10, 10),
+			"self.getBoundingBox('sph', 'size')": (10, 10, 10),
 		})
 
 	def test_sortByBoundingBoxValue(self):

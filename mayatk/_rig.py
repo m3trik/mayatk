@@ -7,7 +7,7 @@ except ImportError as error:
 
 from pythontk import Str, Iter
 #from this package:
-from mayatk import Node
+from mayatk import _node
 
 
 class Rig(object):
@@ -42,7 +42,7 @@ class Rig(object):
 		'''Remove a parented locator from the child object.
 
 		Parameters:
-			obj (str)(obj)(list): The child object or the locator itself.
+			obj (str/obj/list): The child object or the locator itself.
 		'''
 		errorMsg = lambda: pm.inViewMessage(
 			statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(__file__), 
@@ -56,17 +56,17 @@ class Rig(object):
 			if not pm.objExists(obj):
 				continue
 
-			elif Node.isLocator(obj) and not Node.getType(obj) and not Node.getChildren(obj):
+			elif _node.Node.isLocator(obj) and not _node.Node.getType(obj) and not _node.Node.getChildren(obj):
 				pm.delete(obj)
 				continue
 
 			#unlock attributes
 			cls.setAttrLockState(obj, translate=False, rotate=False, scale=False) #unlock all.
 
-			if not Node.isLocator(obj):
+			if not _node.Node.isLocator(obj):
 				try: #if the 'obj' is not a locator, check if it's parent is.
-					obj = Node.getParent(obj)
-					if not Node.isLocator(obj):
+					obj = _node.Node.getParent(obj)
+					if not _node.Node.isLocator(obj):
 						errorMsg()
 						continue
 				except IndexError as error:
@@ -74,7 +74,7 @@ class Rig(object):
 					continue
 
 			#unparent child object
-			children = Node.getChildren(obj)
+			children = _node.Node.getChildren(obj)
 			for child in children:
 				pm.parent(child, world=True)
 
@@ -175,7 +175,7 @@ class Rig(object):
 		A 'True' value locks the attribute, 'False' unlocks, while 'None' leaves the state unchanged.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to lock/unlock attributes of.
+			objects (str/obj/list): The object(s) to lock/unlock attributes of.
 			translate (bool): Lock/Unlock all translate x,y,z values at once.
 			rotate (bool): Lock/Unlock all rotate x,y,z values at once.
 			scale (bool): Lock/Unlock all scale x,y,z values at once.
@@ -192,7 +192,7 @@ class Rig(object):
 
 		for obj in objects:
 			try:
-				if Node.isLocator(obj):
+				if _node.Node.isLocator(obj):
 					obj = pm.listRelatives(obj, children=1, type='transform')[0]
 			except IndexError as error:
 				return
@@ -209,7 +209,7 @@ class Rig(object):
 		'''Create a group containing any given objects.
 
 		Parameters:
-			objects (str)(obj)(list): The object(s) to group.
+			objects (str/obj/list): The object(s) to group.
 			name (str): Name the group.
 			zeroTranslation (bool): Freeze translation before parenting.
 			zeroRotation (bool): Freeze rotation before parenting.
@@ -243,7 +243,7 @@ class Rig(object):
 		'''Creates a group using the first object to define the local rotation axis.
 
 		Parameters:
-			objects (str)(obj)(list): The objects to group. The first object will be used to define the groups LRA.
+			objects (str/obj/list): The objects to group. The first object will be used to define the groups LRA.
 			name (str): The group name.
 			makeIdentity (bool): Freeze transforms on group child objects.
 		'''
@@ -295,7 +295,7 @@ class Rig(object):
 		If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
 
 		Parameters:
-			objects (str)(obj)(list): A list of objects, or an object name to create locators at.
+			objects (str/obj/list): A list of objects, or an object name to create locators at.
 			parent (bool): Parent the object to the locator. (default=False)
 			freezeTransforms (bool): Freeze transforms on the locator. (default=True)
 			bakeChildPivot (bool): Bake pivot positions on the child object. (default=True)
@@ -312,7 +312,7 @@ class Rig(object):
 
 		Example: createLocatorAtSelection(strip='_GEO', suffix='', stripDigits=True, parent=True, lockTranslate=True, lockRotation=True)
 		'''
-		getSuffix = lambda o: locSuffix if Node.isLocator(o) else grpSuffix if Node.isGroup(o) else objSuffix #match the correct suffix to the object type.
+		getSuffix = lambda o: locSuffix if _node.Node.isLocator(o) else grpSuffix if _node.Node.isGroup(o) else objSuffix #match the correct suffix to the object type.
 
 		pm.undoInfo(openChunk=1)
 
@@ -376,26 +376,6 @@ class Rig(object):
 
 # --------------------------------------------------------------------------------------------
 
-def __getattr__(attr:str):
-	"""Searches for an attribute in this module's classes and returns it.
-
-	Parameters:
-		attr (str): The name of the attribute to search for.
-	
-	Return:
-		(obj) The found attribute.
-
-	:Raises:
-		AttributeError: If the given attribute is not found in any of the classes in the module.
-	"""
-	try:
-		return getattr(Rig, attr)
-
-	except AttributeError as error:
-		raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-
-# --------------------------------------------------------------------------------------------
-
 if __name__=='__main__':
 
 	sel = pm.ls(sl=1)
@@ -431,7 +411,7 @@ if __name__=='__main__':
 # 		'''Remove a parented locator from the child object.
 
 # 		Parameters:
-# 			obj (str)(obj)(list): The child object or the locator itself.
+# 			obj (str/obj/list): The child object or the locator itself.
 # 		'''
 # 		errorMsg = lambda: pm.inViewMessage(
 # 			statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(__file__), 
@@ -445,17 +425,17 @@ if __name__=='__main__':
 # 			if not pm.objExists(obj):
 # 				continue
 
-# 			elif Node.isLocator(obj) and not Node.getType(obj) and not Node.getChildren(obj):
+# 			elif _node.Node.isLocator(obj) and not _node.Node.getType(obj) and not _node.Node.getChildren(obj):
 # 				pm.delete(obj)
 # 				continue
 
 # 			#unlock attributes
 # 			cls.setAttrLockState(obj, translate=False, rotate=False, scale=False) #unlock all.
 
-# 			if not Node.isLocator(obj):
+# 			if not _node.Node.isLocator(obj):
 # 				try: #if the 'obj' is not a locator, check if it's parent is.
-# 					obj = Node.getType(obj)
-# 					if not Node.isLocator(obj):
+# 					obj = _node.Node.getType(obj)
+# 					if not _node.Node.isLocator(obj):
 # 						errorMsg()
 # 						continue
 # 				except IndexError as error:
@@ -463,11 +443,11 @@ if __name__=='__main__':
 # 					continue
 
 # 			try: #remove from group
-# 				grp = Node.getType(obj)
+# 				grp = _node.Node.getType(obj)
 # 			except IndexError as error:
 # 				errorMsg()
 # 				continue
-# 			if Node.isGroup(grp):
+# 			if _node.Node.isGroup(grp):
 # 				if grp.split('_')[0]==obj.split('_')[0]:
 # 					pm.ungroup(grp)
 

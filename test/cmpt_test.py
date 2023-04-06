@@ -6,7 +6,7 @@ import inspect
 
 import pymel.core as pm
 
-from mayatk.Cmpt import Cmpt
+from mayatk import Cmpt
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
