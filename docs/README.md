@@ -34,6 +34,6 @@ isGroup(<obj>)
 ```python
 from mayatk import getBoundingBox
 getBoundingBox(<obj>, 'centroid|size') 
-# Returns: tuple: containing bounding box center and size.
+# Returns: tuple containing bounding box center and size.
 # ex. ((-0.02406523456116849, -0.8100277092487823, 0.0), (3.3830200057098523, 4.0155477063595555, 3.40770764056194))
 ```
