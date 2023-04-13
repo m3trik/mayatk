@@ -222,7 +222,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		super().__init__()
 		'''
 		'''
-		self.sb = self.get_switchboard_instance()
+		self.sb = self.switchboard()
 		self.imageFiles = None
 
 		#set json file location.

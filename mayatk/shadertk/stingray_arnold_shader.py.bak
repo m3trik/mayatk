@@ -1,15 +1,15 @@
 # !/usr/bin/python
 # coding=utf-8
 import sys, os
-
 from PySide2 import QtCore, QtWidgets
-
 try: import pymel.core as pm
 except ImportError as error: print (__file__, error)
 
+from uitk import Switchboard
 from pythontk import File, Img, Str, Json
-from mayatk import Node, getMainWindow, undo
-from uitk.switchboard import Switchboard
+#from this package:
+from mayatk._core import Core
+from mayatk._node import Node
 
 
 __version__ = '0.5.3'
@@ -69,7 +69,7 @@ class Stingray_arnold_shader():
 			node.camera.set(state)
 
 
-	@undo
+	@Core.undo
 	def createNetwork(self, textures, name='', hdrMap='', hdrMapVisibility=False, normalMapType='OpenGL', callback=print):
 		'''
 		'''
@@ -380,7 +380,7 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 		'''
 		Parameters:
 			string (str): The text to output to a textEdit widget.
-			progress (int)(list): The progress amount to register with the progressBar.
+			progress (int/list): The progress amount to register with the progressBar.
 				Can be given as an int or a tuple as: (progress, total_len) 
 		'''
 		if clear:
@@ -438,13 +438,9 @@ class Stingray_arnold_shader_sb(Switchboard):
 
 if __name__ == "__main__":
 
-	parent = getMainWindow()
+	parent = Core.getMainWindow()
 	sb = Stingray_arnold_shader_sb(parent)
 	sb.ui.show()
-
-	exit_code = sb.app.exec_()
-	if exit_code != -1:
-		sys.exit(exit_code) # run app, show window, wait for input, then terminate program with a status code returned from app.
 
 # -----------------------------------------------------------------------------
 # Notes
