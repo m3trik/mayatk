@@ -14,109 +14,174 @@ class Project:
     """ """
 
     @staticmethod
-    def getRecentFiles(index=None, timestamp=False):
-        """Get a list of recent files.
+    def getRecentFiles(index=None, format="standard"):
+        """
+        Get a list of recent files.
 
         Parameters:
-            index (int): Return the recent file directory path at the given index. Index 0 would be the most recent file.
-            timestamp (bool): Attach a modified timestamp and date to given file path(s).
+            index (slice or int): Return the recent file directory path at the given index or slice.
+                    Index 0 would be the most recent file.
+                    For example, use index=slice(0, 5) to get the 5 most recent files.
+                    If there are only 3 files, it will return those 3 files without throwing an error.
+            format (str): Defines the format of the returned paths. Possible options are 'standard', 'timestamp',
+                    'standard|timestamp', 'timestamp|standard'. 'standard' returns paths as strings, 'timestamp'
+                    returns timestamped paths, 'standard|timestamp' returns a dictionary with standard paths as
+                    keys and timestamped paths as values, 'timestamp|standard' does the opposite.
 
         Returns:
-            (list)(str)
+            (list or dict): A list or dictionary of recent files depending on the 'format' parameter.
+
+        Examples:
+            getRecentFiles() --> Returns all recent files in standard format
+            getRecentFiles(0) --> Returns the most recent file in standard format
+            getRecentFiles(slice(0, 5)) --> Returns the 5 most recent files in standard format.
+            getRecentFiles(format='timestamp') --> Returns all recent files in timestamp format.
+            getRecentFiles(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
         files = pm.optionVar(query="RecentFilesList")
-        result = (
-            [File.formatPath(f) for f in list(reversed(files)) if "Autosave" not in f]
-            if files
-            else []
-        )
-        try:
-            result = result[index]
-        except (IndexError, TypeError) as error:
-            pass
+        if not files:
+            return []
 
-        if timestamp:  # attach modified timestamp
-            result = File.timeStamp(result)
+        result = [
+            File.formatPath(f)
+            for f in reversed(files)
+            if File.isValid(f) and "Autosave" not in f
+        ]
+
+        if index is not None:
+            try:
+                result = result[index]
+            except (IndexError, TypeError):
+                print(f"Incorrect index or slice. Returning empty list.")
+                return []
+
+        format = format.split("|")
+        if len(format) == 2 and "timestamp" in format and "standard" in format:
+            if format[0] == "timestamp":
+                result = {File.timeStamp(res): res for res in result}
+            else:
+                result = {res: File.timeStamp(res) for res in result}
+        elif "timestamp" in format:
+            result = [File.timeStamp(res) for res in result]
+        # else return the standard format
 
         return result
 
     @staticmethod
-    def getRecentProjects():
-        """Get a list of recently set projects.
-
-        Returns:
-            (list)
+    def getRecentProjects(index=None, format="standard"):
         """
-        files = pm.optionVar(query="RecentProjectsList")
-        result = [File.formatPath(f) for f in list(reversed(files))]
-
-        return result
-
-    @staticmethod
-    def getRecentAutosave(timestamped=False, standard=False):
-        """
-        This function returns a list of recent Maya autosave files (.mb and .ma), sorted by timestamp.
-        It first tries to get the autosave directory from the Maya project's settings,
-        then from the 'MAYA_AUTOSAVE_FOLDER' environment variable, and finally checks the '~/maya/autosave' directory.
+        Get a list of recently set projects.
 
         Parameters:
-            standard (bool): If True, the function will return a list of standard file paths.
-            timestamped (bool): If True, the function will return a list of timestamped file paths.
+            index (slice or int): Return the recent project directory path at the given index or slice.
+                    Index 0 would be the most recent project.
+                    For example, use index=slice(0, 5) to get the 5 most recent projects.
+                    If there are only 3 projects, it will return those 3 projects without throwing an error.
+            format (str): Defines the format of the returned paths. Possible options are 'standard', 'timestamp',
+                    'standard|timestamp', 'timestamp|standard'. 'standard' returns paths as strings, 'timestamp'
+                    returns timestamped paths, 'standard|timestamp' returns a dictionary with standard paths as
+                    keys and timestamped paths as values, 'timestamp|standard' does the opposite.
 
         Returns:
-            list or dict: A list of standard file paths, a list of timestamped file paths,
-            or a dictionary where keys are timestamped file paths and values are standard file paths,
-            depending on the input flags.
+            (list or dict): A list or dictionary of recent projects depending on the 'format' parameter.
+
+        Examples:
+            getRecentProjects() --> Returns all recent projects in standard format
+            getRecentProjects(0) --> Returns the most recent project in standard format
+            getRecentProjects(slice(0, 5)) --> Returns the 5 most recent projects in standard format.
+            getRecentProjects(format='timestamp') --> Returns all recent projects in timestamp format.
+            getRecentProjects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+        """
+        files = pm.optionVar(query="RecentProjectsList")
+        if not files:
+            return []
+
+        result = [File.formatPath(f) for f in reversed(files) if File.isValid(f)]
+
+        if index is not None:
+            try:
+                result = result[index]
+            except (IndexError, TypeError):
+                print(f"Incorrect index or slice. Returning empty list.")
+                return []
+
+        format = format.split("|")
+        if len(format) == 2 and "timestamp" in format and "standard" in format:
+            if format[0] == "timestamp":
+                result = {File.timeStamp(res): res for res in result}
+            else:
+                result = {res: File.timeStamp(res) for res in result}
+        elif "timestamp" in format:
+            result = [File.timeStamp(res) for res in result]
+        # else return the standard format
+
+        return result
+
+    @staticmethod
+    def getRecentAutosave(index=None, format="standard"):
+        """
+        Returns a list of recent Maya autosave files (.mb and .ma), sorted by timestamp.
+
+        Parameters:
+            index (slice or int): Return the recent autosave file directory path at the given index or slice.
+                    Index 0 would be the most recent autosave file.
+                    For example, use index=slice(0, 5) to get the 5 most recent autosave files.
+                    If there are only 3 autosave files, it will return those 3 autosave files without throwing an error.
+            format (str): Defines the format of the returned paths. Possible options are 'standard', 'timestamp',
+                    'standard|timestamp', 'timestamp|standard'. 'standard' returns paths as strings, 'timestamp'
+                    returns timestamped paths, 'standard|timestamp' returns a dictionary with standard paths as
+                    keys and timestamped paths as values, 'timestamp|standard' does the opposite.
+
+        Returns:
+            (list or dict): A list or dictionary of recent autosave files depending on the 'format' parameter.
+
+        Examples:
+            getRecentAutosave() --> Returns all recent autosave files in standard format
+            getRecentAutosave(0) --> Returns the most recent autosave file in standard format
+            getRecentAutosave(slice(0, 5)) --> Returns the 5 most recent autosave files in standard format.
+            getRecentAutosave(format='timestamp') --> Returns all recent autosave files in timestamp format.
+            getRecentAutosave(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
         import glob
         import itertools
-        from datetime import datetime
 
-        # Try to get the autosave directory from the current Maya project
         autosave_dirs = [str(pm.workspace(query=1, rd=1)) + "autosave"]
-
-        # Try to get the autosave directory from the environment variable
         env_autosave_dir = os.environ.get("MAYA_AUTOSAVE_FOLDER")
         if env_autosave_dir is not None:
             autosave_dirs += env_autosave_dir.split(";")
-
-        # Add the default autosave directory
         autosave_dirs.append(os.path.expanduser("~/maya/autosave"))
 
-        # Get a list of all .mb and .ma files in the autosave directories
-        files_dict = {}
+        result = []
         for autosave_dir in autosave_dirs:
             if not os.path.exists(autosave_dir):
                 continue
 
-            files = itertools.chain(
-                glob.iglob(os.path.join(autosave_dir, "*.mb")),
-                glob.iglob(os.path.join(autosave_dir, "*.ma")),
-            )
+        files = itertools.chain(
+            glob.iglob(os.path.join(autosave_dir, "*.mb")),
+            glob.iglob(os.path.join(autosave_dir, "*.ma")),
+        )
 
-            for file in files:
-                timestamp = datetime.fromtimestamp(os.path.getmtime(file)).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                if standard and timestamped:
-                    files_dict[timestamp] = file
-                elif standard:
-                    files_dict[timestamp] = None
-                elif timestamped:
-                    files_dict[timestamp] = None
+        for file in files:
+            result.append(File.formatPath(file))
 
-        # Sort the dictionary by keys (timestamps)
-        files_dict = dict(sorted(files_dict.items(), reverse=True))
+        if index is not None:
+            try:
+                result = result[index]
+            except (IndexError, TypeError):
+                print(f"Incorrect index or slice. Returning empty list.")
+                return []
 
-        # Return the results
-        if standard and timestamped:
-            return files_dict
-        elif standard:
-            return [v for k, v in files_dict.items() if v is not None]
-        elif timestamped:
-            return [k for k, v in files_dict.items() if v is not None]
-        else:
-            return None
+        format = format.split("|")
+        if len(format) == 2 and "timestamp" in format and "standard" in format:
+            if format[0] == "timestamp":
+                result = {File.timeStamp(res): res for res in result}
+            else:
+                result = {res: File.timeStamp(res) for res in result}
+        elif "timestamp" in format:
+            result = [File.timeStamp(res) for res in result]
+        # else return the standard format
+
+        return result
 
     @staticmethod
     def getWorkspaceScenes(fullPath=True):
