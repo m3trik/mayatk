@@ -14,7 +14,7 @@ class Project:
     """ """
 
     @staticmethod
-    def getRecentFiles(index=None, format="standard"):
+    def get_recent_files(index=None, format="standard"):
         """
         Get a list of recent files.
 
@@ -32,20 +32,20 @@ class Project:
             (list or dict): A list or dictionary of recent files depending on the 'format' parameter.
 
         Examples:
-            getRecentFiles() --> Returns all recent files in standard format
-            getRecentFiles(0) --> Returns the most recent file in standard format
-            getRecentFiles(slice(0, 5)) --> Returns the 5 most recent files in standard format.
-            getRecentFiles(format='timestamp') --> Returns all recent files in timestamp format.
-            getRecentFiles(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+            get_recent_files() --> Returns all recent files in standard format
+            get_recent_files(0) --> Returns the most recent file in standard format
+            get_recent_files(slice(0, 5)) --> Returns the 5 most recent files in standard format.
+            get_recent_files(format='timestamp') --> Returns all recent files in timestamp format.
+            get_recent_files(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
         files = pm.optionVar(query="RecentFilesList")
         if not files:
             return []
 
         result = [
-            File.formatPath(f)
+            File.format_path(f)
             for f in reversed(files)
-            if File.isValid(f) and "Autosave" not in f
+            if File.is_valid(f) and "Autosave" not in f
         ]
 
         if index is not None:
@@ -58,17 +58,17 @@ class Project:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.timeStamp(res): res for res in result}
+                result = {File.time_stamp(res): res for res in result}
             else:
-                result = {res: File.timeStamp(res) for res in result}
+                result = {res: File.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.timeStamp(res) for res in result]
+            result = [File.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
 
     @staticmethod
-    def getRecentProjects(index=None, format="standard"):
+    def get_recent_projects(index=None, format="standard"):
         """
         Get a list of recently set projects.
 
@@ -86,17 +86,17 @@ class Project:
             (list or dict): A list or dictionary of recent projects depending on the 'format' parameter.
 
         Examples:
-            getRecentProjects() --> Returns all recent projects in standard format
-            getRecentProjects(0) --> Returns the most recent project in standard format
-            getRecentProjects(slice(0, 5)) --> Returns the 5 most recent projects in standard format.
-            getRecentProjects(format='timestamp') --> Returns all recent projects in timestamp format.
-            getRecentProjects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+            get_recent_projects() --> Returns all recent projects in standard format
+            get_recent_projects(0) --> Returns the most recent project in standard format
+            get_recent_projects(slice(0, 5)) --> Returns the 5 most recent projects in standard format.
+            get_recent_projects(format='timestamp') --> Returns all recent projects in timestamp format.
+            get_recent_projects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
         files = pm.optionVar(query="RecentProjectsList")
         if not files:
             return []
 
-        result = [File.formatPath(f) for f in reversed(files) if File.isValid(f)]
+        result = [File.format_path(f) for f in reversed(files) if File.is_valid(f)]
 
         if index is not None:
             try:
@@ -108,17 +108,17 @@ class Project:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.timeStamp(res): res for res in result}
+                result = {File.time_stamp(res): res for res in result}
             else:
-                result = {res: File.timeStamp(res) for res in result}
+                result = {res: File.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.timeStamp(res) for res in result]
+            result = [File.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
 
     @staticmethod
-    def getRecentAutosave(index=None, format="standard"):
+    def get_recent_autosave(index=None, format="standard"):
         """
         Returns a list of recent Maya autosave files (.mb and .ma), sorted by timestamp.
 
@@ -136,11 +136,11 @@ class Project:
             (list or dict): A list or dictionary of recent autosave files depending on the 'format' parameter.
 
         Examples:
-            getRecentAutosave() --> Returns all recent autosave files in standard format
-            getRecentAutosave(0) --> Returns the most recent autosave file in standard format
-            getRecentAutosave(slice(0, 5)) --> Returns the 5 most recent autosave files in standard format.
-            getRecentAutosave(format='timestamp') --> Returns all recent autosave files in timestamp format.
-            getRecentAutosave(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+            get_recent_autosave() --> Returns all recent autosave files in standard format
+            get_recent_autosave(0) --> Returns the most recent autosave file in standard format
+            get_recent_autosave(slice(0, 5)) --> Returns the 5 most recent autosave files in standard format.
+            get_recent_autosave(format='timestamp') --> Returns all recent autosave files in timestamp format.
+            get_recent_autosave(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
         import glob
         import itertools
@@ -162,7 +162,7 @@ class Project:
         )
 
         for file in files:
-            result.append(File.formatPath(file))
+            result.append(File.format_path(file))
 
         if index is not None:
             try:
@@ -174,17 +174,17 @@ class Project:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.timeStamp(res): res for res in result}
+                result = {File.time_stamp(res): res for res in result}
             else:
-                result = {res: File.timeStamp(res) for res in result}
+                result = {res: File.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.timeStamp(res) for res in result]
+            result = [File.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
 
     @staticmethod
-    def getWorkspaceScenes(fullPath=True):
+    def get_workspace_scenes(fullPath=True):
         """Get a list of maya scene files from the current workspace directory.
 
         Parameters:
@@ -195,11 +195,11 @@ class Project:
         """
         workspace_dir = str(pm.workspace(query=1, rd=1))  # get current project path.
 
-        files = File.getDirContents(
-            workspace_dir, "filepaths", incFiles=("*.mb", "*.ma")
+        files = File.get_dir_contents(
+            workspace_dir, "filepaths", inc_files=("*.mb", "*.ma")
         )
         # Replace any backslashes with forward slashes.
-        result = [File.formatPath(f) for f in files]
+        result = [File.format_path(f) for f in files]
 
         if not fullPath:
             result = [f.split("\\")[-1] for f in result]
@@ -207,7 +207,7 @@ class Project:
         return result
 
     @staticmethod
-    def referenceScene(scene, remove=False, lockReference=False):
+    def reference_scene(scene, remove=False, lockReference=False):
         """Create a reference to a Maya scene.
 
         Parameters:
@@ -247,7 +247,7 @@ if __name__ == "__main__":
 
 
 # @staticmethod
-# def getRecentAutosave(timestamp=False):
+# def get_recent_autosave(timestamp=False):
 #     """Get a list of autosave files.
 
 #     Parameters:
@@ -262,13 +262,13 @@ if __name__ == "__main__":
 # if dir2 is not None:  # Check if the environment variable exists
 #     dir2 = dir2.split(";")[0]
 
-#     result = File.getDirContents(dir1, "filepaths", incFiles=("*.mb", "*.ma"))
+#     result = File.get_dir_contents(dir1, "filepaths", inc_files=("*.mb", "*.ma"))
 #     if dir2 is not None:  # Add the files from the second directory if it exists
-#         result += File.getDirContents(dir2, "filepaths", incFiles=("*.mb", "*.ma"))
+#         result += File.get_dir_contents(dir2, "filepaths", inc_files=("*.mb", "*.ma"))
 #     # # Replace any backslashes with forward slashes and reverse the list.
-#     # result = [File.formatPath(f) for f in list(reversed(files))]
+#     # result = [File.format_path(f) for f in list(reversed(files))]
 
 #     if timestamp:  # attach modified timestamp
-#         result = File.timeStamp(result, sort=True)
+#         result = File.time_stamp(result, sort=True)
 
 #     return result

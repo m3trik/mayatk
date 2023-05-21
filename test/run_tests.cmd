@@ -11,7 +11,7 @@ echo/
 
 
 rem set PYTHONPATH=
-%mayapy% -c "from mayatk import appendMayaPaths; appendMayaPaths(str(%version%))"
+%mayapy% -c "from mayatk import append_maya_paths; append_maya_paths(str(%version%))"
 %mayapy% -c "import maya.standalone; maya.standalone.initialize(name='python')"
 rem %mayapy% -m pip install pymel~=1.3.0a
 

@@ -21,19 +21,19 @@ python -m pip install mayatk
 ###### As the name suggests, the class `Node` holds the package's node related functions.
 ```python
 from mayatk import Node
-Node.isLocator(<obj>)
+Node.is_locator(<obj>)
 # Returns: bool
 ```
 ###### You can also import a function directly.
 ```python
-from mayatk import isGroup
-isGroup(<obj>)
+from mayatk import is_group
+is_group(<obj>)
 # Returns: bool
 ```
 
 ```python
-from mayatk import getBoundingBox
-getBoundingBox(<obj>, 'centroid|size') 
+from mayatk import get_bounding_box
+get_bounding_box(<obj>, 'centroid|size') 
 # Returns: tuple: the combined bounding box center and size.
 # ex. ((-0.02406523456116849, -0.8100277092487823, 0.0), (3.3830200057098523, 4.0155477063595555, 3.40770764056194))
 ```

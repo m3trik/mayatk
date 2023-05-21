@@ -97,11 +97,11 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getType('cyl')": "transform",
-                "self.getType('cylShape')": "mesh",
-                "self.getType('cylShape.vtx[0]')": "vtx",
-                "self.getType('cylShape.e[0]')": "e",
-                "self.getType('cylShape.f[0]')": "f",
+                "self.get_type('cyl')": "transform",
+                "self.get_type('cylShape')": "mesh",
+                "self.get_type('cylShape.vtx[0]')": "vtx",
+                "self.get_type('cylShape.e[0]')": "e",
+                "self.get_type('cylShape.f[0]')": "f",
             }
         )
 
@@ -109,8 +109,8 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getTransformNode('cyl')": "cyl",
-                "self.getTransformNode('cylShape')": "cyl",
+                "self.get_transform_node('cyl')": "cyl",
+                "self.get_transform_node('cylShape')": "cyl",
             }
         )
 
@@ -118,8 +118,8 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getShapeNode('cyl')": "cylShape",
-                "self.getShapeNode('cylShape')": "cylShape",
+                "self.get_shape_node('cyl')": "cylShape",
+                "self.get_shape_node('cylShape')": "cylShape",
             }
         )
 
@@ -127,8 +127,8 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getHistoryNode('cyl')": "polyCylinder1",
-                "self.getHistoryNode('cylShape')": "polyCylinder1",
+                "self.get_history_node('cyl')": "polyCylinder1",
+                "self.get_history_node('cylShape')": "polyCylinder1",
             }
         )
 
@@ -139,8 +139,8 @@ class Node_test(Main, Node):
 
         self.perform_test(
             {
-                "self.isLocator('cyl')": False,
-                "self.isLocator('loc')": True,
+                "self.is_locator('cyl')": False,
+                "self.is_locator('loc')": True,
             }
         )
 
@@ -148,9 +148,9 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.isGroup('cyl')": False,
-                "self.isGroup('cylShape')": False,
-                "self.isGroup('cylShape.vtx[0]')": False,
+                "self.is_group('cyl')": False,
+                "self.is_group('cylShape')": False,
+                "self.is_group('cylShape.vtx[0]')": False,
             }
         )
 
@@ -158,7 +158,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getGroups()": [],
+                "self.get_groups()": [],
             }
         )
 
@@ -166,7 +166,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getParent('cyl')": None,
+                "self.get_parent('cyl')": None,
             }
         )
 
@@ -174,7 +174,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                "self.getChildren('cyl')": [],
+                "self.get_children('cyl')": [],
             }
         )
 
@@ -182,7 +182,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.getNodeAttributes()": None,
+                # "self.get_node_attributes()": None,
             }
         )
 
@@ -190,7 +190,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.setNodeAttributes()": None,
+                # "self.set_node_attributes()": None,
             }
         )
 
@@ -198,7 +198,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.connectAttributes()": None,
+                # "self.connect_attributes()": None,
             }
         )
 
@@ -206,7 +206,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.createRenderNode()": None,
+                # "self.create_render_node()": None,
             }
         )
 
@@ -214,7 +214,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.getIncomingNodeByType()": None,
+                # "self.get_incoming_node_by_type()": None,
             }
         )
 
@@ -222,7 +222,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.getOutgoingNodeByType()": None,
+                # "self.get_outgoing_node_by_type()": None,
             }
         )
 
@@ -230,7 +230,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.connectMultiAttr()": None,
+                # "self.connect_multi_attr()": None,
             }
         )
 
@@ -238,7 +238,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.nodeExists()": None,
+                # "self.node_exists()": None,
             }
         )
 
@@ -246,7 +246,7 @@ class Node_test(Main, Node):
         """ """
         self.perform_test(
             {
-                # "self.createAssembly()": None,
+                # "self.create_assembly()": None,
             }
         )
 
@@ -315,7 +315,7 @@ if __name__ == "__main__":
 #   '{}/bin3'.format(mayapath),
 #   '{}/Python{}'.format(mayapath, pythonver)
 #   ]:
-#   for dd in File.getDirContents(d, 'dirpaths', excDirs='Python27',  recursive=True):
+#   for dd in File.get_dir_contents(d, 'dirpaths', exc_dirs='Python27',  recursive=True):
 #       print (dd)
 #       sys.path.append(dd)
 

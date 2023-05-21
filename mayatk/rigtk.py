@@ -15,7 +15,7 @@ class Rig(object):
     """ """
 
     @staticmethod
-    def createLocator(name=None, pos=(), scale=1):
+    def create_locator(name=None, pos=(), scale=1):
         """Create a locator with the given scale.
 
         Parameters:
@@ -38,14 +38,14 @@ class Rig(object):
         return loc
 
     @classmethod
-    def removeLocator(cls, objects):
+    def remove_locator(cls, objects):
         """Remove a parented locator from the child object.
 
         Parameters:
                 obj (str/obj/list): The child object or the locator itself.
         """
         errorMsg = lambda: pm.inViewMessage(
-            statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(
+            status_message="{} in remove_locator\n\t# Error: Unable to remove locator for the given object. #".format(
                 __file__
             ),
             pos="topCenter",
@@ -59,22 +59,22 @@ class Rig(object):
                 continue
 
             elif (
-                nodetk.Node.isLocator(obj)
-                and not nodetk.Node.getType(obj)
-                and not nodetk.Node.getChildren(obj)
+                nodetk.Node.is_locator(obj)
+                and not nodetk.Node.get_type(obj)
+                and not nodetk.Node.get_children(obj)
             ):
                 pm.delete(obj)
                 continue
 
             # unlock attributes
-            cls.setAttrLockState(
+            cls.set_attr_lock_state(
                 obj, translate=False, rotate=False, scale=False
             )  # unlock all.
 
-            if not nodetk.Node.isLocator(obj):
+            if not nodetk.Node.is_locator(obj):
                 try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = nodetk.Node.getParent(obj)
-                    if not nodetk.Node.isLocator(obj):
+                    obj = nodetk.Node.get_parent(obj)
+                    if not nodetk.Node.is_locator(obj):
                         errorMsg()
                         continue
                 except IndexError as error:
@@ -82,7 +82,7 @@ class Rig(object):
                     continue
 
             # unparent child object
-            children = nodetk.Node.getChildren(obj)
+            children = nodetk.Node.get_children(obj)
             for child in children:
                 pm.parent(child, world=True)
 
@@ -92,7 +92,7 @@ class Rig(object):
         pm.undoInfo(closeChunk=1)
 
     @staticmethod
-    def resetPivotTransforms(objects):
+    def reset_pivot_transforms(objects):
         """Reset Pivot Transforms"""
         objs = pm.ls(type=("transform", "geometryShape"), sl=1)
 
@@ -102,7 +102,7 @@ class Rig(object):
         pm.manipPivot(ro=1, rp=1)
 
     @staticmethod
-    def bakeCustomPivot(objects, position=False, orientation=False):
+    def bake_custom_pivot(objects, position=False, orientation=False):
         """ """
         transforms = pm.ls(objects, transforms=1)
         shapes = pm.ls(objects, shapes=1)
@@ -185,7 +185,7 @@ class Rig(object):
                     pm.manipPivot(ro=1)
 
     @classmethod
-    def setAttrLockState(
+    def set_attr_lock_state(
         cls, objects, translate=None, rotate=None, scale=None, **kwargs
     ):
         """Lock/Unlock any attribute for the given objects, by passing it into kwargs as <attr>=<value>.
@@ -213,7 +213,7 @@ class Rig(object):
 
         for obj in objects:
             try:
-                if nodetk.Node.isLocator(obj):
+                if nodetk.Node.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
             except IndexError as error:
                 return
@@ -221,21 +221,25 @@ class Rig(object):
             for attrs, state in attrs_and_state.items():
                 if state is None:
                     continue
-                for a in Iter.makeList(attrs):
+                for a in Iter.make_list(attrs):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod
-    def createGroup(
-        objects=[], name="", zeroTranslation=False, zeroRotation=False, zeroScale=False
+    def create_group(
+        objects=[],
+        name="",
+        zero_translation=False,
+        zero_rotation=False,
+        zero_scale=False,
     ):
         """Create a group containing any given objects.
 
         Parameters:
                 objects (str/obj/list): The object(s) to group.
                 name (str): Name the group.
-                zeroTranslation (bool): Freeze translation before parenting.
-                zeroRotation (bool): Freeze rotation before parenting.
-                zeroScale (bool): Freeze scale before parenting.
+                zero_translation (bool): Freeze translation before parenting.
+                zero_rotation (bool): Freeze rotation before parenting.
+                zero_scale (bool): Freeze scale before parenting.
 
         Returns:
                 (obj) the group.
@@ -245,16 +249,16 @@ class Rig(object):
             pm.parent(grp, objects)
         except Exception as error:
             print(
-                f"{__file__} in createGroup\n\t# Error: Unable to parent object(s): {error} #"
+                f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
             )
 
-        if zeroTranslation:
+        if zero_translation:
             for attr in ("tx", "ty", "tz"):
                 pm.setAttr(getattr(grp, attr), 0)  # pm.setAttr(node.translate, 0)
-        if zeroRotation:
+        if zero_rotation:
             for attr in ("rx", "ry", "rz"):
                 pm.setAttr(getattr(grp, attr), 0)
-        if zeroScale:
+        if zero_scale:
             for attr in ("sx", "sy", "sz"):
                 pm.setAttr(getattr(grp, attr), 0)
 
@@ -262,24 +266,24 @@ class Rig(object):
         return grp
 
     @classmethod
-    def createGroupLRA(cls, objects, name="", makeIdentity=True):
+    def create_group_with_first_obj_lra(cls, objects, name="", freeze_transforms=True):
         """Creates a group using the first object to define the local rotation axis.
 
         Parameters:
                 objects (str/obj/list): The objects to group. The first object will be used to define the groups LRA.
                 name (str): The group name.
-                makeIdentity (bool): Freeze transforms on group child objects.
+                freeze_transforms (bool): Freeze transforms on group child objects.
         """
         try:
             obj, *other = pm.ls(objects, transforms=1)
         except IndexError as error:
             print(
-                f"{__file__} in createGroupLRA\n\t# Error: Operation requires at least one object. #"
+                f"{__file__} in create_group_with_first_obj_lra\n\t# Error: Operation requires at least one object. #"
             )
             return None
 
         pm.undoInfo(openChunk=1)
-        cls.bakeCustomPivot(
+        cls.bake_custom_pivot(
             obj, position=True, orientation=True
         )  # pm.mel.BakeCustomPivot(obj) #bake the pivot on the object that will define the LRA.
 
@@ -302,7 +306,7 @@ class Rig(object):
 
         for o in other:  # parent any other objects to the new group.
             pm.parent(o, grp)
-            if makeIdentity:
+            if freeze_transforms:
                 pm.makeIdentity(o, apply=True)  # freeze transforms on child objects.
 
         if not name and objParent:  # name the group.
@@ -316,21 +320,21 @@ class Rig(object):
         return grp
 
     @classmethod
-    def createLocatorAtObject(
+    def create_locator_at_object(
         cls,
         objects,
         parent=False,
-        freezeTransforms=False,
-        bakeChildPivot=False,
-        grpSuffix="_GRP#",
-        locSuffix="_LOC#",
-        objSuffix="_GEO#",
-        stripDigits=False,
-        stripSuffix=False,
+        freeze_transforms=False,
+        bake_child_pivot=False,
+        grp_suffix="_GRP#",
+        loc_suffix="_LOC#",
+        obj_suffix="_GEO#",
+        strip_digits=False,
+        strip_suffix=False,
         scale=1,
-        lockTranslate=False,
-        lockRotation=False,
-        lockScale=False,
+        lock_translate=False,
+        lock_rotation=False,
+        lock_scale=False,
     ):
         """Create locators with the same transforms as any selected object(s).
         If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
@@ -338,41 +342,41 @@ class Rig(object):
         Parameters:
                 objects (str/obj/list): A list of objects, or an object name to create locators at.
                 parent (bool): Parent the object to the locator. (default=False)
-                freezeTransforms (bool): Freeze transforms on the locator. (default=True)
-                bakeChildPivot (bool): Bake pivot positions on the child object. (default=True)
-                grpSuffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
-                locSuffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
-                objSuffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
-                stripDigits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-                stripSuffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
+                freeze_transforms (bool): Freeze transforms on the locator. (default=True)
+                bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
+                grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
+                loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
+                obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
+                strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
+                strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
                 scale (float) = The scale of the locator. (default=1)
-                lockTranslate (bool): Lock the translate values of the child object. (default=False)
-                lockRotation (bool): Lock the rotation values of the child object. (default=False)
-                lockScale (bool): Lock the scale values of the child object. (default=False)
+                lock_translate (bool): Lock the translate values of the child object. (default=False)
+                lock_rotation (bool): Lock the rotation values of the child object. (default=False)
+                lock_scale (bool): Lock the scale values of the child object. (default=False)
                 remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
 
-        Example: createLocatorAtSelection(strip='_GEO', suffix='', stripDigits=True, parent=True, lockTranslate=True, lockRotation=True)
+        Example: createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
         """
         getSuffix = (
-            lambda o: locSuffix
-            if nodetk.Node.isLocator(o)
-            else grpSuffix
-            if nodetk.Node.isGroup(o)
-            else objSuffix
+            lambda o: loc_suffix
+            if nodetk.Node.is_locator(o)
+            else grp_suffix
+            if nodetk.Node.is_group(o)
+            else obj_suffix
         )  # match the correct suffix to the object type.
 
         pm.undoInfo(openChunk=1)
 
         for obj in pm.ls(objects, long=True, type="transform"):
-            if bakeChildPivot:
-                cls.bakeCustomPivot(obj, position=1, orientation=1)
+            if bake_child_pivot:
+                cls.bake_custom_pivot(obj, position=1, orientation=1)
 
             vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
             if vertices:
                 objName = vertices[0].split(".")[0]
                 obj = pm.ls(objName)
 
-                loc = cls.createLocator(scale=scale)
+                loc = cls.create_locator(scale=scale)
 
                 xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
                 x, y, z = pos = (
@@ -383,7 +387,7 @@ class Rig(object):
                 pm.move(x, y, z, loc)
 
             else:  # object:
-                loc = cls.createLocator(scale=scale)
+                loc = cls.create_locator(scale=scale)
                 tempConst = pm.parentConstraint(obj, loc, maintainOffset=False)
                 pm.delete(tempConst)
 
@@ -391,15 +395,15 @@ class Rig(object):
                 if parent:
                     origParent = pm.listRelatives(obj, parent=1)
 
-                    grp = cls.createGroup(obj, zeroTranslation=1, zeroRotation=1)
+                    grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
                     pm.rename(
                         grp,
-                        Str.formatSuffix(
+                        Str.format_suffix(
                             obj.name(),
                             suffix=getSuffix(grp),
-                            strip=(objSuffix, grpSuffix, locSuffix),
-                            stripTrailingInts=stripDigits,
-                            stripTrailingAlpha=stripSuffix,
+                            strip=(obj_suffix, grp_suffix, loc_suffix),
+                            strip_trailing_ints=strip_digits,
+                            strip_trailing_alpha=strip_suffix,
                         ),
                     )
 
@@ -407,8 +411,8 @@ class Rig(object):
                     pm.parent(loc, grp)
                     pm.parent(grp, origParent)
 
-                if freezeTransforms:  # freeze transforms before baking pivot.
-                    cls.setAttrLockState(
+                if freeze_transforms:  # freeze transforms before baking pivot.
+                    cls.set_attr_lock_state(
                         obj, translate=False, rotate=False, scale=False
                     )  # assure attributes are unlocked.
                     pm.makeIdentity(obj, apply=True, normal=1)
@@ -418,27 +422,30 @@ class Rig(object):
 
                 pm.rename(
                     loc,
-                    Str.formatSuffix(
+                    Str.format_suffix(
                         obj.name(),
                         suffix=getSuffix(loc),
-                        strip=(objSuffix, grpSuffix, locSuffix),
-                        stripTrailingInts=stripDigits,
-                        stripTrailingAlpha=stripSuffix,
+                        strip=(obj_suffix, grp_suffix, loc_suffix),
+                        strip_trailing_ints=strip_digits,
+                        strip_trailing_alpha=strip_suffix,
                     ),
                 )
                 pm.rename(
                     obj,
-                    Str.formatSuffix(
+                    Str.format_suffix(
                         obj.name(),
                         suffix=getSuffix(obj),
-                        strip=(objSuffix, grpSuffix, locSuffix),
-                        stripTrailingInts=stripDigits,
-                        stripTrailingAlpha=stripSuffix,
+                        strip=(obj_suffix, grp_suffix, loc_suffix),
+                        strip_trailing_ints=strip_digits,
+                        strip_trailing_alpha=strip_suffix,
                     ),
                 )
 
-                cls.setAttrLockState(
-                    obj, translate=lockTranslate, rotate=lockRotation, scale=lockScale
+                cls.set_attr_lock_state(
+                    obj,
+                    translate=lock_translate,
+                    rotate=lock_rotation,
+                    scale=lock_scale,
                 )
 
             except Exception as error:
@@ -450,26 +457,23 @@ class Rig(object):
 
 # --------------------------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------------------------
-
 if __name__ == "__main__":
     sel = pm.ls(sl=1)
 
-    Rigtk.createLocatorAtObject(
+    Rigtk.create_locator_at_object(
         sel,
         parent=1,
-        freezeTransforms=1,
-        bakeChildPivot=1,
-        grpSuffix="_GRP",
-        locSuffix="_LCTR",
-        objSuffix="_GEO",
-        stripDigits=1,
-        stripSuffix=1,
+        freeze_transforms=1,
+        bake_child_pivot=1,
+        grp_suffix="_GRP",
+        loc_suffix="_LCTR",
+        obj_suffix="_GEO",
+        strip_digits=1,
+        strip_suffix=1,
         scale=1,
-        lockTranslate=0,
-        lockRotation=0,
-        lockScale=0,
+        lock_translate=0,
+        lock_rotation=0,
+        lock_scale=0,
     )
 
 # --------------------------------------------------------------------------------------------
@@ -483,14 +487,14 @@ if __name__ == "__main__":
 
 
 # the following was replaced with chatgpt code that fixed a: RuntimeError: Can't ungroup leaf-level transforms, but is not tested aside from a few unit test cases.
-# def removeLocator(cls, objects):
+# def remove_locator(cls, objects):
 #       '''Remove a parented locator from the child object.
 
 #       Parameters:
 #           obj (str/obj/list): The child object or the locator itself.
 #       '''
 #       errorMsg = lambda: pm.inViewMessage(
-#           statusMessage="{} in removeLocator\n\t# Error: Unable to remove locator for the given object. #".format(__file__),
+#           status_message="{} in remove_locator\n\t# Error: Unable to remove locator for the given object. #".format(__file__),
 #           pos='topCenter',
 #           fade=True
 #       )
@@ -501,17 +505,17 @@ if __name__ == "__main__":
 #           if not pm.objExists(obj):
 #               continue
 
-#           elif nodetk.Node.isLocator(obj) and not nodetk.Node.getType(obj) and not nodetk.Node.getChildren(obj):
+#           elif nodetk.Node.is_locator(obj) and not nodetk.Node.get_type(obj) and not nodetk.Node.get_children(obj):
 #               pm.delete(obj)
 #               continue
 
 #           #unlock attributes
-#           cls.setAttrLockState(obj, translate=False, rotate=False, scale=False) #unlock all.
+#           cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False) #unlock all.
 
-#           if not nodetk.Node.isLocator(obj):
+#           if not nodetk.Node.is_locator(obj):
 #               try: #if the 'obj' is not a locator, check if it's parent is.
-#                   obj = nodetk.Node.getType(obj)
-#                   if not nodetk.Node.isLocator(obj):
+#                   obj = nodetk.Node.get_type(obj)
+#                   if not nodetk.Node.is_locator(obj):
 #                       errorMsg()
 #                       continue
 #               except IndexError as error:
@@ -519,11 +523,11 @@ if __name__ == "__main__":
 #                   continue
 
 #           try: #remove from group
-#               grp = nodetk.Node.getType(obj)
+#               grp = nodetk.Node.get_type(obj)
 #           except IndexError as error:
 #               errorMsg()
 #               continue
-#           if nodetk.Node.isGroup(grp):
+#           if nodetk.Node.is_group(grp):
 #               if grp.split('_')[0]==obj.split('_')[0]:
 #                   pm.ungroup(grp)
 

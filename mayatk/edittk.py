@@ -5,7 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
-from pythontk import Str, Iter, areSimilar
+from pythontk import Str, Iter, are_similar
 
 # from this package:
 from mayatk import coretk, nodetk, cmpttk, xformtk
@@ -16,7 +16,7 @@ class Edit:
 
     @staticmethod
     @coretk.Core.undo
-    def rename(objects, to, fltr="", regEx=False, ignoreCase=False):
+    def rename(objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects.
 
         Parameters:
@@ -35,11 +35,11 @@ class Edit:
                         *chars - Search endswith chars.
                         chars* - Search startswith chars.
                         chars|chars - Search any of.  can be used in conjuction with other modifiers.
-                regEx (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
-                ignoreCase (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
+                regex (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
+                ignore_case (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
 
-        ex. rename(r'Cube', '*001', regEx=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
-        ex. rename(r'Cube', '**001', regEx=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
+        ex. rename(r'Cube', '*001', regex=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
+        ex. rename(r'Cube', '**001', regex=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
         """
         # pm.undoInfo (openChunk=1)
         objects = pm.ls(objectsOnly=1) if not objects else pm.ls(objects)
@@ -47,16 +47,16 @@ class Edit:
         # get the short names from the long in order to correctly format. ex. 'NUT_' from: 'CENTER_HINGE_FEMALE_GRP|NUT_'
         long_names = [obj.name() for obj in objects]
         short_names = [
-            ii if ii else i for i, ii in Str.splitAtChars(long_names)
+            ii if ii else i for i, ii in Str.split_at_chars(long_names)
         ]  # split the long names at the last '|' to get the short name.
 
-        names = Str.findStrAndFormat(
+        names = Str.find_str_and_format(
             short_names,
             to,
             fltr,
-            regEx=regEx,
-            ignoreCase=ignoreCase,
-            returnOldNames=True,
+            regex=regex,
+            ignore_case=ignore_case,
+            return_orig_strings=True,
         )
         print("# Rename: Found {} matches. #".format(len(names)))
 
@@ -93,7 +93,7 @@ class Edit:
 
     @staticmethod
     @coretk.Core.undo
-    def setCase(objects=[], case="caplitalize"):
+    def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
         Parameters:
@@ -101,7 +101,7 @@ class Edit:
                 case (str): Desired case using python case operators.
                         valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
 
-        Example: setCase(pm.ls(sl=1), 'upper')
+        Example: set_case(pm.ls(sl=1), 'upper')
         """
         # pm.undoInfo(openChunk=1)
         for obj in pm.ls(objects):
@@ -117,11 +117,11 @@ class Edit:
 
     @staticmethod
     @coretk.Core.undo
-    def setSuffixByObjLocation(
+    def append_location_based_suffix(
         objects,
         alphanumeric=False,
-        stripTrailingInts=True,
-        stripTrailingAlpha=True,
+        strip_trailing_ints=True,
+        strip_trailing_alpha=True,
         reverse=False,
     ):
         """Rename objects with a suffix defined by its location from origin.
@@ -129,8 +129,8 @@ class Edit:
         Parameters:
                 objects (str)(int/list): The object(s) to rename.
                 alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
-                stripTrailingInts (bool): Strip any trailing integers. ie. 'cube123'
-                stripTrailingAlpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
+                strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
+                strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
                 reverse (bool): Reverse the naming order. (Farthest object first)
         """
         import string
@@ -143,7 +143,7 @@ class Edit:
         else:
             suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
-        ordered_objs = xformtk.Xform.orderByDistance(objects, reverse=reverse)
+        ordered_objs = xformtk.Xform.order_by_distance(objects, reverse=reverse)
 
         newNames = {}  # the object with the new name set as a key.
         for n, obj in enumerate(ordered_objs):
@@ -151,25 +151,25 @@ class Edit:
 
             while (
                 (current_name[-1] == "_" or current_name[-1].isdigit())
-                and stripTrailingInts
+                and strip_trailing_ints
             ) or (
                 (
                     len(current_name) > 1
                     and current_name[-2] == "_"
                     and current_name[-1].isupper()
                 )
-                and stripTrailingAlpha
+                and strip_trailing_alpha
             ):
                 if (
                     current_name[-2] == "_" and current_name[-1].isupper()
-                ) and stripTrailingAlpha:  # trailing underscore and uppercase alphanumeric char.
+                ) and strip_trailing_alpha:  # trailing underscore and uppercase alphanumeric char.
                     current_name = re.sub(
                         re.escape(current_name[-2:]) + "$", "", current_name
                     )
 
                 if (
                     current_name[-1] == "_" or current_name[-1].isdigit()
-                ) and stripTrailingInts:  # trailing underscore and integers.
+                ) and strip_trailing_ints:  # trailing underscore and integers.
                     current_name = re.sub(
                         re.escape(current_name[-1:]) + "$", "", current_name
                     )
@@ -186,18 +186,18 @@ class Edit:
             pm.rename(obj, newNames[obj])
 
     @staticmethod
-    def snapClosestVerts(obj1, obj2, tolerance=10.0, freezeTransforms=False):
+    def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
         Parameters:
                 obj1 (obj): The object in which the vertices are moved from.
                 obj2 (obj): The object in which the vertices are moved to.
                 tolerance (float) = Maximum search distance.
-                freezeTransforms (bool): Reset the selected transform and all of its children down to the shape level.
+                freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = cmpttk.Cmpt.getComponents(obj1, "vertices")
-        closestVerts = cmpttk.Cmpt.getClosestVertex(
-            vertices, obj2, tolerance=tolerance, freezeTransforms=freezeTransforms
+        vertices = cmpttk.Cmpt.get_components(obj1, "vertices")
+        closestVerts = cmpttk.Cmpt.get_closest_vertex(
+            vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
         progressBar = "mainProgressBar"
@@ -224,7 +224,7 @@ class Edit:
         pm.progressBar(progressBar, edit=True, endProgress=True)
 
     @staticmethod
-    def mergeVertices(objects, selected=False, tolerance=0.001):
+    def merge_vertices(objects, selected=False, tolerance=0.001):
         """Merge Vertices on the given objects.
 
         Parameters:
@@ -258,7 +258,7 @@ class Edit:
                 pm.select(objects)
 
     @staticmethod
-    def getAllFacesOnAxis(obj, axis="-x", localspace=False):
+    def get_all_faces_on_axis(obj, axis="-x", localspace=False):
         """Get all faces on a specified axis.
 
         Parameters:
@@ -266,7 +266,7 @@ class Edit:
                 axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
                 localspace (bool): Specify world or local space.
 
-        ex call: getAllFacesOnAxis('polyObject', 'y')
+        ex call: get_all_faces_on_axis('polyObject', 'y')
         """
         axis = axis.lower()  # assure case.
 
@@ -292,7 +292,7 @@ class Edit:
             )
 
     @classmethod
-    def deleteAlongAxis(cls, obj, axis="-x"):
+    def delete_along_axis(cls, obj, axis="-x"):
         """Delete components of the given mesh object along the specified axis.
 
         Parameters:
@@ -304,7 +304,7 @@ class Edit:
             for n in pm.listRelatives(obj, allDescendents=1)
             if pm.objectType(n, isType="mesh")
         ]:  # get any mesh type child nodes of obj.
-            faces = cls.getAllFacesOnAxis(node, axis)
+            faces = cls.get_all_faces_on_axis(node, axis)
             if len(faces) == pm.polyEvaluate(
                 node, face=1
             ):  # if all faces fall on the specified axis.
@@ -312,10 +312,10 @@ class Edit:
             else:
                 pm.delete(faces)  # else, delete any individual faces.
 
-        coretk.Core.mfnMeshGenerator("Delete faces on <hl>" + axis.upper() + "</hl>.")
+        coretk.Core.mfn_mesh_generator("Delete faces on <hl>" + axis.upper() + "</hl>.")
 
     @classmethod
-    def cleanGeometry(
+    def clean_geometry(
         cls,
         objects,
         allMeshes=False,
@@ -335,7 +335,7 @@ class Edit:
         nonmanifold=False,
         lamina=False,
         invalidComponents=False,
-        splitNonManifoldVertex=False,
+        split_non_manifold_vertex=False,
         historyOn=True,
     ):
         """Select or remove unwanted geometry from a polygon mesh.
@@ -369,13 +369,13 @@ class Edit:
             "polyCleanupArgList 4 {" + arg_list + "}"
         )  # command = 'polyCleanup '+arg_list #(not used because of arg count error, also the quotes in the arg list would need to be removed).
 
-        if splitNonManifoldVertex:  # Split Non-Manifold Vertex
-            nonManifoldVerts = cls.findNonManifoldVertex(
+        if split_non_manifold_vertex:  # Split Non-Manifold Vertex
+            nonManifoldVerts = cls.find_non_manifold_vertex(
                 objects, select=2
             )  # Select: 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
             if repair:
                 for vertex in nonManifoldVerts:
-                    cls.splitNonManifoldVertex(
+                    cls.split_non_manifold_vertex(
                         vertex, select=True
                     )  # select(bool): Select the vertex after the operation. (default: True)
 
@@ -384,21 +384,21 @@ class Edit:
         # print (command)
 
     @staticmethod
-    def getOverlappingDupObjects(
-        objects=[], omitInitialObjects=False, select=False, verbose=False
+    def get_overlapping_dup_objects(
+        objects=[], retain_given_objects=False, select=False, verbose=False
     ):
         """Find any duplicate overlapping geometry at the object level.
 
         Parameters:
                 objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
-                omitInitialObjects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
+                retain_given_objects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
                 select (bool): Select any found duplicate objects.
                 verbose (bool): Print each found object to console.
 
         Returns:
                 (set)
 
-        ex call: duplicates = getOverlappingDupObjects(omitInitialObjects=True, select=True, verbose=True)
+        ex call: duplicates = get_overlapping_dup_objects(retain_given_objects=True, select=True, verbose=True)
         """
         scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
 
@@ -406,7 +406,7 @@ class Edit:
         scene_objs = {
             i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
             for i in scene_objs
-            if not nodetk.Node.isGroup(i)
+            if not nodetk.Node.is_group(i)
         }
         selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
@@ -421,7 +421,7 @@ class Edit:
                     if set(selected_objs) & set(
                         v
                     ):  # if any selected objects in found duplicates:
-                        if omitInitialObjects:
+                        if retain_given_objects:
                             [
                                 duplicates.add(i) for i in v if i not in selected_objs
                             ]  # add any duplicated of that object, omitting the selected object.
@@ -445,7 +445,7 @@ class Edit:
         return duplicates
 
     @staticmethod
-    def findNonManifoldVertex(objects, select=1):
+    def find_non_manifold_vertex(objects, select=1):
         """Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
         Parameters:
@@ -458,7 +458,7 @@ class Edit:
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = cmpttk.Cmpt.getComponents(objects, "vertices")
+        vertices = cmpttk.Cmpt.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1
@@ -515,7 +515,7 @@ class Edit:
         return nonManifoldVerts
 
     @staticmethod
-    def splitNonManifoldVertex(vertex, select=True):
+    def split_non_manifold_vertex(vertex, select=True):
         """Separate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
         Parameters:
@@ -579,7 +579,7 @@ class Edit:
         pm.undoInfo(closeChunk=True)
 
     @staticmethod
-    def getNGons(objects, repair=False):
+    def get_ngons(objects, repair=False):
         """Get any N-Gons from the given object using selection contraints.
 
         Parameters:
@@ -607,7 +607,7 @@ class Edit:
         return nGons
 
     @staticmethod
-    def getOverlappingVertices(objects, threshold=0.0003):
+    def get_overlapping_vertices(objects, threshold=0.0003):
         """Query the given objects for overlapping vertices.
 
         Parameters:
@@ -620,7 +620,7 @@ class Edit:
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in coretk.Core.mfnMeshGenerator(objects):
+        for mfnMesh in coretk.Core.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 
@@ -639,7 +639,7 @@ class Edit:
         return result
 
     @classmethod
-    def getOverlappingFaces(cls, objects):
+    def get_overlapping_faces(cls, objects):
         """Get any duplicate overlapping faces of the given objects.
 
         :Parameters:
@@ -648,7 +648,7 @@ class Edit:
         Returns:
                 (list) duplicate overlapping faces.
 
-        Example: pm.select(getOverlappingFaces(selection))
+        Example: pm.select(get_overlapping_faces(selection))
         """
         if not objects:
             return []
@@ -656,7 +656,7 @@ class Edit:
         elif not pm.nodeType(objects) == "mesh":  # if the objects are not faces.
             duplicates = Iter.flatten(
                 [
-                    cls.getOverlappingFaces(obj.faces)
+                    cls.get_overlapping_faces(obj.faces)
                     for obj in pm.ls(objects, objectsOnly=1)
                 ]
             )
@@ -682,28 +682,28 @@ class Edit:
                 otherFaces.remove(otherFace)
 
         if otherFaces:
-            duplicates += cls.getOverlappingFaces(
+            duplicates += cls.get_overlapping_faces(
                 otherFaces
             )  # after adding any found duplicates, call again with any remaining faces.
 
         return duplicates
 
     @staticmethod
-    def getSimilarMesh(obj, tol=0.0, includeOrig=False, **kwargs):
+    def get_similar_mesh(obj, tolerance=0.0, inc_orig=False, **kwargs):
         """Find similar geometry objects using the polyEvaluate command.
         Default behaviour is to compare all flags.
 
         Parameters:
                 obj (str/obj/list): The object to find similar for.
-                tol (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
-                includeOrig (bool): Include the original given obj with the return results.
+                tolerance (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
+                inc_orig (bool): Include the original given obj with the return results.
                 kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
                         ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d,
                         vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
         Returns:
                 (list) Similar objects.
 
-        Example: getSimilarMesh(selection, vertex=1, area=1)
+        Example: get_similar_mesh(selection, vertex=1, area=1)
         """
         lst = (
             lambda x: list(x)
@@ -723,20 +723,22 @@ class Edit:
             [
                 m
                 for m in otherSceneMeshes
-                if areSimilar(objProps, lst(pm.polyEvaluate(m, **kwargs)), tol=tol)
+                if are_similar(
+                    objProps, lst(pm.polyEvaluate(m, **kwargs)), tolerance=tolerance
+                )
                 and m != obj
             ]
         )
-        return similar + [obj] if includeOrig else similar
+        return similar + [obj] if inc_orig else similar
 
     @staticmethod
-    def getSimilarTopo(obj, includeOrig=False, **kwargs):
+    def get_similar_topo(obj, inc_orig=False, **kwargs):
         """Find similar geometry objects using the polyCompare command.
         Default behaviour is to compare all flags.
 
         Parameters:
                 obj (str/obj/list): The object to find similar for.
-                includeOrig (bool): Include the original given obj with the return results.
+                inc_orig (bool): Include the original given obj with the return results.
                 kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
                         ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals
         Returns:
@@ -756,35 +758,11 @@ class Edit:
                 if pm.polyCompare(obj, m, **kwargs) == 0 and m != obj
             ]
         )  # 0:equal,Verts:1,Edges:2,Faces:4,UVSets:8,UVIndices:16,ColorSets:32,ColorIndices:64,UserNormals=128. So a return value of 3 indicates both vertices and edges are different.
-        return similar + [obj] if includeOrig else similar
+        return similar + [obj] if inc_orig else similar
 
 
 # --------------------------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------------------------
-
-
-def __getattr__(attr: str):
-    """Searches for an attribute in this module's classes and returns it.
-
-    Parameters:
-            attr (str): The name of the attribute to search for.
-
-    Returns:
-            (obj) The found attribute.
-
-    :Raises:
-            AttributeError: If the given attribute is not found in any of the classes in the module.
-    """
-    try:
-        return getattr(Edit, attr)
-
-    except AttributeError as error:
-        raise AttributeError(f"Module '{__name__}' has no attribute '{attr}'")
-
-
-# --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     pass

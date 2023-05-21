@@ -19,7 +19,7 @@ from mayatk.nodetk import Node
 __version__ = "0.5.3"
 
 
-class Stingray_arnold_shader:
+class StingrayArnoldShader:
     """
     To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
     If Opaque is enabled, opacity will not work at all. Transmission will work however any shadows cast by
@@ -40,9 +40,9 @@ class Stingray_arnold_shader:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
-        node = self.hdr_env  # Node.nodeExists('aiSkyDomeLight', search='exactType')
+        node = self.hdr_env  # Node.node_exists('aiSkyDomeLight', search='exactType')
         if not node:
-            node = Node.createRenderNode(
+            node = Node.create_render_node(
                 "aiSkyDomeLight",
                 "asLight",
                 name=self.hdr_env_name,
@@ -52,10 +52,10 @@ class Stingray_arnold_shader:
             self.hdr_env_transform.hiddenInOutliner.set(1)
             pm.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
 
-        file_node = Node.getIncomingNodeByType(node, "file")
+        file_node = Node.get_incoming_node_by_type(node, "file")
         if not file_node:
-            file_node = Node.createRenderNode(
-                "file", "as2DTexture", place2dTexture=True
+            file_node = Node.create_render_node(
+                "file", "as2DTexture", texture_node=True
             )
             pm.connectAttr(file_node.outColor, node.color, force=True)
 
@@ -64,19 +64,19 @@ class Stingray_arnold_shader:
     @property
     def hdr_env_transform(self) -> object:
         """ """
-        node = Node.getTransformNode(self.hdr_env)
+        node = Node.get_transform_node(self.hdr_env)
         if not node:
             return None
         return node
 
-    def setHdrMapVisibility(self, state):
+    def set_hdr_map_visibility(self, state):
         """ """
         node = self.hdr_env
         if node:
             node.camera.set(state)
 
     @Core.undo
-    def createNetwork(
+    def create_network(
         self,
         textures,
         name="",
@@ -93,7 +93,7 @@ class Stingray_arnold_shader:
 
         if not textures:
             callback(
-                '<br><hl style="color:rgb(255, 100, 100);"><b>Error:</b> No textures given to createNetwork.</hl>'
+                '<br><hl style="color:rgb(255, 100, 100);"><b>Error:</b> No textures given to create_network.</hl>'
             )
             return None
         try:
@@ -102,22 +102,22 @@ class Stingray_arnold_shader:
                 "shaderFXPlugin", quiet=True
             )  # assure stringray plugin is loaded.
 
-            sr_node = Node.createRenderNode("StingrayPBS", name=name)
-            ai_node = Node.createRenderNode(
+            sr_node = Node.create_render_node("StingrayPBS", name=name)
+            ai_node = Node.create_render_node(
                 "aiStandardSurface", name=name + "_ai" if name else ""
             )
 
-            opacityMap = Img.filterImagesByType(textures, "Opacity")
+            opacityMap = Img.filter_images_by_type(textures, "Opacity")
             if opacityMap:
                 pm.shaderfx(
                     sfxnode="StingrayPBS1",
                     loadGraph=r"C:/_local/_test/shaderfx/Standard_Transparent.sfx",
                 )
 
-            openGLMap = Img.filterImagesByType(textures, "Normal_OpenGL")
-            directXMap = Img.filterImagesByType(textures, "Normal_DirectX")
+            openGLMap = Img.filter_images_by_type(textures, "Normal_OpenGL")
+            directXMap = Img.filter_images_by_type(textures, "Normal_DirectX")
             if directXMap and not openGLMap and normalMapType == "Normal_OpenGL":
-                mapPath = Img.createGLFromDX(directXMap[0])
+                mapPath = Img.create_gl_from_dx(directXMap[0])
                 textures.append(mapPath)
                 normal_map_created_from_other_type = True
                 callback(
@@ -126,7 +126,7 @@ class Stingray_arnold_shader:
                     )
                 )
             if openGLMap and not directXMap and normalMapType == "Normal_DirectX":
-                mapPath = Img.createDXFromGL(openGLMap[0])
+                mapPath = Img.create_dx_from_gl(openGLMap[0])
                 textures.append(mapPath)
                 normal_map_created_from_other_type = True
                 callback(
@@ -135,14 +135,14 @@ class Stingray_arnold_shader:
                     )
                 )
 
-            srSG_node = Node.getOutgoingNodeByType(sr_node, "shadingEngine")
+            srSG_node = Node.get_outgoing_node_by_type(sr_node, "shadingEngine")
 
             aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
 
             bump_node = pm.shadingNode("bump2d", asShader=True)
             bump_node.bumpInterp.set(1)  # set bump node to 'tangent space normals'
 
-            Node.connectMultiAttr(  # set node connections.
+            Node.connect_multi_attr(  # set node connections.
                 (ai_node.outColor, srSG_node.aiSurfaceShader),
                 (aiMult_node.outColor, ai_node.baseColor),
                 (bump_node.outNormal, ai_node.normalCamera),
@@ -151,7 +151,7 @@ class Stingray_arnold_shader:
             length = len(textures)
             progress = 0
             for f in textures:
-                typ = Img.getImageTypeFromFilename(f)
+                typ = Img.get_image_type_from_filename(f)
 
                 progress += 1
 
@@ -169,25 +169,25 @@ class Stingray_arnold_shader:
                 )
 
                 if typ == "Base_Color":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_color_map, force=True)
                     sr_node.use_color_map.set(1)
 
-                    n2 = Node.createRenderNode(
-                        "file", "as2DTexture", tex=f, place2dTexture=True
+                    n2 = Node.create_render_node(
+                        "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input1, force=True)
 
                 elif typ == "Roughness":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_roughness_map, force=True)
                     sr_node.use_roughness_map.set(1)
 
-                    n2 = Node.createRenderNode(
+                    n2 = Node.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
-                        place2dTexture=True,
+                        texture_node=True,
                         colorSpace="Raw",
                         alphaIsLuminance=1,
                         ignoreColorSpaceFileRules=1,
@@ -198,15 +198,15 @@ class Stingray_arnold_shader:
                     )  # opacity: same roughness map used in Specular Roughness to provide additional bluriness of refraction.
 
                 elif typ == "Metallic":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_metallic_map, force=True)
                     sr_node.use_metallic_map.set(1)
 
-                    n2 = Node.createRenderNode(
+                    n2 = Node.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
-                        place2dTexture=True,
+                        texture_node=True,
                         colorSpace="Raw",
                         alphaIsLuminance=1,
                         ignoreColorSpaceFileRules=1,
@@ -214,26 +214,26 @@ class Stingray_arnold_shader:
                     pm.connectAttr(n2.outAlpha, ai_node.metalness, force=True)
 
                 elif typ == "Emissive":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_emissive_map, force=True)
                     sr_node.use_emissive_map.set(1)
 
-                    n2 = Node.createRenderNode(
-                        "file", "as2DTexture", tex=f, place2dTexture=True
+                    n2 = Node.create_render_node(
+                        "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outAlpha, ai_node.emission, force=True)
                     pm.connectAttr(n2.outColor, ai_node.emissionColor, force=True)
 
                 elif "Normal" in typ:
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_normal_map, force=True)
                     sr_node.use_normal_map.set(1)
 
-                    n2 = Node.createRenderNode(
+                    n2 = Node.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
-                        place2dTexture=True,
+                        texture_node=True,
                         colorSpace="Raw",
                         alphaIsLuminance=1,
                         ignoreColorSpaceFileRules=1,
@@ -241,25 +241,25 @@ class Stingray_arnold_shader:
                     pm.connectAttr(n2.outAlpha, bump_node.bumpValue, force=True)
 
                 elif typ == "Ambient_Occlusion":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_ao_map, force=True)
                     sr_node.use_ao_map.set(1)
 
-                    n2 = Node.createRenderNode(
-                        "file", "as2DTexture", tex=f, place2dTexture=True
+                    n2 = Node.create_render_node(
+                        "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input2, force=True)
 
                 elif typ == "Opacity":
-                    n1 = Node.createRenderNode("file", "as2DTexture", tex=f)
+                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outAlpha, sr_node.opacity, force=True)
                     sr_node.use_opacity_map.set(1)
 
-                    n2 = Node.createRenderNode(
+                    n2 = Node.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
-                        place2dTexture=True,
+                        texture_node=True,
                         colorSpace="Raw",
                         alphaIsLuminance=1,
                         ignoreColorSpaceFileRules=1,
@@ -291,10 +291,10 @@ class Stingray_arnold_shader:
             )
 
         self.hdr_env = hdrMap
-        self.setHdrMapVisibility(hdrMapVisibility)
+        self.set_hdr_map_visibility(hdrMapVisibility)
 
 
-class Stingray_arnold_shader_slots(Stingray_arnold_shader):
+class StingrayArnoldShaderSlots(StingrayArnoldShader):
     msg_intro = """<u>To setup the material:</u>
         <br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
         <br>• Click the <b>Create Network</b> button to create the shader connections.
@@ -302,37 +302,37 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
-    proj_root_dir = File.getFilepath(__file__)
+    proj_root_dir = File.get_filepath(__file__)
 
     def __init__(self, **kwargs):
         super().__init__()
         """
         """
         self.sb = self.switchboard()
-        self.imageFiles = None
+        self.image_files = None
 
         # set json file location.
         path = "{}/stingray_arnold_shader.json".format(self.sb.defaultDir)
-        File.setJsonFile(path)  # set json file name
+        File.set_json_file(path)  # set json file name
 
         # add filenames|filepaths to the comboBox.
         hdr_path = "{}/resources/hdr".format(self.proj_root_dir)
-        hdr_filenames = File.getDirContents(hdr_path, "filenames", incFiles="*.exr")
-        hdr_fullpaths = File.getDirContents(hdr_path, "filepaths", incFiles="*.exr")
+        hdr_filenames = File.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
+        hdr_fullpaths = File.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
         self.sb.ui.cmb000.addItems_(
             dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False
         )
 
         # initialize widgets with any saved values.
-        self.sb.ui.txt000.setText(File.getJson("mat_name"))
+        self.sb.ui.txt000.setText(File.get_json("mat_name"))
         self.sb.ui.txt001.setText(self.msg_intro)
-        hdr_map_visibility = File.getJson("hdr_map_visibility")
+        hdr_map_visibility = File.get_json("hdr_map_visibility")
         if hdr_map_visibility:
             self.sb.ui.chk000.setChecked(hdr_map_visibility)
-        hdr_map = File.getJson("hdr_map")
+        hdr_map = File.get_json("hdr_map")
         if hdr_map:
             self.sb.ui.cmb000.setCurrentItem(hdr_map)
-        normal_map_type = File.getJson("normal_map_type")
+        normal_map_type = File.get_json("normal_map_type")
         if normal_map_type:
             self.sb.ui.cmb001.setCurrentItem(normal_map_type)
         node = self.hdr_env_transform
@@ -387,31 +387,31 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
         data = cmb.currentData()
 
         self.hdr_env = data  # set the HDR map.
-        File.setJson("hdr_map", text)
+        File.set_json("hdr_map", text)
 
     def chk000(self, state):
         """ """
         chk = self.sb.ui.chk000
 
-        self.setHdrMapVisibility(state)  # set the HDR map visibility.
-        File.setJson("hdr_map_visibility", state)
+        self.set_hdr_map_visibility(state)  # set the HDR map visibility.
+        File.set_json("hdr_map_visibility", state)
 
     def cmb001(self, index):
         """Normal map output selection."""
         cmb = self.sb.ui.cmb001
         text = cmb.currentText()
-        File.setJson("normal_map_type", text)
+        File.set_json("normal_map_type", text)
 
     def txt000(self, text=None):
         """Material name."""
         txt = self.sb.ui.txt000
         text = txt.text()
-        File.setJson("mat_name", text)
+        File.set_json("mat_name", text)
 
     def slider000(self, value):
         """Rotate the HDR map."""
         if self.hdr_env:
-            transform = Node.getTransformNode(self.hdr_env)
+            transform = Node.get_transform_node(self.hdr_env)
             pm.rotate(
                 transform,
                 value,
@@ -423,14 +423,14 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
     def b000(self):
         """Create network."""
-        if self.imageFiles:
+        if self.image_files:
             # pm.mel.HypershadeWindow() #open the hypershade window.
 
             self.sb.ui.txt001.clear()
             self.callback("Creating network ..<br>")
 
-            self.createNetwork(
-                self.imageFiles,
+            self.create_network(
+                self.image_files,
                 self.mat_name,
                 hdrMap=self.hdr_map,
                 hdrMapVisibility=self.hdr_map_visibility,
@@ -443,20 +443,20 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
 
     def b001(self):
         """Get texture maps."""
-        imageFiles = Img.getImageFiles()
+        image_files = Img.get_image_files()
 
-        if imageFiles:
-            self.imageFiles = imageFiles
+        if image_files:
+            self.image_files = image_files
             self.sb.ui.txt001.clear()
 
-            msg_mat_selection = self.imageFiles
+            msg_mat_selection = self.image_files
             for (
                 i
             ) in msg_mat_selection:  # format msg_intro using the mapTypes in imtools.
                 self.callback(Str.truncate(i, 60))
 
             self.sb.ui.b000.setDisabled(False)
-        elif not self.imageFiles:
+        elif not self.image_files:
             self.sb.ui.b000.setDisabled(True)
 
     def callback(self, string, progress=None, clear=False):
@@ -480,22 +480,22 @@ class Stingray_arnold_shader_slots(Stingray_arnold_shader):
             QtWidgets.QApplication.instance().processEvents()
 
 
-class Stingray_arnold_shader_sb(Switchboard):
-    """Constructs the main ui window for `Stingray_arnold_shader` class."""
+class StingrayArnoldShaderUI(Switchboard):
+    """Constructs the main ui window for `StingrayArnoldShader` class."""
 
     def __init__(self, parent=None, **kwargs):
         super().__init__(parent)
 
         self.ui_location = "stingray_arnold_shader.ui"
-        self.slots_location = Stingray_arnold_shader_slots
+        self.slots_location = StingrayArnoldShaderSlots
 
         self.ui.uitk.widgets.draggableHeader.DraggableHeader.hide()
         self.ui.txt001.hide()
-        self.ui.toggle_expand.clicked.connect(self.toggleTextEdit)
+        self.ui.toggle_expand.clicked.connect(self.toggle_text_edit)
 
         self.ui.resize(self.ui.sizeHint())
 
-    def toggleTextEdit(self):
+    def toggle_text_edit(self):
         txt = self.ui.txt001
         if txt.isVisible():
             self._height_open = self.ui.height()
@@ -518,8 +518,8 @@ class Stingray_arnold_shader_sb(Switchboard):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parent = Core.getMainWindow()
-    sb = Stingray_arnold_shader_sb(parent)
+    parent = Core.get_main_window()
+    sb = StingrayArnoldShaderUI(parent)
     sb.ui.show()
 
 # -----------------------------------------------------------------------------

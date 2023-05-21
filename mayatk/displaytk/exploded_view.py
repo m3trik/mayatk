@@ -9,7 +9,7 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
-from pythontk import getDistBetweenTwoPoints
+from pythontk import get_distance
 
 # from this package:
 from mayatk.xformtk import Xform
@@ -74,7 +74,7 @@ class ExplodedView:
         iteration_count = 0
         converged = False
 
-        node_data = [Xform.getBoundingBox(node, "center|maxsize") for node in nodes]
+        node_data = [Xform.get_bounding_box(node, "center|maxsize") for node in nodes]
 
         while not converged and iteration_count < max_iterations:
             total_system_force = om.MVector(0, 0, 0)
@@ -125,19 +125,19 @@ class ExplodedView:
 
     def explode_selected(self):
         """Explode selected"""
-        selection = Node.getUniqueChildren(pm.ls(sl=True))
+        selection = Node.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if obj.hasAttr("original_position"):
                 selection.remove(obj)
                 continue
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
-            Node.setNodeAttributes(obj, original_position=pos)
+            Node.set_node_attributes(obj, original_position=pos)
 
         iterations = self.arrange_objects(selection)
 
     def un_explode_selected(self):
         """Un-explode selected"""
-        selection = Node.getUniqueChildren(pm.ls(sl=True))
+        selection = Node.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if pm.attributeQuery("original_position", node=obj, exists=True):
                 pos = pm.getAttr(obj.original_position)
@@ -155,7 +155,7 @@ class ExplodedView:
 
     def toggle_explode(self):
         """Toggle explode"""
-        selection = Node.getUniqueChildren(pm.ls(sl=True))
+        selection = Node.get_unique_children(pm.ls(sl=True))
         if selection:
             if pm.attributeQuery("original_position", node=selection[0], exists=True):
                 self.un_explode_selected()
@@ -187,7 +187,7 @@ def launch_gui(move_to_cursor=False, frameless_window=False):
     from uitk import Switchboard
     from mayatk.coretk import Core
 
-    parent = Core.getMainWindow()
+    parent = Core.get_main_window()
     sb = Switchboard(
         parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
     )

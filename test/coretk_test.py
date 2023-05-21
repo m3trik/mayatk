@@ -82,7 +82,7 @@ class Core_test(Main, Core):
     # test imports:
     import mayatk as mtk
     from mayatk import Cmpt
-    from mayatk import getComponents
+    from mayatk import get_components
 
     # Tear down the any previous test by creating a new scene:
     pm.mel.file(new=True, force=True)
@@ -110,7 +110,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                "self.replace_mem_address(self.getMainWindow())": '<PySide2.QtWidgets.QWidget(0x00000000000, name="MayaWindow") at 0x00000000000>'
+                "self.replace_mem_address(self.get_main_window())": '<PySide2.QtWidgets.QWidget(0x00000000000, name="MayaWindow") at 0x00000000000>'
                 or None,
             }
         )
@@ -119,7 +119,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                "str(next(self.mfnMeshGenerator('cyl'))).split(';')[0]": "<maya.OpenMaya.MFnMesh",
+                "str(next(self.mfn_mesh_generator('cyl'))).split(';')[0]": "<maya.OpenMaya.MFnMesh",
             }
         )
 
@@ -127,9 +127,9 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                "self.getArrayType(100)": "int",
-                "self.getArrayType('cylShape.vtx[:]')": "str",
-                "self.getArrayType(pm.ls('cylShape.vtx[:]'))": "obj",
+                "self.get_array_type(100)": "int",
+                "self.get_array_type('cylShape.vtx[:]')": "str",
+                "self.get_array_type(pm.ls('cylShape.vtx[:]'))": "obj",
             }
         )
 
@@ -137,16 +137,16 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                "self.convertArrayType('cyl.vtx[:2]', 'str')": ["cylShape.vtx[0:2]"],
-                "self.convertArrayType('cyl.vtx[:2]', 'str', flatten=True)": [
+                "self.convert_array_type('cyl.vtx[:2]', 'str')": ["cylShape.vtx[0:2]"],
+                "self.convert_array_type('cyl.vtx[:2]', 'str', flatten=True)": [
                     "cylShape.vtx[0]",
                     "cylShape.vtx[1]",
                     "cylShape.vtx[2]",
                 ],
-                "str(self.convertArrayType('cyl.vtx[:2]', 'obj'))": "[MeshVertex('cylShape.vtx[0:2]')]",
-                "str(self.convertArrayType('cyl.vtx[:2]', 'obj', flatten=True))": "[MeshVertex('cylShape.vtx[0]'), MeshVertex('cylShape.vtx[1]'), MeshVertex('cylShape.vtx[2]')]",
-                "self.convertArrayType('cyl.vtx[:2]', 'int')": [0, 2],
-                "self.convertArrayType('cyl.vtx[:2]', 'int', flatten=True)": [0, 1, 2],
+                "str(self.convert_array_type('cyl.vtx[:2]', 'obj'))": "[MeshVertex('cylShape.vtx[0:2]')]",
+                "str(self.convert_array_type('cyl.vtx[:2]', 'obj', flatten=True))": "[MeshVertex('cylShape.vtx[0]'), MeshVertex('cylShape.vtx[1]'), MeshVertex('cylShape.vtx[2]')]",
+                "self.convert_array_type('cyl.vtx[:2]', 'int')": [0, 2],
+                "self.convert_array_type('cyl.vtx[:2]', 'int', flatten=True)": [0, 1, 2],
             }
         )
 
@@ -154,7 +154,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.getParameterValuesMEL()": None,
+                # "self.get_parameter_values()": None,
             }
         )
 
@@ -162,7 +162,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.setParameterValuesMEL()": None,
+                # "self.set_parameter_values()": None,
             }
         )
 
@@ -170,7 +170,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.getSelectedChannels()": None,
+                # "self.get_selected_channels()": None,
             }
         )
 
@@ -178,7 +178,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.getPanel()": None,
+                # "self.get_panel()": None,
             }
         )
 
@@ -186,7 +186,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.mainProgressBar()": None,
+                # "self.main_progress_bar()": None,
             }
         )
 
@@ -194,7 +194,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                # "self.viewportMessage()": None,
+                # "self.viewport_message()": None,
             }
         )
 
@@ -263,7 +263,7 @@ if __name__ == "__main__":
 #   '{}/bin3'.format(mayapath),
 #   '{}/Python{}'.format(mayapath, pythonver)
 #   ]:
-#   for dd in File.getDirContents(d, 'dirpaths', excDirs='Python27',  recursive=True):
+#   for dd in File.get_dir_contents(d, 'dirpaths', exc_dirs='Python27',  recursive=True):
 #       print (dd)
 #       sys.path.append(dd)
 

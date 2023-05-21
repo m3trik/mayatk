@@ -19,39 +19,39 @@ class Macro:
                     '''
                     sel = pm.ls(selection=True)
                     if sel:
-                            currentPanel = getPanel(withFocus=True)
+                            currentPanel = get_panel(withFocus=True)
                             state = pm.polyOptions(sel, query=True, wireBackCulling=True)[0]
 
                             if not state:
                                     pm.polyOptions(sel, gl=True, wireBackCulling=True)
                                     Macros.setWireframeOnShadedOption(currentPanel, 0)
-                                    pm.inViewMessage(statusMessage="Back-Face Culling is now <hl>OFF</hl>.>", pos='topCenter', fade=True)
+                                    pm.inViewMessage(status_message="Back-Face Culling is now <hl>OFF</hl>.>", pos='topCenter', fade=True)
                             else:
                                     pm.polyOptions(sel, gl=True, backCulling=True)
                                     Macros.setWireframeOnShadedOption(currentPanel, 1)
-                                    pm.inViewMessage(statusMessage="Back-Face Culling is now <hl>ON</hl>.", pos='topCenter', fade=True)
+                                    pm.inViewMessage(status_message="Back-Face Culling is now <hl>ON</hl>.", pos='topCenter', fade=True)
                     else:
                             print(" Warning: Nothing selected. ")
 
-    #call the `setMacros` function to set a macro for functions you defined in `MSlots`.
-    MSlots.setMacros(macros={
+    #call the `set_macros` function to set a macro for functions you defined in `MSlots`.
+    MSlots.set_macros(macros={
             'm_back_face_culling': {'k':'1', 'cat':'Display'},
     }
     """
 
     @classmethod
-    def setMacros(cls, *args):
-        """Extends `setMacro` to accept a list of strings representing positional and keyword arguments.
+    def set_macros(cls, *args):
+        """Extends `set_macro` to accept a list of strings representing positional and keyword arguments.
 
         Parameters:
                 *args (str): A variable number of strings, each containing the arguments for a single macro. Each string
                                 should be in the format "<macro name>, <positional arg1>, <positional arg2>, ..., <keyword arg1>=<value1>,
                                 <keyword arg2>=<value2>, ..."
         Example:
-                setMacros('m_back_face_culling, key=1, cat=Display', 'm_smooth_preview, key=2, cat=Display') #Calls `setMacro` with the parsed arguments for each macro in `args`.
+                set_macros('m_back_face_culling, key=1, cat=Display', 'm_smooth_preview, key=2, cat=Display') #Calls `set_macro` with the parsed arguments for each macro in `args`.
         """
         for string in args:
-            cls.call_with_input(cls.setMacro, string)
+            cls.call_with_input(cls.set_macro, string)
 
     @staticmethod
     def call_with_input(func, input_string):
@@ -76,8 +76,8 @@ class Macro:
         return func(*args, **kwargs)
 
     @classmethod
-    def setMacro(
-        cls, name, key=None, cat=None, ann=None, default=False, deleteExisting=True
+    def set_macro(
+        cls, name, key=None, cat=None, ann=None, default=False, delete_existing=True
     ):
         """Sets a default runtime command with a keyboard shortcut.
 
@@ -97,7 +97,7 @@ class Macro:
                                                 Tab (Will only work when modifiers are specified)
                                                 Delete, Backspace (Will only work when modifiers are specified)
                 default (bool): Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
-                deleteExisting = Delete any existing (non-default) runtime commands of the given name.
+                delete_existing = Delete any existing (non-default) runtime commands of the given name.
         """
         command = f"if 'm_slots' not in globals(): from {cls.__module__} import {cls.__name__}; global m_slots; m_slots = {cls.__name__}();\nm_slots.{name}();"
 
@@ -109,7 +109,7 @@ class Macro:
             if pm.runTimeCommand(name, query=True, default=True):
                 return  # can not delete default runtime commands.
             elif (
-                deleteExisting
+                delete_existing
             ):  # delete any existing (non-default) runtime commands of that name.
                 pm.runTimeCommand(name, edit=True, delete=True)
 
@@ -155,9 +155,6 @@ class Macro:
 
 # --------------------------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------------------------
-
 if __name__ == "__main__":
     pass
 
@@ -188,100 +185,100 @@ pm.runTimeCommand('name', edit=True, delete=True)
 
 #set runTimeCommand
 pm.runTimeCommand(
-			'name',
-			annotation=string,
-			category=string,
-			categoryArray,
-			command=script,
-			commandArray,
-			commandLanguage=string,
-			default=boolean,
-			defaultCommandArray,
-			delete,
-			exists,
-			hotkeyCtx=string,
-			image=string,
-			keywords=string,
-			annotation=string,
-			longAnnotation=string,
-			numberOfCommands,
-			numberOfDefaultCommands,
-			numberOfUserCommands,
-			plugin=string,
-			save,
-			showInHotkeyEditor=boolean,
-			tags=string,
-			userCommandArray,
+            'name',
+            annotation=string,
+            category=string,
+            categoryArray,
+            command=script,
+            commandArray,
+            commandLanguage=string,
+            default=boolean,
+            defaultCommandArray,
+            delete,
+            exists,
+            hotkeyCtx=string,
+            image=string,
+            keywords=string,
+            annotation=string,
+            longAnnotation=string,
+            numberOfCommands,
+            numberOfDefaultCommands,
+            numberOfUserCommands,
+            plugin=string,
+            save,
+            showInHotkeyEditor=boolean,
+            tags=string,
+            userCommandArray,
 )
 
 -annotation(-ann) string createqueryedit 
-		Description of the command.
+        Description of the command.
 
--category(-cat) string createqueryedit	
-		Category for the command.
+-category(-cat) string createqueryedit  
+        Category for the command.
 
--categoryArray(-caa) query			
-		Return all the run time command categories.
+-categoryArray(-caa) query          
+        Return all the run time command categories.
 
--command(-c) script createqueryedit		
-		Command to be executed when runTimeCommand is invoked.
+-command(-c) script createqueryedit     
+        Command to be executed when runTimeCommand is invoked.
 
--commandArray(-ca) query				
-		Returns an string array containing the names of all the run time commands.
+-commandArray(-ca) query                
+        Returns an string array containing the names of all the run time commands.
 
 -commandLanguage(-cl) string createqueryedit
-		In edit or create mode, this flag allows the caller to choose a scripting language for a command passed to the "-command" flag. If this flag is not specified, then the callback will be assumed to be in the language from which the runTimeCommand command was called. In query mode, the language for this runTimeCommand is returned. The possible values are "mel" or "python".
+        In edit or create mode, this flag allows the caller to choose a scripting language for a command passed to the "-command" flag. If this flag is not specified, then the callback will be assumed to be in the language from which the runTimeCommand command was called. In query mode, the language for this runTimeCommand is returned. The possible values are "mel" or "python".
 
--default(-d) boolean createquery 		
-		Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
+-default(-d) boolean createquery        
+        Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
 
--defaultCommandArray(-dca) query				
-		Returns an string array containing the names of all the default run time commands.
+-defaultCommandArray(-dca) query                
+        Returns an string array containing the names of all the default run time commands.
 
--delete(-del) edit 				
-		Delete the specified user run time command.
+-delete(-del) edit              
+        Delete the specified user run time command.
 
--exists(-ex) create 				
-		Returns true|false depending upon whether the specified object exists. Other flags are ignored.
+-exists(-ex) create                 
+        Returns true|false depending upon whether the specified object exists. Other flags are ignored.
 
--hotkeyCtx(-hc)	string createqueryedit 	
-		hotkey Context for the command.
+-hotkeyCtx(-hc) string createqueryedit  
+        hotkey Context for the command.
 
--image(-i) string createqueryedit 	
-		Image filename for the command.
+-image(-i) string createqueryedit   
+        Image filename for the command.
 
--keywords(-k) string createqueryedit		
-		Keywords for the command. Used for searching for commands in Type To Find. When multiple keywords, use ; as a separator. (Example: "keyword1;keyword2")
+-keywords(-k) string createqueryedit        
+        Keywords for the command. Used for searching for commands in Type To Find. When multiple keywords, use ; as a separator. (Example: "keyword1;keyword2")
 
--annotation(-annotation) string createqueryedit		
-		Label for the command.
+-annotation(-annotation) string createqueryedit     
+        Label for the command.
 
--longAnnotation(-la) string createqueryedit	
-		Extensive, multi-line description of the command. This will show up in Type To Finds more info page in addition to the annotation.
+-longAnnotation(-la) string createqueryedit 
+        Extensive, multi-line description of the command. This will show up in Type To Finds more info page in addition to the annotation.
 
--numberOfCommands(-nc) query			
-		Return the number of run time commands.
+-numberOfCommands(-nc) query            
+        Return the number of run time commands.
 
--numberOfDefaultCommands(-ndc) query			
-		Return the number of default run time commands.
+-numberOfDefaultCommands(-ndc) query            
+        Return the number of default run time commands.
 
--numberOfUserCommands(-nuc)	query			
-		Return the number of user run time commands.
+-numberOfUserCommands(-nuc) query           
+        Return the number of user run time commands.
 
--plugin(-p)	string createqueryedit			
-		Name of the plugin this command requires to be loaded. This flag wraps the script provided into a safety check and automatically loads the plugin referenced on execution if it hasn't been loaded. If the plugin fails to load, the command won't be executed.
+-plugin(-p) string createqueryedit          
+        Name of the plugin this command requires to be loaded. This flag wraps the script provided into a safety check and automatically loads the plugin referenced on execution if it hasn't been loaded. If the plugin fails to load, the command won't be executed.
 
--save(-s) edit 							
-		Save all the user run time commands.
+-save(-s) edit                          
+        Save all the user run time commands.
 
--showInHotkeyEditor(-she) boolean createqueryedit		
-		Indicate that this run time command should be shown in the Hotkey Editor. Default value is true.
+-showInHotkeyEditor(-she) boolean createqueryedit       
+        Indicate that this run time command should be shown in the Hotkey Editor. Default value is true.
 
--tags(-t) string createqueryedit	
-		Tags for the command. Used for grouping commands in Type To Find. When more than one tag, use ; as a separator. (Example: "tag1;tag2")
+-tags(-t) string createqueryedit    
+        Tags for the command. Used for grouping commands in Type To Find. When more than one tag, use ; as a separator. (Example: "tag1;tag2")
 
--userCommandArray(-uca)	query			
-		Returns an string array containing the names of all the user run time commands.
+-userCommandArray(-uca) query           
+        Returns an string array containing the names of all the user run time commands.
 """
 
 
@@ -292,201 +289,201 @@ pm.runTimeCommand(
 
 ## command = self.formatSource(name, removeTabs=1) #remove 1 tab space.
 # def formatSource(self, cmd, removeTabs=0):
-# 		'''Return the text of the source code for an object.
-# 		The source code is returned as a single string.
-# 		Removes lines containing '@' or 'def ' ie. @staticmethod.
+#       '''Return the text of the source code for an object.
+#       The source code is returned as a single string.
+#       Removes lines containing '@' or 'def ' ie. @staticmethod.
 
-# 		Parameters:
-# 			cmd = module, class, method, function, traceback, frame, or code object.
-# 			removeTabs (int): remove x instances of '\t' from each line.
+#       Parameters:
+#           cmd = module, class, method, function, traceback, frame, or code object.
+#           removeTabs (int): remove x instances of '\t' from each line.
 
-# 		Returns:
-# 			A Multi-line string.
-# 		'''
-# 		from inspect import getsource
-# 		source = getsource(getattr(Macros, cmd))
+#       Returns:
+#           A Multi-line string.
+#       '''
+#       from inspect import getsource
+#       source = getsource(getattr(Macros, cmd))
 
-# 		l = [s.replace('\t', '', removeTabs) for s in source.split('\n') if s and not '@' in s]
-# 		call = [s.replace('\t', '', removeTabs).lstrip('def ').rstrip(':') for s in source.split('\n') if 'def ' in s]
-# 		return '\n'.join(l)+'\n\n'+call[0]
+#       l = [s.replace('\t', '', removeTabs) for s in source.split('\n') if s and not '@' in s]
+#       call = [s.replace('\t', '', removeTabs).lstrip('def ').rstrip(':') for s in source.split('\n') if 'def ' in s]
+#       return '\n'.join(l)+'\n\n'+call[0]
 
 
 # string $image_plane[] = `ls -exactType imagePlane`;
 # for ($object in $image_plane){
-# 	if (`getAttr ($object+".displayMode")` != 2){
-# 		setAttr ($object+".displayMode") 2;
-# 		grid -toggle 1;
-# 		inViewMessage -statusMessage "Grid is now <hl>ON</hl>.\\n<hl>F1</hl>"  -fade -position topCenter;
-# 	}else{
-# 		setAttr ($object+".displayMode") 0;
-# 		grid -toggle 0;
-# 		inViewMessage -statusMessage "Grid is now <hl>OFF</hl>.\\n<hl>F1</hl>"  -fade -position topCenter;
-# 	}
+#   if (`getAttr ($object+".displayMode")` != 2){
+#       setAttr ($object+".displayMode") 2;
+#       grid -toggle 1;
+#       inViewMessage -status_message "Grid is now <hl>ON</hl>.\\n<hl>F1</hl>"  -fade -position topCenter;
+#   }else{
+#       setAttr ($object+".displayMode") 0;
+#       grid -toggle 0;
+#       inViewMessage -status_message "Grid is now <hl>OFF</hl>.\\n<hl>F1</hl>"  -fade -position topCenter;
+#   }
 # }
 
 
-# 		global int $toggleFrame_;
+#       global int $toggleFrame_;
 
-# 		string $selection[] = `ls -selection`;
+#       string $selection[] = `ls -selection`;
 
-# 		$mode = `selectMode -query -component`;
-# 		$maskVertex = `selectType -query -vertex`;
-# 		$maskEdge = `selectType -query -edge`;
-# 		$maskFacet = `selectType -query -facet`;
+#       $mode = `selectMode -query -component`;
+#       $maskVertex = `selectType -query -vertex`;
+#       $maskEdge = `selectType -query -edge`;
+#       $maskFacet = `selectType -query -facet`;
 
-# 		if (size($selection)==0)
-# 			{
-# 			viewFit -allObjects;
-# 			}
+#       if (size($selection)==0)
+#           {
+#           viewFit -allObjects;
+#           }
 
-# 		if ($mode==1 && $maskVertex==1 && size($selection)!=0)
-# 			{
-# 			if (size($selection)>1)
-# 				{
-# 				if ($toggleFrame_ == !1)
-# 					{
-# 					viewFit -fitFactor .65;
-# 					$toggleFrame_ = 1;
-# 					print ("frame vertices "+$toggleFrame_+"\\n");
-# 					}
-# 				else
-# 					{
-# 					viewFit -fitFactor .10;
-# 					//viewSet -previousView;
-# 					$toggleFrame_ = 0;
-# 					print ("frame vertices "+$toggleFrame_+"\\n");
-# 					}
-# 				}
-# 			else
-# 				{
-# 				if ($toggleFrame_ == !1)
-# 					{
-# 					viewFit -fitFactor .15;
-# 					$toggleFrame_ = 1;
-# 					print ("frame vertex "+$toggleFrame_+"\\n");
-# 					}
-# 				else
-# 					{
-# 					viewFit -fitFactor .01;
-# 					//viewSet -previousView;
-# 					$toggleFrame_ = 0;
-# 					print ("frame vertex "+$toggleFrame_+"\\n");
-# 					}
-# 				}
-# 			}
-# 		if ($mode==1 && $maskEdge==1 && size($selection)!=0)
-# 			{
-# 			if ($toggleFrame_ == !1)
-# 				{
-# 				viewFit -fitFactor .3;
-# 				$toggleFrame_ = 1;
-# 				print ("frame edge "+$toggleFrame_+"\\n");
-# 				}
-# 			else
-# 				{
-# 				viewFit -fitFactor .9;
-# 				//viewSet -previousView;
-# 				$toggleFrame_ = 0;
-# 				print ("frame edge "+$toggleFrame_+"\\n");
-# 				}
-# 			}
-# 		if ($mode==1 && $maskFacet==1)
-# 			{
-# 			if ($toggleFrame_ == !1)
-# 				{
-# 				viewFit -fitFactor .9;
-# 				$toggleFrame_ = 1;
-# 				print ("frame facet "+$toggleFrame_+"\\n");
-# 				}
-# 			else
-# 				{
-# 				viewFit -fitFactor .45;
-# 				//viewSet -previousView;
-# 				$toggleFrame_ = 0;
-# 				print ("frame facet "+$toggleFrame_+"\\n");
-# 				}
-# 			}
-# 		else if ($mode==0  && size($selection)!=0)
-# 			{
-# 			if ($toggleFrame_ == !1)
-# 				{
-# 				viewFit -fitFactor .99;
-# 				$toggleFrame_ = 1;
-# 				print ("frame object "+$toggleFrame_+"\\n");
-# 				}
-# 			else
-# 				{
-# 				viewFit -fitFactor .65;
-# 				//viewSet -previousView;
-# 				$toggleFrame_ = 0;
-# 				print ("frame object "+$toggleFrame_+"\\n");
-# 				}
-# 			}
+#       if ($mode==1 && $maskVertex==1 && size($selection)!=0)
+#           {
+#           if (size($selection)>1)
+#               {
+#               if ($toggleFrame_ == !1)
+#                   {
+#                   viewFit -fitFactor .65;
+#                   $toggleFrame_ = 1;
+#                   print ("frame vertices "+$toggleFrame_+"\\n");
+#                   }
+#               else
+#                   {
+#                   viewFit -fitFactor .10;
+#                   //viewSet -previousView;
+#                   $toggleFrame_ = 0;
+#                   print ("frame vertices "+$toggleFrame_+"\\n");
+#                   }
+#               }
+#           else
+#               {
+#               if ($toggleFrame_ == !1)
+#                   {
+#                   viewFit -fitFactor .15;
+#                   $toggleFrame_ = 1;
+#                   print ("frame vertex "+$toggleFrame_+"\\n");
+#                   }
+#               else
+#                   {
+#                   viewFit -fitFactor .01;
+#                   //viewSet -previousView;
+#                   $toggleFrame_ = 0;
+#                   print ("frame vertex "+$toggleFrame_+"\\n");
+#                   }
+#               }
+#           }
+#       if ($mode==1 && $maskEdge==1 && size($selection)!=0)
+#           {
+#           if ($toggleFrame_ == !1)
+#               {
+#               viewFit -fitFactor .3;
+#               $toggleFrame_ = 1;
+#               print ("frame edge "+$toggleFrame_+"\\n");
+#               }
+#           else
+#               {
+#               viewFit -fitFactor .9;
+#               //viewSet -previousView;
+#               $toggleFrame_ = 0;
+#               print ("frame edge "+$toggleFrame_+"\\n");
+#               }
+#           }
+#       if ($mode==1 && $maskFacet==1)
+#           {
+#           if ($toggleFrame_ == !1)
+#               {
+#               viewFit -fitFactor .9;
+#               $toggleFrame_ = 1;
+#               print ("frame facet "+$toggleFrame_+"\\n");
+#               }
+#           else
+#               {
+#               viewFit -fitFactor .45;
+#               //viewSet -previousView;
+#               $toggleFrame_ = 0;
+#               print ("frame facet "+$toggleFrame_+"\\n");
+#               }
+#           }
+#       else if ($mode==0  && size($selection)!=0)
+#           {
+#           if ($toggleFrame_ == !1)
+#               {
+#               viewFit -fitFactor .99;
+#               $toggleFrame_ = 1;
+#               print ("frame object "+$toggleFrame_+"\\n");
+#               }
+#           else
+#               {
+#               viewFit -fitFactor .65;
+#               //viewSet -previousView;
+#               $toggleFrame_ = 0;
+#               print ("frame object "+$toggleFrame_+"\\n");
+#               }
+#           }
 
 
-# string $currentPanel = `getPanel -withFocus`;
+# string $currentPanel = `get_panel -withFocus`;
 # $mode = `displayPref -query -wireframeOnShadedActive`;
 
 # if ($mode=="none")
-# 	{
-# 	displayPref -wireframeOnShadedActive "reduced";
-# 	setWireframeOnShadedOption 1 $currentPanel;
-# 	inViewMessage -statusMessage "<hl>Wireframe-on-selection</hl> is now <hl>Full</hl>.\\n<hl>3</hl>"  -fade -position topCenter;
-# 	}
+#   {
+#   displayPref -wireframeOnShadedActive "reduced";
+#   setWireframeOnShadedOption 1 $currentPanel;
+#   inViewMessage -status_message "<hl>Wireframe-on-selection</hl> is now <hl>Full</hl>.\\n<hl>3</hl>"  -fade -position topCenter;
+#   }
 # if ($mode=="reduced")
-# 	{
-# 	displayPref -wireframeOnShadedActive "full";
-# 	setWireframeOnShadedOption 0 $currentPanel;
-# 	inViewMessage -statusMessage "<hl>Wireframe-on-selection</hl> is now <hl>Reduced</hl>.\\n<hl>3</hl>"  -fade -position topCenter;
-# 	}
+#   {
+#   displayPref -wireframeOnShadedActive "full";
+#   setWireframeOnShadedOption 0 $currentPanel;
+#   inViewMessage -status_message "<hl>Wireframe-on-selection</hl> is now <hl>Reduced</hl>.\\n<hl>3</hl>"  -fade -position topCenter;
+#   }
 # if ($mode=="full")
-# 	{
-# 	displayPref -wireframeOnShadedActive "none";
-# 	setWireframeOnShadedOption 0 $currentPanel;
-# 	inViewMessage -statusMessage "<hl>Wireframe-on-selection</hl> is now <hl>OFF</hl>.\\n<hl>3</hl>" -fade -position topCenter;
-# 	}
+#   {
+#   displayPref -wireframeOnShadedActive "none";
+#   setWireframeOnShadedOption 0 $currentPanel;
+#   inViewMessage -status_message "<hl>Wireframe-on-selection</hl> is now <hl>OFF</hl>.\\n<hl>3</hl>" -fade -position topCenter;
+#   }
 
 
 # //xray all except selected
 # string $scene[] = `ls -visible -flatten -dag -noIntermediate -type surfaceShape`;
 # string $selection[] = `ls -selection -dagObjects -shapes`;
 # for ($object in $scene)
-# 	{
-# 	if (!stringArrayContains ($object, $selection))
-# 		{
-# 		int $state[] = `displaySurface -query -xRay $object`;
-# 		displaySurface -xRay ( !$state[0] ) $object;
-# 		}
-# 	}
+#   {
+#   if (!stringArrayContains ($object, $selection))
+#       {
+#       int $state[] = `displaySurface -query -xRay $object`;
+#       displaySurface -xRay ( !$state[0] ) $object;
+#       }
+#   }
 
 
 # mel.eval('''
-# string $currentPanel = `getPanel -withFocus`;
+# string $currentPanel = `get_panel -withFocus`;
 # string $state = `modelEditor -query -displayAppearance $currentPanel`;
 # string $displayTextures = `modelEditor -query -displayTextures $currentPanel`;
 # if(`modelEditor -exists $currentPanel`)
 #   {
-# 	if($state != "wireframe" && $displayTextures == false)
-# 	  {
-# 		modelEditor -edit -displayAppearance smoothShaded -activeOnly false -displayTextures true $currentPanel;
-# 		inViewMessage -statusMessage "modelEditor -smoothShaded <hl>true</hl> -displayTextures <hl>true</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
-# 		}
-# 	if($state == "wireframe" && $displayTextures == true)
-# 	  {
-# 		modelEditor -edit -displayAppearance smoothShaded -activeOnly false -displayTextures false $currentPanel;
-# 		inViewMessage -statusMessage "modelEditor -smoothShaded <hl>true</hl> -displayTextures <hl>false</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
-# 		}
-# 	if($state != "wireframe" && $displayTextures == true)
-# 	  {
-# 		modelEditor -edit -displayAppearance wireframe -activeOnly false $currentPanel;
-# 		inViewMessage -statusMessage "modelEditor -wireframe <hl>true</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
-# 		}
-# 	}
+#   if($state != "wireframe" && $displayTextures == false)
+#     {
+#       modelEditor -edit -displayAppearance smoothShaded -activeOnly false -displayTextures true $currentPanel;
+#       inViewMessage -status_message "modelEditor -smoothShaded <hl>true</hl> -displayTextures <hl>true</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
+#       }
+#   if($state == "wireframe" && $displayTextures == true)
+#     {
+#       modelEditor -edit -displayAppearance smoothShaded -activeOnly false -displayTextures false $currentPanel;
+#       inViewMessage -status_message "modelEditor -smoothShaded <hl>true</hl> -displayTextures <hl>false</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
+#       }
+#   if($state != "wireframe" && $displayTextures == true)
+#     {
+#       modelEditor -edit -displayAppearance wireframe -activeOnly false $currentPanel;
+#       inViewMessage -status_message "modelEditor -wireframe <hl>true</hl>.\\n<hl>5</hl>"  -fade -position topCenter;
+#       }
+#   }
 # ''')
 
 
 # SelectMultiComponentMask;
-# inViewMessage -statusMessage "<hl>Multi-Component Selection Mode</hl>\\n Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
+# inViewMessage -status_message "<hl>Multi-Component Selection Mode</hl>\\n Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
 
 
 # //paste and then re-name object removing keyword 'pasted'
@@ -522,40 +519,40 @@ pm.runTimeCommand(
 # $mode = `selectMode -query -component`;
 # if ($mode==0)
 #   {
-# 	changeSelectMode -component;
-# 	}
+#   changeSelectMode -component;
+#   }
 
 # $maskVertex = `selectType -query -vertex`;
 # $maskEdge = `selectType -query -edge`;
 # $maskFacet = `selectType -query -facet`;
 
 # if ($maskEdge==0 && $maskFacet==1)
-# 	{
-# 	selectType -vertex true;
-# 	inViewMessage -statusMessage "<hl>Vertex</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
-# 	}
+#   {
+#   selectType -vertex true;
+#   inViewMessage -status_message "<hl>Vertex</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
+#   }
 # if ($maskVertex==1 && $maskFacet==0)
-# 	{
-# 	selectType -edge true;
-# 	inViewMessage -statusMessage "<hl>Edge</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
-# 	}
+#   {
+#   selectType -edge true;
+#   inViewMessage -status_message "<hl>Edge</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
+#   }
 # if ($maskVertex==0 && $maskEdge==1)
-# 	{
-# 	selectType -facet true;
-# 	inViewMessage -statusMessage "<hl>Facet</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
-# 	}
+#   {
+#   selectType -facet true;
+#   inViewMessage -status_message "<hl>Facet</hl> Mask is now <hl>ON</hl>.\\n<hl>F4</hl>"  -fade -position topCenter;
+#   }
 
 
 # // added this expression to fix 'toggleMainMenubar function not found' error
 # if (`menu -q -ni MayaWindow|HotBoxControlsMenu` == 0) {setParent -m MayaWindow|HotBoxControlsMenu;source HotboxControlsMenu;};
 
 # //toggle panel menus
-# string $panels[] = `getPanel -allPanels`;
+# string $panels[] = `get_panel -allPanels`;
 # int $state = `panel -query -menuBarVisible $panels[0]`;
 # for ($panel in $panels)
 # {
-# 	// int $state = `panel -query -menuBarVisible $panel`;
-# 	panel -edit -menuBarVisible (!$state) $panel;
+#   // int $state = `panel -query -menuBarVisible $panel`;
+#   panel -edit -menuBarVisible (!$state) $panel;
 # }
 # //toggle main menubar
 # toggleMainMenubar (!$state);
@@ -569,22 +566,22 @@ pm.runTimeCommand(
 # // // enter full screen mode only if the zoom-in mode is not active.
 # // if(!$inZoomInMode)
 # // {
-# // 	string $panelWithFocus = `getPanel -withFocus`;
-# // 	string $parentControl = `workspaceLayoutManager -parentWorkspaceControl $panelWithFocus`;
-# // 	int $isFloatingPanel = `workspaceControl -q -floating $parentControl`;
+# //    string $panelWithFocus = `get_panel -withFocus`;
+# //    string $parentControl = `workspaceLayoutManager -parentWorkspaceControl $panelWithFocus`;
+# //    int $isFloatingPanel = `workspaceControl -q -floating $parentControl`;
 
-# // 	if(!$isFloatingPanel)
-# // 	{
-# // 		if($inFullScreenMode)
-# // 		{
-# // 		//come out of fullscreen mode
-# // 		workspaceLayoutManager -restoreMainWindowControls;
-# // 		}
-# // 		else
-# // 		{
-# // 			// enter fullscreen mode
-# // 			workspaceLayoutManager -collapseMainWindowControls $parentControl true;
-# // 		}
-# // 	optionVar -iv "workspacesInFullScreenUIMode" (!$inFullScreenMode);
-# // 	}
+# //    if(!$isFloatingPanel)
+# //    {
+# //        if($inFullScreenMode)
+# //        {
+# //        //come out of fullscreen mode
+# //        workspaceLayoutManager -restoreMainWindowControls;
+# //        }
+# //        else
+# //        {
+# //            // enter fullscreen mode
+# //            workspaceLayoutManager -collapseMainWindowControls $parentControl true;
+# //        }
+# //    optionVar -iv "workspacesInFullScreenUIMode" (!$inFullScreenMode);
+# //    }
 # // }

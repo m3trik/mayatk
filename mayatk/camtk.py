@@ -14,7 +14,7 @@ class Cam(object):
 
     @staticmethod
     @coretk.Core.undo
-    def groupCameras(
+    def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
         """Group cameras in the scene based on the provided parameters.
@@ -48,12 +48,12 @@ class Cam(object):
         )  # List of default cameras
         all_cameras = pm.ls(type="camera")  # Get all cameras in the scene
         all_camera_transforms = [
-            cam.getParent() for cam in all_cameras
+            cam.get_parent() for cam in all_cameras
         ]  # Get the parent transform nodes of the cameras
 
         if root_only:  # Filter cameras based on the root_only flag
             all_camera_transforms = [
-                cam for cam in all_camera_transforms if cam.getParent() is None
+                cam for cam in all_camera_transforms if cam.get_parent() is None
             ]
 
         # Parent cameras to the group based on the non_default flag
@@ -69,9 +69,9 @@ class Cam(object):
         return group
 
     @classmethod
-    def toggleSafeFrames(cls):
+    def toggle_safe_frames(cls):
         """Toggle display of the film gate for the current camera."""
-        camera = cls.getCurrentCam()
+        camera = cls.get_current_cam()
 
         state = pm.camera(camera, query=1, displayResolution=1)
         if state:
@@ -92,7 +92,7 @@ class Cam(object):
             )
 
     @staticmethod
-    def getCurrentCam():
+    def get_current_cam():
         """Get the currently active camera."""
         from maya.OpenMaya import MDagPath
         from maya.OpenMayaUI import M3dView
@@ -105,19 +105,19 @@ class Cam(object):
 
     @staticmethod
     @coretk.Core.undo
-    def createCameraFromView(name="camera#"):
+    def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
-        from maya.cmds import getPanel  # getPanel in pymel is broken in Maya 2022.
+        from maya.cmds import get_panel  # get_panel in pymel is broken in Maya 2022.
 
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in getPanel(all=True):
-            if getPanel(typeOf=panel) == "modelPanel":
+        for panel in get_panel(all=True):
+            if get_panel(typeOf=panel) == "modelPanel":
                 current_panel = panel
                 break
 
         if current_panel:
-            if getPanel(typeOf=current_panel) == "modelPanel":
+            if get_panel(typeOf=current_panel) == "modelPanel":
                 camera = pm.modelPanel(current_panel, q=1, cam=1)
                 new_camera = pm.duplicate(camera)[0]
                 pm.showHidden(new_camera)
@@ -126,9 +126,6 @@ class Cam(object):
                 return new_camera
         else:
             print("No modelPanel found")
-
-
-# --------------------------------------------------------------------------------------------
 
 
 # --------------------------------------------------------------------------------------------
@@ -159,7 +156,7 @@ if __name__ == "__main__":
 #       source_verts = [pm.ls(source, objectsOnly=1)[0].verts[i] for i in range(3)]
 #       target_verts = [pm.ls(target, objectsOnly=1)[0].verts[i] for i in range(3)]
 
-#       cls.snap3PointsTo3Points(source_verts+target_verts)
+#       cls.align_using_three_points(source_verts+target_verts)
 
 # @staticmethod
 #   def getComponentPoint(component, alignToNormal=False):

@@ -85,7 +85,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.createLocator('_loc')": "_loc",
+                "self.create_locator('_loc')": "_loc",
             }
         )
 
@@ -93,7 +93,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.removeLocator('loc')": None,
+                "self.remove_locator('loc')": None,
             }
         )
 
@@ -101,7 +101,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.resetPivotTransforms('cyl')": None,
+                "self.reset_pivot_transforms('cyl')": None,
             }
         )
 
@@ -109,9 +109,9 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.bakeCustomPivot('cyl')": None,
-                "self.bakeCustomPivot('cyl', position=True)": None,
-                "self.bakeCustomPivot('cyl', orientation=True)": None,
+                "self.bake_custom_pivot('cyl')": None,
+                "self.bake_custom_pivot('cyl', position=True)": None,
+                "self.bake_custom_pivot('cyl', orientation=True)": None,
             }
         )
 
@@ -119,7 +119,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.setAttrLockState('cyl')": None,
+                "self.set_attr_lock_state('cyl')": None,
             }
         )
 
@@ -127,7 +127,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.createGroup(name='emptyGrp').name()": "emptyGrp",
+                "self.create_group(name='emptyGrp').name()": "emptyGrp",
             }
         )
 
@@ -135,7 +135,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.createGroupLRA('cyl', 'LRAgrp').name()": "LRAgrp",
+                "self.create_group_with_first_obj_lra('cyl', 'LRAgrp').name()": "LRAgrp",
             }
         )
 
@@ -143,7 +143,7 @@ class Rig_test(Main, Rig):
         """ """
         self.perform_test(
             {
-                "self.createLocatorAtObject('cyl')": None,
+                "self.create_locator_at_object('cyl')": None,
             }
         )
 

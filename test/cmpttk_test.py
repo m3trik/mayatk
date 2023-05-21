@@ -105,10 +105,10 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getComponentType('cyl.e[:]')": "e",
-                "self.getComponentType('cyl.vtx[:]', 'abv')": "vtx",
-                "self.getComponentType('cyl.e[:]', 'int')": 32,
-                "self.getComponentType('cyl.e[:]', 'hex')": 0x8000,
+                "self.get_component_type('cyl.e[:]')": "e",
+                "self.get_component_type('cyl.vtx[:]', 'abv')": "vtx",
+                "self.get_component_type('cyl.e[:]', 'int')": 32,
+                "self.get_component_type('cyl.e[:]', 'hex')": 0x8000,
             }
         )
 
@@ -116,8 +116,8 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.convertAlias('vertex', 'hex')": 0x0001,
-                "self.convertAlias(0x0001, 'full')": "Polygon Vertex",
+                "self.convert_alias('vertex', 'hex')": 0x0001,
+                "self.convert_alias(0x0001, 'full')": "Polygon Vertex",
             }
         )
 
@@ -125,21 +125,21 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.convertComponentType('cylShape.vtx[:2]', 'vertex')": [
+                "self.convert_component_type('cylShape.vtx[:2]', 'vertex')": [
                     "cylShape.vtx[0:2]"
                 ],
-                "self.convertComponentType('cylShape.vtx[:2]', 'face')": [
+                "self.convert_component_type('cylShape.vtx[:2]', 'face')": [
                     "cylShape.f[0:2]",
                     "cylShape.f[11:14]",
                     "cylShape.f[23]",
                 ],
-                "self.convertComponentType('cylShape.vtx[:2]', 'edge')": [
+                "self.convert_component_type('cylShape.vtx[:2]', 'edge')": [
                     "cylShape.e[0:2]",
                     "cylShape.e[11]",
                     "cylShape.e[24:26]",
                     "cylShape.e[36:38]",
                 ],
-                "self.convertComponentType('cylShape.vtx[:2]', 'uv')": [
+                "self.convert_component_type('cylShape.vtx[:2]', 'uv')": [
                     "cylShape.map[0:2]",
                     "cylShape.map[12:14]",
                     "cylShape.map[24]",
@@ -151,8 +151,10 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.convertIntToComponent('cyl', range(4), 'f')": ["cylShape.f[0:3]"],
-                "self.convertIntToComponent('cyl', range(4), 'f', 'int', flatten=True)": [
+                "self.convert_int_to_component('cyl', range(4), 'f')": [
+                    "cylShape.f[0:3]"
+                ],
+                "self.convert_int_to_component('cyl', range(4), 'f', 'int', flatten=True)": [
                     0,
                     1,
                     2,
@@ -165,10 +167,10 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.filterComponents('cyl.vtx[:]', 'cyl.vtx[:2]', 'cyl.vtx[1:23]')": [
+                "self.filter_components('cyl.vtx[:]', 'cyl.vtx[:2]', 'cyl.vtx[1:23]')": [
                     "cylShape.vtx[0]"
                 ],
-                "self.filterComponents('cyl.f[:]', range(2), range(1, 23))": [
+                "self.filter_components('cyl.f[:]', range(2), range(1, 23))": [
                     "cylShape.f[0]"
                 ],
             }
@@ -178,16 +180,16 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getComponents('cyl', 'vertex', 'str', '', 'cyl.vtx[2:23]')": [
+                "self.get_components('cyl', 'vertex', 'str', '', 'cyl.vtx[2:23]')": [
                     "cylShape.vtx[0]",
                     "cylShape.vtx[1]",
                     "cylShape.vtx[24]",
                     "cylShape.vtx[25]",
                 ],
-                "str(self.getComponents('cyl', 'vertex', 'cyl', '', 'cyl.vtx[:23]'))": "[MeshVertex('cylShape.vtx[24]'), MeshVertex('cylShape.vtx[25]')]",
-                "self.getComponents('cyl', 'f', 'int')": [0, 35],
-                "self.getComponents('cyl', 'edges')": ["cylShape.e[0:59]"],
-                "self.getComponents('cyl', 'edges', 'str', 'cyl.e[:2]')": [
+                "str(self.get_components('cyl', 'vertex', 'cyl', '', 'cyl.vtx[:23]'))": "[MeshVertex('cylShape.vtx[24]'), MeshVertex('cylShape.vtx[25]')]",
+                "self.get_components('cyl', 'f', 'int')": [0, 35],
+                "self.get_components('cyl', 'edges')": ["cylShape.e[0:59]"],
+                "self.get_components('cyl', 'edges', 'str', 'cyl.e[:2]')": [
                     "cylShape.e[0]",
                     "cylShape.e[1]",
                     "cylShape.e[2]",
@@ -199,10 +201,10 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getContigiousEdges(['cyl.e[:2]'])": [
+                "self.get_contigious_edges(['cyl.e[:2]'])": [
                     {"cylShape.e[1]", "cylShape.e[0]", "cylShape.e[2]"}
                 ],
-                "self.getContigiousEdges(['cyl.f[0]'])": [
+                "self.get_contigious_edges(['cyl.f[0]'])": [
                     {
                         "cylShape.e[24]",
                         "cylShape.e[0]",
@@ -217,7 +219,7 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getContigiousIslands('cyl.f[21:26]')": [
+                "self.get_contigious_islands('cyl.f[21:26]')": [
                     {"cylShape.f[22]", "cylShape.f[21]", "cylShape.f[23]"},
                     {"cylShape.f[26]", "cylShape.f[24]", "cylShape.f[25]"},
                 ],
@@ -249,7 +251,7 @@ class Cmpt_test(Main, Cmpt):
 
         self.perform_test(
             {
-                "list(self.getIslands('cmb'))": [
+                "list(self.get_islands('cmb'))": [
                     [
                         "cmb.f[0]",
                         "cmb.f[5]",
@@ -292,16 +294,16 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getBorderComponents('pln', 'vtx')": [
+                "self.get_border_components('pln', 'vtx')": [
                     "plnShape.vtx[0:4]",
                     "plnShape.vtx[7:8]",
                     "plnShape.vtx[11:15]",
                 ],
-                "self.getBorderComponents('pln', 'face')": [
+                "self.get_border_components('pln', 'face')": [
                     "plnShape.f[0:3]",
                     "plnShape.f[5:8]",
                 ],
-                "self.getBorderComponents('pln')": [
+                "self.get_border_components('pln')": [
                     "plnShape.e[0:2]",
                     "plnShape.e[4]",
                     "plnShape.e[6]",
@@ -310,7 +312,7 @@ class Cmpt_test(Main, Cmpt):
                     "plnShape.e[15]",
                     "plnShape.e[20:23]",
                 ],
-                "self.getBorderComponents('pln.e[:]')": [
+                "self.get_border_components('pln.e[:]')": [
                     "plnShape.e[0:2]",
                     "plnShape.e[4]",
                     "plnShape.e[6]",
@@ -319,20 +321,20 @@ class Cmpt_test(Main, Cmpt):
                     "plnShape.e[15]",
                     "plnShape.e[20:23]",
                 ],
-                "self.getBorderComponents(['pln.e[9]','pln.e[10]', 'pln.e[12]', 'pln.e[16]'], 'f', componentBorder=True)": [
+                "self.get_border_components(['pln.e[9]','pln.e[10]', 'pln.e[12]', 'pln.e[16]'], 'f', component_border=True)": [
                     "plnShape.f[1]",
                     "plnShape.f[3:5]",
                     "plnShape.f[7]",
                 ],
-                "self.getBorderComponents('pln.f[3:4]', 'f', componentBorder=True)": [
+                "self.get_border_components('pln.f[3:4]', 'f', component_border=True)": [
                     "plnShape.f[0:1]",
                     "plnShape.f[5:7]",
                 ],
-                "self.getBorderComponents('pln.f[3:4]', 'vtx', componentBorder=True)": [
+                "self.get_border_components('pln.f[3:4]', 'vtx', component_border=True)": [
                     "plnShape.vtx[4:6]",
                     "plnShape.vtx[8:10]",
                 ],
-                "self.getBorderComponents('pln.vtx[6]', 'e', componentBorder=True)": [
+                "self.get_border_components('pln.vtx[6]', 'e', component_border=True)": [
                     "plnShape.e[5]",
                     "plnShape.e[9]",
                     "plnShape.e[11:12]",
@@ -344,7 +346,7 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getClosestVerts('pln.vtx[:10]', 'pln.vtx[11:]', 6.667)": [
+                "self.get_closest_verts('pln.vtx[:10]', 'pln.vtx[11:]', 6.667)": [
                     ("plnShape.vtx[7]", "plnShape.vtx[11]"),
                     ("plnShape.vtx[8]", "plnShape.vtx[12]"),
                     ("plnShape.vtx[9]", "plnShape.vtx[13]"),
@@ -358,13 +360,13 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getClosestVertex('plnShape.vtx[0]', 'cyl', returnType='int')": {
+                "self.get_closest_vertex('plnShape.vtx[0]', 'cyl', returned_type='int')": {
                     "plnShape.vtx[0]": 6
                 },
-                "self.getClosestVertex('plnShape.vtx[0]', 'cyl')": {
+                "self.get_closest_vertex('plnShape.vtx[0]', 'cyl')": {
                     "plnShape.vtx[0]": "cylShape.vtx[6]"
                 },
-                "self.getClosestVertex('plnShape.vtx[2:3]', 'cyl')": {
+                "self.get_closest_vertex('plnShape.vtx[2:3]', 'cyl')": {
                     "plnShape.vtx[2]": "cylShape.vtx[9]",
                     "plnShape.vtx[3]": "cylShape.vtx[9]",
                 },
@@ -375,7 +377,7 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getEdgePath('sph.e[12]', 'edgeLoop')": [
+                "self.get_edge_path('sph.e[12]', 'edgeLoop')": [
                     "sphShape.e[12]",
                     "sphShape.e[17]",
                     "sphShape.e[16]",
@@ -383,7 +385,7 @@ class Cmpt_test(Main, Cmpt):
                     "sphShape.e[14]",
                     "sphShape.e[13]",
                 ],
-                "self.getEdgePath('sph.e[12]', 'edgeLoop', 'int')": [
+                "self.get_edge_path('sph.e[12]', 'edgeLoop', 'int')": [
                     12,
                     17,
                     16,
@@ -391,20 +393,20 @@ class Cmpt_test(Main, Cmpt):
                     14,
                     13,
                 ],
-                "self.getEdgePath('sph.e[12]', 'edgeRing')": [
+                "self.get_edge_path('sph.e[12]', 'edgeRing')": [
                     "sphShape.e[0]",
                     "sphShape.e[6]",
                     "sphShape.e[12]",
                     "sphShape.e[18]",
                     "sphShape.e[24]",
                 ],
-                "self.getEdgePath(['sph.e[43]', 'sph.e[46]'], 'edgeRingPath')": [
+                "self.get_edge_path(['sph.e[43]', 'sph.e[46]'], 'edgeRingPath')": [
                     "sphShape.e[43]",
                     "sphShape.e[42]",
                     "sphShape.e[47]",
                     "sphShape.e[46]",
                 ],
-                "self.getEdgePath(['sph.e[54]', 'sph.e[60]'], 'edgeLoopPath')": [
+                "self.get_edge_path(['sph.e[54]', 'sph.e[60]'], 'edgeLoopPath')": [
                     "sphShape.e[60]",
                     "sphShape.e[48]",
                     "sphShape.e[42]",
@@ -419,7 +421,7 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getEdgesByNormalAngle('cyl', 50, 130)": ["cylShape.e[0:23]"],
+                "self.get_edges_by_normal_angle('cyl', 50, 130)": ["cylShape.e[0:23]"],
             }
         )
 
@@ -427,7 +429,7 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getComponentsByNumberOfConnected(['sph.f[18:23]', 'sph.f[30:35]'], 3, 'e')": [
+                "self.filter_components_by_connection_count(['sph.f[18:23]', 'sph.f[30:35]'], 3, 'e')": [
                     "sphShape.f[30]",
                     "sphShape.f[31]",
                     "sphShape.f[32]",
@@ -435,7 +437,7 @@ class Cmpt_test(Main, Cmpt):
                     "sphShape.f[34]",
                     "sphShape.f[35]",
                 ],
-                "self.getComponentsByNumberOfConnected('pln.vtx[:]', (0,2), 'e')": [
+                "self.filter_components_by_connection_count('pln.vtx[:]', (0,2), 'e')": [
                     "plnShape.vtx[0]",
                     "plnShape.vtx[3]",
                     "plnShape.vtx[12]",
@@ -450,7 +452,7 @@ class Cmpt_test(Main, Cmpt):
 
         self.perform_test(
             {
-                "self.getVertexNormal('pln.vtx[2]', angleWeighted=False)": om.MVector(
+                "self.get_vertex_normal('pln.vtx[2]', angle_weighted=False)": om.MVector(
                     0, 1, 0
                 ),
             }
@@ -460,8 +462,8 @@ class Cmpt_test(Main, Cmpt):
         """ """
         self.perform_test(
             {
-                "self.getVectorFromComponents('pln.f[:]')": (0.0, 1.0, 0.0),
-                "self.getVectorFromComponents(['cyl.f[7]', 'cyl.f[8]'])": (
+                "self.get_vector_from_components('pln.f[:]')": (0.0, 1.0, 0.0),
+                "self.get_vector_from_components(['cyl.f[7]', 'cyl.f[8]'])": (
                     0.0,
                     0.0,
                     0.43982641180356435,

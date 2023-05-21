@@ -97,7 +97,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.moveTo('cube1', 'cube2')": None,
+                "self.move_to('cube1', 'cube2')": None,
             }
         )
 
@@ -105,7 +105,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.dropToGrid('cube1', align='Min', origin=True, centerPivot=True, freezeTransforms=True)": None,
+                "self.drop_to_grid('cube1', align='Min', origin=True, center_pivot=True, freeze_transforms=True)": None,
             }
         )
 
@@ -113,7 +113,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.resetTranslation('cube1')": None,
+                "self.reset_translation('cube1')": None,
             }
         )
 
@@ -121,7 +121,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.setTranslationToPivot('cube1')": None,
+                "self.set_translation_to_pivot('cube1')": None,
             }
         )
 
@@ -129,7 +129,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.alignPivotToSelection('cube1', 'cube2')": None,
+                "self.align_pivot_to_selection('cube1', 'cube2')": None,
             }
         )
 
@@ -137,7 +137,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.aimObjectAtPoint(['cube1', 'cube2'], (0, 15, 15))": None,
+                "self.aim_object_at_point(['cube1', 'cube2'], (0, 15, 15))": None,
             }
         )
 
@@ -145,7 +145,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.rotateAxis(['cube1', 'cube2'], (0, 15, 15))": None,
+                "self.rotate_axis(['cube1', 'cube2'], (0, 15, 15))": None,
             }
         )
 
@@ -153,18 +153,18 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.getOrientation('cube1')": ([1, 0, 0], [0, 1, 0], [0, 0, 1]),
+                "self.get_orientation('cube1')": ([1, 0, 0], [0, 1, 0], [0, 0, 1]),
             }
         )
 
     def test_getDistanceBetweenTwoObjects(self):
         """ """
-        self.dropToGrid(["cube1", "cube2"], origin=True, centerPivot=True)
+        self.drop_to_grid(["cube1", "cube2"], origin=True, center_pivot=True)
         pm.move("cube2", 0, 0, 15)
 
         self.perform_test(
             {
-                "self.getDistanceBetweenTwoObjects('cube1', 'cube2')": 15,
+                "self.get_dist_between_two_objects('cube1', 'cube2')": 15,
             }
         )
 
@@ -172,8 +172,8 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.getCenterPoint('sph')": (0, 0, 0),
-                "self.getCenterPoint('sph.vtx[*]')": (0, 0, 0),
+                "self.get_center_point('sph')": (0, 0, 0),
+                "self.get_center_point('sph.vtx[*]')": (0, 0, 0),
             }
         )
 
@@ -181,7 +181,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.getBoundingBox('sph', 'size')": (10, 10, 10),
+                "self.get_bounding_box('sph', 'size')": (10, 10, 10),
             }
         )
 
@@ -189,7 +189,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "str(self.sortByBoundingBoxValue(['sph.vtx[0]', 'sph.f[0]']))": "[MeshFace('sphShape.f[0]'), MeshVertex('sphShape.vtx[0]')]",
+                "str(self.sort_by_bounding_box_value(['sph.vtx[0]', 'sph.f[0]']))": "[MeshFace('sphShape.f[0]'), MeshVertex('sphShape.vtx[0]')]",
             }
         )
 
@@ -197,7 +197,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                "self.matchScale('cube1', 'cube2', scale=False)": [
+                "self.match_scale('cube1', 'cube2', scale=False)": [
                     1.3063946090989371,
                     0.539387725343009,
                     0.539387708993454,
@@ -209,7 +209,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                # "self.snap3PointsTo3Points()": None,
+                # "self.align_using_three_points()": None,
             }
         )
 
@@ -217,7 +217,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                # "self.isOverlapping()": None,
+                # "self.is_overlapping()": None,
             }
         )
 
@@ -225,7 +225,7 @@ class Xform_test(Main, Xform):
         """ """
         self.perform_test(
             {
-                # "self.alignVertices()": None,
+                # "self.align_vertices()": None,
             }
         )
 

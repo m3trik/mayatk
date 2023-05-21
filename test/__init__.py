@@ -13,7 +13,7 @@ class Main(unittest.TestCase):
         for expression, expected_result in case.items():
             m = str(expression).split("(")[
                 0
-            ]  # ie. 'self.setCase' from "self.setCase('xxx', 'upper')"
+            ]  # ie. 'self.set_case' from "self.set_case('xxx', 'upper')"
 
             try:
                 path = os.path.abspath(inspect.getfile(eval(m)))

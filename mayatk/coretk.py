@@ -31,7 +31,7 @@ class Core:
         return wrapper
 
     @staticmethod
-    def getMainWindow():
+    def get_main_window():
         """Get maya's main window object.
 
         Returns:
@@ -42,7 +42,7 @@ class Core:
         app = QApplication.instance()
         if not app:
             return print(
-                f"# Warning: {__file__} in getMainWindow\n#\tCould not find QApplication instance."
+                f"# Warning: {__file__} in get_main_window\n#\tCould not find QApplication instance."
             )
 
         main_window = next(
@@ -51,13 +51,13 @@ class Core:
         )
         if not main_window:
             return print(
-                f"# Warning: {__file__} in getMainWindow\n#\tCould not find main window instance."
+                f"# Warning: {__file__} in get_main_window\n#\tCould not find main window instance."
             )
 
         return main_window
 
     @staticmethod
-    def appendMayaPaths(maya_version=2023):
+    def append_maya_paths(maya_version=2023):
         """Adds the required library paths for Maya to the system's Python path.
 
         Parameters:
@@ -71,7 +71,7 @@ class Core:
         )  # Get the Maya installation path.
         if not maya_install_path:
             return print(
-                f"# Error: {__file__} in appendMayaPaths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set."
+                f"# Error: {__file__} in append_maya_paths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set."
             )
 
         # Add the Maya libraries to the Python path.
@@ -107,16 +107,16 @@ class Core:
         )
 
     @staticmethod
-    def wrapControl(controlName, container):
+    def wrap_control(control_name, container):
         """Embed a Maya Native UI Object.
 
         Parameters:
-                controlName (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
+                control_name (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
                 container (obj): A widget instance in which to wrap the control.
 
         Example:
                 modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
-                wrapControl(modelPanelName, QtWidgets.QtWidget())
+                wrap_control(modelPanelName, QtWidgets.QtWidget())
         """
         from PySide2 import QtWidgets
         from shiboken2 import wrapInstance
@@ -124,7 +124,7 @@ class Core:
 
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layoutName = Str.setCase(
+        layoutName = Str.set_case(
             container.objectName() + "Layout", "camel"
         )  # results in '<objectName>Layout' or 'layout' if container objectName is ''
         layout.setObjectName(layoutName)
@@ -132,10 +132,10 @@ class Core:
 
         from uitk.switchboard import Switchboard
 
-        derivedClass = Switchboard.getDerivedType(container)
+        derivedClass = Switchboard.get_derived_type(container)
 
         ptr = MQtUtil.findControl(
-            controlName
+            control_name
         )  # get a pointer to the maya api paneLayout.
         control = wrapInstance(int(ptr), derivedClass)
         layout.addWidget(control)
@@ -143,7 +143,7 @@ class Core:
         return control
 
     @staticmethod
-    def mfnMeshGenerator(objects):
+    def mfn_mesh_generator(objects):
         """Generate mfn mesh from the given list of objects.
 
         Parameters:
@@ -155,7 +155,7 @@ class Core:
         import maya.OpenMaya as om
 
         selectionList = om.MSelectionList()
-        for mesh in nodetk.Node.getShapeNode(pm.ls(objects)):
+        for mesh in nodetk.Node.get_shape_node(pm.ls(objects)):
             selectionList.add(mesh)
 
         for i in range(selectionList.length()):
@@ -166,7 +166,7 @@ class Core:
             yield mfnMesh
 
     @staticmethod
-    def getArrayType(lst):
+    def get_array_type(lst):
         """Determine if the given element(s) type.
         Samples only the first element.
 
@@ -177,24 +177,24 @@ class Core:
                 (list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
 
         Example:
-        getArrayType('cyl.vtx[0]') #returns: 'transform'
-        getArrayType('cylShape.vtx[:]') #returns: 'str'
+        get_array_type('cyl.vtx[0]') #returns: 'transform'
+        get_array_type('cylShape.vtx[:]') #returns: 'str'
         """
         try:
-            o = Iter.makeList(lst)[0]
+            o = Iter.make_list(lst)[0]
         except IndexError as error:
-            # print (f'# Error: {__file__} in getArrayType:\n#\tOperation requires at least one object.\n#\t{error}')
+            # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
 
         return "str" if isinstance(o, str) else "int" if isinstance(o, int) else "obj"
 
     @staticmethod
-    def convertArrayType(lst, returnType="str", flatten=False):
+    def convert_array_type(lst, returned_type="str", flatten=False):
         """Convert the given element(s) to <obj>, 'str', or int values.
 
         Parameters:
                 lst (str/obj/list): The components(s) to convert.
-                returnType (str): The desired returned array element type.
+                returned_type (str): The desired returned array element type.
                         valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
                 flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
@@ -202,18 +202,18 @@ class Core:
                 (list)(dict) return a dict only with a return type of 'int' and more that one object given.
 
         Example:
-        convertArrayType('obj.vtx[:2]', 'str') #returns: ['objShape.vtx[0:2]']
-        convertArrayType('obj.vtx[:2]', 'str', True) #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[2]']
-        convertArrayType('obj.vtx[:2]', 'obj') #returns: [MeshVertex('objShape.vtx[0:2]')]
-        convertArrayType('obj.vtx[:2]', 'obj', True) #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[1]'), MeshVertex('objShape.vtx[2]')]
-        convertArrayType('obj.vtx[:2]', 'int')) #returns: {nt.Mesh('objShape'): [(0, 2)]}
-        convertArrayType('obj.vtx[:2]', 'int', True)) #returns: {nt.Mesh('objShape'): [0, 1, 2]}
+        convert_array_type('obj.vtx[:2]', 'str') #returns: ['objShape.vtx[0:2]']
+        convert_array_type('obj.vtx[:2]', 'str', True) #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[2]']
+        convert_array_type('obj.vtx[:2]', 'obj') #returns: [MeshVertex('objShape.vtx[0:2]')]
+        convert_array_type('obj.vtx[:2]', 'obj', True) #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[1]'), MeshVertex('objShape.vtx[2]')]
+        convert_array_type('obj.vtx[:2]', 'int')) #returns: {nt.Mesh('objShape'): [(0, 2)]}
+        convert_array_type('obj.vtx[:2]', 'int', True)) #returns: {nt.Mesh('objShape'): [0, 1, 2]}
         """
         lst = pm.ls(lst, flatten=flatten)
         if not lst or isinstance(lst[0], int):
             return []
 
-        if returnType == "int":
+        if returned_type == "int":
             result = {}
             for c in lst:
                 obj = pm.ls(c, objectsOnly=1)[0]
@@ -232,7 +232,7 @@ class Core:
                         result[obj] = [componentNum]
                 except ValueError as error:  # incompatible object type.
                     print(
-                        f"# Error: {__file__} in convertArrayType\n#\tunable to convert {obj} {num} to int.\n#\t{error}"
+                        f"# Error: {__file__} in convert_array_type\n#\tunable to convert {obj} {num} to int.\n#\t{error}"
                     )
                     break
 
@@ -241,9 +241,9 @@ class Core:
                 len(objects) == 1
             ):  # flatten the dict values from 'result' and remove any duplicates.
                 flattened = Iter.flatten(result.values())
-                result = Iter.removeDuplicates(flattened)
+                result = Iter.remove_duplicates(flattened)
 
-        elif returnType == "str":
+        elif returned_type == "str":
             result = list(map(str, lst))
 
         else:
@@ -252,7 +252,7 @@ class Core:
         return result
 
     @staticmethod
-    def getParameterValuesMEL(node, cmd, parameters):
+    def get_parameter_values(node, cmd, parameters):
         """Query a Maya command, and return a key:value pair for each of the given parameters.
 
         Parameters:
@@ -262,7 +262,7 @@ class Core:
         Returns:
                 (dict) {'parameter name':<value>} ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
-        Example: getParameterValuesMEL(obj, 'transformLimits', ['enableTranslationX','translationX'])
+        Example: get_parameter_values(obj, 'transformLimits', ['enableTranslationX','translationX'])
         """
         cmd = getattr(pm, cmd)
         node = pm.ls(node)[0]
@@ -278,14 +278,14 @@ class Core:
         return result
 
     @staticmethod
-    def setParameterValuesMEL(node, cmd, parameters):
+    def set_parameter_values(node, cmd, parameters):
         """Set parameters using a maya command.
 
         Parameters:
                 node (str/obj/list): The object to query attributes of.
                 parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
-        Example: setParameterValuesMEL(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
+        Example: set_parameter_values(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
         """
         cmd = getattr(pm, cmd)
         node = pm.ls(node)[0]
@@ -294,7 +294,7 @@ class Core:
             cmd(node, **{p: v})
 
     @staticmethod
-    def getSelectedChannels():
+    def get_selected_channels():
         """Get any attributes (channels) that are selected in the channel box.
 
         Returns:
@@ -310,7 +310,7 @@ class Core:
         return attrs
 
     @staticmethod
-    def getPanel(*args, **kwargs):
+    def get_panel(*args, **kwargs):
         """Returns panel and panel configuration information.
         A fix for the broken pymel command of the same name.
 
@@ -320,23 +320,23 @@ class Core:
         Returns:
                 (str) An array of panel names.
         """
-        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022.
+        from maya.cmds import get_panel  # pymel get_panel is broken in ver: 2022.
 
-        result = getPanel(*args, **kwargs)
+        result = get_panel(*args, **kwargs)
 
         return result
 
     @staticmethod
-    def mainProgressBar(size, name="progressBar#", stepAmount=1):
+    def main_progress_bar(size, name="progressBar#", step_amount=1):
         """#add esc key pressed return False
 
         Parameters:
                 size (int): total amount
                 name (str): name of progress bar created
-                stepAmount(int): increment amount
+                step_amount(int): increment amount
 
         example use-case:
-        mainProgressBar (len(edges), progressCount)
+        main_progress_bar (len(edges), progressCount)
                 pm.progressBar ("progressBar_", edit=1, step=1)
                 if pm.progressBar ("progressBar_", query=1, isCancelled=1):
                         break
@@ -357,21 +357,21 @@ class Core:
             isInterruptable=True,
             status=status,
             maxValue=size,
-            step=stepAmount,
+            step=step_amount,
         )
 
     @staticmethod
-    def viewportMessage(
-        message="", statusMessage="", assistMessage="", position="topCenter"
+    def viewport_message(
+        message="", status_message="", assist_message="", position="topCenter"
     ):
         """
         Parameters:
-                message (str): The message to be displayed, (accepts html formatting). General message, inherited by -amg/assistMessage and -smg/statusMessage.
-                statusMessage (str): The status info message to be displayed (accepts html formatting).
-                assistMessage (str): The user assistance message to be displayed, (accepts html formatting).
+                message (str): The message to be displayed, (accepts html formatting).
+                status_message (str): The status info message to be displayed (accepts html formatting).
+                assist_message (str): The user assistance message to be displayed, (accepts html formatting).
                 position (str): position on screen. possible values are: topCenter","topRight","midLeft","midCenter","midCenterTop","midCenterBot","midRight","botLeft","botCenter","botRight"
 
-        ex. viewportMessage("shutting down:<hl>"+str(timer)+"</hl>")
+        ex. viewport_message("shutting down:<hl>"+str(timer)+"</hl>")
         """
         fontSize = 10
         fade = 1
@@ -380,150 +380,18 @@ class Core:
         fadeOutTime = 500
         alpha = 75
 
-        if message:
-            pm.inViewMessage(
-                message=message,
-                position=position,
-                fontSize=fontSize,
-                fade=fade,
-                fadeInTime=fadeInTime,
-                fadeStayTime=fadeStayTime,
-                fadeOutTime=fadeOutTime,
-                alpha=alpha,
-            )  # 1000ms = 1 sec
-        elif statusMessage:
-            pm.inViewMessage(
-                statusMessage=statusMessage,
-                position=position,
-                fontSize=fontSize,
-                fade=fade,
-                fadeInTime=fadeInTime,
-                fadeStayTime=fadeStayTime,
-                fadeOutTime=fadeOutTime,
-                alpha=alpha,
-            )  # 1000ms = 1 sec
-        elif assistMessage:
-            pm.inViewMessage(
-                assistMessage=assistMessage,
-                position=position,
-                fontSize=fontSize,
-                fade=fade,
-                fadeInTime=fadeInTime,
-                fadeStayTime=fadeStayTime,
-                fadeOutTime=fadeOutTime,
-                alpha=alpha,
-            )  # 1000ms = 1 sec
-
-    @staticmethod
-    def outputText(text, window_title):
-        """output text"""
-        # window_title = pm.mel.eval(python("window_title"))
-        window = str(
-            pm.window(
-                widthHeight=(300, 300),
-                topLeftCorner=(65, 265),
-                maximizeButton=False,
-                resizeToFitChildren=True,
-                toolbox=True,
-                title=window_title,
-            )
-        )
-        scrollLayout = str(
-            pm.scrollLayout(
-                verticalScrollBarThickness=16, horizontalScrollBarThickness=16
-            )
-        )
-        pm.columnLayout(adjustableColumn=True)
-        text_field = str(pm.text(label=text, align="left"))
-        print(text_field)
-        pm.setParent("..")
-        pm.showWindow(window)
-        return
-
-    # #output textfield parsed by ';'
-    # def outputTextField2(text):
-    #   window = str(pm.window( widthHeight=(250, 650),
-    #                           topLeftCorner=(50,275),
-    #                           maximizeButton=False,
-    #                           resizeToFitChildren=False,
-    #                           toolbox=True,
-    #                           title=""))
-    #   scrollLayout = str(pm.scrollLayout(verticalScrollBarThickness=16,
-    #                                   horizontalScrollBarThickness=16))
-    #   pm.columnLayout(adjustableColumn=True)
-    #   print(text)
-    #   #for item in array:
-    #   text_field = str(pm.textField(height=20,
-    #                                       width=250,
-    #                                       editable=False,
-    #                                       insertText=str(text)))
-    #   pm.setParent('..')
-    #   pm.showWindow(window)
-    #   return
-
-    @staticmethod
-    def outputscrollField(text, window_title, width, height):
-        """Create an output scroll layout."""
-        window_width = width * 300
-        window_height = height * 600
-        scroll_width = width * 294
-        scroll_height = height * 590
-        window = str(
-            pm.window(
-                widthHeight=(window_width, window_height),
-                topLeftCorner=(45, 0),
-                maximizeButton=False,
-                sizeable=False,
-                title=window_title,
-            )
-        )
-        scrollLayout = str(
-            pm.scrollLayout(
-                verticalScrollBarThickness=16, horizontalScrollBarThickness=16
-            )
-        )
-        pm.columnLayout(adjustableColumn=True)
-        scroll_field = str(
-            pm.scrollField(
-                text=(text),
-                width=scroll_width,
-                height=scroll_height,
-            )
-        )
-        print(window)
-        pm.setParent("..")
-        pm.showWindow(window)
-        return scroll_field
-
-    @staticmethod
-    def outputTextField(array, window_title):
-        """Create an output text field."""
-        window = str(
-            pm.window(
-                widthHeight=(250, 650),
-                topLeftCorner=(65, 275),
-                maximizeButton=False,
-                resizeToFitChildren=False,
-                toolbox=True,
-                title=window_title,
-            )
-        )
-        scrollLayout = str(
-            pm.scrollLayout(
-                verticalScrollBarThickness=16, horizontalScrollBarThickness=16
-            )
-        )
-        pm.columnLayout(adjustableColumn=True)
-        for item in array:
-            text_field = str(
-                pm.textField(height=20, width=500, editable=False, insertText=str(item))
-            )
-        pm.setParent("..")
-        pm.showWindow(window)
-        return text_field
-
-
-# --------------------------------------------------------------------------------------------
+        pm.inViewMessage(
+            message=message,
+            statusMessage=status_message,
+            assistMessage=assist_message,
+            position=position,
+            fontSize=fontSize,
+            fade=fade,
+            fadeInTime=fadeInTime,
+            fadeStayTime=fadeStayTime,
+            fadeOutTime=fadeOutTime,
+            alpha=alpha,
+        )  # 1000ms = 1 sec
 
 
 # --------------------------------------------------------------------------------------------

@@ -5,7 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
-from pythontk import Iter, formatReturn
+from pythontk import Iter, format_return
 
 # from this package:
 from mayatk import coretk, cmpttk
@@ -15,7 +15,7 @@ class Node:
     """ """
 
     @staticmethod
-    def nodeExists(n, search="name"):
+    def node_exists(n, search="name"):
         """Check if the node exists in the current scene.
 
         Parameters:
@@ -32,7 +32,7 @@ class Node:
             return bool(pm.ls(exactType=n))
 
     @classmethod
-    def getType(cls, objects):
+    def get_type(cls, objects):
         """Get the object type as a string.
 
         Parameters:
@@ -43,20 +43,20 @@ class Node:
         """
         types = []
         for obj in pm.ls(objects):
-            if cls.isGroup(obj):
+            if cls.is_group(obj):
                 typ = "group"
-            elif cls.isLocator(obj):
+            elif cls.is_locator(obj):
                 typ = "locator"
             else:
-                typ = cmpttk.Cmpt.getComponentType(obj)
+                typ = cmpttk.Cmpt.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)
 
-        return formatReturn(types, objects)
+        return format_return(types, objects)
 
     @classmethod
-    def isLocator(cls, obj):
+    def is_locator(cls, obj):
         """Check if the object is a locator.
         A locator is a transform node that has a shape node child.
         The shape node defines the appearance and behavior of the locator.
@@ -67,11 +67,11 @@ class Node:
         Returns:
                 (bool)
         """
-        shape = cls.getShapeNode(obj)
+        shape = cls.get_shape_node(obj)
         return pm.nodeType(shape) == "locator"
 
     @staticmethod
-    def isGroup(objects):
+    def is_group(objects):
         """Determine if each of the given object(s) is a group.
         A group is defined as a transform with children.
 
@@ -91,7 +91,7 @@ class Node:
                             (
                                 [
                                     type(c) == pm.nodetypes.Transform
-                                    for c in n.getChildren()
+                                    for c in n.get_children()
                                 ]
                             )
                         ),
@@ -101,10 +101,10 @@ class Node:
                 q = False
             result.append(q)
 
-        return formatReturn(result, objects)
+        return format_return(result, objects)
 
     @classmethod
-    def getGroups(cls, empty=False):
+    def get_groups(cls, empty=False):
         """Get all groups in the scene.
 
         Parameters:
@@ -117,7 +117,7 @@ class Node:
 
         groups = []
         for t in transforms:
-            if cls.isGroup(t):
+            if cls.is_group(t):
                 if empty:
                     children = pm.listRelatives(t, children=True)
                     if children:
@@ -127,7 +127,7 @@ class Node:
         return groups
 
     @staticmethod
-    def getParent(node, all=False):
+    def get_parent(node, all=False):
         """List the parents of an object."""
         if all:
             objects = pm.ls(node, l=1)
@@ -140,7 +140,7 @@ class Node:
             return None
 
     @staticmethod
-    def getChildren(node):
+    def get_children(node):
         """List the children of an object."""
         try:
             return pm.listRelatives(node, children=True, type="transform")
@@ -148,7 +148,7 @@ class Node:
             return []
 
     @staticmethod
-    def getUniqueChildren(objects):
+    def get_unique_children(objects):
         """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves.
 
         This function takes a list of objects in the scene and, if any object is a group, retrieves
@@ -162,7 +162,7 @@ class Node:
                 list: A list containing the unique children of the groups (if any) and other objects.
 
         Example:
-                >>> getUniqueChildren(<group>) # Returns: [nt.Transform(u'pCube1'), nt.Transform(u'pCube2')]
+                >>> get_unique_children(<group>) # Returns: [nt.Transform(u'pCube1'), nt.Transform(u'pCube2')]
         """
         objects = pm.ls(objects, flatten=True)
 
@@ -172,11 +172,11 @@ class Node:
                 for obj in objects
                 for child in (
                     pm.listRelatives(obj, children=True, type="transform")
-                    if obj.nodeType() == "transform"
+                    if obj.node_type() == "transform"
                     and pm.listRelatives(obj, children=True, type="transform")
                     else (
                         [obj]
-                        if obj.nodeType() != "transform"
+                        if obj.node_type() != "transform"
                         or obj.listRelatives(children=True)
                         else []
                     )
@@ -186,12 +186,14 @@ class Node:
         return list(final_set)  # Convert the set back to a list.
 
     @staticmethod
-    def getTransformNode(nodes, returnType="obj", attributes=False, inc=[], exc=[]):
+    def get_transform_node(
+        nodes, returned_type="obj", attributes=False, inc=[], exc=[]
+    ):
         """Get transform node(s) or node attributes.
 
         Parameters:
                 nodes (str/obj/list): A relative of a transform Node.
-                returnType (str): The desired returned object type. Not valid with the `attributes` parameter.
+                returned_type (str): The desired returned object type. Not valid with the `attributes` parameter.
                         (valid: 'str'(default), 'obj').
                 attributes (bool): Return the attributes of the node, rather then the node itself.
 
@@ -218,21 +220,23 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convertArrayType(
-            result, returnType=returnType, flatten=True
+        result = coretk.Core.convert_array_type(
+            result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filterList(result, inc, exc)
+        result = Iter.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return formatReturn(list(set(result)), nodes)
+        return format_return(list(set(result)), nodes)
 
     @classmethod
-    def getShapeNode(cls, nodes, returnType="obj", attributes=False, inc=[], exc=[]):
+    def get_shape_node(
+        cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]
+    ):
         """Get shape node(s) or node attributes.
 
         Parameters:
                 nodes (str/obj/list): A relative of a shape Node.
-                returnType (str): The desired returned object type.
+                returned_type (str): The desired returned object type.
                         (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
                 attributes (bool): Return the attributes of the node, rather then the node itself.
 
@@ -251,7 +255,7 @@ class Node:
                         transforms = pm.listRelatives(
                             pm.listHistory(node, future=1), parent=1
                         )
-                        shapes = cls.getShapeNode(transforms)
+                        shapes = cls.get_shape_node(transforms)
                     except Exception as error:
                         shapes = []
             for n in shapes:
@@ -261,21 +265,21 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convertArrayType(
-            result, returnType=returnType, flatten=True
+        result = coretk.Core.convert_array_type(
+            result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filterList(result, inc, exc)
+        result = Iter.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return formatReturn(list(set(result)), nodes)
+        return format_return(list(set(result)), nodes)
 
     @staticmethod
-    def getHistoryNode(nodes, returnType="obj", attributes=False, inc=[], exc=[]):
+    def get_history_node(nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
         """Get history node(s) or node attributes.
 
         Parameters:
                 nodes (str/obj/list): A relative of a history Node.
-                returnType (str): The desired returned object type.
+                returned_type (str): The desired returned object type.
                         (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
                 attributes (bool): Return the attributes of the node, rather then the node itself.
 
@@ -296,7 +300,9 @@ class Node:
                     history = node.history()[-1]
                 except AttributeError as error:
                     print(
-                        "{} in getHistoryNode\n\t# Error: {} #".format(__file__, error)
+                        "{} in get_history_node\n\t# Error: {} #".format(
+                            __file__, error
+                        )
                     )
                     continue
             result.append(history)
@@ -305,33 +311,33 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convertArrayType(
-            result, returnType=returnType, flatten=True
+        result = coretk.Core.convert_array_type(
+            result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filterList(result, inc, exc)
+        result = Iter.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return formatReturn(list(set(result)), nodes)
+        return format_return(list(set(result)), nodes)
 
     @classmethod
-    def createRenderNode(
+    def create_render_node(
         cls,
-        nodeType,
+        node_type,
         flag="asShader",
-        flag2="surfaceShader",
+        secondary_flag="surfaceShader",
         name="",
         tex="",
-        place2dTexture=False,
-        postCommand="",
+        texture_node=False,
+        post_command="",
         **kwargs,
     ):
         """Procedure to create the node classified as specified by the inputs.
 
         Parameters:
-                nodeType (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
+                node_type (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
                 flag (str): A flag specifying which how to classify the node created.
                         valid:  as2DTexture, as3DTexture, asEnvTexture, asShader, asLight, asUtility
-                flag2 (str): A secondary flag used to make decisions in combination with 'asType'
+                secondary_flag (str): A secondary flag used to make decisions in combination with 'asType'
                         valid:  -asBump : defines a created texture as a bump
                                         -asNoShadingGroup : for materials; create without a shading group
                                         -asDisplacement : for anything; map the created node to a displacement material.
@@ -339,8 +345,8 @@ class Node:
                                         -asPostProcess : for any postprocess node
                 name (str): The desired node name.
                 tex (str): The path to a texture file for those nodes that support one.
-                place2dTexture (bool): If not needed, the place2dTexture node will be deleted after creation.
-                postCommand (str): A command entered by the user when invoking createRenderNode.
+                texture_node (bool): If not needed, the `place2dTexture` node will be deleted after creation.
+                post_command (str): A command entered by the user when invoking create_render_node.
                                 The command will substitute the string %node with the name of the
                                 node it creates.  createRenderWindow will be closed if a command
                                 is not the null string ("").
@@ -349,15 +355,17 @@ class Node:
         Returns:
                 (obj) node
 
-        Example: createRenderNode('StingrayPBS')
-        Example: createRenderNode('file', flag='as2DTexture', tex=f, place2dTexture=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
-        Example: createRenderNode('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
+        Example: create_render_node('StingrayPBS')
+        Example: create_render_node('file', flag='as2DTexture', tex=f, texture_node=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
+        Example: create_render_node('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
         """
         node = pm.PyNode(
-            pm.mel.createRenderNodeCB("-" + flag, flag2, nodeType, postCommand)
+            pm.mel.createRenderNodeCB(
+                "-" + flag, secondary_flag, node_type, post_command
+            )
         )  # node = pm.shadingNode(typ, asTexture=True)
 
-        if not place2dTexture:
+        if not texture_node:
             pm.delete(
                 pm.listConnections(
                     node, type="place2dTexture", source=True, exactType=True
@@ -377,11 +385,11 @@ class Node:
             except RuntimeError as error:
                 print("# Error:", __file__, error, "#")
 
-        cls.setNodeAttributes(node, **kwargs)
+        cls.set_node_attributes(node, **kwargs)
         return node
 
     @staticmethod
-    def getIncomingNodeByType(node, typ, exact=True):
+    def get_incoming_node_by_type(node, typ, exact=True):
         """Get the first connected node of the given type with an incoming connection to the given node.
 
         Parameters:
@@ -392,13 +400,13 @@ class Node:
         Returns:
                 (obj)(None) node if found.
 
-        Example: env_file_node = getIncomingNodeByType(env_node, 'file') #get the incoming file node.
+        Example: env_file_node = get_incoming_node_by_type(env_node, 'file') #get the incoming file node.
         """
         nodes = pm.listConnections(node, type=typ, source=True, exactType=exact)
-        return formatReturn([pm.PyNode(n) for n in nodes])
+        return format_return([pm.PyNode(n) for n in nodes])
 
     @staticmethod
-    def getOutgoingNodeByType(node, typ, exact=True):
+    def get_outgoing_node_by_type(node, typ, exact=True):
         """Get the connected node of the given type with an outgoing connection to the given node.
 
         Parameters:
@@ -409,13 +417,13 @@ class Node:
         Returns:
                 (list)(obj)(None) node(s)
 
-        Example: srSG_node = getOutgoingNodeByType(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
+        Example: srSG_node = get_outgoing_node_by_type(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
         """
         nodes = pm.listConnections(node, type=typ, destination=True, exactType=exact)
-        return formatReturn([pm.PyNode(n) for n in nodes])
+        return format_return([pm.PyNode(n) for n in nodes])
 
     @staticmethod
-    def getNodeAttributes(node, inc=[], exc=[], mapping=False):
+    def get_node_attributes(node, inc=[], exc=[], mapping=False):
         """Get node attributes and their corresponding values as a dict.
 
         Parameters:
@@ -427,7 +435,9 @@ class Node:
         Returns:
                 (dict) {'string attribute': current value}
         """
-        filtered_attrs = Iter.filterList(pm.listAttr(node, read=1, hasData=1), inc, exc)
+        filtered_attrs = Iter.filter_list(
+            pm.listAttr(node, read=1, hasData=1), inc, exc
+        )
 
         result = {
             attr: pm.getAttr(f"{node}.{attr}", silent=True) for attr in filtered_attrs
@@ -435,7 +445,7 @@ class Node:
         return result if mapping else result.values()
 
     @classmethod
-    def setNodeAttributes(cls, node, **attributes):
+    def set_node_attributes(cls, node, **attributes):
         """Set node attribute values. If the attribute doesn't exist, it will be created.
 
         Parameters:
@@ -446,10 +456,10 @@ class Node:
             try:
                 pm.setAttr(f"{node}.{attr}", value)
             except Exception:
-                cls.setNodeCustomAttributes(node, **{attr: value})
+                cls.set_node_custom_attributes(node, **{attr: value})
 
     @classmethod
-    def getMayaAttributeType(cls, value):
+    def get_maya_attribute_type(cls, value):
         """Gets the corresponding Maya attribute type for a given value.
 
         This method determines the Maya attribute type based on the type and structure of the input value.
@@ -466,11 +476,11 @@ class Node:
                 TypeError: If the input value's type is not supported.
 
         Examples:
-                >>> getMayaAttributeType(True) #Returns: 'bool'
-                >>> getMayaAttributeType(42) #Returns: 'long'
-                >>> getMayaAttributeType([1.0, 2.0, 3.0]) #Returns: 'double3'
-                >>> getMayaAttributeType([["a", "b"], ["c", "d"]]) #Returns: 'stringArray'
-                >>> getMayaAttributeType(Matrix([[1.0, 0.0], [0.0, 1.0]], type='float')) #Returns: 'fltMatrix'
+                >>> get_maya_attribute_type(True) #Returns: 'bool'
+                >>> get_maya_attribute_type(42) #Returns: 'long'
+                >>> get_maya_attribute_type([1.0, 2.0, 3.0]) #Returns: 'double3'
+                >>> get_maya_attribute_type([["a", "b"], ["c", "d"]]) #Returns: 'stringArray'
+                >>> get_maya_attribute_type(Matrix([[1.0, 0.0], [0.0, 1.0]], type='float')) #Returns: 'fltMatrix'
 
         Notes:
                 - To support additional data types, add more cases in the method as necessary.
@@ -485,7 +495,7 @@ class Node:
         elif isinstance(value, str):
             return "string"
         elif isinstance(value, (list, tuple, set)):
-            element_type = cls.getMayaAttributeType(value[0])
+            element_type = cls.get_maya_attribute_type(value[0])
             length = len(value)
             # Handle compound and array cases
             if element_type in ["double", "float", "long", "short"]:
@@ -513,7 +523,7 @@ class Node:
                 return "matrix"
 
     @classmethod
-    def setNodeCustomAttributes(cls, node, **attributes):
+    def set_node_custom_attributes(cls, node, **attributes):
         """Set node attribute values. If the attribute doesn't exist, it will be created.
 
         Parameters:
@@ -524,7 +534,7 @@ class Node:
             node = pm.PyNode(node)
 
         for attr, value in attributes.items():
-            attr_type = cls.getMayaAttributeType(value)
+            attr_type = cls.get_maya_attribute_type(value)
             print("attr_type", attr_type)
 
             if not pm.attributeQuery(attr, node=node, exists=True):
@@ -567,7 +577,7 @@ class Node:
                     pm.setAttr(f"{node}.{attr}", value)
 
     @staticmethod
-    def connectAttributes(attr, place, file):
+    def connect_attributes(attr, place, file):
         """A convenience procedure for connecting common attributes between two nodes.
 
         Parameters:
@@ -578,16 +588,16 @@ class Node:
         Example:
         Use convenience command to connect attributes which share
         their names for both the placement and file nodes.
-                connectAttributes('coverage', 'place2d', fileNode')
-                connectAttributes('translateFrame', 'place2d', fileNode')
-                connectAttributes('rotateFrame', 'place2d', fileNode')
-                connectAttributes('mirror', 'place2d', fileNode')
-                connectAttributes('stagger', 'place2d', fileNode')
-                connectAttributes('wrap', 'place2d', fileNode')
-                connectAttributes('wrapV', 'place2d', fileNode')
-                connectAttributes('repeatUV', 'place2d', fileNode')
-                connectAttributes('offset', 'place2d', fileNode')
-                connectAttributes('rotateUV', 'place2d', fileNode')
+                connect_attributes('coverage', 'place2d', fileNode')
+                connect_attributes('translateFrame', 'place2d', fileNode')
+                connect_attributes('rotateFrame', 'place2d', fileNode')
+                connect_attributes('mirror', 'place2d', fileNode')
+                connect_attributes('stagger', 'place2d', fileNode')
+                connect_attributes('wrap', 'place2d', fileNode')
+                connect_attributes('wrapV', 'place2d', fileNode')
+                connect_attributes('repeatUV', 'place2d', fileNode')
+                connect_attributes('offset', 'place2d', fileNode')
+                connect_attributes('rotateUV', 'place2d', fileNode')
 
         These two are named differently.
                 connectAttr -f ( $place2d + ".outUV" ) ( $fileNode + ".uv" );
@@ -596,13 +606,13 @@ class Node:
         pm.connectAttr("{}.{}".format(place, attr), "{}.{}".format(file, attr), f=1)
 
     @staticmethod
-    def connectMultiAttr(*args, force=True):
+    def connect_multi_attr(*args, force=True):
         """Connect multiple node attributes at once.
 
         Parameters:
                 args (tuple): Attributes as two element tuples. ie. (<connect from attribute>, <connect to attribute>)
 
-        Example: connectMultiAttr(
+        Example: connect_multi_attr(
                 (node1.outColor, node2.aiSurfaceShader),
                 (node1.outColor, node3.baseColor),
                 (node4.outNormal, node5.normalCamera),
@@ -615,7 +625,7 @@ class Node:
                 print("# Error:", __file__, error, "#")
 
     @staticmethod
-    def createAssembly(nodes, assembly_name="assembly#", duplicate=False):
+    def create_assembly(nodes, assembly_name="assembly#", duplicate=False):
         """Create an assembly by parenting the input nodes to a new assembly node.
 
         Parameters:
@@ -643,9 +653,6 @@ class Node:
 
 # --------------------------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------------------------
-
 if __name__ == "__main__":
     pass
 
@@ -659,7 +666,7 @@ if __name__ == "__main__":
 # --------------------------------------------------------------------------------------------
 
 
-# def filterComponents(cls, frm, inc=[], exc=[]):
+# def filter_components(cls, frm, inc=[], exc=[]):
 #       '''Filter the given 'frm' list for the items in 'exc'.
 
 #       Parameters:
@@ -670,7 +677,7 @@ if __name__ == "__main__":
 #       Returns:
 #           (list)
 
-#       Example: filterComponents('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
+#       Example: filter_components('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
 #       '''
 #       exc = pm.ls(exc, flatten=True)
 #       if not exc:
@@ -692,18 +699,18 @@ if __name__ == "__main__":
 #           obj = pm.ls(frm, objectsOnly=1)
 #           if len(obj)>1:
 #               return frm
-#           componentType = cls.getComponentType(frm[0])
-#           typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
+#           component_type = cls.get_component_type(frm[0])
+#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
 #           exc = ["{}.{}[{}]".format(obj[0], typ, n) for n in exc]
 
 #       if inc and isinstance(inc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
 #           obj = pm.ls(frm, objectsOnly=1)
 #           if len(obj)>1:
 #               return frm
-#           componentType = cls.getComponentType(frm[0])
-#           typ = cls.convertAlias(componentType) #get the correct componentType variable from possible args.
+#           component_type = cls.get_component_type(frm[0])
+#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
 #           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-#       inc = coretk.Core.convertArrayType(inc, returnType=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = coretk.Core.convertArrayType(exc, returnType=rtn, flatten=True)
+#       inc = coretk.Core.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
+#       exc = coretk.Core.convert_array_type(exc, returned_type=rtn, flatten=True)
 #       return [i for i in components if i not in exc and (inc and i in inc)]

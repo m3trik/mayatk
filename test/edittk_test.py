@@ -113,7 +113,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.setCase('cube1', 'lower')": None,
+                "self.set_case('cube1', 'lower')": None,
             }
         )
 
@@ -144,7 +144,7 @@ class Edit_test(Main, Edit):
 
         self.perform_test(
             {
-                "self.setSuffixByObjLocation(['c1', 'c2'])": None,
+                "self.append_location_based_suffix(['c1', 'c2'])": None,
             }
         )
 
@@ -152,7 +152,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.snapClosestVerts('cube1', 'cube2')": None,
+                "self.snap_closest_verts('cube1', 'cube2')": None,
             }
         )
 
@@ -160,7 +160,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.mergeVertices('cube1')": None,
+                "self.merge_vertices('cube1')": None,
             }
         )
 
@@ -168,7 +168,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.deleteAlongAxis('cube1')": None,
+                "self.delete_along_axis('cube1')": None,
             }
         )
 
@@ -176,7 +176,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getAllFacesOnAxis('cube1')": [],  # faces should have been deleted by the previous test 'deleteAlongAxis'.
+                "self.get_all_faces_on_axis('cube1')": [],  # faces should have been deleted by the previous test 'delete_along_axis'.
             }
         )
 
@@ -184,7 +184,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.cleanGeometry('cyl')": None,
+                "self.clean_geometry('cyl')": None,
             }
         )
 
@@ -192,7 +192,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getOverlappingDupObjects(['cyl', 'cube1', 'cube2'])": set(),
+                "self.get_overlapping_dup_objects(['cyl', 'cube1', 'cube2'])": set(),
             }
         )
 
@@ -200,7 +200,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.findNonManifoldVertex('cyl')": set(),
+                "self.find_non_manifold_vertex('cyl')": set(),
             }
         )
 
@@ -208,7 +208,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.splitNonManifoldVertex('cyl')": None,
+                "self.split_non_manifold_vertex('cyl')": None,
             }
         )
 
@@ -216,7 +216,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getNGons('cyl')": [],
+                "self.get_ngons('cyl')": [],
             }
         )
 
@@ -224,7 +224,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getOverlappingVertices('cyl')": [],
+                "self.get_overlapping_vertices('cyl')": [],
             }
         )
 
@@ -232,8 +232,8 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getOverlappingFaces('cyl')": [],
-                "self.getOverlappingFaces('cyl.f[:]')": [],
+                "self.get_overlapping_faces('cyl')": [],
+                "self.get_overlapping_faces('cyl.f[:]')": [],
             }
         )
 
@@ -241,7 +241,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getSimilarMesh('cyl')": [],
+                "self.get_similar_mesh('cyl')": [],
             }
         )
 
@@ -249,7 +249,7 @@ class Edit_test(Main, Edit):
         """ """
         self.perform_test(
             {
-                "self.getSimilarTopo('cyl')": [],
+                "self.get_similar_topo('cyl')": [],
             }
         )
 
