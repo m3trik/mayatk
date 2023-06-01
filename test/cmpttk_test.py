@@ -1,11 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
 import unittest
 import inspect
-
+import maya.OpenMaya as om
 import pymel.core as pm
-
 from mayatk import Cmpt
 
 
@@ -417,12 +416,32 @@ class Cmpt_test(Main, Cmpt):
             }
         )
 
+    def test_getNormal(self):
+        """ """
+        face = pm.PyNode("cylShape.f[0]")
+        expected_normal = om.MVector(0.7071068109888711, 0.0, -0.7071067513842227)
+        result_normal = self.get_normal(face)
+        self.assertAlmostEqual(result_normal.x, expected_normal.x)
+        self.assertAlmostEqual(result_normal.y, expected_normal.y)
+        self.assertAlmostEqual(result_normal.z, expected_normal.z)
+
+    def test_getNormalAngle(self):
+        """ """
+        # Create a cube and get its first two edges
+        cube = pm.polyCube()[0]
+        edge1 = cube.e[0]
+        edge2 = cube.e[1]
+
+        # The angle between the normals of the faces connected by the first edge is 90 degrees
+        # The angle between the normals of the faces connected by the second edge is also 90 degrees
+        self.assertEqual(self.get_normal_angle(edge1), 90.0)
+        self.assertEqual(self.get_normal_angle(edge2), 90.0)
+
     def test_getEdgesByNormalAngle(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_edges_by_normal_angle('cyl', 50, 130)": ["cylShape.e[0:23]"],
-            }
+        self.assertEqual(
+            self.get_edges_by_normal_angle("cyl", 50, 130),
+            [pm.PyNode("cylShape.e[{}]".format(i)) for i in range(24)],
         )
 
     def test_getComponentsByNumberOfConnected(self):

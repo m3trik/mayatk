@@ -8,7 +8,7 @@ except ImportError as error:
 from pythontk import Iter, format_return
 
 # from this package:
-from mayatk import coretk, cmpttk
+from mayatk import misc_utils, cmpt_utils
 
 
 class Node:
@@ -48,7 +48,7 @@ class Node:
             elif cls.is_locator(obj):
                 typ = "locator"
             else:
-                typ = cmpttk.Cmpt.get_component_type(obj)
+                typ = cmpt_utils.Cmpt.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)
@@ -172,11 +172,11 @@ class Node:
                 for obj in objects
                 for child in (
                     pm.listRelatives(obj, children=True, type="transform")
-                    if obj.node_type() == "transform"
+                    if obj.nodeType() == "transform"
                     and pm.listRelatives(obj, children=True, type="transform")
                     else (
                         [obj]
-                        if obj.node_type() != "transform"
+                        if obj.nodeType() != "transform"
                         or obj.listRelatives(children=True)
                         else []
                     )
@@ -220,7 +220,7 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -265,7 +265,7 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -311,7 +311,7 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -711,6 +711,6 @@ if __name__ == "__main__":
 #           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
 #           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-#       inc = coretk.Core.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = coretk.Core.convert_array_type(exc, returned_type=rtn, flatten=True)
+#       inc = misc_utils.Misc.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
+#       exc = misc_utils.Misc.convert_array_type(exc, returned_type=rtn, flatten=True)
 #       return [i for i in components if i not in exc and (inc and i in inc)]

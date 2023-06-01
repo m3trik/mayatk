@@ -116,7 +116,7 @@ def __getattr__(name):
 
 # 	:Raises:
 # 		AttributeError: If the specified attribute is not found in either the original module
-# 						or the 'Core' module within the package.
+# 						or the 'Misc' module within the package.
 # 	Example:
 # 		<package>.__getattr__('module1.attribute1') #returns: <attribute1 value>
 # 		<package>.__getattr__('attribute1') #returns: <attribute1 value>
@@ -127,7 +127,7 @@ def __getattr__(name):
 # 		return getattr(module, attr)
 
 # 	except (ValueError, ModuleNotFoundError):
-# 		module = __import__(f"{__package__}.Core", fromlist=["Core"])
+# 		module = __import__(f"{__package__}.Misc", fromlist=["Misc"])
 # 		return getattr(module, attr)
 
 # 	except AttributeError as error:

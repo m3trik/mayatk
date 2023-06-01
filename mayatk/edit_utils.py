@@ -8,14 +8,14 @@ except ImportError as error:
 from pythontk import Str, Iter, are_similar
 
 # from this package:
-from mayatk import coretk, nodetk, cmpttk, xformtk
+from mayatk import misc_utils, node_utils, cmpt_utils, xform_utils
 
 
 class Edit:
     """ """
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def rename(objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects.
 
@@ -92,7 +92,7 @@ class Edit:
         # pm.undoInfo (closeChunk=1)
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -116,7 +116,7 @@ class Edit:
         # pm.undoInfo(closeChunk=1)
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def append_location_based_suffix(
         objects,
         alphanumeric=False,
@@ -143,7 +143,7 @@ class Edit:
         else:
             suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
-        ordered_objs = xformtk.Xform.order_by_distance(objects, reverse=reverse)
+        ordered_objs = xform_utils.Xform.order_by_distance(objects, reverse=reverse)
 
         newNames = {}  # the object with the new name set as a key.
         for n, obj in enumerate(ordered_objs):
@@ -195,8 +195,8 @@ class Edit:
                 tolerance (float) = Maximum search distance.
                 freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = cmpttk.Cmpt.get_components(obj1, "vertices")
-        closestVerts = cmpttk.Cmpt.get_closest_vertex(
+        vertices = cmpt_utils.Cmpt.get_components(obj1, "vertices")
+        closestVerts = cmpt_utils.Cmpt.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -312,7 +312,7 @@ class Edit:
             else:
                 pm.delete(faces)  # else, delete any individual faces.
 
-        coretk.Core.mfn_mesh_generator("Delete faces on <hl>" + axis.upper() + "</hl>.")
+        misc_utils.Misc.mfn_mesh_generator("Delete faces on <hl>" + axis.upper() + "</hl>.")
 
     @classmethod
     def clean_geometry(
@@ -406,7 +406,7 @@ class Edit:
         scene_objs = {
             i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
             for i in scene_objs
-            if not nodetk.Node.is_group(i)
+            if not node_utils.Node.is_group(i)
         }
         selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
@@ -458,7 +458,7 @@ class Edit:
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = cmpttk.Cmpt.get_components(objects, "vertices")
+        vertices = cmpt_utils.Cmpt.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1
@@ -620,7 +620,7 @@ class Edit:
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in coretk.Core.mfn_mesh_generator(objects):
+        for mfnMesh in misc_utils.Misc.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 

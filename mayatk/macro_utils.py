@@ -19,7 +19,7 @@ class Macro:
                     '''
                     sel = pm.ls(selection=True)
                     if sel:
-                            currentPanel = get_panel(withFocus=True)
+                            currentPanel = getPanel(withFocus=True)
                             state = pm.polyOptions(sel, query=True, wireBackCulling=True)[0]
 
                             if not state:
@@ -421,7 +421,7 @@ pm.runTimeCommand(
 #           }
 
 
-# string $currentPanel = `get_panel -withFocus`;
+# string $currentPanel = `getPanel -withFocus`;
 # $mode = `displayPref -query -wireframeOnShadedActive`;
 
 # if ($mode=="none")
@@ -458,7 +458,7 @@ pm.runTimeCommand(
 
 
 # mel.eval('''
-# string $currentPanel = `get_panel -withFocus`;
+# string $currentPanel = `getPanel -withFocus`;
 # string $state = `modelEditor -query -displayAppearance $currentPanel`;
 # string $displayTextures = `modelEditor -query -displayTextures $currentPanel`;
 # if(`modelEditor -exists $currentPanel`)
@@ -547,7 +547,7 @@ pm.runTimeCommand(
 # if (`menu -q -ni MayaWindow|HotBoxControlsMenu` == 0) {setParent -m MayaWindow|HotBoxControlsMenu;source HotboxControlsMenu;};
 
 # //toggle panel menus
-# string $panels[] = `get_panel -allPanels`;
+# string $panels[] = `getPanel -allPanels`;
 # int $state = `panel -query -menuBarVisible $panels[0]`;
 # for ($panel in $panels)
 # {
@@ -566,7 +566,7 @@ pm.runTimeCommand(
 # // // enter full screen mode only if the zoom-in mode is not active.
 # // if(!$inZoomInMode)
 # // {
-# //    string $panelWithFocus = `get_panel -withFocus`;
+# //    string $panelWithFocus = `getPanel -withFocus`;
 # //    string $parentControl = `workspaceLayoutManager -parentWorkspaceControl $panelWithFocus`;
 # //    int $isFloatingPanel = `workspaceControl -q -floating $parentControl`;
 

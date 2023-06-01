@@ -6,7 +6,7 @@ import inspect
 
 import pymel.core as pm
 
-from mayatk import Core
+from mayatk import Misc
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -61,7 +61,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class Core_test(Main, Core):
+class Core_test(Main, Misc):
     """
     set object mode:
             pm.selectMode(object=1)
@@ -102,7 +102,7 @@ class Core_test(Main, Core):
         """ """
         self.perform_test(
             {
-                "self.replace_mem_address(self.undo())": "<function Core.undo.<locals>.wrapper at 0x00000000000>",
+                "self.replace_mem_address(self.undo())": "<function Misc.undo.<locals>.wrapper at 0x00000000000>",
             }
         )
 

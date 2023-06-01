@@ -8,7 +8,7 @@ except ImportError as error:
 from pythontk import Str, Iter
 
 # from this package:
-from mayatk import nodetk
+from mayatk import node_utils
 
 
 class Rig(object):
@@ -59,9 +59,9 @@ class Rig(object):
                 continue
 
             elif (
-                nodetk.Node.is_locator(obj)
-                and not nodetk.Node.get_type(obj)
-                and not nodetk.Node.get_children(obj)
+                node_utils.Node.is_locator(obj)
+                and not node_utils.Node.get_type(obj)
+                and not node_utils.Node.get_children(obj)
             ):
                 pm.delete(obj)
                 continue
@@ -71,10 +71,10 @@ class Rig(object):
                 obj, translate=False, rotate=False, scale=False
             )  # unlock all.
 
-            if not nodetk.Node.is_locator(obj):
+            if not node_utils.Node.is_locator(obj):
                 try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = nodetk.Node.get_parent(obj)
-                    if not nodetk.Node.is_locator(obj):
+                    obj = node_utils.Node.get_parent(obj)
+                    if not node_utils.Node.is_locator(obj):
                         errorMsg()
                         continue
                 except IndexError as error:
@@ -82,7 +82,7 @@ class Rig(object):
                     continue
 
             # unparent child object
-            children = nodetk.Node.get_children(obj)
+            children = node_utils.Node.get_children(obj)
             for child in children:
                 pm.parent(child, world=True)
 
@@ -213,7 +213,7 @@ class Rig(object):
 
         for obj in objects:
             try:
-                if nodetk.Node.is_locator(obj):
+                if node_utils.Node.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
             except IndexError as error:
                 return
@@ -359,9 +359,9 @@ class Rig(object):
         """
         getSuffix = (
             lambda o: loc_suffix
-            if nodetk.Node.is_locator(o)
+            if node_utils.Node.is_locator(o)
             else grp_suffix
-            if nodetk.Node.is_group(o)
+            if node_utils.Node.is_group(o)
             else obj_suffix
         )  # match the correct suffix to the object type.
 
@@ -505,17 +505,17 @@ if __name__ == "__main__":
 #           if not pm.objExists(obj):
 #               continue
 
-#           elif nodetk.Node.is_locator(obj) and not nodetk.Node.get_type(obj) and not nodetk.Node.get_children(obj):
+#           elif node_utils.Node.is_locator(obj) and not node_utils.Node.get_type(obj) and not node_utils.Node.get_children(obj):
 #               pm.delete(obj)
 #               continue
 
 #           #unlock attributes
 #           cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False) #unlock all.
 
-#           if not nodetk.Node.is_locator(obj):
+#           if not node_utils.Node.is_locator(obj):
 #               try: #if the 'obj' is not a locator, check if it's parent is.
-#                   obj = nodetk.Node.get_type(obj)
-#                   if not nodetk.Node.is_locator(obj):
+#                   obj = node_utils.Node.get_type(obj)
+#                   if not node_utils.Node.is_locator(obj):
 #                       errorMsg()
 #                       continue
 #               except IndexError as error:
@@ -523,11 +523,11 @@ if __name__ == "__main__":
 #                   continue
 
 #           try: #remove from group
-#               grp = nodetk.Node.get_type(obj)
+#               grp = node_utils.Node.get_type(obj)
 #           except IndexError as error:
 #               errorMsg()
 #               continue
-#           if nodetk.Node.is_group(grp):
+#           if node_utils.Node.is_group(grp):
 #               if grp.split('_')[0]==obj.split('_')[0]:
 #                   pm.ungroup(grp)
 

@@ -175,7 +175,7 @@ def MTbakeInstancer(
         return thisNode
 
     _instancer = pm.ls(instancer, type="instancer")[0]
-    if not _instancer:  # check that the node_type is 'instancer'.
+    if not _instancer:  # check that the node type is 'instancer'.
         raise Exception(
             '"{}" is type: "{}". The required node type is "instancer".'.format(
                 instancer, pm.nodeType(instancer)

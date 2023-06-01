@@ -8,7 +8,7 @@ except ImportError as error:
 from pythontk import Iter, Math, format_return
 
 # from this package:
-from mayatk import coretk, cmpttk
+from mayatk import misc_utils, cmpt_utils
 
 
 class Xform(object):
@@ -42,7 +42,7 @@ class Xform(object):
         pm.xform(source, translation=target_pos, worldSpace=1, relative=1)
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -57,7 +57,7 @@ class Xform(object):
 
         ex. drop_to_grid(obj, align='Min') #set the object onto the grid.
         """
-        # pm.coretk.Core.undoInfo(openChunk=1)
+        # pm.misc_utils.Misc.undoInfo(openChunk=1)
         for obj in pm.ls(objects, transforms=1):
             osPivot = pm.xform(
                 obj, query=1, rotatePivot=1, objectSpace=1
@@ -84,17 +84,17 @@ class Xform(object):
 
             if freeze_transforms:
                 pm.makeIdentity(obj, apply=True)
-        # pm.coretk.Core.undoInfo (closeChunk=1)
+        # pm.misc_utils.Misc.undoInfo (closeChunk=1)
 
     @classmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
         Parameters:
                 objects (str/obj/list): The object(s) to reset the translation values for.
         """
-        # pm.coretk.Core.undoInfo(openChunk=1)
+        # pm.misc_utils.Misc.undoInfo(openChunk=1)
         for obj in pm.ls(objects):
             pos = pm.objectCenter(obj)  # get the object's current position.
             cls.drop_to_grid(
@@ -104,7 +104,7 @@ class Xform(object):
             pm.xform(
                 obj, translation=pos
             )  # move the object back to it's original position.
-        # pm.coretk.Core.undoInfo(closeChunk=1)
+        # pm.misc_utils.Misc.undoInfo(closeChunk=1)
 
     @staticmethod
     def set_translation_to_pivot(node):
@@ -119,7 +119,7 @@ class Xform(object):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -128,7 +128,7 @@ class Xform(object):
                 align_to (list): The object to align with.
                 translate (bool): Move the object with it's pivot.
         """
-        # pm.coretk.Core.undoInfo(openChunk=1)
+        # pm.misc_utils.Misc.undoInfo(openChunk=1)
         pos = pm.xform(align_to, q=1, translation=True, worldSpace=True)
         center_pos = [  # Get center by averaging of all x,y,z points.
             sum(pos[0::3]) / len(pos[0::3]),
@@ -169,10 +169,10 @@ class Xform(object):
                 pm.xform(obj, translation=center_pos, worldSpace=True)
 
             pm.delete(plane)
-        # pm.coretk.Core.undoInfo(closeChunk=1)
+        # pm.misc_utils.Misc.undoInfo(closeChunk=1)
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -197,7 +197,7 @@ class Xform(object):
         pm.delete(const, target)
 
     @classmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -483,7 +483,7 @@ class Xform(object):
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = cmpttk.Cmpt.get_closest_verts(
+        closestVerts = cmpt_utils.Cmpt.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 
@@ -505,7 +505,7 @@ class Xform(object):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in coretk.Core.mfn_mesh_generator(objects):
+        for mesh in misc_utils.Misc.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -584,7 +584,7 @@ class Xform(object):
         return list(reversed(result)) if reverse else result
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 
@@ -595,7 +595,7 @@ class Xform(object):
 
         Example: align_vertices(mode=3, average=True, edgeloop=True)
         """
-        # pm.coretk.Core.undoInfo (openChunk=True)
+        # pm.misc_utils.Misc.undoInfo (openChunk=True)
         selectTypeEdge = pm.selectType(query=True, edge=True)
 
         if edgeloop:
@@ -621,8 +621,8 @@ class Xform(object):
 
         if len(selection) < 2:
             if len(selection) == 0:
-                coretk.Core.viewport_message("No vertices selected")
-            coretk.Core.viewport_message("Selection must contain at least two vertices")
+                misc_utils.Misc.viewport_message("No vertices selected")
+            misc_utils.Misc.viewport_message("Selection must contain at least two vertices")
 
         for vertex in selection:
             vertexXYZ = pm.xform(vertex, query=1, translation=1, worldSpace=1)
@@ -644,7 +644,7 @@ class Xform(object):
 
         if selectTypeEdge:
             pm.selectType(edge=True)
-        # pm.coretk.Core.undoInfo (closeChunk=True)
+        # pm.misc_utils.Misc.undoInfo (closeChunk=True)
 
 
 # --------------------------------------------------------------------------------------------

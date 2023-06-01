@@ -6,14 +6,14 @@ except ImportError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk import coretk
+from mayatk import misc_utils
 
 
 class Cam(object):
     """ """
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
@@ -104,20 +104,18 @@ class Cam(object):
         return camPath
 
     @staticmethod
-    @coretk.Core.undo
+    @misc_utils.Misc.undo
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
-        from maya.cmds import get_panel  # get_panel in pymel is broken in Maya 2022.
-
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in get_panel(all=True):
-            if get_panel(typeOf=panel) == "modelPanel":
+        for panel in misc_utils.get_panel(all=True):
+            if misc_utils.get_panel(typeOf=panel) == "modelPanel":
                 current_panel = panel
                 break
 
         if current_panel:
-            if get_panel(typeOf=current_panel) == "modelPanel":
+            if misc_utils.get_panel(typeOf=current_panel) == "modelPanel":
                 camera = pm.modelPanel(current_panel, q=1, cam=1)
                 new_camera = pm.duplicate(camera)[0]
                 pm.showHidden(new_camera)

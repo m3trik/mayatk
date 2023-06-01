@@ -12,8 +12,8 @@ from uitk import Switchboard
 from pythontk import File, Img, Str
 
 # from this package:
-from mayatk.coretk import Core
-from mayatk.nodetk import Node
+from mayatk.misc_utils import Misc
+from mayatk.node_utils import Node
 
 
 __version__ = "0.5.3"
@@ -75,7 +75,7 @@ class StingrayArnoldShader:
         if node:
             node.camera.set(state)
 
-    @Core.undo
+    @Misc.undo
     def create_network(
         self,
         textures,
@@ -518,7 +518,7 @@ class StingrayArnoldShaderUI(Switchboard):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parent = Core.get_main_window()
+    parent = Misc.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
     sb.ui.show()
 

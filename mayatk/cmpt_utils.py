@@ -5,43 +5,224 @@ try:
 except ImportError as error:
     print(__file__, error)
 
-from pythontk import Iter, Math, randomize
+from pythontk import Iter, Math
 
 # from this package:
-from mayatk import coretk
+from mayatk import misc_utils
 
 
-class _GetComponents:
+class GetComponentsMixin:
     """ """
 
-    componentTypes = [
-        # abv   singular    plural      full                        int     hex
-        ("vtx", "vertex", "vertices", "Polygon Vertex", 31, 0x0001),
-        ("e", "edge", "edges", "Polygon Edge", 32, 0x8000),
-        ("f", "face", "faces", "Polygon Face", 34, 0x0008),
-        ("uv", "texture", "texture coordinates", "Polygon UV", 35, 0x0010),
-        ("cv", "control vertex", "control vertices", "Control Vertex", 28, None),
-        ("vtxf", "vertexFace", "vertexFaces", "Polygon Vertex Face", 70, None),
-        (None, None, None, "Edit Point", 30, None),
-        (None, None, None, "Handle", 0, None),
-        (None, None, None, "Nurbs Curves On Surface", 11, None),
-        (None, None, None, "Subdivision Mesh Point", 36, None),
-        (None, None, None, "Subdivision Mesh Edge", 37, None),
-        (None, None, None, "Subdivision Mesh Face", 38, None),
-        (None, None, None, "Curve Parameter Point", 39, None),
-        (None, None, None, "Curve Knot", 40, None),
-        (None, None, None, "Surface Parameter Point", 41, None),
-        (None, None, None, "Surface Knot", 42, None),
-        (None, None, None, "Surface Range", 43, None),
-        (None, None, None, "Trim Surface Edge", 44, None),
-        (None, None, None, "Surface Isoparm", 45, None),
-        (None, None, None, "Lattice Point", 46, None),
-        (None, None, None, "Particle", 47, None),
-        (None, None, None, "Scale Pivot", 49, None),
-        (None, None, None, "Rotate Pivot", 50, None),
-        (None, None, None, "Select Handle", 51, None),
-        (None, None, None, "NURBS Surface Face", 72, None),
-        (None, None, None, "Subdivision Mesh UV", 73, None),
+    componentTypes = [  # abv, singular, plural, full, int, hex
+        (
+            "vtx",
+            "vertex",
+            "vertices",
+            "Polygon Vertex",
+            31,
+            0x0001,
+        ),
+        (
+            "e",
+            "edge",
+            "edges",
+            "Polygon Edge",
+            32,
+            0x8000,
+        ),
+        (
+            "f",
+            "face",
+            "faces",
+            "Polygon Face",
+            34,
+            0x0008,
+        ),
+        (
+            "uv",
+            "texture",
+            "texture coordinates",
+            "Polygon UV",
+            35,
+            0x0010,
+        ),
+        (
+            "cv",
+            "control vertex",
+            "control vertices",
+            "Control Vertex",
+            28,
+            None,
+        ),
+        (
+            "vtxf",
+            "vertexFace",
+            "vertexFaces",
+            "Polygon Vertex Face",
+            70,
+            None,
+        ),
+        (
+            None,
+            "edit point",
+            "edit points",
+            "Edit Point",
+            30,
+            None,
+        ),
+        (
+            None,
+            "handle",
+            "handles",
+            "Handle",
+            0,
+            None,
+        ),
+        (
+            None,
+            "nurbs surface",
+            "nurbs surfaces",
+            "Nurbs Curves On Surface",
+            11,
+            None,
+        ),
+        (
+            None,
+            "subd mesh point",
+            "subd mesh points",
+            "Subdivision Mesh Point",
+            36,
+            None,
+        ),
+        (
+            None,
+            "subd mesh edge",
+            "subd mesh edges",
+            "Subdivision Mesh Edge",
+            37,
+            None,
+        ),
+        (
+            None,
+            "subd mesh face",
+            "subd mesh faces",
+            "Subdivision Mesh Face",
+            38,
+            None,
+        ),
+        (
+            None,
+            "curve parameter point",
+            "curve parameter points",
+            "Curve Parameter Point",
+            39,
+            None,
+        ),
+        (
+            None,
+            "curve knot",
+            "curve knots",
+            "Curve Knot",
+            40,
+            None,
+        ),
+        (
+            None,
+            "surface parameter point",
+            "surface parameter points",
+            "Surface Parameter Point",
+            41,
+            None,
+        ),
+        (
+            None,
+            "surface knot",
+            "surface knots",
+            "Surface Knot",
+            42,
+            None,
+        ),
+        (
+            None,
+            "surface range",
+            "surface ranges",
+            "Surface Range",
+            43,
+            None,
+        ),
+        (
+            None,
+            "trim surface edge",
+            "trim surface edges",
+            "Trim Surface Edge",
+            44,
+            None,
+        ),
+        (
+            None,
+            "surface isoparm",
+            "surface isoparms",
+            "Surface Isoparm",
+            45,
+            None,
+        ),
+        (
+            None,
+            "lattice point",
+            "lattice points",
+            "Lattice Point",
+            46,
+            None,
+        ),
+        (
+            None,
+            "particle",
+            "particles",
+            "Particle",
+            47,
+            None,
+        ),
+        (
+            None,
+            "scale pivot",
+            "scale pivots",
+            "Scale Pivot",
+            49,
+            None,
+        ),
+        (
+            None,
+            "rotate pivot",
+            "rotate pivots",
+            "Rotate Pivot",
+            50,
+            None,
+        ),
+        (
+            None,
+            "select handle",
+            "select handles",
+            "Select Handle",
+            51,
+            None,
+        ),
+        (
+            None,
+            "nurbs surface face",
+            "nurbs surface faces",
+            "NURBS Surface Face",
+            72,
+            None,
+        ),
+        (
+            None,
+            "subd mesh UV",
+            "subd mesh UVs",
+            "Subdivision Mesh UV",
+            73,
+            None,
+        ),
     ]
 
     @classmethod
@@ -156,7 +337,7 @@ class _GetComponents:
         components = pm.polyListComponentConversion(
             components, **{d[typ.lower()]: True}
         )
-        return coretk.Core.convert_array_type(
+        return misc_utils.Misc.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
 
@@ -193,7 +374,7 @@ class _GetComponents:
         else:
             result = ["{}.{}[{}]".format(objName, component_type, c) for c in integers]
 
-        return coretk.Core.convert_array_type(
+        return misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -216,9 +397,9 @@ class _GetComponents:
         filter_components('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
         """
         typ = cls.get_component_type(components)
-        etyp = coretk.Core.get_array_type(components)
-        etyp_inc = coretk.Core.get_array_type(inc)
-        etyp_exc = coretk.Core.get_array_type(exc)
+        etyp = misc_utils.Misc.get_array_type(components)
+        etyp_inc = misc_utils.Misc.get_array_type(inc)
+        etyp_exc = misc_utils.Misc.get_array_type(exc)
 
         if etyp_inc == "int" or etyp_exc == "int":
             try:
@@ -242,7 +423,7 @@ class _GetComponents:
         components = pm.ls(components, flatten=True)
 
         filtered = Iter.filter_list(components, inc=inc, exc=exc)
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             filtered, returned_type=etyp, flatten=flatten
         )
         return result
@@ -291,13 +472,13 @@ class _GetComponents:
         if randomize:
             components = randomize(pm.ls(components, flatten=1), randomize)
 
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
         return result
 
 
-class Cmpt(_GetComponents):
+class Cmpt(GetComponentsMixin):
     """ """
 
     @classmethod
@@ -513,7 +694,7 @@ class Cmpt(_GetComponents):
         result = cls.convert_component_type(
             result, component_type
         )  # convert back to the original component type and flatten /un-flatten list.
-        result = coretk.Core.convert_array_type(
+        result = misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
         return result
@@ -535,8 +716,8 @@ class Cmpt(_GetComponents):
         """
         from operator import itemgetter
 
-        a = coretk.Core.convert_array_type(a, returned_type="str", flatten=True)
-        b = coretk.Core.convert_array_type(b, returned_type="str", flatten=True)
+        a = misc_utils.Misc.convert_array_type(a, returned_type="str", flatten=True)
+        b = misc_utils.Misc.convert_array_type(b, returned_type="str", flatten=True)
         vertPairsAndDistance = {}
         for v1 in a:
             v1Pos = pm.pointPosition(v1, world=1)
@@ -573,7 +754,7 @@ class Cmpt(_GetComponents):
         get_closest_vertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
         get_closest_vertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
         """
-        vertices = coretk.Core.convert_array_type(
+        vertices = misc_utils.Misc.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
         pm.undoInfo(openChunk=True)
@@ -611,7 +792,7 @@ class Cmpt(_GetComponents):
             v2Pos = pm.pointPosition(v2, world=True)
             distance = Math.get_distance(v1Pos, v2Pos)
 
-            v2_convertedType = coretk.Core.convert_array_type(
+            v2_convertedType = misc_utils.Misc.convert_array_type(
                 v2, returned_type=returned_type
             )[0]
             if not tolerance:
@@ -697,7 +878,7 @@ class Cmpt(_GetComponents):
         result = Iter.remove_duplicates(
             ["{}.e[{}]".format(objName, e) for e in edgesLong]
         )
-        return coretk.Core.convert_array_type(
+        return misc_utils.Misc.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -779,47 +960,121 @@ class Cmpt(_GetComponents):
 
         return result
 
-    @classmethod
-    def get_edges_by_normal_angle(
-        cls, objects, low_angle=50, high_angle=130, returned_type="str", flatten=False
-    ):
-        """Get a list of edges having normals between the given high and low angles using maya's polySelectConstraint.
+    @staticmethod
+    def get_normal(face):
+        """Get the normal of a face in world space.
 
         Parameters:
-                objects (str/list)(obj): The object(s) to get edges of.
-                low_angle (int): Normal angle low range.
-                high_angle (int): Normal angle high range.
-                returned_type (str): The desired returned object type.
-                        valid: 'str'(default), 'obj', 'int'(valid only at sub-object level)
-                flatten (bool): Flattens the returned list of objects so that each component is it's own element.
+            face (pymel.core.nodetypes.MeshFace): The face to get the normal of.
 
         Returns:
-                (list) Polygon edges.
+            om.MVector: The normal of the face in world space.
 
-        Example: get_edges_by_normal_angle('cyl', 50, 130) #returns: ['cylShape.e[0:23]']
+        Raises:
+            TypeError: If the input is not a MeshFace.
         """
-        orig_selection = pm.ls(
-            sl=1
-        )  # get currently selected objects in order to re-select them after the contraint operation.
+        import maya.OpenMaya as om
 
-        pm.select(objects)
-        pm.polySelectConstraint(
-            angle=True, anglebound=(low_angle, high_angle), mode=3, type=0x8000
-        )  # Constrain that selection to only edges of a certain Angle
-        pm.selectType(polymeshEdge=True)
+        if not isinstance(face, pm.general.MeshFace):
+            raise TypeError(f"Input must be a MeshFace, got {type(face)}.")
 
-        mask = cls.convert_alias("edges", "int")
-        objects = pm.filterExpand(selectionMask=mask, expand=flatten)
+        # Create an MSelectionList and add the face to it
+        sel_list = om.MSelectionList()
+        sel_list.add(face.name())
 
-        edges = cls.get_components(
-            objects,
-            component_type="edges",
-            returned_type=returned_type,
-            flatten=flatten,
-        )  # get selected edges with constraint active.
-        pm.polySelectConstraint(mode=0)  # Remove the selection constraint.
+        # Create an MDagPath and an MObject for the face
+        dag_path = om.MDagPath()
+        component = om.MObject()
+        sel_list.getDagPath(0, dag_path, component)
 
-        pm.select(orig_selection)  # re-select any originally selected objects.
+        # Create an MFnMesh for the mesh the face belongs to
+        mesh_fn = om.MFnMesh(dag_path)
+
+        # Get the index of the face
+        face_index = int(face.name().split("[")[-1].split("]")[0])
+
+        # Get the normal of the face
+        normal = om.MVector()
+        mesh_fn.getPolygonNormal(face_index, normal, om.MSpace.kWorld)
+
+        return normal
+
+    @classmethod
+    def get_normal_angle(cls, edge):
+        """Get the angle between the normals of the two faces connected by an edge.
+
+        Parameters:
+            edge (MeshEdge): The edge to get the normal angle of.
+
+        Returns:
+            float: The angle between the normals of the two faces connected by the edge, in degrees.
+
+        Raises:
+            TypeError: If the input edge is not a MeshEdge.
+        """
+        import math
+
+        if not isinstance(edge, pm.general.MeshEdge):
+            raise TypeError(f"Input must be a MeshEdge, got {type(edge)}.")
+
+        # Get the faces connected by the edge
+        connected_faces = list(edge.connectedFaces())
+
+        # Get the normals of the faces
+        normal1 = cls.get_normal(connected_faces[0])
+        normal2 = cls.get_normal(connected_faces[1])
+
+        # Calculate the angle between the normals
+        angle = normal1.angle(normal2)
+
+        # Convert the angle from radians to degrees
+        angle = math.degrees(angle)
+
+        return angle
+
+    @classmethod
+    def get_edges_by_normal_angle(cls, objects, low_angle=0, high_angle=180):
+        """Get a list of edges having normals between the given high and low angles.
+
+        Parameters:
+            objects (str/list)(obj): The object(s) to get edges of.
+            low_angle (int): Normal angle low range.
+            high_angle (int): Normal angle high range.
+
+        Returns:
+            list: Polygon edges that have normals within the specified angle range.
+
+        Raises:
+            TypeError: If the input objects are not Mesh or MeshEdge.
+        """
+        # Assure objects is a list
+        objects = pm.ls(objects)
+
+        edges = []
+        # Iterate over the objects
+        for obj in objects:
+            # If the object is a transform, get its shape
+            if isinstance(obj, pm.nt.Transform):
+                obj = obj.getShape()
+
+            # If the object is a mesh, get all its edges
+            if isinstance(obj, pm.nt.Mesh):
+                edges.extend(obj.edges)
+
+            # If the object is an edge, add it to the list
+            elif isinstance(obj, pm.general.MeshEdge):
+                edges.append(obj)
+
+            else:
+                raise TypeError(f"Input must be a Mesh or MeshEdge, got {type(obj)}.")
+
+        # Filter the edges based on their normal angle
+        edges = [
+            edge
+            for edge in edges
+            if low_angle <= cls.get_normal_angle(edge) <= high_angle
+        ]
+
         return edges
 
     @classmethod
@@ -843,7 +1098,7 @@ class Cmpt(_GetComponents):
         """
         try:
             lowRange, highRange = num_of_connected
-        except TypeError as error:
+        except TypeError:
             lowRange = highRange = num_of_connected
 
         typ = cls.get_component_type(components)
@@ -859,7 +1114,7 @@ class Cmpt(_GetComponents):
             if n >= lowRange and n <= highRange:
                 result.append(c)
 
-        result = coretk.Core.convert_array_type(result, returned_type=returned_type)
+        result = misc_utils.Misc.convert_array_type(result, returned_type=returned_type)
         return result
 
     @classmethod
@@ -884,7 +1139,7 @@ class Cmpt(_GetComponents):
         dagPath = selectionList.getDagPath(0)  # create empty dag path object.
         mesh = om.MFnMesh(dagPath)  # get mesh.
 
-        vtxID = coretk.Core.convert_array_type(vertex, "int")[0]
+        vtxID = misc_utils.Misc.convert_array_type(vertex, "int")[0]
         # get vertex normal and use om.MSpace.kObject for object space.
         return mesh.getVertexNormal(vtxID, angle_weighted, space=om.MSpace.kWorld)
 
@@ -971,6 +1226,6 @@ if __name__ == "__main__":
 #           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
 #           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-#       inc = coretk.Core.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = coretk.Core.convert_array_type(exc, returned_type=rtn, flatten=True)
+#       inc = misc_utils.Misc.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
+#       exc = misc_utils.Misc.convert_array_type(exc, returned_type=rtn, flatten=True)
 #       return [i for i in components if i not in exc and (inc and i in inc)]

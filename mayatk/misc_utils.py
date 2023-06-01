@@ -9,10 +9,10 @@ except ImportError as error:
 from pythontk import Iter
 
 # from this package:
-from mayatk import nodetk
+from mayatk import node_utils
 
 
-class Core:
+class Misc:
     """ """
 
     def undo(fn):
@@ -155,7 +155,7 @@ class Core:
         import maya.OpenMaya as om
 
         selectionList = om.MSelectionList()
-        for mesh in nodetk.Node.get_shape_node(pm.ls(objects)):
+        for mesh in node_utils.Node.get_shape_node(pm.ls(objects)):
             selectionList.add(mesh)
 
         for i in range(selectionList.length()):
@@ -320,9 +320,9 @@ class Core:
         Returns:
                 (str) An array of panel names.
         """
-        from maya.cmds import get_panel  # pymel get_panel is broken in ver: 2022.
+        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022.
 
-        result = get_panel(*args, **kwargs)
+        result = getPanel(*args, **kwargs)
 
         return result
 

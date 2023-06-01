@@ -28,7 +28,7 @@
   <property name="dockOptions">
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
-  <widget class="QWidget" name="main_widget">
+  <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
      <layout class="QVBoxLayout" name="verticalLayout_1">

@@ -12,8 +12,8 @@ except ModuleNotFoundError as error:
 from pythontk import get_distance
 
 # from this package:
-from mayatk.xformtk import Xform
-from mayatk.nodetk import Node
+from mayatk.xform_utils import Xform
+from mayatk.node_utils import Node
 
 
 class ExplodedView:
@@ -185,9 +185,9 @@ def launch_gui(move_to_cursor=False, frameless_window=False):
     """Launch the UI"""
     from PySide2 import QtCore, QtGui
     from uitk import Switchboard
-    from mayatk.coretk import Core
+    from mayatk.misc_utils import Misc
 
-    parent = Core.get_main_window()
+    parent = Misc.get_main_window()
     sb = Switchboard(
         parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
     )

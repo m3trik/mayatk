@@ -47,12 +47,12 @@ def run_tests(module_names):
 if __name__ == "__main__":
     run_tests(
         [
-            "coretk",
-            "nodetk",
-            "cmpttk",
-            "edittk",
-            "xformtk",
-            "rigtk",
+            "misc_utils",
+            "node_utils",
+            "cmpt_utils",
+            "edit_utils",
+            "xform_utils",
+            "rig_utils",
         ]
     )
 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
 # deprecated:
 # --------------------------------------------------------------------------------------------
 
-# from mayatk import Core; from test import core_test; importlib.reload(Core); importlib.reload(core_test); run_tests(core_test)
+# from mayatk import Misc; from test import core_test; importlib.reload(Misc); importlib.reload(core_test); run_tests(core_test)
 # from mayatk import Node; from test import node_test; importlib.reload(Node); importlib.reload(node_test); run_tests(node_test)
 # from mayatk import Cmpt; from test import cmpt_test; importlib.reload(Cmpt); importlib.reload(cmpt_test); run_tests(cmpt_test)
 # from mayatk import Edit; from test import edit_test; importlib.reload(Edit); importlib.reload(edit_test); run_tests(edit_test)
