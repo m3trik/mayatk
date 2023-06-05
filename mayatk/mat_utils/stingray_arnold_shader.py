@@ -421,7 +421,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                 absolute=True,
             )
 
-    def b000(self):
+    def b000(self, *args, **kwargs):
         """Create network."""
         if self.image_files:
             # pm.mel.HypershadeWindow() #open the hypershade window.
@@ -441,7 +441,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.callback(self.msg_completed)
             # pm.mel.hyperShadePanelGraphCommand('hyperShadePanel1', 'rearrangeGraph')
 
-    def b001(self):
+    def b001(self, *args, **kwargs):
         """Get texture maps."""
         image_files = Img.get_image_files()
 
@@ -489,7 +489,7 @@ class StingrayArnoldShaderUI(Switchboard):
         self.ui_location = "stingray_arnold_shader.ui"
         self.slots_location = StingrayArnoldShaderSlots
 
-        self.ui.uitk.widgets.draggableHeader.DraggableHeader.hide()
+        self.ui.draggableHeader.hide()
         self.ui.txt001.hide()
         self.ui.toggle_expand.clicked.connect(self.toggle_text_edit)
 
