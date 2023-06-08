@@ -36,7 +36,7 @@ def MTcreateNetwork(
     ex. mashNW = mapi.Network() #network instance
             mashNW.MTcreateNetwork(objects, geometry='Instancer', hideOnCreate=False) #create a MASH network
     """
-    loaded = int(pm.pluginInfo("MASH", query=1, l=1))
+    loaded = int(pm.pluginInfo("MASH", q=True, l=1))
     if not loaded:
         pm.loadPlugin("MASH")
 
@@ -262,7 +262,7 @@ def MTbakeInstancer(
 
                     # if the object doesn't appear on frame 0(animated creation), set the visibility when it first appears
                     pm.setKeyframe(
-                        name + ".visibility", v=0, t=pm.currentTime(query=1) - 1
+                        name + ".visibility", v=0, t=pm.currentTime(q=True) - 1
                     )
                     pm.setKeyframe(name + ".visibility", v=1)
 

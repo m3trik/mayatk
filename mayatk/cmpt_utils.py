@@ -585,12 +585,12 @@ class Cmpt(GetComponentsMixin):
 
         Example: get_islands('combined_obj') #returns: [['combined_obj.f[0]', 'combined_obj.f[5]', ..etc, ['combined_obj.f[15]', ..etc]]
         """
-        num_shells = pm.polyEvaluate(obj, shell=True)
+        # num_shells = pm.polyEvaluate(obj, shell=True)
         num_faces = pm.polyEvaluate(obj, face=True)
 
         unprocessed = set(range(num_faces))
 
-        shells = []
+        # shells = []
         while unprocessed:
             index = next(iter(unprocessed))  # face_index
             faces = pm.polySelect(
@@ -846,11 +846,11 @@ class Cmpt(GetComponentsMixin):
             return []
 
         if path == "edgeRing":
-            edgesLong = pm.polySelect(obj, query=1, edgeRing=cnums)  # (e..)
+            edgesLong = pm.polySelect(obj, q=True, edgeRing=cnums)  # (e..)
 
         elif path == "edgeRingPath":
             edgesLong = pm.polySelect(
-                obj, query=1, edgeRingPath=(cnums[0], cnums[1])
+                obj, q=True, edgeRingPath=(cnums[0], cnums[1])
             )  # (e, e)
             if not edgesLong:
                 print(
@@ -862,7 +862,7 @@ class Cmpt(GetComponentsMixin):
 
         elif path == "edgeLoopPath":
             edgesLong = pm.polySelect(
-                obj, query=1, edgeLoopPath=(cnums[0], cnums[1])
+                obj, q=True, edgeLoopPath=(cnums[0], cnums[1])
             )  # (e, e)
             if not edgesLong:
                 print(
@@ -872,7 +872,7 @@ class Cmpt(GetComponentsMixin):
                 )
                 return []
         else:  #'edgeLoop'
-            edgesLong = pm.polySelect(obj, query=1, edgeLoop=cnums)  # (e..)
+            edgesLong = pm.polySelect(obj, q=True, edgeLoop=cnums)  # (e..)
 
         objName = obj.name()
         result = Iter.remove_duplicates(
@@ -949,7 +949,7 @@ class Cmpt(GetComponentsMixin):
             if ctype == "uv"
             else "shortestEdgePath": compNums
         }
-        compLong = set(pm.polySelect(obj, query=1, **kwargs) + compNums)
+        compLong = set(pm.polySelect(obj, q=True, **kwargs) + compNums)
 
         result = cls.convert_int_to_component(
             obj, compLong, ctype, returned_type=returned_type, flatten=flatten
@@ -999,6 +999,40 @@ class Cmpt(GetComponentsMixin):
 
         return normal
 
+    @staticmethod
+    def get_normal_vector(x):
+        """Get the normal vectors of the given polygon object(s) or its components.
+
+        Parameters:
+            x (str/obj/list): A polygon mesh or its components. Accepts a string representation, a PyNode object,
+                              or a list of either, representing one or more polygon meshes or their faces.
+
+        Returns:
+            dict: A dictionary where each key-value pair corresponds to a face of the polygon object(s).
+                  The key is the face's ID, and the value is a list representing the face's normal vector in the format [x, y, z].
+
+        This function extracts the normal vectors for each face of the provided polygon object(s).
+        If components (faces) are provided directly, the function will only calculate and return the normals for those faces.
+        """
+        obj = pm.ls(x)
+        normals = pm.polyInfo(obj, faceNormals=1)
+
+        regex = "[A-Z]*_[A-Z]* *[0-9]*: "
+
+        dct = {}
+        for n in normals:
+            lst = list(
+                s.replace(regex, "") for s in n.split() if s
+            )  # ['FACE_NORMAL', '150:', '0.935741', '0.110496', '0.334931\n']
+
+            key = int(lst[1].strip(":"))  # int face number as key ie. 150
+            value = list(
+                float(i) for i in lst[-3:]
+            )  # vector list as value. ie. [[0.935741, 0.110496, 0.334931]]
+            dct[key] = value
+
+        return dct
+
     @classmethod
     def get_normal_angle(cls, edge):
         """Get the angle between the normals of the two faces connected by an edge.
@@ -1031,6 +1065,30 @@ class Cmpt(GetComponentsMixin):
         angle = math.degrees(angle)
 
         return angle
+
+    @classmethod
+    def average_normals(cls, objects, by_uv_shell=False):
+        """Average the normals of the given objects.
+
+        Parameters:
+            objects (str/obj/list): The objects to operate on.
+            by_uv_shell (bool): Average each UV shell individually.
+        """
+        pm.undoInfo(openChunk=1)
+        for obj in objects:
+            if by_uv_shell:
+                obj = pm.ls(obj, transforms=1)
+                sets = cls.get_uv_shell_sets(obj)
+                for s in sets:
+                    pm.polySetToFaceNormal(s)
+                    pm.polyAverageNormal(s)
+            else:
+                sel = pm.ls(obj, sl=1)
+                if not sel:
+                    sel = obj
+                pm.polySetToFaceNormal(sel)
+                pm.polyAverageNormal(sel)
+        pm.undoInfo(closeChunk=1)
 
     @classmethod
     def get_edges_by_normal_angle(cls, objects, low_angle=0, high_angle=180):
@@ -1076,6 +1134,105 @@ class Cmpt(GetComponentsMixin):
         ]
 
         return edges
+
+    @classmethod
+    def get_faces_with_similar_normals(
+        cls,
+        faces,
+        transforms=[],
+        similar_faces=[],
+        range_x=0.1,
+        range_y=0.1,
+        range_z=0.1,
+        returned_type="str",
+    ):
+        """Filter for faces with normals that fall within an X,Y,Z tolerance.
+
+        Parameters:
+                faces (list): ['polygon faces'] - faces to find similar normals for.
+                similar_faces (list): optional ability to add faces from previous calls to the return value.
+                transforms (list): [<shape nodes>] - objects to check faces on. If none are given the objects containing the given faces will be used.
+                range_x = float - x axis tolerance
+                range_y = float - y axis tolerance
+                range_z = float - z axis tolerance
+                returned_type (str): The desired returned object type.
+                                                valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
+        Returns:
+                (list) faces that fall within the given normal range.
+
+        ex. get_faces_with_similar_normals(selectedFaces, range_x=0.5, range_y=0.5, range_z=0.5)
+        """
+        # Work on a copy of the argument so that removal of elements doesn't effect the passed in list.
+        faces = pm.ls(faces, flatten=1)
+        for face in faces:
+            normals = cls.get_normal_vector(face)
+
+            for k, v in normals.items():
+                sX, sY, sZ = v
+
+                if not transforms:
+                    transforms = pm.ls(face, objectsOnly=True)
+
+                for node in transforms:
+                    for f in cls.get_components(
+                        node, "faces", returned_type=returned_type, flatten=1
+                    ):
+                        n = cls.get_normal_vector(f)
+                        for k, v in n.items():
+                            nX, nY, nZ = v
+
+                            if (
+                                sX <= nX + range_x
+                                and sX >= nX - range_x
+                                and sY <= nY + range_y
+                                and sY >= nY - range_y
+                                and sZ <= nZ + range_z
+                                and sZ >= nZ - range_z
+                            ):
+                                similar_faces.append(f)
+                                if (
+                                    f in faces
+                                ):  # If the face is in the loop que, remove it, as has already been evaluated.
+                                    faces.remove(f)
+
+        return similar_faces
+
+    @staticmethod
+    def transfer_normals(source, target):
+        """Transfer normal information from one object to another.
+
+        Parameters:
+            source (str/obj/list): The transform node to copy normals from.
+            target (str/obj/list): The transform node(s) to copy normals to.
+        """
+        pm.undoInfo(openChunk=1)
+        s, *other = pm.ls(source)
+        # store source transforms
+        sourcePos = pm.xform(s, q=1, t=1, ws=1)
+        sourceRot = pm.xform(s, q=1, ro=1, ws=1)
+        sourceScale = pm.xform(s, q=1, s=1, ws=1)
+
+        for t in pm.ls(target):
+            # store target transforms
+            targetPos = pm.xform(t, q=1, t=1, ws=1)
+            targetRot = pm.xform(t, q=1, ro=1, ws=1)
+            targetScale = pm.xform(t, q=1, s=1, ws=1)
+
+            # move target to source position
+            pm.xform(t, t=sourcePos, ws=1)
+            pm.xform(t, ro=sourceRot, ws=1)
+            pm.xform(t, s=sourceScale, ws=1)
+
+            # copy normals
+            pm.polyNormalPerVertex(t, ufn=0)
+            pm.transferAttributes(s, t, pos=0, nml=1, uvs=0, col=0, spa=0, sm=3, clb=1)
+            pm.delete(t, ch=1)
+
+            # restore t position
+            pm.xform(t, t=targetPos, ws=1)
+            pm.xform(t, ro=targetRot, ws=1)
+            pm.xform(t, s=targetScale, ws=1)
+        pm.undoInfo(closeChunk=1)
 
     @classmethod
     def filter_components_by_connection_count(
@@ -1165,6 +1322,222 @@ class Cmpt(GetComponentsMixin):
         )  # averaging of all x,y,z points.
 
         return normal_vector
+
+    @staticmethod
+    def orient_shells(objects):
+        """Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
+
+        Parameters:
+            objects (str/obj/list): Polygon mesh objects and/or components.
+        """
+        for obj in pm.ls(objects, objectsOnly=1):
+            # filter components for only this object.
+            obj_compts = [i for i in objects if obj in pm.ls(i, objectsOnly=1)]
+            pm.polyLayoutUV(
+                obj_compts,
+                flipReversed=0,
+                layout=0,
+                layoutMethod=1,
+                percentageSpace=0.2,
+                rotateForBestFit=3,
+                scale=0,
+                separate=0,
+            )
+
+    @classmethod
+    def move_to_uv_space(cls, objects, u, v, relative=True):
+        """Move objects to the given u and v coordinates.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to move.
+            u (int): u coordinate.
+            v (int): v coordinate.
+            relative (bool): Move relative or absolute.
+        """
+        # Convert the objects to UVs
+        uvs = pm.polyListComponentConversion(objects, fromFace=True, toUV=True)
+        uvs = pm.ls(uvs, flatten=True)
+
+        # Move the UVs to the given u and v coordinates
+        pm.polyEditUV(uvs, u=u, v=v, relative=relative)
+
+    @classmethod
+    def get_uv_shell_sets(cls, objects=None, returned_type="shells"):
+        """Get All UV shells and their corresponding sets of faces.
+
+        Parameters:
+            objects (obj/list): Polygon object(s) or Polygon face(s).
+            returned_type (str): The desired returned type. valid values are: 'shells', 'IDs'. If None is given, the full dict will be returned.
+
+        Returns:
+            (list)(dict) dependant on the given returned_type arg. ex. {0L:[[MeshFace(u'pShape.f[0]'), MeshFace(u'pShape.f[1]')], 1L:[[MeshFace(u'pShape.f[2]'), MeshFace(u'pShape.f[3]')]}
+        """
+        faces = cls.get_components(objects, "faces", flatten=1)
+
+        shells = {}
+        for face in faces:
+            shell_Id = pm.polyEvaluate(face, uvShellIds=True)
+
+            try:
+                shells[shell_Id[0]].append(face)
+            except KeyError:
+                try:
+                    shells[shell_Id[0]] = [face]
+                except IndexError:
+                    pass
+
+        if returned_type == "shells":
+            shells = list(shells.values())
+        elif returned_type == "IDs":
+            shells = shells.keys()
+
+        return shells
+
+    @staticmethod
+    def get_uv_shell_border_edges(objects):
+        """Get the edges that make up any UV islands of the given objects.
+
+        Parameters:
+            objects (str/obj/list): Polygon objects, mesh UVs, or Edges.
+
+        Returns:
+            (list): UV border edges.
+        """
+        uv_border_edges = []
+        for obj in pm.ls(objects):
+            # If the obj is a mesh object, get its shape
+            if isinstance(obj, pm.nt.Transform):
+                obj = obj.getShape()
+
+            # If the obj is a mesh shape, get its UV borders
+            if isinstance(obj, pm.nt.Mesh):
+                # Get the connected edges to the selected UVs
+                connected_edges = pm.polyListComponentConversion(
+                    obj, fromUV=True, toEdge=True
+                )
+                connected_edges = pm.ls(connected_edges, flatten=True)
+            elif isinstance(obj, pm.general.MeshEdge):
+                # If the object is already an edge, no conversion is necessary
+                connected_edges = pm.ls(obj, flatten=True)
+            elif isinstance(obj, pm.general.MeshUV):
+                # If the object is a UV, convert it to its connected edges
+                connected_edges = pm.polyListComponentConversion(
+                    obj, fromUV=True, toEdge=True
+                )
+                connected_edges = pm.ls(connected_edges, flatten=True)
+            else:
+                raise ValueError(f"Unsupported object type: {type(obj)}")
+
+            for edge in connected_edges:
+                edge_uvs = pm.ls(
+                    pm.polyListComponentConversion(edge, tuv=True), fl=True
+                )
+                edge_faces = pm.ls(
+                    pm.polyListComponentConversion(edge, tf=True), fl=True
+                )
+                if (
+                    len(edge_uvs) > 2 or len(edge_faces) < 2
+                ):  # If an edge has more than two uvs or less than 2 faces, it's a uv border edge.
+                    uv_border_edges.append(edge)
+
+        return uv_border_edges
+
+    @staticmethod
+    def transfer_uvs(source, target):
+        import maya.api.OpenMaya as om2
+
+        # Create a MSelectionList
+        sList = om2.MSelectionList()
+
+        # Add objects to the list (accepts both PyNodes and strings)
+        if isinstance(source, str):
+            sList.add(source)
+        else:
+            sList.add(source.name())
+        if isinstance(target, str):
+            sList.add(target)
+        else:
+            sList.add(target.name())
+
+        # Get MObjects of source and target
+        source_obj = sList.getDagPath(0).extendToShape()  # extend to shape node
+        target_obj = sList.getDagPath(1).extendToShape()  # extend to shape node
+
+        # Get the function set for source and target
+        sFnMesh = om2.MFnMesh(source_obj)
+        tFnMesh = om2.MFnMesh(target_obj)
+
+        # Get uv count for source
+        uArray, vArray = sFnMesh.getUVs()
+
+        # Clear target UVs and set them with source UVs
+        tFnMesh.clearUVs()
+        tFnMesh.setUVs(uArray, vArray)
+
+        # Get the number of polygons in source mesh
+        poly_count = sFnMesh.numPolygons
+
+        # Assign UVs to faces
+        for i in range(poly_count):
+            count = sFnMesh.polygonVertexCount(i)
+            for j in range(count):
+                uv_id = sFnMesh.getPolygonUVid(i, j)
+                tFnMesh.assignUV(i, j, uv_id)
+
+    # @staticmethod
+    # def transfer_uvs(source, target):
+    #     # Get source and target PyNodes
+    #     source_node = pm.PyNode(source)
+    #     target_node = pm.PyNode(target)
+
+    #     # Store target transforms
+    #     target_pos = pm.xform(target_node, q=True, t=True, ws=True)
+    #     target_rot = pm.xform(target_node, q=True, ro=True, ws=True)
+    #     target_scale = pm.xform(target_node, q=True, s=True, ws=True)
+
+    #     # Move target to source position
+    #     pm.xform(target_node, t=pm.xform(source_node, q=True, t=True, ws=True), ws=True)
+    #     pm.xform(
+    #         target_node, ro=pm.xform(source_node, q=True, ro=True, ws=True), ws=True
+    #     )
+    #     pm.xform(target_node, s=pm.xform(source_node, q=True, s=True, ws=True), ws=True)
+
+    #     # Debug statements
+    #     print(
+    #         "Source UVs before transfer:",
+    #         pm.polyListComponentConversion(source_node.f, fromFace=True, toUV=True),
+    #     )
+    #     print(
+    #         "Target UVs before transfer:",
+    #         pm.polyListComponentConversion(target_node.f, fromFace=True, toUV=True),
+    #     )
+
+    #     # Transfer UVs
+    #     pm.transferAttributes(
+    #         source_node,
+    #         target_node,
+    #         transferPositions=0,
+    #         transferNormals=0,
+    #         transferUVs=2,
+    #     )
+
+    #     # Debug statements
+    #     print(
+    #         "Source UVs after transfer:",
+    #         pm.polyListComponentConversion(source_node.f, fromFace=True, toUV=True),
+    #     )
+    #     print(
+    #         "Target UVs after transfer:",
+    #         pm.polyListComponentConversion(target_node.f, fromFace=True, toUV=True),
+    #     )
+
+    #     # Delete history on target
+    #     pm.delete(target_node, ch=True)
+
+    #     # Restore target position
+    #     pm.xform(target_node, t=target_pos, ws=True)
+    #     pm.xform(target_node, ro=target_rot, ws=True)
+    #     pm.xform(target_node, s=target_scale, ws=True)
 
 
 # --------------------------------------------------------------------------------------------

@@ -221,7 +221,7 @@ class Rig(object):
             for attrs, state in attrs_and_state.items():
                 if state is None:
                     continue
-                for a in Iter.make_list(attrs):
+                for a in Iter.make_iterable(attrs):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod

@@ -60,10 +60,10 @@ class Xform(object):
         # pm.misc_utils.Misc.undoInfo(openChunk=1)
         for obj in pm.ls(objects, transforms=1):
             osPivot = pm.xform(
-                obj, query=1, rotatePivot=1, objectSpace=1
+                obj, q=True, rotatePivot=1, objectSpace=1
             )  # save the object space obj pivot.
             wsPivot = pm.xform(
-                obj, query=1, rotatePivot=1, worldSpace=1
+                obj, q=True, rotatePivot=1, worldSpace=1
             )  # save the world space obj pivot.
 
             pm.xform(obj, centerPivots=1)  # center pivot
@@ -189,7 +189,7 @@ class Xform(object):
 
         pm.xform(target, translation=target_pos, absolute=True)
 
-        for obj in Iter.make_list(objects):
+        for obj in Iter.make_iterable(objects):
             const = pm.aimConstraint(
                 target, obj, aim=aim_vect, worldUpVector=up_vect, worldUpType="vector"
             )
@@ -603,15 +603,15 @@ class Xform(object):
 
         pm.mel.PolySelectConvert(3)  # convert to vertices
 
-        selection = pm.ls(selection=1, flatten=1)
-        lastSelected = pm.ls(tail=1, selection=1, flatten=1)
-        align_to = pm.xform(lastSelected, query=1, translation=1, worldSpace=1)
+        selection = pm.ls(sl=True, flatten=1)
+        lastSelected = pm.ls(tail=1, sl=True, flatten=1)
+        align_to = pm.xform(lastSelected, q=True, translation=1, worldSpace=1)
         alignX = align_to[0]
         alignY = align_to[1]
         alignZ = align_to[2]
 
         if average:
-            xyz = pm.xform(selection, query=1, translation=1, worldSpace=1)
+            xyz = pm.xform(selection, q=True, translation=1, worldSpace=1)
             x = xyz[0::3]
             y = xyz[1::3]
             z = xyz[2::3]
@@ -625,7 +625,7 @@ class Xform(object):
             misc_utils.Misc.viewport_message("Selection must contain at least two vertices")
 
         for vertex in selection:
-            vertexXYZ = pm.xform(vertex, query=1, translation=1, worldSpace=1)
+            vertexXYZ = pm.xform(vertex, q=True, translation=1, worldSpace=1)
             vertX = vertexXYZ[0]
             vertY = vertexXYZ[1]
             vertZ = vertexXYZ[2]
@@ -793,9 +793,9 @@ if __name__ == "__main__":
 #           (tuple) coordinate as xyz float values.
 #       '''
 #       if ".vtx" in str(component):
-#           x = pm.polyNormalPerVertex(component, query=1, x=1)
-#           y = pm.polyNormalPerVertex(component, query=1, y=1)
-#           z = pm.polyNormalPerVertex(component, query=1, z=1)
+#           x = pm.polyNormalPerVertex(component, q=True, x=1)
+#           y = pm.polyNormalPerVertex(component, q=True, y=1)
+#           z = pm.polyNormalPerVertex(component, q=True, z=1)
 #           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
 
 #       elif ".e" in str(component):
@@ -805,11 +805,11 @@ if __name__ == "__main__":
 #           vertices = [componentName+".vtx["+vertices[2]+"]",componentName+".vtx["+vertices[3]+"]"]
 #           x=[];y=[];z=[]
 #           for vertex in vertices:
-#               x_ = pm.polyNormalPerVertex (vertex, query=1, x=1)
+#               x_ = pm.polyNormalPerVertex (vertex, q=True, x=1)
 #               x.append(sum(x_) / float(len(x_)))
-#               y_ = pm.polyNormalPerVertex (vertex, query=1, y=1)
+#               y_ = pm.polyNormalPerVertex (vertex, q=True, y=1)
 #               x.append(sum(y_) / float(len(y_)))
-#               z_ = pm.polyNormalPerVertex (vertex, query=1, z=1)
+#               z_ = pm.polyNormalPerVertex (vertex, q=True, z=1)
 #               x.append(sum(z_) / float(len(z_)))
 #           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
 
@@ -825,7 +825,7 @@ if __name__ == "__main__":
 #           constraint = pm.normalConstraint(component, object_,aimVector=normal,upVector=[0,1,0],worldUpVector=[0,1,0],worldUpType="vector") # "scene","object","objectrotation","vector","none"
 #           pm.delete(constraint) #orient object_ then remove constraint.
 
-#       vertexPoint = pm.xform (component, query=1, translation=1) #average vertex points on destination to get component center.
+#       vertexPoint = pm.xform (component, q=True, translation=1) #average vertex points on destination to get component center.
 #       x = vertexPoint[0::3]
 #       y = vertexPoint[1::3]
 #       z = vertexPoint[2::3]

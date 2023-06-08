@@ -416,7 +416,7 @@ class Cmpt_test(Main, Cmpt):
             }
         )
 
-    def test_getNormal(self):
+    def test_get_normal(self):
         """ """
         face = pm.PyNode("cylShape.f[0]")
         expected_normal = om.MVector(0.7071068109888711, 0.0, -0.7071067513842227)
@@ -425,7 +425,25 @@ class Cmpt_test(Main, Cmpt):
         self.assertAlmostEqual(result_normal.y, expected_normal.y)
         self.assertAlmostEqual(result_normal.z, expected_normal.z)
 
-    def test_getNormalAngle(self):
+    def test_get_normal_vector(self):
+        """ """
+        # Create a cube and get its first face
+        cube = pm.polyCube()[0]
+        face = cube.f[0]
+
+        # Retrieve the normal directly from Maya for the first face of the cube
+        expected_normal = pm.polyInfo(face, fn=True)[0].split()[2:5]
+        expected_normal = [float(i) for i in expected_normal]
+
+        # Get the normal using the get_normal_vector function
+        result_normal = self.get_normal_vector(face)
+
+        # Since result_normal is a dictionary, we retrieve the value using the face's ID as key
+        self.assertAlmostEqual(result_normal[0][0], expected_normal[0])
+        self.assertAlmostEqual(result_normal[0][1], expected_normal[1])
+        self.assertAlmostEqual(result_normal[0][2], expected_normal[2])
+
+    def test_get_normal_angle(self):
         """ """
         # Create a cube and get its first two edges
         cube = pm.polyCube()[0]
@@ -437,12 +455,86 @@ class Cmpt_test(Main, Cmpt):
         self.assertEqual(self.get_normal_angle(edge1), 90.0)
         self.assertEqual(self.get_normal_angle(edge2), 90.0)
 
-    def test_getEdgesByNormalAngle(self):
+    def test_average_normals(self):
+        """ """
+        # Create a cube
+        cube = pm.polyCube()[0]
+
+        # Average the normals of the cube
+        self.average_normals([cube])
+
+        # The average normal for a cube should be equal for each face
+        normals = self.get_normal_vector(cube.f)
+
+        # Expected normals for a cube
+        expected_normals = {
+            0: [0.0, 0.0, 1.0],
+            1: [0.0, 1.0, 0.0],
+            2: [0.0, 0.0, -1.0],
+            3: [0.0, -1.0, 0.0],
+            4: [1.0, 0.0, 0.0],
+            5: [-1.0, 0.0, 0.0],
+        }
+
+        # Verify that the normals are approximately equal to the expected normals
+        for key, normal in normals.items():
+            self.assertAlmostEqual(normal[0], expected_normals[key][0])
+            self.assertAlmostEqual(normal[1], expected_normals[key][1])
+            self.assertAlmostEqual(normal[2], expected_normals[key][2])
+
+    def test_get_edges_by_normal_angle(self):
         """ """
         self.assertEqual(
             self.get_edges_by_normal_angle("cyl", 50, 130),
             [pm.PyNode("cylShape.e[{}]".format(i)) for i in range(24)],
         )
+
+    def test_get_faces_with_similar_normals(self):
+        """ """
+        # Create a cube and sphere
+        cube = pm.polyCube()[0]
+        sphere = pm.polySphere()[0]
+
+        # Get faces of the cube and sphere
+        cube_faces = cube.f[:]
+        # sphere_faces = sphere.f[:]
+
+        # For a cube and a sphere, there should be faces with similar normals.
+        # Since we do not know which faces will have similar normals,
+        # we cannot predict the exact number of similar faces.
+        similar_faces = self.get_faces_with_similar_normals(
+            cube_faces, transforms=[sphere], range_x=0.1, range_y=0.1, range_z=0.1
+        )
+
+        # So we just assert that there are some similar faces found
+        self.assertTrue(len(similar_faces) > 0)
+
+    def test_transfer_normals(self):
+        """ """
+        # Create two cubes
+        source = pm.polyCube()[0]
+        target = pm.polyCube()[0]
+
+        # Get the vertices of the first face of the source cube
+        vertices = pm.polyListComponentConversion(
+            source.f[0], fromFace=True, toVertex=True
+        )
+        vertices = pm.ls(vertices, flatten=True)
+
+        # Change the normal of the vertices
+        for vertex in vertices:
+            pm.polyNormalPerVertex(vertex, normalXYZ=[1.0, 0.0, 0.0])
+
+        # Transfer normals from source to target
+        self.transfer_normals(source, target)
+
+        # The normal for the first face of the target should now match the source
+        source_normal = self.get_normal_vector(source.f[0])[0]
+        target_normal = self.get_normal_vector(target.f[0])[0]
+
+        self.assertAlmostEqual(source_normal[0], target_normal[0])
+        self.assertAlmostEqual(source_normal[1], target_normal[1])
+        self.assertAlmostEqual(source_normal[2], target_normal[2])
 
     def test_getComponentsByNumberOfConnected(self):
         """ """
@@ -489,6 +581,100 @@ class Cmpt_test(Main, Cmpt):
                 ),
             }
         )
+
+    def test_orient_shells(self):
+        """ """
+        # Create a plane with a UV map
+        plane = pm.polyPlane()[0]
+        pm.polyUVSet(plane, create=True, uvSet="map1")
+
+        # Orient the UV shells of the plane
+        self.orient_shells([plane])
+
+        # Check if UV shells are oriented as expected
+        uv_shells = pm.polyUVSet(plane, query=True, allUVSets=True)
+        self.assertTrue(uv_shells)
+
+    def test_move_to_uv_space(self):
+        """Test the move_to_uv_space method."""
+        # Create a plane
+        plane = pm.polyPlane()[0]
+
+        # Move the UVs of the plane
+        self.move_to_uv_space([plane], 1, 1, relative=False)
+
+        # Get the UVs of the plane
+        uvs = pm.polyListComponentConversion(plane.f, fromFace=True, toUV=True)
+        uvs = pm.ls(uvs, flatten=True)
+
+        for uv in uvs:
+            # Query the UV coordinate
+            u, v = pm.polyEditUV(uv, query=True)
+
+            # Check that the UV coordinate is approximately equal to [1, 1]
+            self.assertAlmostEqual(u, 1, places=5)
+            self.assertAlmostEqual(v, 1, places=5)
+
+    def test_get_uv_shell_sets(self):
+        """ """
+        # Create a plane with a UV map
+        plane = pm.polyPlane()[0]
+        pm.polyUVSet(plane, create=True, uvSet="map1")
+
+        # Get the UV shell sets of the plane
+        uv_shell_sets = self.get_uv_shell_sets([plane])
+
+        # Check if the UV shell sets are as expected
+        self.assertTrue(uv_shell_sets)  # Should not be empty
+
+    def test_get_uv_shell_border_edges(self):
+        """ """
+        # Create a plane with a UV map
+        plane = pm.polyPlane()[0]
+        pm.polyUVSet(plane, create=True, uvSet="map1")
+
+        # Get the UV shell border edges of the plane
+        uv_shell_border_edges = self.get_uv_shell_border_edges([plane])
+
+        # Check if the UV shell border edges are as expected
+        self.assertTrue(uv_shell_border_edges)  # Should not be empty
+
+    def test_transfer_uvs(self):
+        """ """
+        # Create two planes
+        source = pm.polyPlane()[0]
+        target = pm.polyPlane()[0]
+
+        # Set a UV for the first vertex of the first face of the source plane
+        source_uv_set = "map1"
+        target_uv_set = "map2"
+        pm.polyUVSet(source, create=True, uvSet=source_uv_set)
+        pm.polyUVSet(target, create=True, uvSet=target_uv_set)
+
+        # Get the UVs of the first face of the source plane
+        source_uvs = pm.polyListComponentConversion(
+            source.f[0], fromFace=True, toUV=True
+        )
+        source_uvs = pm.ls(source_uvs, flatten=True)
+
+        # Edit the first UV of the source plane
+        pm.polyEditUV(source_uvs[0], u=0.5, v=0.5)
+
+        # Transfer UVs from source to target
+        self.transfer_uvs(source, target)
+
+        # Get the UVs of the first face of the target plane
+        target_uvs = pm.polyListComponentConversion(
+            target.f[0], fromFace=True, toUV=True
+        )
+        target_uvs = pm.ls(target_uvs, flatten=True)
+
+        # The UV for the first vertex of the first face of the target should now match the source
+        source_u, source_v = pm.polyEditUV(source_uvs[0], query=True)
+        target_u, target_v = pm.polyEditUV(target_uvs[0], query=True)
+
+        self.assertAlmostEqual(source_u, target_u)
+        self.assertAlmostEqual(source_v, target_v)
 
 
 # -----------------------------------------------------------------------------

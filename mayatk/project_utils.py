@@ -145,7 +145,7 @@ class Project:
         import glob
         import itertools
 
-        autosave_dirs = [str(pm.workspace(query=1, rd=1)) + "autosave"]
+        autosave_dirs = [str(pm.workspace(q=True, rd=1)) + "autosave"]
         env_autosave_dir = os.environ.get("MAYA_AUTOSAVE_FOLDER")
         if env_autosave_dir is not None:
             autosave_dirs += env_autosave_dir.split(";")
@@ -193,7 +193,7 @@ class Project:
         Returns:
             (list)
         """
-        workspace_dir = str(pm.workspace(query=1, rd=1))  # get current project path.
+        workspace_dir = str(pm.workspace(q=True, rd=1))  # get current project path.
 
         files = File.get_dir_contents(
             workspace_dir, "filepaths", inc_files=("*.mb", "*.ma")
@@ -256,7 +256,7 @@ if __name__ == "__main__":
 #     Returns:
 #         (list)
 #     """
-# dir1 = str(pm.workspace(query=1, rd=1)) + "autosave"  # current project path.
+# dir1 = str(pm.workspace(q=True, rd=1)) + "autosave"  # current project path.
 # # get autosave dir path from env variable.
 # dir2 = os.environ.get("MAYA_AUTOSAVE_FOLDER")
 # if dir2 is not None:  # Check if the environment variable exists

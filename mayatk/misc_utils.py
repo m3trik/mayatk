@@ -181,7 +181,7 @@ class Misc:
         get_array_type('cylShape.vtx[:]') #returns: 'str'
         """
         try:
-            o = Iter.make_list(lst)[0]
+            o = Iter.make_iterable(lst)[0]
         except IndexError as error:
             # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
@@ -338,7 +338,7 @@ class Misc:
         example use-case:
         main_progress_bar (len(edges), progressCount)
                 pm.progressBar ("progressBar_", edit=1, step=1)
-                if pm.progressBar ("progressBar_", query=1, isCancelled=1):
+                if pm.progressBar ("progressBar_", q=True, isCancelled=1):
                         break
         pm.progressBar ("progressBar_", edit=1, endProgress=1)
 

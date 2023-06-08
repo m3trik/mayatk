@@ -73,7 +73,7 @@ class Cam(object):
         """Toggle display of the film gate for the current camera."""
         camera = cls.get_current_cam()
 
-        state = pm.camera(camera, query=1, displayResolution=1)
+        state = pm.camera(camera, q=True, displayResolution=1)
         if state:
             pm.camera(
                 camera,
@@ -168,9 +168,9 @@ if __name__ == "__main__":
 #           (tuple) coordinate as xyz float values.
 #       '''
 #       if ".vtx" in str(component):
-#           x = pm.polyNormalPerVertex(component, query=1, x=1)
-#           y = pm.polyNormalPerVertex(component, query=1, y=1)
-#           z = pm.polyNormalPerVertex(component, query=1, z=1)
+#           x = pm.polyNormalPerVertex(component, q=True, x=1)
+#           y = pm.polyNormalPerVertex(component, q=True, y=1)
+#           z = pm.polyNormalPerVertex(component, q=True, z=1)
 #           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
 
 #       elif ".e" in str(component):
@@ -180,11 +180,11 @@ if __name__ == "__main__":
 #           vertices = [componentName+".vtx["+vertices[2]+"]",componentName+".vtx["+vertices[3]+"]"]
 #           x=[];y=[];z=[]
 #           for vertex in vertices:
-#               x_ = pm.polyNormalPerVertex (vertex, query=1, x=1)
+#               x_ = pm.polyNormalPerVertex (vertex, q=True, x=1)
 #               x.append(sum(x_) / float(len(x_)))
-#               y_ = pm.polyNormalPerVertex (vertex, query=1, y=1)
+#               y_ = pm.polyNormalPerVertex (vertex, q=True, y=1)
 #               x.append(sum(y_) / float(len(y_)))
-#               z_ = pm.polyNormalPerVertex (vertex, query=1, z=1)
+#               z_ = pm.polyNormalPerVertex (vertex, q=True, z=1)
 #               x.append(sum(z_) / float(len(z_)))
 #           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
 #           constraint = pm.normalConstraint(component, object_,aimVector=normal,upVector=[0,1,0],worldUpVector=[0,1,0],worldUpType="vector") # "scene","object","objectrotation","vector","none"
 #           pm.delete(constraint) #orient object_ then remove constraint.
 
-#       vertexPoint = pm.xform (component, query=1, translation=1) #average vertex points on destination to get component center.
+#       vertexPoint = pm.xform (component, q=True, translation=1) #average vertex points on destination to get component center.
 #       x = vertexPoint[0::3]
 #       y = vertexPoint[1::3]
 #       z = vertexPoint[2::3]
