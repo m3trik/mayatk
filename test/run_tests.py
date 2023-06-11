@@ -53,6 +53,7 @@ if __name__ == "__main__":
             "edit_utils",
             "xform_utils",
             "rig_utils",
+            "mat_utils",
         ]
     )
 

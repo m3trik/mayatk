@@ -4,7 +4,6 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-
 from pythontk import Iter, format_return
 
 # from this package:
@@ -97,7 +96,7 @@ class Node:
                         ),
                     )
                 )
-            except AttributeError as error:
+            except AttributeError:
                 q = False
             result.append(q)
 
@@ -131,12 +130,11 @@ class Node:
         """List the parents of an object."""
         if all:
             objects = pm.ls(node, l=1)
-            tokens = []
             return objects[0].split("|")
 
         try:
             return pm.listRelatives(node, parent=True, type="transform")[0]
-        except IndexError as error:
+        except IndexError:
             return None
 
     @staticmethod
@@ -144,7 +142,7 @@ class Node:
         """List the children of an object."""
         try:
             return pm.listRelatives(node, children=True, type="transform")
-        except IndexError as error:
+        except IndexError:
             return []
 
     @staticmethod
@@ -211,7 +209,7 @@ class Node:
                         transforms = pm.listRelatives(
                             pm.listHistory(node, future=1), parent=1
                         )
-                    except Exception as error:
+                    except Exception:
                         transforms = []
             for n in transforms:
                 result.append(n)
@@ -256,7 +254,7 @@ class Node:
                             pm.listHistory(node, future=1), parent=1
                         )
                         shapes = cls.get_shape_node(transforms)
-                    except Exception as error:
+                    except Exception:
                         shapes = []
             for n in shapes:
                 result.append(n)
@@ -295,7 +293,7 @@ class Node:
                 history = pm.listConnections(shapes, source=1, destination=0)[
                     -1
                 ]  # get incoming connections: returns list ie. [nt.PolyCone('polyCone1')]
-            except IndexError as error:
+            except IndexError:
                 try:
                     history = node.history()[-1]
                 except AttributeError as error:
@@ -515,7 +513,7 @@ class Node:
                 return "compound"
         # Add more cases for other data types if necessary
         elif isinstance(
-            value, Matrix
+            value, pm.Matrix
         ):  # Replace Matrix with the correct class for a matrix in your environment
             if value.type == "float":
                 return "fltMatrix"
