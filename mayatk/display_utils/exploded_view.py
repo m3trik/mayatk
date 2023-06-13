@@ -164,19 +164,19 @@ class ExplodedView:
 
 
 class ExplodedViewSlots(ExplodedView):
-    def b000(self, *args, **kwargs):
+    def b000(self):
         """Explode button"""
         self.explode_selected()
 
-    def b001(self, *args, **kwargs):
+    def b001(self):
         """Un-explode selected button"""
         self.un_explode_selected()
 
-    def b002(self, *args, **kwargs):
+    def b002(self):
         """Un-explode all button"""
         self.un_explode_all()
 
-    def b003(self, *args, **kwargs):
+    def b003(self):
         """Toggle Exlode"""
         self.toggle_explode()
 

@@ -421,7 +421,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                 absolute=True,
             )
 
-    def b000(self, *args, **kwargs):
+    def b000(self):
         """Create network."""
         if self.image_files:
             # pm.mel.HypershadeWindow() #open the hypershade window.
@@ -441,7 +441,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.callback(self.msg_completed)
             # pm.mel.hyperShadePanelGraphCommand('hyperShadePanel1', 'rearrangeGraph')
 
-    def b001(self, *args, **kwargs):
+    def b001(self):
         """Get texture maps."""
         image_files = Img.get_image_files()
 
