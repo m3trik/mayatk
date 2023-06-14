@@ -489,6 +489,23 @@ class Cmpt_test(Main, Cmpt):
             [pm.PyNode("cylShape.e[{}]".format(i)) for i in range(24)],
         )
 
+    def test_set_edge_hardness(self):
+        """Test the set_edge_hardness method"""
+        # Create a cube
+        cube = pm.polyCube()[0]
+
+        # Apply different hardness to different edges of the cube
+        self.set_edge_hardness([cube], 45, upper_hardness=60, lower_hardness=20)
+
+        # The first edge of the cube should have a hardness of 60 (upper hardness)
+        self.assertEqual(pm.polySoftEdge(cube.e[0], q=True, a=True), 60.0)
+
+        # If we now set the threshold to a higher value and apply again
+        self.set_edge_hardness([cube], 135, upper_hardness=80, lower_hardness=30)
+
+        # The first edge of the cube should now have a hardness of 30 (lower hardness)
+        self.assertEqual(pm.polySoftEdge(cube.e[0], q=True, a=True), 30.0)
+
     def test_get_faces_with_similar_normals(self):
         """ """
         # Create a cube and sphere

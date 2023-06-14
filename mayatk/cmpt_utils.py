@@ -457,13 +457,12 @@ class GetComponentsMixin:
                 (list)(dict) Dependant on flags.
 
         Example:
-        get_components('obj', 'vertex', 'str', '', 'obj.vtx[2:23]') #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[24]', 'objShape.vtx[25]']
-        get_components('obj', 'vertex', 'obj', '', 'obj.vtx[:23]') #returns: [MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
-        get_components('obj', 'f', 'int') #returns: {nt.Mesh('objShape'): [(0, 35)]}
-        get_components('obj', 'edges') #returns: ['objShape.e[0:59]']
-        get_components('obj', 'edges', 'str', 'obj.e[:2]') #returns: ['objShape.e[0]', 'objShape.e[1]', 'objShape.e[2]']
+        get_components(obj, 'vertex', 'str', '', 'obj.vtx[2:23]') #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[24]', 'objShape.vtx[25]']
+        get_components(obj, 'vertex', 'obj', '', 'obj.vtx[:23]') #returns: [MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
+        get_components(obj, 'f', 'int') #returns: {nt.Mesh('objShape'): [(0, 35)]}
+        get_components(obj, 'edges') #returns: ['objShape.e[0:59]']
+        get_components(obj, 'edges', 'str', 'obj.e[:2]') #returns: ['objShape.e[0]', 'objShape.e[1]', 'objShape.e[2]']
         """
-
         components = cls.convert_component_type(objects, component_type)
 
         if inc or exc:
@@ -1074,21 +1073,29 @@ class Cmpt(GetComponentsMixin):
             objects (str/obj/list): The objects to operate on.
             by_uv_shell (bool): Average each UV shell individually.
         """
-        pm.undoInfo(openChunk=1)
-        for obj in objects:
-            if by_uv_shell:
-                obj = pm.ls(obj, transforms=1)
-                sets = cls.get_uv_shell_sets(obj)
-                for s in sets:
-                    pm.polySetToFaceNormal(s)
-                    pm.polyAverageNormal(s)
-            else:
-                sel = pm.ls(obj, sl=1)
-                if not sel:
-                    sel = obj
-                pm.polySetToFaceNormal(sel)
-                pm.polyAverageNormal(sel)
-        pm.undoInfo(closeChunk=1)
+        pm.undoInfo(openChunk=True)  # Open undo chunk to make operation reversible
+
+        if by_uv_shell:
+            uv_shell_sets = cls.get_uv_shell_sets(objects)
+            # Iteratively operate on each uv_shell_set
+            for uv_set in uv_shell_sets:
+                # Convert faces to vertices
+                vertices = pm.polyListComponentConversion(
+                    uv_set, fromFace=True, toVertexFace=True
+                )
+                # Unfreeze normals
+                pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
+                # Soften edges to smooth normals across the entire UV shell
+                pm.polySoftEdge(vertices, a=180)
+        else:
+            # If not by_uv_shell, directly average normals of the object or components
+            vertices = pm.polyListComponentConversion(
+                objects, fromFace=True, toVertexFace=True
+            )
+            pm.polyNormalPerVertex(vertices, unFreezeNormal=True)  # Unfreeze normals
+            pm.polySoftEdge(vertices, a=180)  # Soften edges to smooth normals
+
+        pm.undoInfo(closeChunk=True)  # Close undo chunk after operations are done
 
     @classmethod
     def get_edges_by_normal_angle(cls, objects, low_angle=0, high_angle=180):
@@ -1134,6 +1141,85 @@ class Cmpt(GetComponentsMixin):
         ]
 
         return edges
+
+    def set_edge_hardness(
+        cls, objects, angle_threshold, upper_hardness=None, lower_hardness=None
+    ):
+        """Sets the hardness (softness) of edges in the provided objects based on their normal angles.
+
+        The function recursively processes lists, tuples, and sets of objects, applying the hardness settings
+        to each item individually. It also supports PyMel Transform, Mesh, and MeshEdge objects.
+
+        If an edge's normal angle is greater than or equal to the given threshold, the edge is considered
+        for upper hardness application. If an edge's normal angle is less than the threshold, the edge is
+        considered for lower hardness application.
+
+        Parameters:
+            cls (class): The class that the method is part of.
+            objects (str, pm.nt.Transform, pm.nt.Mesh, pm.general.MeshEdge, list/tuple/set of these types):
+                The objects whose edge hardness is to be set. For string input, it should be in the format 'object.e[start:end]'.
+            angle_threshold (float): The threshold of the normal angle in degrees to determine hardness.
+            upper_hardness (float, optional): The hardness to apply to edges with a normal angle greater
+                than or equal to the threshold. If None, these edges are not processed. Value should be between 0 and 180.
+            lower_hardness (float, optional): The hardness to apply to edges with a normal angle less
+                than the threshold. If None, these edges are not processed. Value should be between 0 and 180.
+
+        Returns:
+            None: This function doesn't return anything; it modifies the provided objects in-place.
+
+        Raises:
+            TypeError: If the 'objects' argument is not of the correct type.
+        """
+        # If objects is a list, handle each item recursively
+        if isinstance(objects, (list, tuple, set)):
+            for item in objects:
+                cls.set_edge_hardness(
+                    item, angle_threshold, upper_hardness, lower_hardness
+                )
+            return
+
+        # If objects is a PyMel object, handle it accordingly
+        if isinstance(objects, pm.nt.Transform):
+            shape = objects.getShape()
+            objects = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
+        elif isinstance(objects, pm.nt.Mesh):
+            # If it's a mesh, operate on all edges
+            objects = f"{objects.name()}.e[0:{len(objects.edges())-1}]"
+        elif isinstance(objects, pm.general.MeshEdge):
+            objects = objects.name()
+
+        # Ensure objects is a list of strings
+        if isinstance(objects, str):
+            objects = [objects]
+
+        upper_hardness_edges = []
+        lower_hardness_edges = []
+
+        for obj_name in objects:
+            # Create a PyNode of the mesh object
+            mesh_obj = pm.PyNode(obj_name.split(".")[0])
+            # Extract edge indices from obj_name using regex
+            edge_indices = obj_name.split("[")[-1].split("]")[0].split(":")
+            # Generate all indices between start and end
+            edge_start = int(edge_indices[0])
+            edge_end = int(edge_indices[1]) if len(edge_indices) > 1 else edge_start
+            edge_indices = list(range(edge_start, edge_end + 1))
+            # Iterate over edges
+            for edge_index in edge_indices:
+                edge = mesh_obj.edges[edge_index]
+                edge_angle = cls.get_normal_angle(edge)
+                # Check edge angle and add to respective list
+                if upper_hardness is not None and edge_angle >= angle_threshold:
+                    upper_hardness_edges.append(edge)
+                elif lower_hardness is not None and edge_angle < angle_threshold:
+                    lower_hardness_edges.append(edge)
+
+        # Apply softness to edges in the lists
+        if upper_hardness_edges:
+            pm.polySoftEdge(upper_hardness_edges, a=upper_hardness, ch=True)
+
+        if lower_hardness_edges:
+            pm.polySoftEdge(lower_hardness_edges, a=lower_hardness, ch=True)
 
     @classmethod
     def get_faces_with_similar_normals(
@@ -1363,7 +1449,7 @@ class Cmpt(GetComponentsMixin):
 
     @classmethod
     def get_uv_shell_sets(cls, objects=None, returned_type="shells"):
-        """Get All UV shells and their corresponding sets of faces.
+        """Get UV shells and their corresponding sets of faces.
 
         Parameters:
             objects (obj/list): Polygon object(s) or Polygon face(s).
@@ -1483,61 +1569,6 @@ class Cmpt(GetComponentsMixin):
             for j in range(count):
                 uv_id = sFnMesh.getPolygonUVid(i, j)
                 tFnMesh.assignUV(i, j, uv_id)
-
-    # @staticmethod
-    # def transfer_uvs(source, target):
-    #     # Get source and target PyNodes
-    #     source_node = pm.PyNode(source)
-    #     target_node = pm.PyNode(target)
-
-    #     # Store target transforms
-    #     target_pos = pm.xform(target_node, q=True, t=True, ws=True)
-    #     target_rot = pm.xform(target_node, q=True, ro=True, ws=True)
-    #     target_scale = pm.xform(target_node, q=True, s=True, ws=True)
-
-    #     # Move target to source position
-    #     pm.xform(target_node, t=pm.xform(source_node, q=True, t=True, ws=True), ws=True)
-    #     pm.xform(
-    #         target_node, ro=pm.xform(source_node, q=True, ro=True, ws=True), ws=True
-    #     )
-    #     pm.xform(target_node, s=pm.xform(source_node, q=True, s=True, ws=True), ws=True)
-
-    #     # Debug statements
-    #     print(
-    #         "Source UVs before transfer:",
-    #         pm.polyListComponentConversion(source_node.f, fromFace=True, toUV=True),
-    #     )
-    #     print(
-    #         "Target UVs before transfer:",
-    #         pm.polyListComponentConversion(target_node.f, fromFace=True, toUV=True),
-    #     )
-
-    #     # Transfer UVs
-    #     pm.transferAttributes(
-    #         source_node,
-    #         target_node,
-    #         transferPositions=0,
-    #         transferNormals=0,
-    #         transferUVs=2,
-    #     )
-
-    #     # Debug statements
-    #     print(
-    #         "Source UVs after transfer:",
-    #         pm.polyListComponentConversion(source_node.f, fromFace=True, toUV=True),
-    #     )
-    #     print(
-    #         "Target UVs after transfer:",
-    #         pm.polyListComponentConversion(target_node.f, fromFace=True, toUV=True),
-    #     )
-
-    #     # Delete history on target
-    #     pm.delete(target_node, ch=True)
-
-    #     # Restore target position
-    #     pm.xform(target_node, t=target_pos, ws=True)
-    #     pm.xform(target_node, ro=target_rot, ws=True)
-    #     pm.xform(target_node, s=target_scale, ws=True)
 
 
 # --------------------------------------------------------------------------------------------
