@@ -72,30 +72,22 @@ class Node:
     @staticmethod
     def is_group(objects):
         """Determine if each of the given object(s) is a group.
-        A group is defined as a transform with children.
+        A group is defined as a transform node with children and no shape nodes directly beneath it.
 
         Parameters:
-                nodes (str/obj/list): The object(s) to query.
+            objects (str/obj/list): The object(s) to query.
 
         Returns:
-                (bool)(list) A list is always returned when 'objects' is given as a list.
+            (bool)(list) A list is always returned when 'objects' is given as a list.
         """
         result = []
         for n in pm.ls(objects):
             try:
-                q = all(
-                    (
-                        type(n) == pm.nodetypes.Transform,
-                        all(
-                            (
-                                [
-                                    type(c) == pm.nodetypes.Transform
-                                    for c in n.get_children()
-                                ]
-                            )
-                        ),
-                    )
-                )
+                # Check if the object is a transform node
+                is_transform = type(n) == pm.nodetypes.Transform
+                # Check if the transform node does not have any shape nodes directly beneath it
+                no_shapes = len(n.getShapes(noIntermediate=True)) == 0
+                q = is_transform and no_shapes
             except AttributeError:
                 q = False
             result.append(q)
@@ -154,13 +146,13 @@ class Node:
         If an object is not a group, it will be included in the list.
 
         Parameters:
-                objects (str/obj/list): A string, PyNode, or list of PyNodes representing the objects in the scene.
+            objects (str/obj/list): A string, PyNode, or list of PyNodes representing the objects in the scene.
 
         Returns:
-                list: A list containing the unique children of the groups (if any) and other objects.
+            list: A list containing the unique children of the groups (if any) and other objects.
 
         Example:
-                >>> get_unique_children(<group>) # Returns: [nt.Transform(u'pCube1'), nt.Transform(u'pCube2')]
+            >>> get_unique_children(<group>) # Returns: [nt.Transform(u'pCube1'), nt.Transform(u'pCube2')]
         """
         objects = pm.ls(objects, flatten=True)
 

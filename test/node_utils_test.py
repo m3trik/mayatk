@@ -95,160 +95,108 @@ class Node_test(Main, Node):
 
     def test_getType(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_type('cyl')": "transform",
-                "self.get_type('cylShape')": "mesh",
-                "self.get_type('cylShape.vtx[0]')": "vtx",
-                "self.get_type('cylShape.e[0]')": "e",
-                "self.get_type('cylShape.f[0]')": "f",
-            }
-        )
+        self.assertEqual(self.get_type("cyl"), "transform")
+        self.assertEqual(self.get_type("cylShape"), "mesh")
+        self.assertEqual(self.get_type("cylShape.vtx[0]"), "vtx")
+        self.assertEqual(self.get_type("cylShape.e[0]"), "e")
+        self.assertEqual(self.get_type("cylShape.f[0]"), "f")
 
     def test_getTransformNode(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_transform_node('cyl')": "cyl",
-                "self.get_transform_node('cylShape')": "cyl",
-            }
-        )
+        self.assertEqual(self.get_transform_node("cyl"), "cyl")
+        self.assertEqual(self.get_transform_node("cylShape"), "cyl")
 
     def test_getShapeNode(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_shape_node('cyl')": "cylShape",
-                "self.get_shape_node('cylShape')": "cylShape",
-            }
-        )
+        self.assertEqual(self.get_shape_node("cyl"), "cylShape")
+        self.assertEqual(self.get_shape_node("cylShape"), "cylShape")
 
     def test_getHistoryNode(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_history_node('cyl')": "polyCylinder1",
-                "self.get_history_node('cylShape')": "polyCylinder1",
-            }
-        )
+        self.assertEqual(self.get_history_node("cyl"), "polyCylinder1")
+        self.assertEqual(self.get_history_node("cylShape"), "polyCylinder1")
 
     def test_isLocator(self):
         """ """
         if not pm.objExists("loc"):
             loc = pm.spaceLocator(name="loc")
 
-        self.perform_test(
-            {
-                "self.is_locator('cyl')": False,
-                "self.is_locator('loc')": True,
-            }
-        )
+        self.assertEqual(self.is_locator("cyl"), False)
+        self.assertEqual(self.is_locator(loc), True)
 
     def test_isGroup(self):
-        """ """
-        self.perform_test(
-            {
-                "self.is_group('cyl')": False,
-                "self.is_group('cylShape')": False,
-                "self.is_group('cylShape.vtx[0]')": False,
-            }
-        )
+        # Single node tests
+        pm.polyCube(name="cube")
+        pm.polySphere(name="sphere")
+        self.assertEqual(self.is_group("cube"), False)  # Single cube
+        self.assertEqual(self.is_group("cubeShape"), False)  # Shape node
+        self.assertEqual(self.is_group("sphereShape.vtx[0]"), False)  # Single vertex
+
+        # Group tests
+        pm.group("cube", "sphere", name="group1")
+        self.assertEqual(self.is_group("group1"), True)  # Group with multiple children
+
+        # Nested group tests
+        pm.polyCone(name="cone")
+        pm.group("group1", "cone", name="group2")
+        self.assertEqual(
+            self.is_group("group2"), True
+        )  # Group containing another group
+
+        # Empty group tests
+        pm.group(name="emptyGroup")
+        self.assertEqual(self.is_group("emptyGroup"), True)  # Empty group
+
+        # Cleanup
+        pm.delete("group2", "emptyGroup")
 
     def test_getGroups(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_groups()": [],
-            }
-        )
+        self.assertEqual(self.get_groups(), [])
 
     def test_getParent(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_parent('cyl')": None,
-            }
-        )
+        self.assertEqual(self.get_parent("cyl"), None)
 
     def test_getChildren(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_children('cyl')": [],
-            }
-        )
+        self.assertEqual(self.get_children("cyl"), [])
 
     def test_getNodeAttributes(self):
         """ """
-        self.perform_test(
-            {
-                # "self.get_node_attributes()": None,
-            }
-        )
+        # self.assertEqual(self.get_node_attributes(), None)
 
     def test_setNodeAttributes(self):
         """ """
-        self.perform_test(
-            {
-                # "self.set_node_attributes()": None,
-            }
-        )
+        # self.assertEqual(self.set_node_attributes(), None)
 
     def test_connectAttributes(self):
         """ """
-        self.perform_test(
-            {
-                # "self.connect_attributes()": None,
-            }
-        )
+        # self.assertEqual(self.connect_attributes(), None)
 
     def test_createRenderNode(self):
         """ """
-        self.perform_test(
-            {
-                # "self.create_render_node()": None,
-            }
-        )
+        # self.assertEqual(self.create_render_node(), None)
 
     def test_getIncomingNodeByType(self):
         """ """
-        self.perform_test(
-            {
-                # "self.get_incoming_node_by_type()": None,
-            }
-        )
+        # self.get_incoming_node_by_type(), None)
 
     def test_getOutgoingNodeByType(self):
         """ """
-        self.perform_test(
-            {
-                # "self.get_outgoing_node_by_type()": None,
-            }
-        )
+        # self.assertEqual(self.get_outgoing_node_by_type(), None)
 
     def test_connectMultiAttr(self):
         """ """
-        self.perform_test(
-            {
-                # "self.connect_multi_attr()": None,
-            }
-        )
+        # self.assertEqual(self.connect_multi_attr(), None)
 
     def test_nodeExists(self):
         """ """
-        self.perform_test(
-            {
-                # "self.node_exists()": None,
-            }
-        )
+        # self.assertEqual(self.node_exists(), None)
 
     def test_createAssembly(self):
         """ """
-        self.perform_test(
-            {
-                # "self.create_assembly()": None,
-            }
-        )
+        # self.assertEqual(self.create_assembly(), None)
 
 
 # -----------------------------------------------------------------------------

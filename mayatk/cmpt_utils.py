@@ -8,7 +8,7 @@ except ImportError as error:
 from pythontk import Iter, Math
 
 # from this package:
-from mayatk import misc_utils
+from mayatk import misc_utils, node_utils
 
 
 class GetComponentsMixin:
@@ -1142,8 +1142,9 @@ class Cmpt(GetComponentsMixin):
 
         return edges
 
+    @classmethod
     def set_edge_hardness(
-        cls, objects, angle_threshold, upper_hardness=None, lower_hardness=None
+        cls, x, angle_threshold, upper_hardness=None, lower_hardness=None
     ):
         """Sets the hardness (softness) of edges in the provided objects based on their normal angles.
 
@@ -1156,7 +1157,7 @@ class Cmpt(GetComponentsMixin):
 
         Parameters:
             cls (class): The class that the method is part of.
-            objects (str, pm.nt.Transform, pm.nt.Mesh, pm.general.MeshEdge, list/tuple/set of these types):
+            x (str, pm.nt.Transform, pm.nt.Mesh, pm.general.MeshEdge, list/tuple/set of these types):
                 The objects whose edge hardness is to be set. For string input, it should be in the format 'object.e[start:end]'.
             angle_threshold (float): The threshold of the normal angle in degrees to determine hardness.
             upper_hardness (float, optional): The hardness to apply to edges with a normal angle greater
@@ -1168,34 +1169,41 @@ class Cmpt(GetComponentsMixin):
             None: This function doesn't return anything; it modifies the provided objects in-place.
 
         Raises:
-            TypeError: If the 'objects' argument is not of the correct type.
+            TypeError: If the 'x' argument is not of the correct type.
         """
-        # If objects is a list, handle each item recursively
-        if isinstance(objects, (list, tuple, set)):
-            for item in objects:
+        # If x is a list, handle each item recursively
+        if isinstance(x, (list, tuple, set)):
+            for item in x:
                 cls.set_edge_hardness(
                     item, angle_threshold, upper_hardness, lower_hardness
                 )
             return
 
-        # If objects is a PyMel object, handle it accordingly
-        if isinstance(objects, pm.nt.Transform):
-            shape = objects.getShape()
-            objects = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
-        elif isinstance(objects, pm.nt.Mesh):
+        # If x is a PyMel object, handle it accordingly
+        if isinstance(x, pm.nt.Transform):
+            is_group = node_utils.Node.is_group(x)
+            if is_group:
+                grp_children = node_utils.Node.get_unique_children(x)
+                cls.set_edge_hardness(
+                    grp_children, angle_threshold, upper_hardness, lower_hardness
+                )
+                return
+            shape = x.getShape()
+            x = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
+        elif isinstance(x, pm.nt.Mesh):
             # If it's a mesh, operate on all edges
-            objects = f"{objects.name()}.e[0:{len(objects.edges())-1}]"
-        elif isinstance(objects, pm.general.MeshEdge):
-            objects = objects.name()
+            x = f"{x.name()}.e[0:{len(x.edges())-1}]"
+        elif isinstance(x, pm.general.MeshEdge):
+            x = x.name()
 
-        # Ensure objects is a list of strings
-        if isinstance(objects, str):
-            objects = [objects]
+        # Ensure x is a list of strings
+        if isinstance(x, str):
+            x = [x]
 
         upper_hardness_edges = []
         lower_hardness_edges = []
 
-        for obj_name in objects:
+        for obj_name in x:
             # Create a PyNode of the mesh object
             mesh_obj = pm.PyNode(obj_name.split(".")[0])
             # Extract edge indices from obj_name using regex
