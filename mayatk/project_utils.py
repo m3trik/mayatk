@@ -207,28 +207,65 @@ class Project:
         return result
 
     @staticmethod
-    def reference_scene(scene, remove=False, lockReference=False):
-        """Create a reference to a Maya scene.
+    def reference_scene(file_path):
+        """Reference a Maya scene.
 
         Parameters:
-            remove (bool): Remove a previously referenced scene.
+            file_path (str): The path to the Maya scene file to reference.
         """
-        if remove:  # unload reference.
-            # refNode = pm.referenceQuery(scene, referenceNode=True)
-            pm.mel.file(scene, removeReference=True)
+        if os.path.exists(file_path):
+            pm.system.createReference(file_path)
+        else:
+            raise FileNotFoundError(f"No such file: '{file_path}'")
 
-        else:  # load reference.
-            # ex. 'sceneName' from 'sceneName.mb'
-            namespace = scene.split("\\")[-1].rstrip(".mb").rstrip(".ma")
-            pm.mel.file(
-                scene,
-                reference=True,
-                namespace=namespace,
-                groupReference=True,
-                lockReference=lockReference,
-                loadReferenceDepth="topOnly",
-                force=True,
-            )
+    @staticmethod
+    def remove_reference(file_path):
+        """Remove a reference to a Maya scene.
+
+        Parameters:
+            file_path (str): The path to the Maya scene file to remove the reference to.
+        """
+        ref_node = pm.system.FileReference(file_path)
+        if ref_node.isReferenced():
+            ref_node.remove()
+
+    @staticmethod
+    def is_referenced(file_path):
+        """Check if a Maya scene is referenced.
+
+        Parameters:
+            file_path (str): The path to the Maya scene file to check.
+
+        Returns:
+            (bool): True if the scene is referenced, False otherwise.
+        """
+        ref_node = pm.system.FileReference(file_path)
+        return ref_node.isReferenced()
+
+    @staticmethod
+    def get_reference_nodes(file_path):
+        """Get the nodes from a referenced Maya scene.
+
+        Parameters:
+            file_path (str): The path to the Maya scene file to get the nodes from.
+
+        Returns:
+            (list): A list of nodes in the referenced scene.
+        """
+        ref_node = pm.system.FileReference(file_path)
+        if ref_node.isReferenced():
+            return ref_node.nodes()
+        else:
+            return []
+
+    @staticmethod
+    def list_references():
+        """List all references in the current Maya scene.
+
+        Returns:
+            (list): A list of all references in the current Maya scene.
+        """
+        return [ref.filePath() for ref in pm.system.listReferences()]
 
 
 # --------------------------------------------------------------------------------------------
@@ -245,6 +282,29 @@ if __name__ == "__main__":
 # deprecated:
 # --------------------------------------------------------------------------------------------
 
+# @staticmethod
+# def reference_scene(scene, remove=False, lockReference=False):
+#     """Create a reference to a Maya scene.
+
+#     Parameters:
+#         remove (bool): Remove a previously referenced scene.
+#     """
+#     if remove:  # unload reference.
+#         # refNode = pm.referenceQuery(scene, referenceNode=True)
+#         pm.mel.file(scene, removeReference=True)
+
+#     else:  # load reference.
+#         # ex. 'sceneName' from 'sceneName.mb'
+#         namespace = scene.split("\\")[-1].rstrip(".mb").rstrip(".ma")
+#         pm.mel.file(
+#             scene,
+#             reference=True,
+#             namespace=namespace,
+#             groupReference=True,
+#             lockReference=lockReference,
+#             loadReferenceDepth="topOnly",
+#             force=True,
+#         )
 
 # @staticmethod
 # def get_recent_autosave(timestamp=False):
