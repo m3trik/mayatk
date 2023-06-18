@@ -6,7 +6,7 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from pythontk import Iter
+from pythontk import Iter, Str
 
 # from this package:
 from mayatk import node_utils
@@ -20,7 +20,7 @@ class Misc:
         Prevents the undo queue from breaking entirely if an exception is raised within the given function.
 
         Parameters:
-                fn (obj): The decorated python function that will be placed into the undo que as a single entry.
+            fn (obj): The decorated python function that will be placed into the undo que as a single entry.
         """
 
         def wrapper(*args, **kwargs):
@@ -35,7 +35,7 @@ class Misc:
         """Get maya's main window object.
 
         Returns:
-                (QWidget)
+            (QWidget)
         """
         from PySide2.QtWidgets import QApplication
 
@@ -61,10 +61,10 @@ class Misc:
         """Adds the required library paths for Maya to the system's Python path.
 
         Parameters:
-                maya_version (int, str, optional): The version of Maya to add the paths for. Defaults to 2023.
+            maya_version (int, str, optional): The version of Maya to add the paths for. Defaults to 2023.
 
         Returns:
-                (None)
+            (None)
         """
         maya_install_path = os.environ.get(
             "MAYA_LOCATION"
@@ -111,12 +111,12 @@ class Misc:
         """Embed a Maya Native UI Object.
 
         Parameters:
-                control_name (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
-                container (obj): A widget instance in which to wrap the control.
+            control_name (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
+            container (obj): A widget instance in which to wrap the control.
 
         Example:
-                modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
-                wrap_control(modelPanelName, QtWidgets.QtWidget())
+            modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
+            wrap_control(modelPanelName, QtWidgets.QtWidget())
         """
         from PySide2 import QtWidgets
         from shiboken2 import wrapInstance
@@ -147,10 +147,10 @@ class Misc:
         """Generate mfn mesh from the given list of objects.
 
         Parameters:
-                objects (str)(obj(list): The objects to convert to mfn mesh.
+            objects (str)(obj(list): The objects to convert to mfn mesh.
 
         Returns:
-                (generator)
+            (generator)
         """
         import maya.OpenMaya as om
 
@@ -171,10 +171,10 @@ class Misc:
         Samples only the first element.
 
         Parameters:
-                obj (str/obj/list): The components(s) to query.
+            obj (str/obj/list): The components(s) to query.
 
         Returns:
-                (list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
+            (list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
 
         Example:
         get_array_type('cyl.vtx[0]') #returns: 'transform'
@@ -182,7 +182,7 @@ class Misc:
         """
         try:
             o = Iter.make_iterable(lst)[0]
-        except IndexError as error:
+        except IndexError:
             # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
 
@@ -193,13 +193,13 @@ class Misc:
         """Convert the given element(s) to <obj>, 'str', or int values.
 
         Parameters:
-                lst (str/obj/list): The components(s) to convert.
-                returned_type (str): The desired returned array element type.
-                        valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
-                flatten (bool): Flattens the returned list of objects so that each component is it's own element.
+            lst (str/obj/list): The components(s) to convert.
+            returned_type (str): The desired returned array element type.
+                    valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
+            flatten (bool): Flattens the returned list of objects so that each component is it's own element.
 
         Returns:
-                (list)(dict) return a dict only with a return type of 'int' and more that one object given.
+            (list)(dict) return a dict only with a return type of 'int' and more that one object given.
 
         Example:
         convert_array_type('obj.vtx[:2]', 'str') #returns: ['objShape.vtx[0:2]']
@@ -252,40 +252,38 @@ class Misc:
         return result
 
     @staticmethod
-    def get_parameter_values(node, cmd, parameters):
-        """Query a Maya command, and return a key:value pair for each of the given parameters.
+    def get_parameter_mapping(node, cmd, parameters):
+        """Queries a specified Maya command and returns a dictionary mapping the provided parameters to their values.
+
+        This function helps to retrieve the values of different parameters or attributes associated with a given Maya node (like transformLimits). The node can be a string name, an object or a list of nodes.
 
         Parameters:
-                node (str/obj/list): The object to query attributes of.
-                parameters (list): The command parameters to query. ie. ['enableTranslationX','translationX']
+            node (str/obj): The node for which the attributes need to be queried.
+            cmd (str): The name of the Maya command that is to be executed. For example, 'transformLimits'.
+            parameters (list): A list of strings representing the parameters of the command to query. For example, ['enableTranslationX','translationX'].
 
         Returns:
-                (dict) {'parameter name':<value>} ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
+            dict: A dictionary where each key is a queried parameter name and the corresponding value is the returned attribute value from the query. For example, {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}.
 
-        Example: get_parameter_values(obj, 'transformLimits', ['enableTranslationX','translationX'])
+        Example:
+            >>> get_parameter_mapping(obj, 'transformLimits', ['enableTranslationX','translationX'])
+            {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
         """
         cmd = getattr(pm, cmd)
         node = pm.ls(node)[0]
 
-        result = {}
-        for p in parameters:
-            values = cmd(
-                node, **{"q": True, p: True}
-            )  # query the parameter to get it's value.
-
-            result[p] = values
-
-        return result
+        return {p: cmd(node, **{"q": True, p: True}) for p in parameters}
 
     @staticmethod
-    def set_parameter_values(node, cmd, parameters):
-        """Set parameters using a maya command.
+    def set_parameter_mapping(node, cmd, parameters):
+        """Applies a set of parameter values to a specified Maya node using a given Maya command.
 
         Parameters:
-                node (str/obj/list): The object to query attributes of.
-                parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
+            node (str/obj/list): The object to query attributes of.
+            parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
 
-        Example: set_parameter_values(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
+        Example:
+            >>> apply_parameter_mapping(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
         """
         cmd = getattr(pm, cmd)
         node = pm.ls(node)[0]
@@ -298,7 +296,7 @@ class Misc:
         """Get any attributes (channels) that are selected in the channel box.
 
         Returns:
-                (str) list of any selected attributes as strings. (ie. ['tx', ry', 'sz'])
+            (str) list of any selected attributes as strings. (ie. ['tx', ry', 'sz'])
         """
         channelBox = pm.mel.eval(
             "global string $gChannelBoxName; $temp=$gChannelBoxName;"
@@ -315,10 +313,10 @@ class Misc:
         A fix for the broken pymel command of the same name.
 
         Parameters:
-                [allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
+            [allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
 
         Returns:
-                (str) An array of panel names.
+            (str) An array of panel names.
         """
         from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022.
 
@@ -328,21 +326,21 @@ class Misc:
 
     @staticmethod
     def main_progress_bar(size, name="progressBar#", step_amount=1):
-        """#add esc key pressed return False
+        """# add esc key pressed return False
 
         Parameters:
-                size (int): total amount
-                name (str): name of progress bar created
-                step_amount(int): increment amount
+            size (int): total amount
+            name (str): name of progress bar created
+            step_amount(int): increment amount
 
-        example use-case:
-        main_progress_bar (len(edges), progressCount)
-                pm.progressBar ("progressBar_", edit=1, step=1)
-                if pm.progressBar ("progressBar_", q=True, isCancelled=1):
-                        break
-        pm.progressBar ("progressBar_", edit=1, endProgress=1)
+        Example:
+            main_progress_bar (len(edges), progressCount)
+            pm.progressBar ("progressBar_", edit=1, step=1)
+            if pm.progressBar ("progressBar_", q=True, isCancelled=1):
+                break
+            pm.progressBar ("progressBar_", edit=1, endProgress=1)
 
-        to use main progressBar: name=string $gMainProgressBar
+            to use main progressBar: name=string $gMainProgressBar
         """
         status = "processing: {} items ..".format(size)
 
@@ -366,12 +364,13 @@ class Misc:
     ):
         """
         Parameters:
-                message (str): The message to be displayed, (accepts html formatting).
-                status_message (str): The status info message to be displayed (accepts html formatting).
-                assist_message (str): The user assistance message to be displayed, (accepts html formatting).
-                position (str): position on screen. possible values are: topCenter","topRight","midLeft","midCenter","midCenterTop","midCenterBot","midRight","botLeft","botCenter","botRight"
+            message (str): The message to be displayed, (accepts html formatting).
+            status_message (str): The status info message to be displayed (accepts html formatting).
+            assist_message (str): The user assistance message to be displayed, (accepts html formatting).
+            position (str): position on screen. possible values are: topCenter","topRight","midLeft","midCenter","midCenterTop","midCenterBot","midRight","botLeft","botCenter","botRight"
 
-        ex. viewport_message("shutting down:<hl>"+str(timer)+"</hl>")
+        Example:
+            viewport_message("shutting down:<hl>"+str(timer)+"</hl>")
         """
         fontSize = 10
         fade = 1

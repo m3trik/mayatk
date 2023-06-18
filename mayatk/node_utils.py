@@ -18,10 +18,10 @@ class Node:
         """Check if the node exists in the current scene.
 
         Parameters:
-                search (str): The search parameters. valid: 'name', 'type', 'exactType'
+            search (str): The search parameters. valid: 'name', 'type', 'exactType'
 
         Returns:
-                (bool)
+            (bool)
         """
         if search == "name":
             return bool(pm.ls(n))
@@ -35,10 +35,10 @@ class Node:
         """Get the object type as a string.
 
         Parameters:
-                objects (str/obj/list): The object(s) to query.
+            objects (str/obj/list): The object(s) to query.
 
         Returns:
-                (str/list) The node type. A list is always returned when 'objects' is given as a list.
+            (str/list) The node type. A list is always returned when 'objects' is given as a list.
         """
         types = []
         for obj in pm.ls(objects):
@@ -61,10 +61,10 @@ class Node:
         The shape node defines the appearance and behavior of the locator.
 
         Parameters:
-                obj () = The object to query.
+            obj () = The object to query.
 
         Returns:
-                (bool)
+            (bool)
         """
         shape = cls.get_shape_node(obj)
         return pm.nodeType(shape) == "locator"
@@ -99,10 +99,10 @@ class Node:
         """Get all groups in the scene.
 
         Parameters:
-                empty (bool): Return only empty groups.
+            empty (bool): Return only empty groups.
 
         Returns:
-                (bool)
+            (bool)
         """
         transforms = pm.ls(type="transform")
 
@@ -182,13 +182,13 @@ class Node:
         """Get transform node(s) or node attributes.
 
         Parameters:
-                nodes (str/obj/list): A relative of a transform Node.
-                returned_type (str): The desired returned object type. Not valid with the `attributes` parameter.
-                        (valid: 'str'(default), 'obj').
-                attributes (bool): Return the attributes of the node, rather then the node itself.
+            nodes (str/obj/list): A relative of a transform Node.
+            returned_type (str): The desired returned object type. Not valid with the `attributes` parameter.
+                    (valid: 'str'(default), 'obj').
+            attributes (bool): Return the attributes of the node, rather then the node itself.
 
         Returns:
-                (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+            (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
         for node in pm.ls(nodes):
@@ -225,13 +225,13 @@ class Node:
         """Get shape node(s) or node attributes.
 
         Parameters:
-                nodes (str/obj/list): A relative of a shape Node.
-                returned_type (str): The desired returned object type.
-                        (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
-                attributes (bool): Return the attributes of the node, rather then the node itself.
+            nodes (str/obj/list): A relative of a shape Node.
+            returned_type (str): The desired returned object type.
+                    (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
+            attributes (bool): Return the attributes of the node, rather then the node itself.
 
         Returns:
-                (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+            (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
         for node in pm.ls(nodes):
@@ -268,13 +268,13 @@ class Node:
         """Get history node(s) or node attributes.
 
         Parameters:
-                nodes (str/obj/list): A relative of a history Node.
-                returned_type (str): The desired returned object type.
-                        (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
-                attributes (bool): Return the attributes of the node, rather then the node itself.
+            nodes (str/obj/list): A relative of a history Node.
+            returned_type (str): The desired returned object type.
+                    (valid: 'str'(default), 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level).
+            attributes (bool): Return the attributes of the node, rather then the node itself.
 
         Returns:
-                (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
+            (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
         for node in pm.ls(nodes):
@@ -324,30 +324,31 @@ class Node:
         """Procedure to create the node classified as specified by the inputs.
 
         Parameters:
-                node_type (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
-                flag (str): A flag specifying which how to classify the node created.
-                        valid:  as2DTexture, as3DTexture, asEnvTexture, asShader, asLight, asUtility
-                secondary_flag (str): A secondary flag used to make decisions in combination with 'asType'
-                        valid:  -asBump : defines a created texture as a bump
-                                        -asNoShadingGroup : for materials; create without a shading group
-                                        -asDisplacement : for anything; map the created node to a displacement material.
-                                        -asUtility : for anything; do whatever the $as flag says, but also classify as a utility
-                                        -asPostProcess : for any postprocess node
-                name (str): The desired node name.
-                tex (str): The path to a texture file for those nodes that support one.
-                texture_node (bool): If not needed, the `place2dTexture` node will be deleted after creation.
-                post_command (str): A command entered by the user when invoking create_render_node.
-                                The command will substitute the string %node with the name of the
-                                node it creates.  createRenderWindow will be closed if a command
-                                is not the null string ("").
-                kwargs () = Set additional node attributes after creation. ie. colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1
+            node_type (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
+            flag (str): A flag specifying which how to classify the node created.
+                    valid:  as2DTexture, as3DTexture, asEnvTexture, asShader, asLight, asUtility
+            secondary_flag (str): A secondary flag used to make decisions in combination with 'asType'
+                    valid:  -asBump : defines a created texture as a bump
+                                    -asNoShadingGroup : for materials; create without a shading group
+                                    -asDisplacement : for anything; map the created node to a displacement material.
+                                    -asUtility : for anything; do whatever the $as flag says, but also classify as a utility
+                                    -asPostProcess : for any postprocess node
+            name (str): The desired node name.
+            tex (str): The path to a texture file for those nodes that support one.
+            texture_node (bool): If not needed, the `place2dTexture` node will be deleted after creation.
+            post_command (str): A command entered by the user when invoking create_render_node.
+                            The command will substitute the string %node with the name of the
+                            node it creates.  createRenderWindow will be closed if a command
+                            is not the null string ("").
+            kwargs () = Set additional node attributes after creation. ie. colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1
 
         Returns:
-                (obj) node
+            (obj) node
 
-        Example: create_render_node('StingrayPBS')
-        Example: create_render_node('file', flag='as2DTexture', tex=f, texture_node=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
-        Example: create_render_node('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
+        Example:
+            create_render_node('StingrayPBS')
+            create_render_node('file', flag='as2DTexture', tex=f, texture_node=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
+            create_render_node('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
         """
         node = pm.PyNode(
             pm.mel.createRenderNodeCB(
@@ -383,12 +384,12 @@ class Node:
         """Get the first connected node of the given type with an incoming connection to the given node.
 
         Parameters:
-                node (str/obj): A node with incoming connections.
-                typ (str): The node type to search for. ie. 'StingrayPBS'
-                exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+            node (str/obj): A node with incoming connections.
+            typ (str): The node type to search for. ie. 'StingrayPBS'
+            exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
         Returns:
-                (obj)(None) node if found.
+            (obj)(None) node if found.
 
         Example: env_file_node = get_incoming_node_by_type(env_node, 'file') #get the incoming file node.
         """
@@ -400,12 +401,12 @@ class Node:
         """Get the connected node of the given type with an outgoing connection to the given node.
 
         Parameters:
-                node (str/obj): A node with outgoing connections.
-                typ (str): The node type to search for. ie. 'file'
-                exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+            node (str/obj): A node with outgoing connections.
+            typ (str): The node type to search for. ie. 'file'
+            exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
 
         Returns:
-                (list)(obj)(None) node(s)
+            (list)(obj)(None) node(s)
 
         Example: srSG_node = get_outgoing_node_by_type(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
         """
@@ -417,13 +418,13 @@ class Node:
         """Get node attributes and their corresponding values as a dict.
 
         Parameters:
-                node (obj): The node to get attributes of.
-                include (str/list): Attributes to include. All others will be omitted. Exclude takes precedence over include.
-                exclude (str/list): Attributes to exclude from the returned dictionary.
-                mapping (bool): Return a dictionary that maps the attributes to their values.
+            node (obj): The node to get attributes of.
+            include (str/list): Attributes to include. All others will be omitted. Exclude takes precedence over include.
+            exclude (str/list): Attributes to exclude from the returned dictionary.
+            mapping (bool): Return a dictionary that maps the attributes to their values.
 
         Returns:
-                (dict) {'string attribute': current value}
+            (dict) {'string attribute': current value}
         """
         filtered_attrs = Iter.filter_list(
             pm.listAttr(node, read=1, hasData=1), inc, exc
@@ -439,13 +440,13 @@ class Node:
         """Set node attribute values. If the attribute doesn't exist, it will be created.
 
         Parameters:
-                node (str/obj): The node to set attributes of.
-                attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+            node (str/obj): The node to set attributes of.
+            attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
         """
         for attr, value in attributes.items():
             try:
                 pm.setAttr(f"{node}.{attr}", value)
-            except Exception:
+            except AttributeError:
                 cls.set_node_custom_attributes(node, **{attr: value})
 
     @classmethod
@@ -457,24 +458,24 @@ class Node:
         lists, tuples, sets, and matrices.
 
         Parameters:
-                value: The value to determine the Maya attribute type for.
+            value: The value to determine the Maya attribute type for.
 
         Returns:
-                str: The corresponding Maya attribute type as a string.
+            str: The corresponding Maya attribute type as a string.
 
         Raises:
-                TypeError: If the input value's type is not supported.
+            TypeError: If the input value's type is not supported.
 
-        Examples:
-                >>> get_maya_attribute_type(True) #Returns: 'bool'
-                >>> get_maya_attribute_type(42) #Returns: 'long'
-                >>> get_maya_attribute_type([1.0, 2.0, 3.0]) #Returns: 'double3'
-                >>> get_maya_attribute_type([["a", "b"], ["c", "d"]]) #Returns: 'stringArray'
-                >>> get_maya_attribute_type(Matrix([[1.0, 0.0], [0.0, 1.0]], type='float')) #Returns: 'fltMatrix'
+        Example:
+            >>> get_maya_attribute_type(True) #Returns: 'bool'
+            >>> get_maya_attribute_type(42) #Returns: 'long'
+            >>> get_maya_attribute_type([1.0, 2.0, 3.0]) #Returns: 'double3'
+            >>> get_maya_attribute_type([["a", "b"], ["c", "d"]]) #Returns: 'stringArray'
+            >>> get_maya_attribute_type(Matrix([[1.0, 0.0], [0.0, 1.0]], type='float')) #Returns: 'fltMatrix'
 
         Notes:
-                - To support additional data types, add more cases in the method as necessary.
-                - Replace 'Matrix' with the correct class for a matrix in your environment.
+            - To support additional data types, add more cases in the method as necessary.
+            - Replace 'Matrix' with the correct class for a matrix in your environment.
         """
         if isinstance(value, bool):
             return "bool"
@@ -517,8 +518,8 @@ class Node:
         """Set node attribute values. If the attribute doesn't exist, it will be created.
 
         Parameters:
-                node (str/obj): The node to set attributes of.
-                attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+            node (str/obj): The node to set attributes of.
+            attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
         """
         if isinstance(node, str):
             node = pm.PyNode(node)
@@ -568,30 +569,28 @@ class Node:
 
     @staticmethod
     def connect_attributes(attr, place, file):
-        """A convenience procedure for connecting common attributes between two nodes.
+        """Connects a given attribute between two nodes using a specified place and file node.
+
+        This convenience function is designed to facilitate the linking of common attributes between nodes in Maya. It's especially useful when you need to connect several attributes which share the same name in the placement and file nodes.
 
         Parameters:
-                attr () =
-                place () =
-                file () =
+            attr (str): The name of the attribute to connect between the nodes.
+                        For example, 'coverage', 'translateFrame', 'rotateFrame', etc.
+            place (str): The name of the placement node which has the attribute to connect.
+            file (str): The name of the file node where the attribute will be connected to.
+
+        Note:
+            For attributes named differently between the place and file nodes, you should use the 'connectAttr' function with the respective attribute names.
 
         Example:
-        Use convenience command to connect attributes which share
-        their names for both the placement and file nodes.
-                connect_attributes('coverage', 'place2d', fileNode')
-                connect_attributes('translateFrame', 'place2d', fileNode')
-                connect_attributes('rotateFrame', 'place2d', fileNode')
-                connect_attributes('mirror', 'place2d', fileNode')
-                connect_attributes('stagger', 'place2d', fileNode')
-                connect_attributes('wrap', 'place2d', fileNode')
-                connect_attributes('wrapV', 'place2d', fileNode')
-                connect_attributes('repeatUV', 'place2d', fileNode')
-                connect_attributes('offset', 'place2d', fileNode')
-                connect_attributes('rotateUV', 'place2d', fileNode')
+            connect_attributes('coverage', 'place2d', 'fileNode')
+            connect_attributes('translateFrame', 'place2d', 'fileNode')
+            connect_attributes('rotateFrame', 'place2d', 'fileNode')
+            connect_attributes('mirror', 'place2d', 'fileNode')
+            ...
 
-        These two are named differently.
-                connectAttr -f ( $place2d + ".outUV" ) ( $fileNode + ".uv" );
-                connectAttr -f ( $place2d + ".outUvFilterSize" ) ( $fileNode + ".uvFilterSize" );
+            pm.connectAttr(f'{place}.outUV', f'{file}.uv', f=1)
+            pm.connectAttr(f'{place}.outUvFilterSize', f'{file}.uvFilterSize', f=1)
         """
         pm.connectAttr("{}.{}".format(place, attr), "{}.{}".format(file, attr), f=1)
 
@@ -600,13 +599,14 @@ class Node:
         """Connect multiple node attributes at once.
 
         Parameters:
-                args (tuple): Attributes as two element tuples. ie. (<connect from attribute>, <connect to attribute>)
+            args (tuple): Attributes as two element tuples. ie. (<connect from attribute>, <connect to attribute>)
 
-        Example: connect_multi_attr(
+        Example:
+            connect_multi_attr(
                 (node1.outColor, node2.aiSurfaceShader),
                 (node1.outColor, node3.baseColor),
                 (node4.outNormal, node5.normalCamera),
-        )
+            )
         """
         for frm, to in args:
             try:
@@ -619,14 +619,14 @@ class Node:
         """Create an assembly by parenting the input nodes to a new assembly node.
 
         Parameters:
-                nodes (list): A list of nodes to include in the assembly.
-                assembly_name (str, optional): The name of the assembly node. Defaults to 'assembly#'.
-                duplicate (bool, optional): If True, duplicates the input nodes before parenting. Defaults to False.
+            nodes (list): A list of nodes to include in the assembly.
+            assembly_name (str, optional): The name of the assembly node. Defaults to 'assembly#'.
+            duplicate (bool, optional): If True, duplicates the input nodes before parenting. Defaults to False.
 
         Returns:
-                pm.PyNode: The assembly node with added properties:
-                        - addChild (function): Adds a new child to the assembly node.
-                        - children (function): Returns the list of children under the assembly node.
+            pm.PyNode: The assembly node with added properties:
+                - addChild (function): Adds a new child to the assembly node.
+                - children (function): Returns the list of children under the assembly node.
         """
         assembly_node = pm.assembly(name=assembly_name)
 

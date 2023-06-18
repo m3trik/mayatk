@@ -154,7 +154,7 @@ class Core_test(Main, Misc):
         """ """
         self.perform_test(
             {
-                # "self.get_parameter_values()": None,
+                # "self.get_parameter_mapping()": None,
             }
         )
 
@@ -162,7 +162,7 @@ class Core_test(Main, Misc):
         """ """
         self.perform_test(
             {
-                # "self.set_parameter_values()": None,
+                # "self.set_parameter_mapping()": None,
             }
         )
 
