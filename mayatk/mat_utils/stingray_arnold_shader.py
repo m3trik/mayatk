@@ -319,7 +319,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         hdr_path = "{}/resources/hdr".format(self.proj_root_dir)
         hdr_filenames = File.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
         hdr_fullpaths = File.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
-        self.sb.ui.cmb000.addItems_(
+        self.sb.ui.cmb000.add(
             dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False
         )
 

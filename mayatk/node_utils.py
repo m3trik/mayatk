@@ -414,25 +414,39 @@ class Node:
         return format_return([pm.PyNode(n) for n in nodes])
 
     @staticmethod
-    def get_node_attributes(node, inc=[], exc=[], mapping=False):
-        """Get node attributes and their corresponding values as a dict.
+    def get_node_attributes(node, inc=[], exc=[], mapping=False, **kwargs):
+        """Retrieves specified node's attributes along with their corresponding values, represented as a dictionary.
 
         Parameters:
-            node (obj): The node to get attributes of.
-            include (str/list): Attributes to include. All others will be omitted. Exclude takes precedence over include.
-            exclude (str/list): Attributes to exclude from the returned dictionary.
-            mapping (bool): Return a dictionary that maps the attributes to their values.
+            node (obj): The target node from which to extract attributes.
+            inc (str/list): Specifies which attributes to include in the output. Any other attributes will be ignored. If there is any overlap, the exclude parameter takes priority over this.
+            exc (str/list): Determines which attributes to leave out from the result.
+            mapping (bool): If set to True, returns a dictionary mapping attributes to their respective values.
+            kwargs: Supports additional keyword arguments that are passed to the listAttr command in Maya.
 
         Returns:
-            (dict) {'string attribute': current value}
+            dict: A dictionary that pairs each attribute (as a string) to its current value. If 'mapping' is False, only the values of the attributes are returned.
         """
-        filtered_attrs = Iter.filter_list(
-            pm.listAttr(node, read=1, hasData=1), inc, exc
+        kwargs.setdefault("read", True)
+        kwargs.setdefault("hasData", True)
+        kwargs.setdefault("settable", True)
+
+        attr_names = Iter.filter_list(
+            pm.listAttr(node, **kwargs),
+            inc,
+            exc,
         )
 
-        result = {
-            attr: pm.getAttr(f"{node}.{attr}", silent=True) for attr in filtered_attrs
-        }
+        result = {}
+        for attr_name in attr_names:
+            try:
+                result[attr_name] = pm.getAttr(f"{node}.{attr_name}", silent=True)
+            except pm.MayaAttributeError as e:
+                print(
+                    f"Error encountered while extracting attribute {attr_name} from node {node}: {e}"
+                )
+                continue
+
         return result if mapping else result.values()
 
     @classmethod
