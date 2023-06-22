@@ -1,3 +1,5 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 ### MAYATK (Maya Toolkit)
 
 ---
@@ -17,23 +19,12 @@ python -m pip install mayatk
 ```
 
 ### Example use-case:
-###### Import the class `Node` from the package.
-###### As the name suggests, the class `Node` holds the package's node related functions.
 ```python
-from mayatk import Node
-Node.is_locator(<obj>)
+import mayatk as mtk
+mtk.is_group(<obj>)
 # Returns: bool
-```
-###### You can also import a function directly.
-```python
-from mayatk import is_group
-is_group(<obj>)
-# Returns: bool
-```
 
-```python
-from mayatk import get_bounding_box
-get_bounding_box(<obj>, 'centroid|size') 
-# Returns: tuple: the combined bounding box center and size.
+mtk.getBoundingBox(<obj>, 'centroid|size') 
+# Returns: tuple containing bounding box center and size.
 # ex. ((-0.02406523456116849, -0.8100277092487823, 0.0), (3.3830200057098523, 4.0155477063595555, 3.40770764056194))
 ```
