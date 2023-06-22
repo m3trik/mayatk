@@ -48,7 +48,7 @@
        <enum>QLayout::SetFixedSize</enum>
       </property>
       <item>
-       <widget class="Draggable_header" name="draggable_header">
+       <widget class="DraggableHeader" name="draggableHeader">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -571,14 +571,14 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>Draggable_header</class>
+   <class>DraggableHeader</class>
    <extends>QLabel</extends>
-   <header>draggable_header.h</header>
+   <header>uitk.widgets.draggableHeader.DraggableHeader.h</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
-   <header>widgets.combobox.h</header>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

@@ -6,34 +6,36 @@ import inspect
 
 
 class Main(unittest.TestCase):
-	'''
-	'''
-	def perform_test(self, case):
-		'''
-		'''
-		for expression, expected_result in case.items():
-			m = str(expression).split('(')[0] #ie. 'self.setCase' from "self.setCase('xxx', 'upper')"
+    """ """
 
-			try:
-				path = os.path.abspath(inspect.getfile(eval(m)))
-			except TypeError as error:
-				path = ''
+    def perform_test(self, case):
+        """ """
+        for expression, expected_result in case.items():
+            m = str(expression).split("(")[
+                0
+            ]  # ie. 'self.set_case' from "self.set_case('xxx', 'upper')"
 
-			result = eval(expression)
-			self.assertEqual(
-				result, 
-				expected_result, 
-				"\n\nError: {}\n  Call:     {}\n  Expected: {} {}\n  Returned: {} {}".format(path, expression.replace('self.', '', 1), type(expected_result), expected_result, type(result), result)
-			)
+            try:
+                path = os.path.abspath(inspect.getfile(eval(m)))
+            except TypeError as error:
+                path = ""
+
+            result = eval(expression)
+            self.assertEqual(
+                result,
+                expected_result,
+                "\n\nError: {}\n  Call:     {}\n  Expected: {} {}\n  Returned: {} {}".format(
+                    path,
+                    expression.replace("self.", "", 1),
+                    type(expected_result),
+                    expected_result,
+                    type(result),
+                    result,
+                ),
+            )
+
 
 # -----------------------------------------------------------------------------
-
-
-
-
-
-
-
 
 
 # -----------------------------------------------------------------------------

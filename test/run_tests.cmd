@@ -11,17 +11,17 @@ echo/
 
 
 rem set PYTHONPATH=
-rem %mayapy% -c "from mayatk import appendMayaPaths; appendMayaPaths(str(%version%))"
-rem %mayapy% -c "import maya.standalone; maya.standalone.initialize(name='python')"
+%mayapy% -c "from mayatk import append_maya_paths; append_maya_paths(str(%version%))"
+%mayapy% -c "import maya.standalone; maya.standalone.initialize(name='python')"
 rem %mayapy% -m pip install pymel~=1.3.0a
 
 
-%mayapy% -c "from test import Core_test;  Core_test.unittest.main(exit=False)"
-%mayapy% -c "from test import Node_test;  Node_test.unittest.main(exit=False)"
-%mayapy% -c "from test import Cmpt_test;  Cmpt_test.unittest.main(exit=False)"
-%mayapy% -c "from test import Edit_test;  Edit_test.unittest.main(exit=False)"
-%mayapy% -c "from test import Xform_test; Xform_test.unittest.main(exit=False)"
-%mayapy% -c "from test import Rig_test;   Rig_test.unittest.main(exit=False)"
+%mayapy% -c "from test import core_test;  core_test.unittest.main(exit=False)"
+%mayapy% -c "from test import node_test;  node_test.unittest.main(exit=False)"
+%mayapy% -c "from test import cmpt_test;  cmpt_test.unittest.main(exit=False)"
+%mayapy% -c "from test import edit_test;  edit_test.unittest.main(exit=False)"
+%mayapy% -c "from test import xform_test; xform_test.unittest.main(exit=False)"
+%mayapy% -c "from test import rig_test;   rig_test.unittest.main(exit=False)"
 
 
 PAUSE
