@@ -6,7 +6,7 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = '0.6.2'
+__version__ = '0.6.5'
 
 
 # Define dictionaries to map class names, method names, class method names, and sub-modules to their respective modules
@@ -106,29 +106,29 @@ def __getattr__(name):
 
 
 # def __getattr__(attr):
-# 	"""This function dynamically imports a module and returns an attribute from the module.
+#   """This function dynamically imports a module and returns an attribute from the module.
 
-# 	Parameters:
-# 		attr (str): The name of the attribute to be imported. The name should be in the format
-# 					'module_name.attribute_name' or just 'attribute_name'.
-# 	Returns:
-# 		(obj) The attribute specified by the `attr` argument.
+#   Parameters:
+#       attr (str): The name of the attribute to be imported. The name should be in the format
+#                   'module_name.attribute_name' or just 'attribute_name'.
+#   Returns:
+#       (obj) The attribute specified by the `attr` argument.
 
-# 	:Raises:
-# 		AttributeError: If the specified attribute is not found in either the original module
-# 						or the 'Misc' module within the package.
-# 	Example:
-# 		<package>.__getattr__('module1.attribute1') #returns: <attribute1 value>
-# 		<package>.__getattr__('attribute1') #returns: <attribute1 value>
-# 	"""
-# 	try:
-# 		module = __import__(f"{__package__}.{attr}", fromlist=[f"{attr}"])
-# 		setattr(sys.modules[__name__], attr, getattr(module, attr))
-# 		return getattr(module, attr)
+#   :Raises:
+#       AttributeError: If the specified attribute is not found in either the original module
+#                       or the 'Misc' module within the package.
+#   Example:
+#       <package>.__getattr__('module1.attribute1') #returns: <attribute1 value>
+#       <package>.__getattr__('attribute1') #returns: <attribute1 value>
+#   """
+#   try:
+#       module = __import__(f"{__package__}.{attr}", fromlist=[f"{attr}"])
+#       setattr(sys.modules[__name__], attr, getattr(module, attr))
+#       return getattr(module, attr)
 
-# 	except (ValueError, ModuleNotFoundError):
-# 		module = __import__(f"{__package__}.Misc", fromlist=["Misc"])
-# 		return getattr(module, attr)
+#   except (ValueError, ModuleNotFoundError):
+#       module = __import__(f"{__package__}.Misc", fromlist=["Misc"])
+#       return getattr(module, attr)
 
-# 	except AttributeError as error:
-# 		raise AttributeError(f"Module '{__package__}' has no attribute '{attr}'") from error
+#   except AttributeError as error:
+#       raise AttributeError(f"Module '{__package__}' has no attribute '{attr}'") from error
