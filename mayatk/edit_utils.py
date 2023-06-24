@@ -292,27 +292,21 @@ class Edit:
             )
 
     @classmethod
-    def delete_along_axis(cls, obj, axis="-x"):
+    def delete_along_axis(cls, objects, axis="-x"):
         """Delete components of the given mesh object along the specified axis.
 
         Parameters:
-                obj (obj): Mesh object.
-                axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted.
+            obj (obj): Mesh object.
+            axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted.
         """
-        for node in [
-            n
-            for n in pm.listRelatives(obj, allDescendents=1)
-            if pm.objectType(n, isType="mesh")
-        ]:  # get any mesh type child nodes of obj.
+        # Get any mesh type child nodes of obj.
+        for node in (o for o in objects if not node_utils.Node.is_group(o)):
             faces = cls.get_all_faces_on_axis(node, axis)
-            if len(faces) == pm.polyEvaluate(
-                node, face=1
-            ):  # if all faces fall on the specified axis.
-                pm.delete(node)  # delete entire node
+            # If all faces fall on the specified axis.
+            if len(faces) == pm.polyEvaluate(node, face=1):
+                pm.delete(node)  # Delete entire node
             else:
-                pm.delete(faces)  # else, delete any individual faces.
-
-        misc_utils.Misc.mfn_mesh_generator("Delete faces on <hl>" + axis.upper() + "</hl>.")
+                pm.delete(faces)  # Else, delete any individual faces.
 
     @classmethod
     def clean_geometry(

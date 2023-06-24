@@ -166,27 +166,29 @@ class Misc:
             yield mfnMesh
 
     @staticmethod
-    def get_array_type(lst):
-        """Determine if the given element(s) type.
+    def get_array_type(array):
+        """Determine the given element(s) type.
         Samples only the first element.
 
         Parameters:
-            obj (str/obj/list): The components(s) to query.
+            array (str/obj/list): The components(s) to query.
 
         Returns:
-            (list) 'str', 'obj'(shape node), 'transform'(as string), 'int'(valid only at sub-object level)
-
-        Example:
-        get_array_type('cyl.vtx[0]') #returns: 'transform'
-        get_array_type('cylShape.vtx[:]') #returns: 'str'
+            (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
         try:
-            o = Iter.make_iterable(lst)[0]
+            o = Iter.make_iterable(array)[0]
         except IndexError:
             # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
 
-        return "str" if isinstance(o, str) else "int" if isinstance(o, int) else "obj"
+        return (
+            "str"
+            if isinstance(o, str)
+            else "int"
+            if isinstance(o, int)
+            else node_utils.Node.get_type(o)
+        )
 
     @staticmethod
     def convert_array_type(lst, returned_type="str", flatten=False):
@@ -310,7 +312,7 @@ class Misc:
     @staticmethod
     def get_panel(*args, **kwargs):
         """Returns panel and panel configuration information.
-        A fix for the broken pymel command of the same name.
+        A fix for the broken pymel command `getPanel`.
 
         Parameters:
             [allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
