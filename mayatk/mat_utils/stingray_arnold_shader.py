@@ -1,15 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
-import sys, os
-from PySide2 import QtCore, QtWidgets
+from PySide2 import QtWidgets
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-
 from uitk import Switchboard
-from pythontk import File, Img, Str
+import pythontk as ptk
 
 # from this package:
 from mayatk.misc_utils import Misc
@@ -34,7 +32,7 @@ class StingrayArnoldShader:
         node = pm.ls(self.hdr_env_name, exactType="aiSkyDomeLight")
         try:
             return node[0]
-        except IndexError as error:
+        except IndexError:
             return None
 
     @hdr_env.setter
@@ -107,33 +105,25 @@ class StingrayArnoldShader:
                 "aiStandardSurface", name=name + "_ai" if name else ""
             )
 
-            opacityMap = Img.filter_images_by_type(textures, "Opacity")
+            opacityMap = ptk.filter_images_by_type(textures, "Opacity")
             if opacityMap:
                 pm.shaderfx(
                     sfxnode="StingrayPBS1",
                     loadGraph=r"C:/_local/_test/shaderfx/Standard_Transparent.sfx",
                 )
 
-            openGLMap = Img.filter_images_by_type(textures, "Normal_OpenGL")
-            directXMap = Img.filter_images_by_type(textures, "Normal_DirectX")
+            openGLMap = ptk.filter_images_by_type(textures, "Normal_OpenGL")
+            directXMap = ptk.filter_images_by_type(textures, "Normal_DirectX")
             if directXMap and not openGLMap and normalMapType == "Normal_OpenGL":
-                mapPath = Img.create_gl_from_dx(directXMap[0])
+                mapPath = ptk.create_gl_from_dx(directXMap[0])
                 textures.append(mapPath)
                 normal_map_created_from_other_type = True
-                callback(
-                    "OpenGL map created using {}.".format(
-                        Str.truncate(directXMap[0], 20)
-                    )
-                )
+                callback(f"OpenGL map created using {ptk.truncate(directXMap[0], 20)}.")
             if openGLMap and not directXMap and normalMapType == "Normal_DirectX":
-                mapPath = Img.create_dx_from_gl(openGLMap[0])
+                mapPath = ptk.create_dx_from_gl(openGLMap[0])
                 textures.append(mapPath)
                 normal_map_created_from_other_type = True
-                callback(
-                    "DirectX map created using {}.".format(
-                        Str.truncate(openGLMap[0], 20)
-                    )
-                )
+                callback(f"DirectX map created using {ptk.truncate(openGLMap[0], 20)}.")
 
             srSG_node = Node.get_outgoing_node_by_type(sr_node, "shadingEngine")
 
@@ -151,7 +141,7 @@ class StingrayArnoldShader:
             length = len(textures)
             progress = 0
             for f in textures:
-                typ = Img.get_image_type_from_filename(f)
+                typ = ptk.get_image_type_from_filename(f)
 
                 progress += 1
 
@@ -164,7 +154,7 @@ class StingrayArnoldShader:
                     continue
 
                 callback(
-                    "creating nodes and connections for <b>{}</b> map ..".format(typ),
+                    f"creating nodes and connections for <b>{typ}</b> map ..",
                     [progress, length],
                 )
 
@@ -271,23 +261,17 @@ class StingrayArnoldShader:
                     if normal_map_created_from_other_type:
                         continue  # do not show a warning for unconnected normal maps if it resulted from being converted to a different output type.
                     callback(
-                        '<br><hl style="color:rgb(255, 100, 100);"><b>Map type: <b>{}</b> not connected:<br></hl>'.format(
-                            typ, Str.truncate(f, 60)
-                        ),
+                        f'<br><hl style="color:rgb(255, 100, 100);"><b>Map type: <b>{typ, ptk.truncate(f, 60)}</b> not connected:<br></hl>',
                         [progress, length],
                     )
                     continue
 
                 callback(
-                    '<font style="color: rgb(80,180,100)">{}..connected successfully.</font>'.format(
-                        typ
-                    )
+                    f'<font style="color: rgb(80,180,100)">{typ}..connected successfully.</font>'
                 )
-        except Exception as error:
+        except Exception as e:
             callback(
-                '<br><hl style="color:rgb(255, 100, 100);"><b>Error:</b>{}.</hl>'.format(
-                    error
-                )
+                f'<br><hl style="color:rgb(255, 100, 100);"><b>Error:</b>{e}.</hl>'
             )
 
         self.hdr_env = hdrMap
@@ -302,7 +286,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
-    proj_root_dir = File.get_filepath(__file__)
+    proj_root_dir = ptk.get_filepath(__file__)
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -312,27 +296,25 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.image_files = None
 
         # set json file location.
-        path = "{}/stingray_arnold_shader.json".format(self.sb.defaultDir)
-        File.set_json_file(path)  # set json file name
+        path = f"{self.sb.default_dir}/stingray_arnold_shader.json"
+        ptk.set_json_file(path)  # set json file name
 
         # add filenames|filepaths to the comboBox.
-        hdr_path = "{}/resources/hdr".format(self.proj_root_dir)
-        hdr_filenames = File.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
-        hdr_fullpaths = File.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
-        self.sb.ui.cmb000.add(
-            dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False
-        )
+        hdr_path = f"{self.proj_root_dir}/resources/hdr"
+        hdr_filenames = ptk.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
+        hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
+        self.sb.ui.cmb000.add(dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False)
 
         # initialize widgets with any saved values.
-        self.sb.ui.txt000.setText(File.get_json("mat_name"))
+        self.sb.ui.txt000.setText(ptk.get_json("mat_name"))
         self.sb.ui.txt001.setText(self.msg_intro)
-        hdr_map_visibility = File.get_json("hdr_map_visibility")
+        hdr_map_visibility = ptk.get_json("hdr_map_visibility")
         if hdr_map_visibility:
             self.sb.ui.chk000.setChecked(hdr_map_visibility)
-        hdr_map = File.get_json("hdr_map")
+        hdr_map = ptk.get_json("hdr_map")
         if hdr_map:
             self.sb.ui.cmb000.setCurrentItem(hdr_map)
-        normal_map_type = File.get_json("normal_map_type")
+        normal_map_type = ptk.get_json("normal_map_type")
         if normal_map_type:
             self.sb.ui.cmb001.setCurrentItem(normal_map_type)
         node = self.hdr_env_transform
@@ -380,35 +362,31 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         text = self.sb.ui.cmb001.currentText()
         return text
 
-    def cmb000(self, index):
+    def cmb000(self, index, widget):
         """HDR map selection."""
-        cmb = self.sb.ui.cmb000
-        text = cmb.currentText()
-        data = cmb.currentData()
+        text = widget.currentText()
+        data = widget.currentData()
 
         self.hdr_env = data  # set the HDR map.
-        File.set_json("hdr_map", text)
+        ptk.set_json("hdr_map", text)
 
-    def chk000(self, state):
-        """ """
-        chk = self.sb.ui.chk000
-
-        self.set_hdr_map_visibility(state)  # set the HDR map visibility.
-        File.set_json("hdr_map_visibility", state)
-
-    def cmb001(self, index):
+    def cmb001(self, index, widget):
         """Normal map output selection."""
         cmb = self.sb.ui.cmb001
         text = cmb.currentText()
-        File.set_json("normal_map_type", text)
+        ptk.set_json("normal_map_type", text)
 
-    def txt000(self, text=None):
+    def chk000(self, state, widget):
+        """ """
+        self.set_hdr_map_visibility(state)  # set the HDR map visibility.
+        ptk.set_json("hdr_map_visibility", state)
+
+    def txt000(self, text, widget):
         """Material name."""
-        txt = self.sb.ui.txt000
-        text = txt.text()
-        File.set_json("mat_name", text)
+        text = widget.text()
+        ptk.set_json("mat_name", text)
 
-    def slider000(self, value):
+    def slider000(self, value, widget):
         """Rotate the HDR map."""
         if self.hdr_env:
             transform = Node.get_transform_node(self.hdr_env)
@@ -443,7 +421,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
     def b001(self):
         """Get texture maps."""
-        image_files = Img.get_image_files()
+        image_files = ptk.get_image_files()
 
         if image_files:
             self.image_files = image_files
@@ -452,8 +430,8 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             msg_mat_selection = self.image_files
             for (
                 i
-            ) in msg_mat_selection:  # format msg_intro using the mapTypes in imtools.
-                self.callback(Str.truncate(i, 60))
+            ) in msg_mat_selection:  # format msg_intro using the map_types in imtools.
+                self.callback(ptk.truncate(i, 60))
 
             self.sb.ui.b000.setDisabled(False)
         elif not self.image_files:
@@ -470,8 +448,8 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.sb.ui.txt003.clear()
 
         if isinstance(progress, (list, tuple, set)):
-            p, l = progress
-            progress = (p / l) * 100
+            p, length = progress
+            progress = (p / length) * 100
 
         self.sb.ui.txt001.append(string)
 
@@ -514,17 +492,15 @@ class StingrayArnoldShaderUI(Switchboard):
 
 # -----------------------------------------------------------------------------
 
-
-# -----------------------------------------------------------------------------
-
 if __name__ == "__main__":
     parent = Misc.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
-    sb.ui.show()
+    sb.ui.set_style(theme="dark")
+    sb.ui.show(app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
 
 
-# Deprecated ------------------------------------------------------------------
+# Deprecated ------------------------------------
