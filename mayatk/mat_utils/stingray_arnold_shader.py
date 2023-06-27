@@ -290,33 +290,18 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
     def __init__(self, **kwargs):
         super().__init__()
-        """
-        """
+        """ """
         self.sb = self.switchboard()
         self.image_files = None
 
-        # set json file location.
-        path = f"{self.sb.default_dir}/stingray_arnold_shader.json"
-        ptk.set_json_file(path)  # set json file name
-
-        # add filenames|filepaths to the comboBox.
+        # Add filenames|filepaths to the comboBox.
         hdr_path = f"{self.proj_root_dir}/resources/hdr"
         hdr_filenames = ptk.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
         hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
         self.sb.ui.cmb000.add(dict(zip(hdr_filenames, hdr_fullpaths)), ascending=False)
 
-        # initialize widgets with any saved values.
-        self.sb.ui.txt000.setText(ptk.get_json("mat_name"))
         self.sb.ui.txt001.setText(self.msg_intro)
-        hdr_map_visibility = ptk.get_json("hdr_map_visibility")
-        if hdr_map_visibility:
-            self.sb.ui.chk000.setChecked(hdr_map_visibility)
-        hdr_map = ptk.get_json("hdr_map")
-        if hdr_map:
-            self.sb.ui.cmb000.setCurrentItem(hdr_map)
-        normal_map_type = ptk.get_json("normal_map_type")
-        if normal_map_type:
-            self.sb.ui.cmb001.setCurrentItem(normal_map_type)
+
         node = self.hdr_env_transform
         if node:
             rotation = node.rotateY.get()
@@ -327,7 +312,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         """Get the mat name from the user input text field.
 
         Returns:
-                (str)
+            (str)
         """
         text = self.sb.ui.txt000.text()
         return text
@@ -337,7 +322,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         """Get the hdr map filepath from the comboBoxes current text.
 
         Returns:
-                (str) data as string.
+            (str) data as string.
         """
         data = self.sb.ui.cmb000.currentData()
         return data
@@ -347,7 +332,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         """Get the hdr map visibility state from the checkBoxes current state.
 
         Returns:
-                (bool)
+            (bool)
         """
         state = self.sb.ui.chk000.isChecked()
         return state
@@ -357,34 +342,26 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         """Get the normal map type from the comboBoxes current text.
 
         Returns:
-                (str)
+            (str)
         """
         text = self.sb.ui.cmb001.currentText()
         return text
 
     def cmb000(self, index, widget):
         """HDR map selection."""
-        text = widget.currentText()
         data = widget.currentData()
 
         self.hdr_env = data  # set the HDR map.
-        ptk.set_json("hdr_map", text)
 
     def cmb001(self, index, widget):
         """Normal map output selection."""
-        cmb = self.sb.ui.cmb001
-        text = cmb.currentText()
-        ptk.set_json("normal_map_type", text)
 
     def chk000(self, state, widget):
         """ """
         self.set_hdr_map_visibility(state)  # set the HDR map visibility.
-        ptk.set_json("hdr_map_visibility", state)
 
     def txt000(self, text, widget):
         """Material name."""
-        text = widget.text()
-        ptk.set_json("mat_name", text)
 
     def slider000(self, value, widget):
         """Rotate the HDR map."""
@@ -437,12 +414,25 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         elif not self.image_files:
             self.sb.ui.b000.setDisabled(True)
 
+    def toggle_expand(self, state, widget):
+        """ """
+        if state:
+            if not hasattr(self, "_height_open"):
+                self._height_closed = self.sb.ui.height()
+                self._height_open = self.sb.ui.sizeHint().height() + 100
+            self.sb.ui.txt001.show()
+            self.sb.ui.resize(self.sb.ui.width(), self._height_open)
+        else:
+            self._height_open = self.sb.ui.height()
+            self.sb.ui.txt001.hide()
+            self.sb.ui.resize(self.sb.ui.width(), self._height_closed)
+
     def callback(self, string, progress=None, clear=False):
         """
         Parameters:
-                string (str): The text to output to a textEdit widget.
-                progress (int/list): The progress amount to register with the progressBar.
-                        Can be given as an int or a tuple as: (progress, total_len)
+            string (str): The text to output to a textEdit widget.
+            progress (int/list): The progress amount to register with the progressBar.
+                    Can be given as an int or a tuple as: (progress, total_len)
         """
         if clear:
             self.sb.ui.txt003.clear()
@@ -469,25 +459,8 @@ class StingrayArnoldShaderUI(Switchboard):
 
         self.ui.draggableHeader.hide()
         self.ui.txt001.hide()
-        self.ui.toggle_expand.clicked.connect(self.toggle_text_edit)
 
         self.ui.resize(self.ui.sizeHint())
-
-    def toggle_text_edit(self):
-        txt = self.ui.txt001
-        if txt.isVisible():
-            self._height_open = self.ui.height()
-            txt.hide()
-            self.ui.resize(self.ui.width(), self._height_closed)
-        else:
-            self._height_closed = self.ui.height()
-            txt.show()
-            self.ui.resize(
-                self.ui.width(),
-                self._height_open
-                if hasattr(self, "_height_open")
-                else self.ui.sizeHint().height(),
-            )
 
 
 # -----------------------------------------------------------------------------
