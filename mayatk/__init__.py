@@ -6,7 +6,7 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = '0.6.5'
+__version__ = '0.6.6'
 
 
 # Define dictionaries to map class names, method names, class method names, and sub-modules to their respective modules
