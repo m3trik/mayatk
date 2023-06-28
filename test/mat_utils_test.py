@@ -8,7 +8,7 @@ from mayatk.mat_utils import mat_utils
 importlib.reload(mat_utils)
 
 
-class MatTest(unittest.TestCase, mat_utils.Mat):
+class MatUtilsTest(unittest.TestCase, mat_utils.MatUtils):
     def test_get_mats(self):
         """Test the get_mats method."""
         # Create a sphere and assign a lambert material to it
@@ -72,7 +72,7 @@ class MatTest(unittest.TestCase, mat_utils.Mat):
         lambert = pm.shadingNode("lambert", asShader=True)
 
         # Assign the lambert material to the sphere
-        mat_utils.Mat.assign_mat([sphere], lambert)
+        mat_utils.MatUtils.assign_mat([sphere], lambert)
 
         # Print the materials of the sphere after assignment
         print(
@@ -81,7 +81,7 @@ class MatTest(unittest.TestCase, mat_utils.Mat):
         )
 
         # Get the materials of the sphere
-        mats = list(mat_utils.Mat.get_mats(sphere))
+        mats = list(mat_utils.MatUtils.get_mats(sphere))
 
         # Print the materials retrieved by get_mats
         print("Materials from get_mats:", mats)

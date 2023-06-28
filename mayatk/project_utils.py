@@ -6,11 +6,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+from pythontk import FileUtils
 
-from pythontk import File
 
-
-class Project:
+class ProjectUtils:
     """ """
 
     @staticmethod
@@ -43,9 +42,9 @@ class Project:
             return []
 
         result = [
-            File.format_path(f)
+            FileUtils.format_path(f)
             for f in reversed(files)
-            if File.is_valid(f) and "Autosave" not in f
+            if FileUtils.is_valid(f) and "Autosave" not in f
         ]
 
         if index is not None:
@@ -58,11 +57,11 @@ class Project:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.time_stamp(res): res for res in result}
+                result = {FileUtils.time_stamp(res): res for res in result}
             else:
-                result = {res: File.time_stamp(res) for res in result}
+                result = {res: FileUtils.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.time_stamp(res) for res in result]
+            result = [FileUtils.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -96,23 +95,25 @@ class Project:
         if not files:
             return []
 
-        result = [File.format_path(f) for f in reversed(files) if File.is_valid(f)]
+        result = [
+            FileUtils.format_path(f) for f in reversed(files) if FileUtils.is_valid(f)
+        ]
 
         if index is not None:
             try:
                 result = result[index]
             except (IndexError, TypeError):
-                print(f"Incorrect index or slice. Returning empty list.")
+                print("Incorrect index or slice. Returning empty list.")
                 return []
 
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.time_stamp(res): res for res in result}
+                result = {FileUtils.time_stamp(res): res for res in result}
             else:
-                result = {res: File.time_stamp(res) for res in result}
+                result = {res: FileUtils.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.time_stamp(res) for res in result]
+            result = [FileUtils.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -162,23 +163,23 @@ class Project:
         )
 
         for file in files:
-            result.append(File.format_path(file))
+            result.append(FileUtils.format_path(file))
 
         if index is not None:
             try:
                 result = result[index]
             except (IndexError, TypeError):
-                print(f"Incorrect index or slice. Returning empty list.")
+                print("Incorrect index or slice. Returning empty list.")
                 return []
 
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {File.time_stamp(res): res for res in result}
+                result = {FileUtils.time_stamp(res): res for res in result}
             else:
-                result = {res: File.time_stamp(res) for res in result}
+                result = {res: FileUtils.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [File.time_stamp(res) for res in result]
+            result = [FileUtils.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -195,11 +196,11 @@ class Project:
         """
         workspace_dir = str(pm.workspace(q=True, rd=1))  # get current project path.
 
-        files = File.get_dir_contents(
+        files = FileUtils.get_dir_contents(
             workspace_dir, "filepaths", inc_files=("*.mb", "*.ma")
         )
         # Replace any backslashes with forward slashes.
-        result = [File.format_path(f) for f in files]
+        result = [FileUtils.format_path(f) for f in files]
 
         if not fullPath:
             result = [f.split("\\")[-1] for f in result]
@@ -268,20 +269,17 @@ class Project:
         return [ref.filePath() for ref in pm.system.listReferences()]
 
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     pass
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
-
+# deprecated ---------------------
 # @staticmethod
 # def reference_scene(scene, remove=False, lockReference=False):
 #     """Create a reference to a Maya scene.
@@ -322,13 +320,13 @@ if __name__ == "__main__":
 # if dir2 is not None:  # Check if the environment variable exists
 #     dir2 = dir2.split(";")[0]
 
-#     result = File.get_dir_contents(dir1, "filepaths", inc_files=("*.mb", "*.ma"))
+#     result = FileUtils.get_dir_contents(dir1, "filepaths", inc_files=("*.mb", "*.ma"))
 #     if dir2 is not None:  # Add the files from the second directory if it exists
-#         result += File.get_dir_contents(dir2, "filepaths", inc_files=("*.mb", "*.ma"))
+#         result += FileUtils.get_dir_contents(dir2, "filepaths", inc_files=("*.mb", "*.ma"))
 #     # # Replace any backslashes with forward slashes and reverse the list.
-#     # result = [File.format_path(f) for f in list(reversed(files))]
+#     # result = [FileUtils.format_path(f) for f in list(reversed(files))]
 
 #     if timestamp:  # attach modified timestamp
-#         result = File.time_stamp(result, sort=True)
+#         result = FileUtils.time_stamp(result, sort=True)
 
 #     return result

@@ -10,8 +10,8 @@ from uitk import Switchboard
 import pythontk as ptk
 
 # from this package:
-from mayatk.misc_utils import Misc
-from mayatk.node_utils import Node
+from mayatk.utils import Utils
+from mayatk.node_utils import NodeUtils
 
 
 __version__ = "0.5.3"
@@ -38,9 +38,11 @@ class StingrayArnoldShader:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
-        node = self.hdr_env  # Node.node_exists('aiSkyDomeLight', search='exactType')
+        node = (
+            self.hdr_env
+        )  # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
         if not node:
-            node = Node.create_render_node(
+            node = NodeUtils.create_render_node(
                 "aiSkyDomeLight",
                 "asLight",
                 name=self.hdr_env_name,
@@ -50,9 +52,9 @@ class StingrayArnoldShader:
             self.hdr_env_transform.hiddenInOutliner.set(1)
             pm.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
 
-        file_node = Node.get_incoming_node_by_type(node, "file")
+        file_node = NodeUtils.get_incoming_node_by_type(node, "file")
         if not file_node:
-            file_node = Node.create_render_node(
+            file_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", texture_node=True
             )
             pm.connectAttr(file_node.outColor, node.color, force=True)
@@ -62,7 +64,7 @@ class StingrayArnoldShader:
     @property
     def hdr_env_transform(self) -> object:
         """ """
-        node = Node.get_transform_node(self.hdr_env)
+        node = NodeUtils.get_transform_node(self.hdr_env)
         if not node:
             return None
         return node
@@ -73,7 +75,7 @@ class StingrayArnoldShader:
         if node:
             node.camera.set(state)
 
-    @Misc.undo
+    @Utils.undo
     def create_network(
         self,
         textures,
@@ -100,8 +102,8 @@ class StingrayArnoldShader:
                 "shaderFXPlugin", quiet=True
             )  # assure stringray plugin is loaded.
 
-            sr_node = Node.create_render_node("StingrayPBS", name=name)
-            ai_node = Node.create_render_node(
+            sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
+            ai_node = NodeUtils.create_render_node(
                 "aiStandardSurface", name=name + "_ai" if name else ""
             )
 
@@ -125,14 +127,14 @@ class StingrayArnoldShader:
                 normal_map_created_from_other_type = True
                 callback(f"DirectX map created using {ptk.truncate(openGLMap[0], 20)}.")
 
-            srSG_node = Node.get_outgoing_node_by_type(sr_node, "shadingEngine")
+            srSG_node = NodeUtils.get_outgoing_node_by_type(sr_node, "shadingEngine")
 
             aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
 
             bump_node = pm.shadingNode("bump2d", asShader=True)
             bump_node.bumpInterp.set(1)  # set bump node to 'tangent space normals'
 
-            Node.connect_multi_attr(  # set node connections.
+            NodeUtils.connect_multi_attr(  # set node connections.
                 (ai_node.outColor, srSG_node.aiSurfaceShader),
                 (aiMult_node.outColor, ai_node.baseColor),
                 (bump_node.outNormal, ai_node.normalCamera),
@@ -159,21 +161,21 @@ class StingrayArnoldShader:
                 )
 
                 if typ == "Base_Color":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_color_map, force=True)
                     sr_node.use_color_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input1, force=True)
 
                 elif typ == "Roughness":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_roughness_map, force=True)
                     sr_node.use_roughness_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
@@ -188,11 +190,11 @@ class StingrayArnoldShader:
                     )  # opacity: same roughness map used in Specular Roughness to provide additional bluriness of refraction.
 
                 elif typ == "Metallic":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_metallic_map, force=True)
                     sr_node.use_metallic_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
@@ -204,22 +206,22 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, ai_node.metalness, force=True)
 
                 elif typ == "Emissive":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_emissive_map, force=True)
                     sr_node.use_emissive_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outAlpha, ai_node.emission, force=True)
                     pm.connectAttr(n2.outColor, ai_node.emissionColor, force=True)
 
                 elif "Normal" in typ:
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_normal_map, force=True)
                     sr_node.use_normal_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
@@ -231,21 +233,21 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, bump_node.bumpValue, force=True)
 
                 elif typ == "Ambient_Occlusion":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outColor, sr_node.TEX_ao_map, force=True)
                     sr_node.use_ao_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file", "as2DTexture", tex=f, texture_node=True
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input2, force=True)
 
                 elif typ == "Opacity":
-                    n1 = Node.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
                     pm.connectAttr(n1.outAlpha, sr_node.opacity, force=True)
                     sr_node.use_opacity_map.set(1)
 
-                    n2 = Node.create_render_node(
+                    n2 = NodeUtils.create_render_node(
                         "file",
                         "as2DTexture",
                         tex=f,
@@ -366,7 +368,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     def slider000(self, value, widget):
         """Rotate the HDR map."""
         if self.hdr_env:
-            transform = Node.get_transform_node(self.hdr_env)
+            transform = NodeUtils.get_transform_node(self.hdr_env)
             pm.rotate(
                 transform,
                 value,
@@ -466,7 +468,7 @@ class StingrayArnoldShaderUI(Switchboard):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parent = Misc.get_main_window()
+    parent = Utils.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
     sb.ui.set_style(theme="dark")
     sb.ui.show(app_exec=True)

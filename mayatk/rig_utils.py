@@ -4,14 +4,13 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-
-from pythontk import Str, Iter
+import pythontk as ptk
 
 # from this package:
 from mayatk import node_utils
 
 
-class Rig(object):
+class RigUtils(object):
     """ """
 
     @staticmethod
@@ -19,12 +18,12 @@ class Rig(object):
         """Create a locator with the given scale.
 
         Parameters:
-                name (str): Name the locator.
-                pos (tuple): The desired location in world space.
-                scale (float) = The desired scale of the locator.
+            name (str): Name the locator.
+            pos (tuple): The desired location in world space.
+            scale (float) = The desired scale of the locator.
 
         Returns:
-                (obj) locator
+            (obj) locator
         """
         loc = pm.spaceLocator()
 
@@ -42,16 +41,8 @@ class Rig(object):
         """Remove a parented locator from the child object.
 
         Parameters:
-                obj (str/obj/list): The child object or the locator itself.
+            obj (str/obj/list): The child object or the locator itself.
         """
-        errorMsg = lambda: pm.inViewMessage(
-            status_message="{} in remove_locator\n\t# Error: Unable to remove locator for the given object. #".format(
-                __file__
-            ),
-            pos="topCenter",
-            fade=True,
-        )
-
         pm.undoInfo(openChunk=1)
 
         for obj in pm.ls(objects, long=True, objectsOnly=True):
@@ -59,30 +50,36 @@ class Rig(object):
                 continue
 
             elif (
-                node_utils.Node.is_locator(obj)
-                and not node_utils.Node.get_type(obj)
-                and not node_utils.Node.get_children(obj)
+                node_utils.NodeUtils.is_locator(obj)
+                and not node_utils.NodeUtils.get_type(obj)
+                and not node_utils.NodeUtils.get_children(obj)
             ):
                 pm.delete(obj)
                 continue
 
             # unlock attributes
-            cls.set_attr_lock_state(
-                obj, translate=False, rotate=False, scale=False
-            )  # unlock all.
+            cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
 
-            if not node_utils.Node.is_locator(obj):
+            if not node_utils.NodeUtils.is_locator(obj):
                 try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = node_utils.Node.get_parent(obj)
-                    if not node_utils.Node.is_locator(obj):
-                        errorMsg()
+                    obj = node_utils.NodeUtils.get_parent(obj)
+                    if not node_utils.NodeUtils.is_locator(obj):
+                        pm.inViewMessage(
+                            status_message="Error: Unable to remove locator for the given object.",
+                            pos="topCenter",
+                            fade=True,
+                        )
                         continue
-                except IndexError as error:
-                    errorMsg()
+                except IndexError:
+                    pm.inViewMessage(
+                        status_message="Error: Unable to remove locator for the given object.",
+                        pos="topCenter",
+                        fade=True,
+                    )
                     continue
 
             # unparent child object
-            children = node_utils.Node.get_children(obj)
+            children = node_utils.NodeUtils.get_children(obj)
             for child in children:
                 pm.parent(child, world=True)
 
@@ -127,7 +124,7 @@ class Rig(object):
             )  # get custom orientation
             pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
             customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
-            if not ctx in ("moveSuperContext", "manipMoveContext"):  # Move tool
+            if ctx not in ("moveSuperContext", "manipMoveContext"):  # Move tool
                 otherToolActive = 1  # some other tool
 
         if orientation and customModeActive:
@@ -192,10 +189,10 @@ class Rig(object):
         A 'True' value locks the attribute, 'False' unlocks, while 'None' leaves the state unchanged.
 
         Parameters:
-                objects (str/obj/list): The object(s) to lock/unlock attributes of.
-                translate (bool): Lock/Unlock all translate x,y,z values at once.
-                rotate (bool): Lock/Unlock all rotate x,y,z values at once.
-                scale (bool): Lock/Unlock all scale x,y,z values at once.
+            objects (str/obj/list): The object(s) to lock/unlock attributes of.
+            translate (bool): Lock/Unlock all translate x,y,z values at once.
+            rotate (bool): Lock/Unlock all rotate x,y,z values at once.
+            scale (bool): Lock/Unlock all scale x,y,z values at once.
         """
         objects = pm.ls(objects, transforms=1, long=True)
 
@@ -213,15 +210,15 @@ class Rig(object):
 
         for obj in objects:
             try:
-                if node_utils.Node.is_locator(obj):
+                if node_utils.NodeUtils.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
-            except IndexError as error:
+            except IndexError:
                 return
 
             for attrs, state in attrs_and_state.items():
                 if state is None:
                     continue
-                for a in Iter.make_iterable(attrs):
+                for a in ptk.make_iterable(attrs):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod
@@ -235,14 +232,14 @@ class Rig(object):
         """Create a group containing any given objects.
 
         Parameters:
-                objects (str/obj/list): The object(s) to group.
-                name (str): Name the group.
-                zero_translation (bool): Freeze translation before parenting.
-                zero_rotation (bool): Freeze rotation before parenting.
-                zero_scale (bool): Freeze scale before parenting.
+            objects (str/obj/list): The object(s) to group.
+            name (str): Name the group.
+            zero_translation (bool): Freeze translation before parenting.
+            zero_rotation (bool): Freeze rotation before parenting.
+            zero_scale (bool): Freeze scale before parenting.
 
         Returns:
-                (obj) the group.
+            (obj) the group.
         """
         grp = pm.group(empty=True, n=name)
         try:
@@ -270,13 +267,13 @@ class Rig(object):
         """Creates a group using the first object to define the local rotation axis.
 
         Parameters:
-                objects (str/obj/list): The objects to group. The first object will be used to define the groups LRA.
-                name (str): The group name.
-                freeze_transforms (bool): Freeze transforms on group child objects.
+            objects (str/obj/list): The objects to group. The first object will be used to define the groups LRA.
+            name (str): The group name.
+            freeze_transforms (bool): Freeze transforms on group child objects.
         """
         try:
             obj, *other = pm.ls(objects, transforms=1)
-        except IndexError as error:
+        except IndexError:
             print(
                 f"{__file__} in create_group_with_first_obj_lra\n\t# Error: Operation requires at least one object. #"
             )
@@ -300,7 +297,7 @@ class Rig(object):
 
         try:
             pm.parent(obj, grp)
-        except:  # root level objects
+        except Exception:  # root level objects
             pm.parent(grp, world=True)
             pm.parent(obj, grp)
 
@@ -340,28 +337,29 @@ class Rig(object):
         If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
 
         Parameters:
-                objects (str/obj/list): A list of objects, or an object name to create locators at.
-                parent (bool): Parent the object to the locator. (default=False)
-                freeze_transforms (bool): Freeze transforms on the locator. (default=True)
-                bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
-                grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
-                loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
-                obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
-                strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-                strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
-                scale (float) = The scale of the locator. (default=1)
-                lock_translate (bool): Lock the translate values of the child object. (default=False)
-                lock_rotation (bool): Lock the rotation values of the child object. (default=False)
-                lock_scale (bool): Lock the scale values of the child object. (default=False)
-                remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
+            objects (str/obj/list): A list of objects, or an object name to create locators at.
+            parent (bool): Parent the object to the locator. (default=False)
+            freeze_transforms (bool): Freeze transforms on the locator. (default=True)
+            bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
+            grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
+            loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
+            obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
+            strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
+            strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
+            scale (float) = The scale of the locator. (default=1)
+            lock_translate (bool): Lock the translate values of the child object. (default=False)
+            lock_rotation (bool): Lock the rotation values of the child object. (default=False)
+            lock_scale (bool): Lock the scale values of the child object. (default=False)
+            remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
 
-        Example: createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
+        Example:
+            createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
         """
         getSuffix = (
             lambda o: loc_suffix
-            if node_utils.Node.is_locator(o)
+            if node_utils.NodeUtils.is_locator(o)
             else grp_suffix
-            if node_utils.Node.is_group(o)
+            if node_utils.NodeUtils.is_group(o)
             else obj_suffix
         )  # match the correct suffix to the object type.
 
@@ -398,7 +396,7 @@ class Rig(object):
                     grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
                     pm.rename(
                         grp,
-                        Str.format_suffix(
+                        ptk.format_suffix(
                             obj.name(),
                             suffix=getSuffix(grp),
                             strip=(obj_suffix, grp_suffix, loc_suffix),
@@ -422,7 +420,7 @@ class Rig(object):
 
                 pm.rename(
                     loc,
-                    Str.format_suffix(
+                    ptk.format_suffix(
                         obj.name(),
                         suffix=getSuffix(loc),
                         strip=(obj_suffix, grp_suffix, loc_suffix),
@@ -432,7 +430,7 @@ class Rig(object):
                 )
                 pm.rename(
                     obj,
-                    Str.format_suffix(
+                    ptk.format_suffix(
                         obj.name(),
                         suffix=getSuffix(obj),
                         strip=(obj_suffix, grp_suffix, loc_suffix),
@@ -455,12 +453,12 @@ class Rig(object):
         pm.undoInfo(closeChunk=1)
 
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     sel = pm.ls(sl=1)
 
-    Rigtk.create_locator_at_object(
+    RigUtils.create_locator_at_object(
         sel,
         parent=1,
         freeze_transforms=1,
@@ -476,63 +474,12 @@ if __name__ == "__main__":
         lock_scale=0,
     )
 
-# --------------------------------------------------------------------------------------------
+if __name__ == "__main__":
+    pass
+
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
-
-
-# the following was replaced with chatgpt code that fixed a: RuntimeError: Can't ungroup leaf-level transforms, but is not tested aside from a few unit test cases.
-# def remove_locator(cls, objects):
-#       '''Remove a parented locator from the child object.
-
-#       Parameters:
-#           obj (str/obj/list): The child object or the locator itself.
-#       '''
-#       errorMsg = lambda: pm.inViewMessage(
-#           status_message="{} in remove_locator\n\t# Error: Unable to remove locator for the given object. #".format(__file__),
-#           pos='topCenter',
-#           fade=True
-#       )
-
-#       pm.undoInfo(openChunk=1)
-
-#       for obj in pm.ls(objects, long=True, objectsOnly=True):
-#           if not pm.objExists(obj):
-#               continue
-
-#           elif node_utils.Node.is_locator(obj) and not node_utils.Node.get_type(obj) and not node_utils.Node.get_children(obj):
-#               pm.delete(obj)
-#               continue
-
-#           #unlock attributes
-#           cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False) #unlock all.
-
-#           if not node_utils.Node.is_locator(obj):
-#               try: #if the 'obj' is not a locator, check if it's parent is.
-#                   obj = node_utils.Node.get_type(obj)
-#                   if not node_utils.Node.is_locator(obj):
-#                       errorMsg()
-#                       continue
-#               except IndexError as error:
-#                   errorMsg()
-#                   continue
-
-#           try: #remove from group
-#               grp = node_utils.Node.get_type(obj)
-#           except IndexError as error:
-#               errorMsg()
-#               continue
-#           if node_utils.Node.is_group(grp):
-#               if grp.split('_')[0]==obj.split('_')[0]:
-#                   pm.ungroup(grp)
-
-#           #remove locator
-#           pm.ungroup(obj)
-#           pm.delete(obj)
-
-#       pm.undoInfo(closeChunk=1)
+# deprecated ---------------------

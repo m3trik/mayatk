@@ -10,7 +10,7 @@ import pythontk as ptk
 from mayatk import node_utils
 
 
-class Mat(object):
+class MatUtils(object):
     """ """
 
     @staticmethod
@@ -66,7 +66,7 @@ class Mat(object):
 
         # convert to dictionary to filter material names and types.
         d = {m.name(): pm.nodeType(m) for m in matList}
-        filtered = ptk.Iter.filter_dict(d, inc, exc, keys=True, values=True)
+        filtered = ptk.filter_dict(d, inc, exc, keys=True, values=True)
 
         # use the filtered results to reconstruct a filtered list of actual materials.
         return [m for m in matList if m.name() in filtered]
@@ -190,7 +190,7 @@ class Mat(object):
             flattened = pm.ls(connected_objs, flatten=True)
             # Only add objects to the list if they are in the specified objects list
             for obj in flattened:
-                transform_node = node_utils.Node.get_transform_node(obj)
+                transform_node = node_utils.NodeUtils.get_transform_node(obj)
                 if transform_node in objects:
                     # Check if the object is a face. If not, convert to faces
                     if not isinstance(obj, pm.MeshFace):
@@ -207,16 +207,14 @@ class Mat(object):
         return objs_with_material
 
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     pass
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
+# deprecated ---------------------

@@ -1,18 +1,19 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
+import sys
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from pythontk import Iter, Str
+import pythontk as ptk
 
 # from this package:
 from mayatk import node_utils
 
 
-class Misc:
+class Utils:
     """ """
 
     def undo(fn):
@@ -124,7 +125,7 @@ class Misc:
 
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layoutName = Str.set_case(
+        layoutName = ptk.set_case(
             container.objectName() + "Layout", "camel"
         )  # results in '<objectName>Layout' or 'layout' if container objectName is ''
         layout.setObjectName(layoutName)
@@ -155,7 +156,7 @@ class Misc:
         import maya.OpenMaya as om
 
         selectionList = om.MSelectionList()
-        for mesh in node_utils.Node.get_shape_node(pm.ls(objects)):
+        for mesh in node_utils.NodeUtils.get_shape_node(pm.ls(objects)):
             selectionList.add(mesh)
 
         for i in range(selectionList.length()):
@@ -177,7 +178,7 @@ class Misc:
             (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
         try:
-            o = Iter.make_iterable(array)[0]
+            o = ptk.make_iterable(array)[0]
         except IndexError:
             # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
@@ -187,7 +188,7 @@ class Misc:
             if isinstance(o, str)
             else "int"
             if isinstance(o, int)
-            else node_utils.Node.get_type(o)
+            else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod
@@ -242,8 +243,8 @@ class Misc:
             if (
                 len(objects) == 1
             ):  # flatten the dict values from 'result' and remove any duplicates.
-                flattened = Iter.flatten(result.values())
-                result = Iter.remove_duplicates(flattened)
+                flattened = ptk.flatten(result.values())
+                result = ptk.remove_duplicates(flattened)
 
         elif returned_type == "str":
             result = list(map(str, lst))
