@@ -1,12 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
 import unittest
 import inspect
-
 import pymel.core as pm
-
-from mayatk import Node
+from mayatk import NodeUtils
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -61,7 +59,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class Node_test(Main, Node):
+class NodeUtils_test(Main, NodeUtils):
     """
     set object mode:
             pm.selectMode(object=1)
@@ -243,29 +241,3 @@ if __name__ == "__main__":
 # """
 
 # Deprecated ---------------------
-
-
-# ------------------------------------------------------------------------------------
-# this is the missing stuff when running python.exe compared with mayapy.exe
-
-# mayaver = 2022
-# pythonver = 37
-
-# mayapath = '%ProgramFiles%/Autodesk/Maya{}'.format(mayaver)
-
-# os.environ['MAYA_LOCATION'] = mayapath
-# os.environ['PYTHONHOME'] = mayapath+'/Python{}'.format(mayaver, pythonver)
-# os.environ['PATH'] = mayapath+'/bin;'.format(mayaver) + os.environ['PATH']
-
-# from pythontk import File
-# for d in [
-#   '{}/bin'.format(mayapath),
-#   '{}/bin3'.format(mayapath),
-#   '{}/Python{}'.format(mayapath, pythonver)
-#   ]:
-#   for dd in File.get_dir_contents(d, 'dirpaths', exc_dirs='Python27',  recursive=True):
-#       print (dd)
-#       sys.path.append(dd)
-
-# import maya.standalone
-# maya.standalone.initialize(name='python')

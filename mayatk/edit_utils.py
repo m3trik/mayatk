@@ -4,42 +4,42 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-
-from pythontk import Str, Iter, are_similar
+import pythontk as ptk
 
 # from this package:
-from mayatk import misc_utils, node_utils, cmpt_utils, xform_utils
+from mayatk import utils, node_utils, cmpt_utils, xform_utils
 
 
-class Edit:
+class EditUtils:
     """ """
 
     @staticmethod
-    @misc_utils.Misc.undo
+    @utils.Utils.undo
     def rename(objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects.
 
         Parameters:
-                objects (str/obj/list): The object(s to rename. If nothing is given, all scene objects will be renamed.
-                to (str): Desired name: An optional asterisk modifier can be used for formatting
-                        chars - replace all.
-                        *chars* - replace only.
-                        *chars - replace suffix.
-                        **chars - append suffix.
-                        chars* - replace prefix.
-                        chars** - append prefix.
-                fltr (str): Optionally, filter which the given objects to rename using the following:
-                        An asterisk denotes startswith*, *endswith, *contains*, and multiple search strings can be separated by pipe ('|') chars.
-                        chars - Search exact.
-                        *chars* - Search contains chars.
-                        *chars - Search endswith chars.
-                        chars* - Search startswith chars.
-                        chars|chars - Search any of.  can be used in conjuction with other modifiers.
-                regex (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
-                ignore_case (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
+            objects (str/obj/list): The object(s to rename. If nothing is given, all scene objects will be renamed.
+            to (str): Desired name: An optional asterisk modifier can be used for formatting
+                    chars - replace all.
+                    *chars* - replace only.
+                    *chars - replace suffix.
+                    **chars - append suffix.
+                    chars* - replace prefix.
+                    chars** - append prefix.
+            fltr (str): Optionally, filter which the given objects to rename using the following:
+                    An asterisk denotes startswith*, *endswith, *contains*, and multiple search strings can be separated by pipe ('|') chars.
+                    chars - Search exact.
+                    *chars* - Search contains chars.
+                    *chars - Search endswith chars.
+                    chars* - Search startswith chars.
+                    chars|chars - Search any of.  can be used in conjuction with other modifiers.
+            regex (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
+            ignore_case (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
 
-        ex. rename(r'Cube', '*001', regex=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
-        ex. rename(r'Cube', '**001', regex=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
+        Example:
+            rename(r'Cube', '*001', regex=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
+            rename(r'Cube', '**001', regex=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
         """
         # pm.undoInfo (openChunk=1)
         objects = pm.ls(objectsOnly=1) if not objects else pm.ls(objects)
@@ -47,10 +47,10 @@ class Edit:
         # get the short names from the long in order to correctly format. ex. 'NUT_' from: 'CENTER_HINGE_FEMALE_GRP|NUT_'
         long_names = [obj.name() for obj in objects]
         short_names = [
-            ii if ii else i for i, ii in Str.split_at_chars(long_names)
+            ii if ii else i for i, ii in ptk.split_at_chars(long_names)
         ]  # split the long names at the last '|' to get the short name.
 
-        names = Str.find_str_and_format(
+        names = ptk.find_str_and_format(
             short_names,
             to,
             fltr,
@@ -92,16 +92,17 @@ class Edit:
         # pm.undoInfo (closeChunk=1)
 
     @staticmethod
-    @misc_utils.Misc.undo
+    @utils.Utils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
         Parameters:
-                objects (str/list): The objects to rename. default:all scene objects
-                case (str): Desired case using python case operators.
-                        valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
+            objects (str/list): The objects to rename. default:all scene objects
+            case (str): Desired case using python case operators.
+                    valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
 
-        Example: set_case(pm.ls(sl=1), 'upper')
+        Example:
+            set_case(pm.ls(sl=1), 'upper')
         """
         # pm.undoInfo(openChunk=1)
         for obj in pm.ls(objects):
@@ -116,7 +117,7 @@ class Edit:
         # pm.undoInfo(closeChunk=1)
 
     @staticmethod
-    @misc_utils.Misc.undo
+    @utils.Utils.undo
     def append_location_based_suffix(
         objects,
         alphanumeric=False,
@@ -127,11 +128,11 @@ class Edit:
         """Rename objects with a suffix defined by its location from origin.
 
         Parameters:
-                objects (str)(int/list): The object(s) to rename.
-                alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
-                strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
-                strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
-                reverse (bool): Reverse the naming order. (Farthest object first)
+            objects (str)(int/list): The object(s) to rename.
+            alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
+            strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
+            strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
+            reverse (bool): Reverse the naming order. (Farthest object first)
         """
         import string
         import re
@@ -143,7 +144,9 @@ class Edit:
         else:
             suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
-        ordered_objs = xform_utils.Xform.order_by_distance(objects, reverse=reverse)
+        ordered_objs = xform_utils.XformUtils.order_by_distance(
+            objects, reverse=reverse
+        )
 
         newNames = {}  # the object with the new name set as a key.
         for n, obj in enumerate(ordered_objs):
@@ -190,13 +193,13 @@ class Edit:
         """Snap the vertices from object one to the closest verts on object two.
 
         Parameters:
-                obj1 (obj): The object in which the vertices are moved from.
-                obj2 (obj): The object in which the vertices are moved to.
-                tolerance (float) = Maximum search distance.
-                freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
+            obj1 (obj): The object in which the vertices are moved from.
+            obj2 (obj): The object in which the vertices are moved to.
+            tolerance (float) = Maximum search distance.
+            freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = cmpt_utils.Cmpt.get_components(obj1, "vertices")
-        closestVerts = cmpt_utils.Cmpt.get_closest_vertex(
+        vertices = cmpt_utils.CmptUtils.get_components(obj1, "vertices")
+        closestVerts = cmpt_utils.CmptUtils.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -228,9 +231,9 @@ class Edit:
         """Merge Vertices on the given objects.
 
         Parameters:
-                objects (str/obj/list): The object(s) to merge vertices on.
-                selected (bool): Merge only the currently selected components.
-                tolerance (float) = The maximum merge distance.
+            objects (str/obj/list): The object(s) to merge vertices on.
+            selected (bool): Merge only the currently selected components.
+            tolerance (float) = The maximum merge distance.
         """
         for obj in pm.ls(objects):
             if selected:  # merge selected components.
@@ -262,34 +265,51 @@ class Edit:
         """Get all faces on a specified axis.
 
         Parameters:
-                obj (str/obj): The name of the geometry.
-                axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-                localspace (bool): Specify world or local space.
+            obj (str/obj): The name of the geometry.
+            axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
+            localspace (bool): Specify world or local space.
 
-        ex call: get_all_faces_on_axis('polyObject', 'y')
+        Example:
+            get_all_faces_on_axis('polyObject', 'y')
         """
-        axis = axis.lower()  # assure case.
+        obj = pm.ls(obj)[0] if pm.ls(obj) else None
 
-        i = 0  #'x'
-        if any([axis == "y", axis == "-y"]):
-            i = 1
-        if any([axis == "z", axis == "-z"]):
-            i = 2
+        if not obj:
+            raise ValueError(f"No such object exists: {obj}")
 
-        objName = pm.ls(obj)[0].name()
+        # Get shape nodes
+        shapes = obj.getShapes()
+        if not shapes:
+            raise ValueError("The object has no shape nodes.")
 
-        if axis.startswith("-"):  # any([axis=="-x", axis=="-y", axis=="-z"]):
-            return list(
-                face
-                for face in pm.filterExpand(objName + ".f[*]", sm=34)
-                if pm.exactWorldBoundingBox(face)[i] < -0.00001
+        # Validate axis
+        valid_axes = {"x": 0, "-x": 0, "y": 1, "-y": 1, "z": 2, "-z": 2}
+        axis = axis.lower()
+        if axis not in valid_axes:
+            raise ValueError(
+                "Invalid axis. Valid options are 'x', '-x', 'y', '-y', 'z', '-z'"
             )
+
+        i = valid_axes[axis]
+        # Collect faces from all geometry type shapes
+        faces = []
+        for shape in shapes:
+            if pm.nodeType(shape) not in ["mesh", "nurbsSurface", "subdiv"]:
+                continue
+            faces.extend(pm.filterExpand(f"{shape.name()}.f[*]", sm=34))
+
+        if not faces:
+            raise ValueError("The shape nodes have no faces.")
+
+        # Get faces on the specified axis
+        if axis.startswith("-"):
+            return [
+                face for face in faces if pm.exactWorldBoundingBox(face)[i] < -0.00001
+            ]
         else:
-            return list(
-                face
-                for face in pm.filterExpand(objName + ".f[*]", sm=34)
-                if pm.exactWorldBoundingBox(face)[i] > -0.00001
-            )
+            return [
+                face for face in faces if pm.exactWorldBoundingBox(face)[i] > -0.00001
+            ]
 
     @classmethod
     def delete_along_axis(cls, objects, axis="-x"):
@@ -300,7 +320,7 @@ class Edit:
             axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted.
         """
         # Get any mesh type child nodes of obj.
-        for node in (o for o in objects if not node_utils.Node.is_group(o)):
+        for node in (o for o in pm.ls(objects) if not node_utils.NodeUtils.is_group(o)):
             faces = cls.get_all_faces_on_axis(node, axis)
             # If all faces fall on the specified axis.
             if len(faces) == pm.polyEvaluate(node, face=1):
@@ -335,9 +355,9 @@ class Edit:
         """Select or remove unwanted geometry from a polygon mesh.
 
         Parameters:
-                objects (str/obj/list): The polygon objects to clean.
-                allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
-                repair (bool): Attempt to repair instead of just selecting geometry.
+            objects (str/obj/list): The polygon objects to clean.
+            allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
+            repair (bool): Attempt to repair instead of just selecting geometry.
         """
         arg_list = '"{0}","{1}","{2}","{3}","{4}","{5}","{6}","{7}","{8}","{9}","{10}","{11}","{12}","{13}","{14}","{15}","{16}","{17}"'.format(
             allMeshes,
@@ -384,15 +404,16 @@ class Edit:
         """Find any duplicate overlapping geometry at the object level.
 
         Parameters:
-                objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
-                retain_given_objects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
-                select (bool): Select any found duplicate objects.
-                verbose (bool): Print each found object to console.
+            objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
+            retain_given_objects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
+            select (bool): Select any found duplicate objects.
+            verbose (bool): Print each found object to console.
 
         Returns:
-                (set)
+            (set)
 
-        ex call: duplicates = get_overlapping_dup_objects(retain_given_objects=True, select=True, verbose=True)
+        Example:
+            duplicates = get_overlapping_dup_objects(retain_given_objects=True, select=True, verbose=True)
         """
         scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
 
@@ -400,7 +421,7 @@ class Edit:
         scene_objs = {
             i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
             for i in scene_objs
-            if not node_utils.Node.is_group(i)
+            if not node_utils.NodeUtils.is_group(i)
         }
         selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
@@ -443,16 +464,16 @@ class Edit:
         """Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
         Parameters:
-                objects (str/obj/list): A polygon mesh, or a list of meshes.
-                select (int): Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
+            objects (str/obj/list): A polygon mesh, or a list of meshes.
+            select (int): Select any found non-manifold vertices. 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
 
         Returns:
-                (set) any found non-manifold verts.
+            (set) any found non-manifold verts.
         """
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = cmpt_utils.Cmpt.get_components(objects, "vertices")
+        vertices = cmpt_utils.CmptUtils.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1
@@ -513,8 +534,8 @@ class Edit:
         """Separate a connected vertex of non-manifold geometry where the faces share a single vertex.
 
         Parameters:
-                vertex (str/obj): A single polygon vertex.
-                select (bool): Select the vertex after the operation. (default is True)
+            vertex (str/obj): A single polygon vertex.
+            select (bool): Select the vertex after the operation. (default is True)
         """
         pm.undoInfo(openChunk=True)
         connected_faces = pm.polyListComponentConversion(
@@ -537,14 +558,14 @@ class Edit:
             ]  # selectedFaces = pm.ls(sl=1, flatten=1)
             verts_sorted_by_face.append(connected_verts_flat)
 
-        out = (
-            []
-        )  # 1) take first set A from list. 2) for each other set B in the list do if B has common element(s) with A join B into A; remove B from list. 3) repeat 2. until no more overlap with A. 4) put A into outpup. 5) repeat 1. with rest of list.
+        # 1) take first set A from list. 2) for each other set B in the list do if B has common element(s) with A join B into A; remove B from list. 3) repeat 2. until no more overlap with A. 4) put A into outpup. 5) repeat 1. with rest of list.
+        out = []
         while len(verts_sorted_by_face) > 0:
+            # first, *rest = verts_sorted_by_face
             first, rest = (
                 verts_sorted_by_face[0],
                 verts_sorted_by_face[1:],
-            )  # first, *rest = verts_sorted_by_face
+            )
             first = set(first)
 
             lf = -1
@@ -565,9 +586,8 @@ class Edit:
         for vertex_set in out:
             pm.polyMergeVertex(vertex_set, distance=0.001)
 
-        pm.select(
-            vertex_set, deselect=1
-        )  # deselect the vertices that were selected during the polyMergeVertex operation.
+        # deselect the vertices that were selected during the polyMergeVertex operation.
+        pm.select(vertex_set, deselect=1)
         if select:
             pm.select(vertex, add=1)
         pm.undoInfo(closeChunk=True)
@@ -577,19 +597,17 @@ class Edit:
         """Get any N-Gons from the given object using selection contraints.
 
         Parameters:
-                objects (str/obj/list): The objects to query.
-                repair (bool): Repair any found N-gons.
+            objects (str/obj/list): The objects to query.
+            repair (bool): Repair any found N-gons.
 
         Returns:
-                (list)
+            (list)
         """
         pm.select(objects)
-        pm.mel.changeSelectMode(
-            1
-        )  # Change to Component mode to retain object highlighting
-        pm.selectType(
-            smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0
-        )  # Change to Face Component Mode
+        # Change to Component mode to retain object highlighting
+        pm.mel.changeSelectMode(1)
+        # Change to Face Component Mode
+        pm.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
         # Select Object/s and Run Script to highlight N-Gons
         pm.polySelectConstraint(mode=3, type=0x0008, size=3)
         nGons = pm.ls(sl=1)
@@ -605,16 +623,16 @@ class Edit:
         """Query the given objects for overlapping vertices.
 
         Parameters:
-                objects (str/obj/list): The objects to query.
-                threshold (float) = The maximum allowed distance.
+            objects (str/obj/list): The objects to query.
+            threshold (float) = The maximum allowed distance.
 
         Returns:
-                (list)
+            (list)
         """
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in misc_utils.Misc.mfn_mesh_generator(objects):
+        for mfnMesh in utils.Utils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 
@@ -637,10 +655,10 @@ class Edit:
         """Get any duplicate overlapping faces of the given objects.
 
         :Parameters:
-                objects (str/obj/list): Faces or polygon objects.
+            objects (str/obj/list): Faces or polygon objects.
 
         Returns:
-                (list) duplicate overlapping faces.
+            (list) duplicate overlapping faces.
 
         Example: pm.select(get_overlapping_faces(selection))
         """
@@ -648,7 +666,7 @@ class Edit:
             return []
 
         elif not pm.nodeType(objects) == "mesh":  # if the objects are not faces.
-            duplicates = Iter.flatten(
+            duplicates = ptk.flatten(
                 [
                     cls.get_overlapping_faces(obj.faces)
                     for obj in pm.ls(objects, objectsOnly=1)
@@ -676,9 +694,8 @@ class Edit:
                 otherFaces.remove(otherFace)
 
         if otherFaces:
-            duplicates += cls.get_overlapping_faces(
-                otherFaces
-            )  # after adding any found duplicates, call again with any remaining faces.
+            # after adding any found duplicates, call again with any remaining faces.
+            duplicates += cls.get_overlapping_faces(otherFaces)
 
         return duplicates
 
@@ -688,16 +705,17 @@ class Edit:
         Default behaviour is to compare all flags.
 
         Parameters:
-                obj (str/obj/list): The object to find similar for.
-                tolerance (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
-                inc_orig (bool): Include the original given obj with the return results.
-                kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
-                        ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d,
-                        vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
+            obj (str/obj/list): The object to find similar for.
+            tolerance (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
+            inc_orig (bool): Include the original given obj with the return results.
+            kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
+                    ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d,
+                    vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
         Returns:
-                (list) Similar objects.
+            (list) Similar objects.
 
-        Example: get_similar_mesh(selection, vertex=1, area=1)
+        Example:
+            get_similar_mesh(selection, vertex=1, area=1)
         """
         lst = (
             lambda x: list(x)
@@ -717,7 +735,7 @@ class Edit:
             [
                 m
                 for m in otherSceneMeshes
-                if are_similar(
+                if ptk.are_similar(
                     objProps, lst(pm.polyEvaluate(m, **kwargs)), tolerance=tolerance
                 )
                 and m != obj
@@ -731,12 +749,12 @@ class Edit:
         Default behaviour is to compare all flags.
 
         Parameters:
-                obj (str/obj/list): The object to find similar for.
-                inc_orig (bool): Include the original given obj with the return results.
-                kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
-                        ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals
+            obj (str/obj/list): The object to find similar for.
+            inc_orig (bool): Include the original given obj with the return results.
+            kwargs (bool): Any keyword argument 'polyCompare' takes. Used to filter the results.
+                    ex: vertices, edges, faceDesc, uvSets, uvSetIndices, colorSets, colorSetIndices, userNormals
         Returns:
-                (list) Similar objects.
+            (list) Similar objects.
         """
         obj, *other = pm.filterExpand(
             pm.ls(obj, long=True, tr=True), selectionMask=12
@@ -755,17 +773,13 @@ class Edit:
         return similar + [obj] if inc_orig else similar
 
 
-# --------------------------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     pass
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
+# deprecated ---------------------

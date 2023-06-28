@@ -9,11 +9,10 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
-from pythontk import get_distance
-
 # from this package:
-from mayatk.xform_utils import Xform
-from mayatk.node_utils import Node
+from mayatk.utils import Utils
+from mayatk.xform_utils import XformUtils
+from mayatk.node_utils import NodeUtils
 
 
 class ExplodedView:
@@ -74,7 +73,9 @@ class ExplodedView:
         iteration_count = 0
         converged = False
 
-        node_data = [Xform.get_bounding_box(node, "center|maxsize") for node in nodes]
+        node_data = [
+            XformUtils.get_bounding_box(node, "center|maxsize") for node in nodes
+        ]
 
         while not converged and iteration_count < max_iterations:
             total_system_force = om.MVector(0, 0, 0)
@@ -125,19 +126,19 @@ class ExplodedView:
 
     def explode_selected(self):
         """Explode selected"""
-        selection = Node.get_unique_children(pm.ls(sl=True))
+        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if obj.hasAttr("original_position"):
                 selection.remove(obj)
                 continue
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
-            Node.set_node_attributes(obj, original_position=pos)
+            NodeUtils.set_node_attributes(obj, original_position=pos)
 
         iterations = self.arrange_objects(selection)
 
     def un_explode_selected(self):
         """Un-explode selected"""
-        selection = Node.get_unique_children(pm.ls(sl=True))
+        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if pm.attributeQuery("original_position", node=obj, exists=True):
                 pos = pm.getAttr(obj.original_position)
@@ -155,7 +156,7 @@ class ExplodedView:
 
     def toggle_explode(self):
         """Toggle explode"""
-        selection = Node.get_unique_children(pm.ls(sl=True))
+        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
         if selection:
             if pm.attributeQuery("original_position", node=selection[0], exists=True):
                 self.un_explode_selected()
@@ -185,9 +186,8 @@ def launch_gui(move_to_cursor=False, frameless_window=False):
     """Launch the UI"""
     from PySide2 import QtCore, QtGui
     from uitk import Switchboard
-    from mayatk.misc_utils import Misc
 
-    parent = Misc.get_main_window()
+    parent = Utils.get_main_window()
     sb = Switchboard(
         parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
     )
@@ -205,5 +205,15 @@ def launch_gui(move_to_cursor=False, frameless_window=False):
     sb.ui.show()
 
 
+# -----------------------------------------------------------------------------
+
+
 if __name__ == "__main__":
     launch_gui()
+
+# -----------------------------------------------------------------------------
+# Notes
+# -----------------------------------------------------------------------------
+
+
+# deprecated ---------------------

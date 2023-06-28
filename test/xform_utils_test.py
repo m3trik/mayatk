@@ -1,12 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
 import unittest
 import inspect
-
 import pymel.core as pm
-
-from mayatk import Xform
+from mayatk import XformUtils
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -61,7 +59,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class Xform_test(Main, Xform):
+class XformUtils_test(Main, XformUtils):
     """ """
 
     # Tear down the any previous test by creating a new scene:

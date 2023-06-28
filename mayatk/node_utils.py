@@ -4,13 +4,13 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from pythontk import Iter, format_return
+import pythontk as ptk
 
 # from this package:
-from mayatk import misc_utils, cmpt_utils
+from mayatk import utils, cmpt_utils
 
 
-class Node:
+class NodeUtils:
     """ """
 
     @staticmethod
@@ -47,12 +47,12 @@ class Node:
             elif cls.is_locator(obj):
                 typ = "locator"
             else:
-                typ = cmpt_utils.Cmpt.get_component_type(obj)
+                typ = cmpt_utils.CmptUtils.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)
 
-        return format_return(types, objects)
+        return ptk.format_return(types, objects)
 
     @classmethod
     def is_locator(cls, obj):
@@ -92,7 +92,7 @@ class Node:
                 q = False
             result.append(q)
 
-        return format_return(result, objects)
+        return ptk.format_return(result, objects)
 
     @classmethod
     def get_groups(cls, empty=False):
@@ -210,13 +210,13 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = misc_utils.Misc.convert_array_type(
+        result = utils.Utils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filter_list(result, inc, exc)
+        result = ptk.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return format_return(list(set(result)), nodes)
+        return ptk.format_return(list(set(result)), nodes)
 
     @classmethod
     def get_shape_node(
@@ -255,13 +255,13 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = misc_utils.Misc.convert_array_type(
+        result = utils.Utils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filter_list(result, inc, exc)
+        result = ptk.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return format_return(list(set(result)), nodes)
+        return ptk.format_return(list(set(result)), nodes)
 
     @staticmethod
     def get_history_node(nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
@@ -301,13 +301,13 @@ class Node:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = misc_utils.Misc.convert_array_type(
+        result = utils.Utils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
-        result = Iter.filter_list(result, inc, exc)
+        result = ptk.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
-        return format_return(list(set(result)), nodes)
+        return ptk.format_return(list(set(result)), nodes)
 
     @classmethod
     def create_render_node(
@@ -391,10 +391,11 @@ class Node:
         Returns:
             (obj)(None) node if found.
 
-        Example: env_file_node = get_incoming_node_by_type(env_node, 'file') #get the incoming file node.
+        Example:
+            env_file_node = get_incoming_node_by_type(env_node, 'file') #get the incoming file node.
         """
         nodes = pm.listConnections(node, type=typ, source=True, exactType=exact)
-        return format_return([pm.PyNode(n) for n in nodes])
+        return ptk.format_return([pm.PyNode(n) for n in nodes])
 
     @staticmethod
     def get_outgoing_node_by_type(node, typ, exact=True):
@@ -408,10 +409,11 @@ class Node:
         Returns:
             (list)(obj)(None) node(s)
 
-        Example: srSG_node = get_outgoing_node_by_type(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
+        Example:
+            srSG_node = get_outgoing_node_by_type(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
         """
         nodes = pm.listConnections(node, type=typ, destination=True, exactType=exact)
-        return format_return([pm.PyNode(n) for n in nodes])
+        return ptk.format_return([pm.PyNode(n) for n in nodes])
 
     @staticmethod
     def get_node_attributes(node, inc=[], exc=[], mapping=False, **kwargs):
@@ -431,7 +433,7 @@ class Node:
         kwargs.setdefault("hasData", True)
         kwargs.setdefault("settable", True)
 
-        attr_names = Iter.filter_list(
+        attr_names = ptk.filter_list(
             pm.listAttr(node, **kwargs),
             inc,
             exc,
@@ -655,66 +657,14 @@ class Node:
         return assembly_node
 
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     pass
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
-
-
-# def filter_components(cls, frm, inc=[], exc=[]):
-#       '''Filter the given 'frm' list for the items in 'exc'.
-
-#       Parameters:
-#           frm (str/obj/list): The components(s) to filter.
-#           inc (str/obj/list): The component(s) to include.
-#           exc (str/obj/list): The component(s) to exclude.
-#                               (exlude take precidence over include)
-#       Returns:
-#           (list)
-
-#       Example: filter_components('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
-#       '''
-#       exc = pm.ls(exc, flatten=True)
-#       if not exc:
-#           return frm
-
-#       c, *other = components = pm.ls(frm, flatten=True)
-#       #determine the type of items in 'exc' by sampling the first element.
-#       if isinstance(c, str):
-#           if 'Shape' in c:
-#               rtn = 'transform'
-#           else:
-#               rtn = 'str'
-#       elif isinstance(c, int):
-#           rtn = 'int'
-#       else:
-#           rtn = 'obj'
-
-#       if exc and isinstance(exc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           exc = ["{}.{}[{}]".format(obj[0], typ, n) for n in exc]
-
-#       if inc and isinstance(inc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
-
-#       inc = misc_utils.Misc.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = misc_utils.Misc.convert_array_type(exc, returned_type=rtn, flatten=True)
-#       return [i for i in components if i not in exc and (inc and i in inc)]
+# deprecated ---------------------

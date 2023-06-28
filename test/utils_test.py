@@ -1,12 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
 import unittest
 import inspect
-
 import pymel.core as pm
-
-from mayatk import Misc
+from mayatk import Utils
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -61,7 +59,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class Core_test(Main, Misc):
+class Core_test(Main, Utils):
     """
     set object mode:
             pm.selectMode(object=1)
@@ -81,7 +79,7 @@ class Core_test(Main, Misc):
 
     # test imports:
     import mayatk as mtk
-    from mayatk import Cmpt
+    from mayatk import CmptUtils
     from mayatk import get_components
 
     # Tear down the any previous test by creating a new scene:
@@ -100,10 +98,9 @@ class Core_test(Main, Misc):
 
     def test_undo(self):
         """ """
-        self.perform_test(
-            {
-                "self.replace_mem_address(self.undo())": "<function Misc.undo.<locals>.wrapper at 0x00000000000>",
-            }
+        self.assertEqual(
+            self.replace_mem_address(self.undo()),
+            "<function Utils.undo.<locals>.wrapper at 0x00000000000>",
         )
 
     def test_getMainWindow(self):
@@ -125,13 +122,9 @@ class Core_test(Main, Misc):
 
     def test_getArrayType(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_array_type(100)": "int",
-                "self.get_array_type('cylShape.vtx[:]')": "str",
-                "self.get_array_type(pm.ls('cylShape.vtx[:]'))": "obj",
-            }
-        )
+        self.assertEqual(self.get_array_type(100), "int")
+        self.assertEqual(self.get_array_type("cylShape.vtx[:]"), "str")
+        self.assertEqual(self.get_array_type(pm.ls("cylShape.vtx[:]")), "vtx")
 
     def test_convertArrayType(self):
         """ """
@@ -146,7 +139,11 @@ class Core_test(Main, Misc):
                 "str(self.convert_array_type('cyl.vtx[:2]', 'obj'))": "[MeshVertex('cylShape.vtx[0:2]')]",
                 "str(self.convert_array_type('cyl.vtx[:2]', 'obj', flatten=True))": "[MeshVertex('cylShape.vtx[0]'), MeshVertex('cylShape.vtx[1]'), MeshVertex('cylShape.vtx[2]')]",
                 "self.convert_array_type('cyl.vtx[:2]', 'int')": [0, 2],
-                "self.convert_array_type('cyl.vtx[:2]', 'int', flatten=True)": [0, 1, 2],
+                "self.convert_array_type('cyl.vtx[:2]', 'int', flatten=True)": [
+                    0,
+                    1,
+                    2,
+                ],
             }
         )
 
@@ -243,29 +240,3 @@ if __name__ == "__main__":
 # """
 
 # Deprecated ---------------------
-
-
-# ------------------------------------------------------------------------------------
-# this is the missing stuff when running python.exe compared with mayapy.exe
-
-# mayaver = 2022
-# pythonver = 37
-
-# mayapath = '%ProgramFiles%/Autodesk/Maya{}'.format(mayaver)
-
-# os.environ['MAYA_LOCATION'] = mayapath
-# os.environ['PYTHONHOME'] = mayapath+'/Python{}'.format(mayaver, pythonver)
-# os.environ['PATH'] = mayapath+'/bin;'.format(mayaver) + os.environ['PATH']
-
-# from pythontk import File
-# for d in [
-#   '{}/bin'.format(mayapath),
-#   '{}/bin3'.format(mayapath),
-#   '{}/Python{}'.format(mayapath, pythonver)
-#   ]:
-#   for dd in File.get_dir_contents(d, 'dirpaths', exc_dirs='Python27',  recursive=True):
-#       print (dd)
-#       sys.path.append(dd)
-
-# import maya.standalone
-# maya.standalone.initialize(name='python')

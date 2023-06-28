@@ -7,7 +7,7 @@ def run_test_cases(test_module):
     """Runs all test cases within a test module.
 
     Parameters:
-            test_module (str)(module): A module object or a string representing the module name.
+        test_module (str)(module): A module object or a string representing the module name.
 
     """
     if isinstance(test_module, str):
@@ -26,7 +26,7 @@ def run_tests(module_names):
     """Reloads the non-test and test modules and runs the test cases within the test modules.
 
     Parameters:
-            module_names (list): A list of strings representing the names of the non-test modules.
+        module_names (list): A list of strings representing the names of the non-test modules.
 
     """
     for module_name in module_names:
@@ -47,7 +47,7 @@ def run_tests(module_names):
 if __name__ == "__main__":
     run_tests(
         [
-            "misc_utils",
+            "utils",
             "node_utils",
             "cmpt_utils",
             "edit_utils",
@@ -57,24 +57,9 @@ if __name__ == "__main__":
         ]
     )
 
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------------------------
-# deprecated:
-# --------------------------------------------------------------------------------------------
-
-# from mayatk import Misc; from test import core_test; importlib.reload(Misc); importlib.reload(core_test); run_tests(core_test)
-# from mayatk import Node; from test import node_test; importlib.reload(Node); importlib.reload(node_test); run_tests(node_test)
-# from mayatk import Cmpt; from test import cmpt_test; importlib.reload(Cmpt); importlib.reload(cmpt_test); run_tests(cmpt_test)
-# from mayatk import Edit; from test import edit_test; importlib.reload(Edit); importlib.reload(edit_test); run_tests(edit_test)
-# from mayatk import Xform; from test import xform_test; importlib.reload(Xform); importlib.reload(xform_test); run_tests(xform_test)
-# from mayatk import Rig; from test import rig_test; importlib.reload(Rig); importlib.reload(rig_test); run_tests(rig_test)
-
-# from test import core_test;  core_test.unittest.main(exit=False)
-# from test import edit_test;  edit_test.unittest.main(exit=False)
-# from test import cmpt_test;  cmpt_test.unittest.main(exit=False)
-# from test import rig_test;   rig_test.unittest.main(exit=False)
-# from test import xform_test; xform_test.unittest.main(exit=False)
+# deprecated ---------------------
