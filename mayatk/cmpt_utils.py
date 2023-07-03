@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import utils, node_utils
+from mayatk import core_utils, node_utils
 
 
 class GetComponentsMixin:
@@ -334,7 +334,7 @@ class GetComponentsMixin:
         components = pm.polyListComponentConversion(
             components, **{d[typ.lower()]: True}
         )
-        return utils.Utils.convert_array_type(
+        return core_utils.CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
 
@@ -374,7 +374,7 @@ class GetComponentsMixin:
         else:
             result = ["{}.{}[{}]".format(objName, component_type, c) for c in integers]
 
-        return utils.Utils.convert_array_type(
+        return core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -397,9 +397,9 @@ class GetComponentsMixin:
             filter_components('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
         """
         typ = cls.get_component_type(components)
-        etyp = utils.Utils.get_array_type(components)
-        etyp_inc = utils.Utils.get_array_type(inc)
-        etyp_exc = utils.Utils.get_array_type(exc)
+        etyp = core_utils.CoreUtils.get_array_type(components)
+        etyp_inc = core_utils.CoreUtils.get_array_type(inc)
+        etyp_exc = core_utils.CoreUtils.get_array_type(exc)
 
         if etyp_inc == "int" or etyp_exc == "int":
             try:
@@ -421,7 +421,7 @@ class GetComponentsMixin:
         components = pm.ls(components, flatten=True)
 
         filtered = ptk.filter_list(components, inc=inc, exc=exc)
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             filtered, returned_type=etyp, flatten=flatten
         )
         return result
@@ -469,7 +469,7 @@ class GetComponentsMixin:
         if randomize:
             components = randomize(pm.ls(components, flatten=1), randomize)
 
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
         return result
@@ -691,7 +691,7 @@ class CmptUtils(GetComponentsMixin):
         result = cls.convert_component_type(
             result, component_type
         )  # convert back to the original component type and flatten /un-flatten list.
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
         return result
@@ -713,8 +713,12 @@ class CmptUtils(GetComponentsMixin):
         """
         from operator import itemgetter
 
-        a = utils.Utils.convert_array_type(a, returned_type="str", flatten=True)
-        b = utils.Utils.convert_array_type(b, returned_type="str", flatten=True)
+        a = core_utils.CoreUtils.convert_array_type(
+            a, returned_type="str", flatten=True
+        )
+        b = core_utils.CoreUtils.convert_array_type(
+            b, returned_type="str", flatten=True
+        )
         vertPairsAndDistance = {}
         for v1 in a:
             v1Pos = pm.pointPosition(v1, world=1)
@@ -751,7 +755,7 @@ class CmptUtils(GetComponentsMixin):
             get_closest_vertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
             get_closest_vertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
         """
-        vertices = utils.Utils.convert_array_type(
+        vertices = core_utils.CoreUtils.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
         pm.undoInfo(openChunk=True)
@@ -785,7 +789,7 @@ class CmptUtils(GetComponentsMixin):
             v2Pos = pm.pointPosition(v2, world=True)
             distance = ptk.get_distance(v1Pos, v2Pos)
 
-            v2_convertedType = utils.Utils.convert_array_type(
+            v2_convertedType = core_utils.CoreUtils.convert_array_type(
                 v2, returned_type=returned_type
             )[0]
             if not tolerance:
@@ -865,7 +869,7 @@ class CmptUtils(GetComponentsMixin):
         result = ptk.remove_duplicates(
             ["{}.e[{}]".format(objName, e) for e in edgesLong]
         )
-        return utils.Utils.convert_array_type(
+        return core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -1349,7 +1353,9 @@ class CmptUtils(GetComponentsMixin):
             if n >= lowRange and n <= highRange:
                 result.append(c)
 
-        result = utils.Utils.convert_array_type(result, returned_type=returned_type)
+        result = core_utils.CoreUtils.convert_array_type(
+            result, returned_type=returned_type
+        )
         return result
 
     @classmethod
@@ -1374,7 +1380,7 @@ class CmptUtils(GetComponentsMixin):
         dagPath = selectionList.getDagPath(0)  # create empty dag path object.
         mesh = om.MFnMesh(dagPath)  # get mesh.
 
-        vtxID = utils.Utils.convert_array_type(vertex, "int")[0]
+        vtxID = core_utils.CoreUtils.convert_array_type(vertex, "int")[0]
         # get vertex normal and use om.MSpace.kObject for object space.
         return mesh.getVertexNormal(vtxID, angle_weighted, space=om.MSpace.kWorld)
 
@@ -1620,6 +1626,6 @@ if __name__ == "__main__":
 #           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
 #           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
 
-#       inc = utils.Utils.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = utils.Utils.convert_array_type(exc, returned_type=rtn, flatten=True)
+#       inc = core_utils.CoreUtils.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
+#       exc = core_utils.CoreUtils.convert_array_type(exc, returned_type=rtn, flatten=True)
 #       return [i for i in components if i not in exc and (inc and i in inc)]

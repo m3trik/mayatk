@@ -7,14 +7,14 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import utils, node_utils, cmpt_utils, xform_utils
+from mayatk import core_utils, node_utils, cmpt_utils, xform_utils
 
 
 class EditUtils:
     """ """
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def rename(objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects.
 
@@ -92,7 +92,7 @@ class EditUtils:
         # pm.undoInfo (closeChunk=1)
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -117,7 +117,7 @@ class EditUtils:
         # pm.undoInfo(closeChunk=1)
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def append_location_based_suffix(
         objects,
         alphanumeric=False,
@@ -632,7 +632,7 @@ class EditUtils:
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in utils.Utils.mfn_mesh_generator(objects):
+        for mfnMesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 

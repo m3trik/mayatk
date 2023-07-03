@@ -6,14 +6,14 @@ except ImportError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk import utils
+from mayatk import core_utils
 
 
 class Cam(object):
     """ """
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
@@ -104,18 +104,18 @@ class Cam(object):
         return camPath
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in utils.Utils.get_panel(all=True):
-            if utils.Utils.get_panel(typeOf=panel) == "modelPanel":
+        for panel in core_utils.CoreUtils.get_panel(all=True):
+            if core_utils.CoreUtils.get_panel(typeOf=panel) == "modelPanel":
                 current_panel = panel
                 break
 
         if current_panel:
-            if utils.Utils.get_panel(typeOf=current_panel) == "modelPanel":
+            if core_utils.CoreUtils.get_panel(typeOf=current_panel) == "modelPanel":
                 camera = pm.modelPanel(current_panel, q=1, cam=1)
                 new_camera = pm.duplicate(camera)[0]
                 pm.showHidden(new_camera)

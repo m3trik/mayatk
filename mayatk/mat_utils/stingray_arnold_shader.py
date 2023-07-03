@@ -10,7 +10,7 @@ from uitk import Switchboard
 import pythontk as ptk
 
 # from this package:
-from mayatk.utils import Utils
+from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 
 
@@ -75,7 +75,7 @@ class StingrayArnoldShader:
         if node:
             node.camera.set(state)
 
-    @Utils.undo
+    @CoreUtils.undo
     def create_network(
         self,
         textures,
@@ -468,7 +468,7 @@ class StingrayArnoldShaderUI(Switchboard):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parent = Utils.get_main_window()
+    parent = CoreUtils.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
     sb.ui.set_style(theme="dark")
     sb.ui.show(app_exec=True)
@@ -476,6 +476,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# Deprecated ------------------------------------

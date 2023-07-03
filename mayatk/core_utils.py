@@ -13,7 +13,7 @@ import pythontk as ptk
 from mayatk import node_utils
 
 
-class Utils:
+class CoreUtils:
     """ """
 
     def undo(fn):
