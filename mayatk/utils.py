@@ -395,6 +395,37 @@ class Utils:
             alpha=alpha,
         )  # 1000ms = 1 sec
 
+    @staticmethod
+    def get_mel_globals(keyword=None, ignore_case=True):
+        """Get global MEL variables."""
+        variables = [
+            v
+            for v in sorted(pm.mel.eval("env"))
+            if not keyword
+            or (
+                v.count(keyword)
+                if not ignore_case
+                else v.lower().count(keyword.lower())
+            )
+        ]
+        return variables
+
+    @staticmethod
+    def list_ui_objects():
+        """List all UI objects."""
+        ui_objects = {
+            "windows": pm.lsUI(windows=True),
+            "panels": pm.lsUI(panels=True),
+            "editors": pm.lsUI(editors=True),
+            "menus": pm.lsUI(menus=True),
+            "menuItems": pm.lsUI(menuItems=True),
+            "controls": pm.lsUI(controls=True),
+            "controlLayouts": pm.lsUI(controlLayouts=True),
+            "contexts": pm.lsUI(contexts=True),
+        }
+        for category, objects in ui_objects.items():
+            print(f"{category}:\n{objects}\n")
+
 
 # --------------------------------------------------------------------------------------------
 

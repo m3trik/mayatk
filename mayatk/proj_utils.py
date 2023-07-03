@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class ProjectUtils:
+class ProjUtils:
     """ """
 
     @staticmethod
@@ -275,56 +275,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
-# @staticmethod
-# def reference_scene(scene, remove=False, lockReference=False):
-#     """Create a reference to a Maya scene.
-
-#     Parameters:
-#         remove (bool): Remove a previously referenced scene.
-#     """
-#     if remove:  # unload reference.
-#         # refNode = pm.referenceQuery(scene, referenceNode=True)
-#         pm.mel.file(scene, removeReference=True)
-
-#     else:  # load reference.
-#         # ex. 'sceneName' from 'sceneName.mb'
-#         namespace = scene.split("\\")[-1].rstrip(".mb").rstrip(".ma")
-#         pm.mel.file(
-#             scene,
-#             reference=True,
-#             namespace=namespace,
-#             groupReference=True,
-#             lockReference=lockReference,
-#             loadReferenceDepth="topOnly",
-#             force=True,
-#         )
-
-# @staticmethod
-# def get_recent_autosave(timestamp=False):
-#     """Get a list of autosave files.
-
-#     Parameters:
-#         timestamp (bool): Attach a modified timestamp and date to given file path(s).
-
-#     Returns:
-#         (list)
-#     """
-# dir1 = str(pm.workspace(q=True, rd=1)) + "autosave"  # current project path.
-# # get autosave dir path from env variable.
-# dir2 = os.environ.get("MAYA_AUTOSAVE_FOLDER")
-# if dir2 is not None:  # Check if the environment variable exists
-#     dir2 = dir2.split(";")[0]
-
-#     result = ptk.get_dir_contents(dir1, "filepaths", inc_files=("*.mb", "*.ma"))
-#     if dir2 is not None:  # Add the files from the second directory if it exists
-#         result += ptk.get_dir_contents(dir2, "filepaths", inc_files=("*.mb", "*.ma"))
-#     # # Replace any backslashes with forward slashes and reverse the list.
-#     # result = [ptk.format_path(f) for f in list(reversed(files))]
-
-#     if timestamp:  # attach modified timestamp
-#         result = ptk.time_stamp(result, sort=True)
-
-#     return result
