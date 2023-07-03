@@ -10,7 +10,7 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk.utils import Utils
+from mayatk.core_utils import CoreUtils
 from mayatk.xform_utils import XformUtils
 from mayatk.node_utils import NodeUtils
 
@@ -187,7 +187,7 @@ def launch_gui(move_to_cursor=False, frameless_window=False):
     from PySide2 import QtCore, QtGui
     from uitk import Switchboard
 
-    parent = Utils.get_main_window()
+    parent = CoreUtils.get_main_window()
     sb = Switchboard(
         parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
     )

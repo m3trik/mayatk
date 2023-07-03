@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import utils, cmpt_utils
+from mayatk import core_utils, cmpt_utils
 
 
 class NodeUtils:
@@ -210,7 +210,7 @@ class NodeUtils:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -255,7 +255,7 @@ class NodeUtils:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -301,7 +301,7 @@ class NodeUtils:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = utils.Utils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter

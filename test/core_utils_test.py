@@ -4,11 +4,7 @@ import os
 import unittest
 import inspect
 import pymel.core as pm
-from mayatk import Utils
-
-
-# sfr = pm.melGlobals['cmdScrollFieldReporter']
-# pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
+from mayatk import CoreUtils
 
 
 class Main(unittest.TestCase):
@@ -59,7 +55,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class Core_test(Main, Utils):
+class CoreUtils_test(Main, CoreUtils):
     """
     set object mode:
             pm.selectMode(object=1)
@@ -100,7 +96,7 @@ class Core_test(Main, Utils):
         """ """
         self.assertEqual(
             self.replace_mem_address(self.undo()),
-            "<function Utils.undo.<locals>.wrapper at 0x00000000000>",
+            "<function CoreUtils.undo.<locals>.wrapper at 0x00000000000>",
         )
 
     def test_getMainWindow(self):

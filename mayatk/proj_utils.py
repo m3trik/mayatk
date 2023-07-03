@@ -6,10 +6,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from pythontk import FileUtils
+import pythontk as ptk
 
 
-class ProjectUtils:
+class ProjUtils:
     """ """
 
     @staticmethod
@@ -42,9 +42,9 @@ class ProjectUtils:
             return []
 
         result = [
-            FileUtils.format_path(f)
+            ptk.format_path(f)
             for f in reversed(files)
-            if FileUtils.is_valid(f) and "Autosave" not in f
+            if ptk.is_valid(f) and "Autosave" not in f
         ]
 
         if index is not None:
@@ -57,11 +57,11 @@ class ProjectUtils:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {FileUtils.time_stamp(res): res for res in result}
+                result = {ptk.time_stamp(res): res for res in result}
             else:
-                result = {res: FileUtils.time_stamp(res) for res in result}
+                result = {res: ptk.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [FileUtils.time_stamp(res) for res in result]
+            result = [ptk.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -95,9 +95,7 @@ class ProjectUtils:
         if not files:
             return []
 
-        result = [
-            FileUtils.format_path(f) for f in reversed(files) if FileUtils.is_valid(f)
-        ]
+        result = [ptk.format_path(f) for f in reversed(files) if ptk.is_valid(f)]
 
         if index is not None:
             try:
@@ -109,11 +107,11 @@ class ProjectUtils:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {FileUtils.time_stamp(res): res for res in result}
+                result = {ptk.time_stamp(res): res for res in result}
             else:
-                result = {res: FileUtils.time_stamp(res) for res in result}
+                result = {res: ptk.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [FileUtils.time_stamp(res) for res in result]
+            result = [ptk.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -163,7 +161,7 @@ class ProjectUtils:
         )
 
         for file in files:
-            result.append(FileUtils.format_path(file))
+            result.append(ptk.format_path(file))
 
         if index is not None:
             try:
@@ -175,11 +173,11 @@ class ProjectUtils:
         format = format.split("|")
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {FileUtils.time_stamp(res): res for res in result}
+                result = {ptk.time_stamp(res): res for res in result}
             else:
-                result = {res: FileUtils.time_stamp(res) for res in result}
+                result = {res: ptk.time_stamp(res) for res in result}
         elif "timestamp" in format:
-            result = [FileUtils.time_stamp(res) for res in result]
+            result = [ptk.time_stamp(res) for res in result]
         # else return the standard format
 
         return result
@@ -196,11 +194,11 @@ class ProjectUtils:
         """
         workspace_dir = str(pm.workspace(q=True, rd=1))  # get current project path.
 
-        files = FileUtils.get_dir_contents(
+        files = ptk.get_dir_contents(
             workspace_dir, "filepaths", inc_files=("*.mb", "*.ma")
         )
         # Replace any backslashes with forward slashes.
-        result = [FileUtils.format_path(f) for f in files]
+        result = [ptk.format_path(f) for f in files]
 
         if not fullPath:
             result = [f.split("\\")[-1] for f in result]
@@ -277,56 +275,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
-# @staticmethod
-# def reference_scene(scene, remove=False, lockReference=False):
-#     """Create a reference to a Maya scene.
-
-#     Parameters:
-#         remove (bool): Remove a previously referenced scene.
-#     """
-#     if remove:  # unload reference.
-#         # refNode = pm.referenceQuery(scene, referenceNode=True)
-#         pm.mel.file(scene, removeReference=True)
-
-#     else:  # load reference.
-#         # ex. 'sceneName' from 'sceneName.mb'
-#         namespace = scene.split("\\")[-1].rstrip(".mb").rstrip(".ma")
-#         pm.mel.file(
-#             scene,
-#             reference=True,
-#             namespace=namespace,
-#             groupReference=True,
-#             lockReference=lockReference,
-#             loadReferenceDepth="topOnly",
-#             force=True,
-#         )
-
-# @staticmethod
-# def get_recent_autosave(timestamp=False):
-#     """Get a list of autosave files.
-
-#     Parameters:
-#         timestamp (bool): Attach a modified timestamp and date to given file path(s).
-
-#     Returns:
-#         (list)
-#     """
-# dir1 = str(pm.workspace(q=True, rd=1)) + "autosave"  # current project path.
-# # get autosave dir path from env variable.
-# dir2 = os.environ.get("MAYA_AUTOSAVE_FOLDER")
-# if dir2 is not None:  # Check if the environment variable exists
-#     dir2 = dir2.split(";")[0]
-
-#     result = FileUtils.get_dir_contents(dir1, "filepaths", inc_files=("*.mb", "*.ma"))
-#     if dir2 is not None:  # Add the files from the second directory if it exists
-#         result += FileUtils.get_dir_contents(dir2, "filepaths", inc_files=("*.mb", "*.ma"))
-#     # # Replace any backslashes with forward slashes and reverse the list.
-#     # result = [FileUtils.format_path(f) for f in list(reversed(files))]
-
-#     if timestamp:  # attach modified timestamp
-#         result = FileUtils.time_stamp(result, sort=True)
-
-#     return result

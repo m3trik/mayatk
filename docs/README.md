@@ -1,4 +1,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![CoreUtils Tests](https://img.shields.io/badge/CoreUtils-Passing-brightgreen.svg)](../test/core_utils_test.py#CoreUtilsTest)
+[![ProjUtils Tests](https://img.shields.io/badge/ProjUtils-Passing-brightgreen.svg)](../test/proj_utils_test.py#ProjUtilsTest)
+[![XformUtils Tests](https://img.shields.io/badge/XformUtils-Passing-brightgreen.svg)](../test/xform_utils_test.py#XformUtilsTest)
+[![NodeUtils Tests](https://img.shields.io/badge/NodeUtils-Passing-brightgreen.svg)](../test/node_utils_test.py#NodeUtilsTest)
+[![MashUtils Tests](https://img.shields.io/badge/MashUtils-Passing-brightgreen.svg)](../test/mash_utils_test.py#MashUtilsTest)
+[![EditUtils Tests](https://img.shields.io/badge/EditUtils-Passing-brightgreen.svg)](../test/edit_utils_test.py#EditUtilsTest)
+[![CmptUtils Tests](https://img.shields.io/badge/CmptUtils-Passing-brightgreen.svg)](../test/cmpt_utils_test.py#CmptUtilsTest)
+[![CamUtils Tests](https://img.shields.io/badge/CamUtils-Passing-brightgreen.svg)](../test/cam_utils_test.py#CamUtilsTest)
+[![MatUtils Tests](https://img.shields.io/badge/MatUtils-Passing-brightgreen.svg)](../test/mat_utils_test.py#MatUtilsTest)
+[![RigUtils Tests](https://img.shields.io/badge/RigUtils-Passing-brightgreen.svg)](../test/rig_utils_test.py#RigUtilsTest)
 
 ### MAYATK (Maya Toolkit)
 
@@ -8,8 +18,6 @@
 <!-- short_description_end -->
 
 ### Installation:
-
-###### 
 
 To install:
 Add the `mayatk` folder to a directory on your python path, or

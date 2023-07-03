@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import utils, cmpt_utils
+from mayatk import core_utils, cmpt_utils
 
 
 class XformUtils:
@@ -41,7 +41,7 @@ class XformUtils:
         pm.xform(source, translation=target_pos, worldSpace=1, relative=1)
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -87,7 +87,7 @@ class XformUtils:
         # pm.undoInfo (closeChunk=1)
 
     @classmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -119,7 +119,7 @@ class XformUtils:
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -172,7 +172,7 @@ class XformUtils:
         # pm.undoInfo(closeChunk=1)
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -198,7 +198,7 @@ class XformUtils:
         pm.delete(const, target)
 
     @classmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -505,7 +505,7 @@ class XformUtils:
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in utils.Utils.mfn_mesh_generator(objects):
+        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -586,7 +586,7 @@ class XformUtils:
         return list(reversed(result)) if reverse else result
 
     @staticmethod
-    @utils.Utils.undo
+    @core_utils.CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 
@@ -624,8 +624,10 @@ class XformUtils:
 
         if len(selection) < 2:
             if len(selection) == 0:
-                utils.Utils.viewport_message("No vertices selected")
-            utils.Utils.viewport_message("Selection must contain at least two vertices")
+                core_utils.CoreUtils.viewport_message("No vertices selected")
+            core_utils.CoreUtils.viewport_message(
+                "Selection must contain at least two vertices"
+            )
 
         for vertex in selection:
             vertexXYZ = pm.xform(vertex, q=True, translation=1, worldSpace=1)
@@ -658,173 +660,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
-
-# @staticmethod
-# def snap3PointsTo3Points(vertices):
-#     """Move and align the object defined by the first 3 points to the last 3 points.
-
-#     Parameters:
-#             vertices (list): The first 3 points must be on the same object (i.e. it is the
-#                                     object to be transformed). The second set of points define
-#                                     the position and plane to transform to.
-#     """
-#     import math
-
-#     vertices = pm.ls(vertices, flatten=True)
-#     objectToMove = pm.ls(vertices[:3], objectsOnly=True)
-
-#     # get the world space position of each selected point object
-#     p0, p1, p2 = [pm.pointPosition(v) for v in vertices[0:3]]
-#     p3, p4, p5 = [pm.pointPosition(v) for v in vertices[3:6]]
-
-#     (
-#         dx,
-#         dy,
-#         dz,
-#     ) = (
-#         distance
-#     ) = [  # calculate the translation amount - the first point on each pair is the point to use for translation.
-#         p3[0] - p0[0],
-#         p3[1] - p0[1],
-#         p3[2] - p0[2],
-#     ]
-
-#     pm.move(
-#         dx, dy, dz, objectToMove, relative=1
-#     )  # move the first object by that amount.
-
-#     a1x, a1y, a1z = axis1 = [  # define the two vectors for each pair of points.
-#         p1[0] - p0[0],
-#         p1[1] - p0[1],
-#         p1[2] - p0[2],
-#     ]
-#     a2x, a2y, a2z = axis2 = [p4[0] - p3[0], p4[1] - p3[1], p4[2] - p3[2]]
-
-#     # get the angle (in radians) between the two vectors and the axis of rotation. This is used to move axis1 to match axis2
-#     dp = ptk.dot_product(axis1, axis2, 1)
-#     dp = ptk.clamp(-1.0, 1.0, dp)
-#     angle = math.acos(dp)
-#     cross_product = ptk.cross_product(axis1, axis2, 1, 1)
-
-#     # rotate the first object about the pivot point (the pivot is defined by the first point from the second pair of points. i.e. point 3 from the inputs above)
-#     rotation = ptk.xyz_rotation(angle, cross_product)
-#     pm.rotate(
-#         objectToMove,
-#         str(rotation[0]) + "rad",
-#         str(rotation[1]) + "rad",
-#         str(rotation[2]) + "rad",
-#         pivot=p3,
-#         relative=1,
-#     )
-
-#     # Get these points again since they may have moved
-#     p2 = pm.pointPosition(vertices[2])
-#     p5 = pm.pointPosition(vertices[5])
-
-#     axis3 = [p2[0] - p4[0], p2[1] - p4[1], p2[2] - p4[2]]
-#     axis4 = [p5[0] - p4[0], p5[1] - p4[1], p5[2] - p4[2]]
-
-#     axis2 = ptk.normalize(axis2)
-
-#     # Get the dot product of axis3 on axis2
-#     dp = ptk.dot_product(axis3, axis2, 0)
-#     axis3[0] = p2[0] - p4[0] + dp * axis2[0]
-#     axis3[1] = p2[1] - p4[1] + dp * axis2[1]
-#     axis3[2] = p2[2] - p4[2] + dp * axis2[2]
-
-#     # Get the dot product of axis4 on axis2
-#     dp = ptk.dot_product(axis4, axis2, 0)
-#     axis4[0] = p5[0] - p4[0] + dp * axis2[0]
-#     axis4[1] = p5[1] - p4[1] + dp * axis2[1]
-#     axis4[2] = p5[2] - p4[2] + dp * axis2[2]
-
-#     # rotate the first object again, this time about the 2nd axis so that the 3rd point is in the same plane. ie. match up axis3 with axis4.
-#     dp = ptk.dot_product(axis3, axis4, 1)
-#     dp = ptk.clamp(-1.0, 1.0, dp)
-#     angle = math.acos(dp)
-
-#     # reverse the angle if the cross product is in the -ve axis direction
-#     cross_product = ptk.cross_product(axis3, axis4, 1, 1)
-#     dp = ptk.dot_product(cross_product, axis2, 0)
-#     if dp < 0:
-#         angle = -angle
-
-#     rotation = ptk.xyz_rotation(angle, axis2)
-#     pm.rotate(
-#         objectToMove,
-#         str(rotation[0]) + "rad",
-#         str(rotation[1]) + "rad",
-#         str(rotation[2]) + "rad",
-#         pivot=p4,
-#         relative=1,
-#     )
-
-# @classmethod
-#   def matchTransformByVertexOrder(cls, source, target):
-#       '''Match transform and rotation on like objects by using 3 vertices from each object.
-#       The vertex order is transferred to the target object(s).
-
-#       Parameters:
-#           source (str/obj): The object to move from.
-#           target (str/obj): The object to move to.
-#       '''
-#       pm.polyTransfer(source, alternateObject=target, vertices=2) #vertices positions are copied from the target object.
-
-#       source_verts = [pm.ls(source, objectsOnly=1)[0].verts[i] for i in range(3)]
-#       target_verts = [pm.ls(target, objectsOnly=1)[0].verts[i] for i in range(3)]
-
-#       cls.snap3PointsTo3Points(source_verts+target_verts)
-
-# @staticmethod
-#   def getComponentPoint(component, alignToNormal=False):
-#       '''Get the center point from the given component.
-
-#       Parameters:
-#           component (str/obj): Object component.
-#           alignToNormal (bool): Constain to normal vector.
-
-#       Returns:
-#           (tuple) coordinate as xyz float values.
-#       '''
-#       if ".vtx" in str(component):
-#           x = pm.polyNormalPerVertex(component, q=True, x=1)
-#           y = pm.polyNormalPerVertex(component, q=True, y=1)
-#           z = pm.polyNormalPerVertex(component, q=True, z=1)
-#           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
-
-#       elif ".e" in str(component):
-#           componentName = str(component).split(".")[0]
-#           vertices = pm.polyInfo (component, edgeToVertex=1)[0]
-#           vertices = vertices.split()
-#           vertices = [componentName+".vtx["+vertices[2]+"]",componentName+".vtx["+vertices[3]+"]"]
-#           x=[];y=[];z=[]
-#           for vertex in vertices:
-#               x_ = pm.polyNormalPerVertex (vertex, q=True, x=1)
-#               x.append(sum(x_) / float(len(x_)))
-#               y_ = pm.polyNormalPerVertex (vertex, q=True, y=1)
-#               x.append(sum(y_) / float(len(y_)))
-#               z_ = pm.polyNormalPerVertex (vertex, q=True, z=1)
-#               x.append(sum(z_) / float(len(z_)))
-#           xyz = [sum(x) / float(len(x)), sum(y) / float(len(y)), sum(z) / float(len(z))] #get average
-
-#       else:# elif ".f" in str(component):
-#           xyz = pm.polyInfo (component, faceNormals=1)
-#           xyz = xyz[0].split()
-#           xyz = [float(xyz[2]), float(xyz[3]), float(xyz[4])]
-
-#       if alignToNormal: #normal constraint
-#           normal = pm.mel.eval("unit <<"+str(xyz[0])+", "+str(xyz[1])+", "+str(xyz[2])+">>;") #normalize value using MEL
-#           # normal = [round(i-min(xyz)/(max(xyz)-min(xyz)),6) for i in xyz] #normalize and round value using python
-
-#           constraint = pm.normalConstraint(component, object_,aimVector=normal,upVector=[0,1,0],worldUpVector=[0,1,0],worldUpType="vector") # "scene","object","objectrotation","vector","none"
-#           pm.delete(constraint) #orient object_ then remove constraint.
-
-#       vertexPoint = pm.xform (component, q=True, translation=1) #average vertex points on destination to get component center.
-#       x = vertexPoint[0::3]
-#       y = vertexPoint[1::3]
-#       z = vertexPoint[2::3]
-
-#       return tuple(round(sum(x) / float(len(x)),4), round(sum(y) / float(len(y)),4), round(sum(z) / float(len(z)),4))
