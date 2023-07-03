@@ -1037,14 +1037,14 @@ class CmptUtils(GetComponentsMixin):
 
         # Get the faces connected by the edge
         connected_faces = list(edge.connectedFaces())
+        if len(connected_faces) != 2:
+            return 0
 
         # Get the normals of the faces
         normal1 = cls.get_normal(connected_faces[0])
         normal2 = cls.get_normal(connected_faces[1])
-
         # Calculate the angle between the normals
         angle = normal1.angle(normal2)
-
         # Convert the angle from radians to degrees
         angle = math.degrees(angle)
 
