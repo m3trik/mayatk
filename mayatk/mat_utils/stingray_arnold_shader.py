@@ -59,7 +59,7 @@ class StingrayArnoldShader:
             )
             pm.connectAttr(file_node.outColor, node.color, force=True)
 
-        file_node.fileTextureName.set(tex)
+        file_node.fileTextureName.set(str(tex))
 
     @property
     def hdr_env_transform(self) -> object:
@@ -459,9 +459,7 @@ class StingrayArnoldShaderUI(Switchboard):
         self.ui_location = "stingray_arnold_shader.ui"
         self.slots_location = StingrayArnoldShaderSlots
 
-        self.ui.draggableHeader.hide()
         self.ui.txt001.hide()
-
         self.ui.resize(self.ui.sizeHint())
 
 
@@ -471,6 +469,8 @@ if __name__ == "__main__":
     parent = CoreUtils.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
     sb.ui.set_style(theme="dark")
+    sb.ui.stays_on_top = True
+    sb.ui.draggableHeader.hide()
     sb.ui.show(app_exec=True)
 
 # -----------------------------------------------------------------------------
