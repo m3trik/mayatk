@@ -202,8 +202,7 @@ def launch_gui(move_to_cursor=False, frameless=False):
     else:
         sb.center_widget(sb.ui)
 
-    sb.ui.centralWidget().setProperty("class", "translucentBgWithBorder")
-    sb.ui.set_style(theme="dark")
+    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
     sb.ui.stays_on_top = True
     sb.ui.show()
 
