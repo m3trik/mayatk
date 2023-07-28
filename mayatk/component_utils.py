@@ -475,7 +475,7 @@ class GetComponentsMixin:
         return result
 
 
-class CmptUtils(GetComponentsMixin):
+class ComponentUtils(GetComponentsMixin):
     """ """
 
     @classmethod
@@ -1578,54 +1578,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
-# def filter_components(cls, frm, inc=[], exc=[]):
-#       '''Filter the given 'frm' list for the items in 'exc'.
-
-#       Parameters:
-#           frm (str/obj/list): The components(s) to filter.
-#           inc (str/obj/list): The component(s) to include.
-#           exc (str/obj/list): The component(s) to exclude.
-#                               (exlude take precidence over include)
-#       Returns:
-#           (list)
-
-#       Example: filter_components('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
-#       '''
-#       exc = pm.ls(exc, flatten=True)
-#       if not exc:
-#           return frm
-
-#       c, *other = components = pm.ls(frm, flatten=True)
-#       #determine the type of items in 'exc' by sampling the first element.
-#       if isinstance(c, str):
-#           if 'Shape' in c:
-#               rtn = 'transform'
-#           else:
-#               rtn = 'str'
-#       elif isinstance(c, int):
-#           rtn = 'int'
-#       else:
-#           rtn = 'obj'
-
-#       if exc and isinstance(exc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           exc = ["{}.{}[{}]".format(obj[0], typ, n) for n in exc]
-
-#       if inc and isinstance(inc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
-
-#       inc = core_utils.CoreUtils.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = core_utils.CoreUtils.convert_array_type(exc, returned_type=rtn, flatten=True)
-#       return [i for i in components if i not in exc and (inc and i in inc)]

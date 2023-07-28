@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class ProjUtils:
+class Project:
     """ """
 
     @staticmethod

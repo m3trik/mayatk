@@ -18,7 +18,7 @@ rem %mayapy% -m pip install pymel~=1.3.0a
 
 %mayapy% -c "from test import core_test;  core_test.unittest.main(exit=False)"
 %mayapy% -c "from test import node_test;  node_test.unittest.main(exit=False)"
-%mayapy% -c "from test import cmpt_test;  cmpt_test.unittest.main(exit=False)"
+%mayapy% -c "from test import component_test;  cmpt_test.unittest.main(exit=False)"
 %mayapy% -c "from test import edit_test;  edit_test.unittest.main(exit=False)"
 %mayapy% -c "from test import xform_test; xform_test.unittest.main(exit=False)"
 %mayapy% -c "from test import rig_test;   rig_test.unittest.main(exit=False)"

@@ -5,7 +5,7 @@ import unittest
 import inspect
 import maya.OpenMaya as om
 import pymel.core as pm
-from mayatk import CmptUtils
+from mayatk import ComponentUtils
 
 
 # sfr = pm.melGlobals['cmdScrollFieldReporter']
@@ -60,7 +60,7 @@ class Main(unittest.TestCase):
         return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
 
 
-class CmptUtils_test(Main, CmptUtils):
+class CmptUtils_test(Main, ComponentUtils):
     """
     set object mode:
             pm.selectMode(object=1)

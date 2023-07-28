@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, node_utils, cmpt_utils, xform_utils
+from mayatk import core_utils, node_utils, component_utils, xform_utils
 
 
 class EditUtils:
@@ -100,7 +100,6 @@ class EditUtils:
             objects (str/list): The objects to rename. default:all scene objects
             case (str): Desired case using python case operators.
                     valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
-
         Example:
             set_case(pm.ls(sl=1), 'upper')
         """
@@ -112,7 +111,7 @@ class EditUtils:
             try:
                 pm.rename(name, newName)
             except Exception as error:
-                if not pm.ls(obj, readOnly=True) == []:  # ignore read-only errors.
+                if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
                     print(name + ": ", error)
         # pm.undoInfo(closeChunk=1)
 
@@ -198,8 +197,8 @@ class EditUtils:
             tolerance (float) = Maximum search distance.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = cmpt_utils.CmptUtils.get_components(obj1, "vertices")
-        closestVerts = cmpt_utils.CmptUtils.get_closest_vertex(
+        vertices = component_utils.ComponentUtils.get_components(obj1, "vertices")
+        closestVerts = component_utils.ComponentUtils.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -398,7 +397,7 @@ class EditUtils:
         # print (command)
 
     @staticmethod
-    def get_overlapping_dup_objects(
+    def get_overlapping_duplicates(
         objects=[], retain_given_objects=False, select=False, verbose=False
     ):
         """Find any duplicate overlapping geometry at the object level.
@@ -413,7 +412,7 @@ class EditUtils:
             (set)
 
         Example:
-            duplicates = get_overlapping_dup_objects(retain_given_objects=True, select=True, verbose=True)
+            duplicates = get_overlapping_duplicates(retain_given_objects=True, select=True, verbose=True)
         """
         scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
 
@@ -473,7 +472,7 @@ class EditUtils:
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = cmpt_utils.CmptUtils.get_components(objects, "vertices")
+        vertices = component_utils.ComponentUtils.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1

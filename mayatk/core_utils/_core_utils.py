@@ -295,6 +295,21 @@ class CoreUtils:
             cmd(node, **{p: v})
 
     @staticmethod
+    def generate_unique_name(base_name):
+        """Generate a unique name based on the base_name."""
+        # Base case: If the base_name doesn't exist, just return it.
+        if not pm.objExists(base_name):
+            return base_name
+
+        # Otherwise, append numbers until we get a unique name.
+        counter = 1
+        new_name = f"{base_name}_{counter}"
+        while pm.objExists(new_name):
+            counter += 1
+            new_name = f"{base_name}_{counter}"
+        return new_name
+
+    @staticmethod
     def get_selected_channels():
         """Get any attributes (channels) that are selected in the channel box.
 

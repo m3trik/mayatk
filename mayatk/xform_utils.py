@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, cmpt_utils
+from mayatk import core_utils, component_utils
 
 
 class XformUtils:
@@ -483,7 +483,7 @@ class XformUtils:
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = cmpt_utils.CmptUtils.get_closest_verts(
+        closestVerts = component_utils.ComponentUtils.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 

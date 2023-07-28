@@ -23,14 +23,14 @@ class ExplodedView:
         """Calculates the repulsive force between two objects based on their centroids and sizes.
 
         Parameters:
-                centroid1 (tuple): A tuple of floats representing the centroid of the first object in 3D space.
-                size1 (float): The size of the first object.
-                centroid2 (tuple): A tuple of floats representing the centroid of the second object in 3D space.
-                size2 (float): The size of the second object.
-                scale (float, optional): The scaling factor to apply to the force magnitude. Defaults to 0.05.
+            centroid1 (tuple): A tuple of floats representing the centroid of the first object in 3D space.
+            size1 (float): The size of the first object.
+            centroid2 (tuple): A tuple of floats representing the centroid of the second object in 3D space.
+            size2 (float): The size of the second object.
+            scale (float, optional): The scaling factor to apply to the force magnitude. Defaults to 0.05.
 
         Returns:
-                om.MVector: The force vector resulting from the repulsion.
+            om.MVector: The force vector resulting from the repulsion.
         """
         distance = (
             (centroid1[0] - centroid2[0]) ** 2
@@ -59,16 +59,16 @@ class ExplodedView:
         """Arranges a list of objects in 3D space to avoid overlap.
 
         Parameters:
-                nodes (list): A list of objects to arrange.
-                convergence_threshold (float, optional): The threshold at which to consider the system as having converged.
-                Defaults to 1e-4.
-                max_iterations (int, optional): The maximum number of iterations to run before stopping.
-                Defaults to 10000.
-                max_movement (float, optional): The maximum distance an object can move during a single iteration.
-                Defaults to 1.0.
+            nodes (list): A list of objects to arrange.
+            convergence_threshold (float, optional): The threshold at which to consider the system as having converged.
+            Defaults to 1e-4.
+            max_iterations (int, optional): The maximum number of iterations to run before stopping.
+            Defaults to 10000.
+            max_movement (float, optional): The maximum distance an object can move during a single iteration.
+            Defaults to 1.0.
 
         Returns:
-                int: The number of iterations required for the system to converge.
+            int: The number of iterations required for the system to converge.
         """
         iteration_count = 0
         converged = False
@@ -182,26 +182,29 @@ class ExplodedViewSlots(ExplodedView):
         self.toggle_explode()
 
 
-def launch_gui(move_to_cursor=False, frameless_window=False):
+def launch_gui(move_to_cursor=False, frameless=False):
     """Launch the UI"""
-    from PySide2 import QtCore, QtGui
+    from PySide2 import QtCore
     from uitk import Switchboard
 
     parent = CoreUtils.get_main_window()
     sb = Switchboard(
         parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
     )
-    if frameless_window:
+    if frameless:
         sb.ui.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint)
         sb.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
     else:
         sb.ui.setWindowTitle("Exploded View")
 
     if move_to_cursor:
-        sb.move_and_center_widget(sb.ui, QtGui.QCursor.pos())
+        sb.center_widget(sb.ui, "cursor")
     else:
-        sb.center_widget_on_screen(sb.ui)
+        sb.center_widget(sb.ui)
 
+    sb.ui.centralWidget().setProperty("class", "translucentBgWithBorder")
+    sb.ui.set_style(theme="dark")
+    sb.ui.stays_on_top = True
     sb.ui.show()
 
 
@@ -214,6 +217,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------

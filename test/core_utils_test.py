@@ -75,7 +75,7 @@ class CoreUtils_test(Main, CoreUtils):
 
     # test imports:
     import mayatk as mtk
-    from mayatk import CmptUtils
+    from mayatk import ComponentUtils
     from mayatk import get_components
 
     # Tear down the any previous test by creating a new scene:
@@ -164,6 +164,14 @@ class CoreUtils_test(Main, CoreUtils):
         self.perform_test(
             {
                 # "self.get_selected_channels()": None,
+            }
+        )
+
+    def test_generate_unique_name(self):
+        """ """
+        self.perform_test(
+            {
+                # "self.generate_unique_name()": None,
             }
         )
 

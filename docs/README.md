@@ -6,8 +6,8 @@
 [![NodeUtils Tests](https://img.shields.io/badge/NodeUtils-Passing-brightgreen.svg)](../test/node_utils_test.py#NodeUtilsTest)
 [![MashUtils Tests](https://img.shields.io/badge/MashUtils-Passing-brightgreen.svg)](../test/mash_utils_test.py#MashUtilsTest)
 [![EditUtils Tests](https://img.shields.io/badge/EditUtils-Passing-brightgreen.svg)](../test/edit_utils_test.py#EditUtilsTest)
-[![CmptUtils Tests](https://img.shields.io/badge/CmptUtils-Passing-brightgreen.svg)](../test/cmpt_utils_test.py#CmptUtilsTest)
-[![CamUtils Tests](https://img.shields.io/badge/CamUtils-Passing-brightgreen.svg)](../test/cam_utils_test.py#CamUtilsTest)
+[![ComponentUtils Tests](https://img.shields.io/badge/ComponentUtils-Passing-brightgreen.svg)](../test/cmpt_utils_test.py#CmptUtilsTest)
+[![CameraUtils Tests](https://img.shields.io/badge/CameraUtils-Passing-brightgreen.svg)](../test/cam_utils_test.py#CamUtilsTest)
 [![MatUtils Tests](https://img.shields.io/badge/MatUtils-Passing-brightgreen.svg)](../test/mat_utils_test.py#MatUtilsTest)
 [![RigUtils Tests](https://img.shields.io/badge/RigUtils-Passing-brightgreen.svg)](../test/rig_utils_test.py#RigUtilsTest)
 
