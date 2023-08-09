@@ -177,58 +177,84 @@ class CmptUtils_test(Main, ComponentUtils):
 
     def test_getComponents(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_components('cyl', 'vertex', 'str', '', 'cyl.vtx[2:23]')": [
-                    "cylShape.vtx[0]",
-                    "cylShape.vtx[1]",
-                    "cylShape.vtx[24]",
-                    "cylShape.vtx[25]",
-                ],
-                "str(self.get_components('cyl', 'vertex', 'cyl', '', 'cyl.vtx[:23]'))": "[MeshVertex('cylShape.vtx[24]'), MeshVertex('cylShape.vtx[25]')]",
-                "self.get_components('cyl', 'f', 'int')": [0, 35],
-                "self.get_components('cyl', 'edges')": ["cylShape.e[0:59]"],
-                "self.get_components('cyl', 'edges', 'str', 'cyl.e[:2]')": [
-                    "cylShape.e[0]",
-                    "cylShape.e[1]",
-                    "cylShape.e[2]",
-                ],
-            }
+        self.assertEqual(
+            self.get_components("cyl", "vertex", "str", "", "cyl.vtx[2:23]"),
+            [
+                "cylShape.vtx[0]",
+                "cylShape.vtx[1]",
+                "cylShape.vtx[24]",
+                "cylShape.vtx[25]",
+            ],
         )
+        self.assertEqual(
+            str(self.get_components("cyl", "vertex", "cyl", "", "cyl.vtx[:23]")),
+            "[MeshVertex('cylShape.vtx[24]'), MeshVertex('cylShape.vtx[25]')]",
+        )
+        self.assertEqual(self.get_components("cyl", "f", "int"), [0, 35])
+        self.assertEqual(self.get_components("cyl", "edges"), ["cylShape.e[0:59]"])
+        self.assertEqual(
+            self.get_components("cyl", "edges", "str", "cyl.e[:2]"),
+            [
+                "cylShape.e[0]",
+                "cylShape.e[1]",
+                "cylShape.e[2]",
+            ],
+        )
+
+    def test_map_components_to_objects(self):
+        """Test mapping of components to their respective objects."""
+        # Create a sphere
+        pm.polySphere(name="mySphere")[0]  # This is the transform node
+
+        actual = self.map_components_to_objects(
+            [pm.MeshFace(f"mySphereShape.f[{i}]") for i in range(5)]
+        )
+        expected = {
+            "mySphereShape": [
+                pm.MeshFace("mySphereShape.f[0]"),
+                pm.MeshFace("mySphereShape.f[1]"),
+                pm.MeshFace("mySphereShape.f[2]"),
+                pm.MeshFace("mySphereShape.f[3]"),
+                pm.MeshFace("mySphereShape.f[4]"),
+            ]
+        }
+        self.assertEqual(actual, expected)
 
     def test_getContigiousEdges(self):
         """ """
-        self.perform_test(
-            {
-                "self.get_contigious_edges(['cyl.e[:2]'])": [
-                    {"cylShape.e[1]", "cylShape.e[0]", "cylShape.e[2]"}
-                ],
-                "self.get_contigious_edges(['cyl.f[0]'])": [
-                    {
-                        "cylShape.e[24]",
-                        "cylShape.e[0]",
-                        "cylShape.e[25]",
-                        "cylShape.e[12]",
-                    }
-                ],
-            }
+        self.assertEqual(
+            self.get_contigious_edges(["cyl.e[:2]"]),
+            [{"cylShape.e[1]", "cylShape.e[0]", "cylShape.e[2]"}],
+        )
+        self.assertEqual(
+            self.get_contigious_edges(["cyl.f[0]"]),
+            [
+                {
+                    "cylShape.e[24]",
+                    "cylShape.e[0]",
+                    "cylShape.e[25]",
+                    "cylShape.e[12]",
+                }
+            ],
         )
 
     def test_getContigiousIslands(self):
-        """ """
-        self.perform_test(
-            {
-                "self.get_contigious_islands('cyl.f[21:26]')": [
-                    {"cylShape.f[22]", "cylShape.f[21]", "cylShape.f[23]"},
-                    {"cylShape.f[26]", "cylShape.f[24]", "cylShape.f[25]"},
-                ],
-            }
-        )
+        actual = self.get_contigious_islands("cyl.f[21:26]")
+        expected = [
+            {"cylShape.f[22]", "cylShape.f[21]", "cylShape.f[23]"},
+            {"cylShape.f[26]", "cylShape.f[24]", "cylShape.f[25]"},
+        ]
+
+        # Convert each set to a sorted tuple, and sort the lists
+        actual_sorted = sorted(tuple(sorted(s)) for s in actual)
+        expected_sorted = sorted(tuple(sorted(s)) for s in expected)
+
+        self.assertEqual(actual_sorted, expected_sorted)
 
     def test_getIslands(self):
         """ """
         if not pm.objExists("cmb"):  # create two objects and combine them.
-            cmbA = pm.polyCylinder(
+            pm.polyCylinder(
                 radius=5,
                 height=10,
                 subdivisionsX=5,
@@ -236,7 +262,7 @@ class CmptUtils_test(Main, ComponentUtils):
                 subdivisionsZ=1,
                 name="cmbA",
             )
-            cmbB = pm.polyCylinder(
+            pm.polyCylinder(
                 radius=5,
                 height=6,
                 subdivisionsX=5,
@@ -244,49 +270,50 @@ class CmptUtils_test(Main, ComponentUtils):
                 subdivisionsZ=1,
                 name="cmbB",
             )
-            cmb = pm.polyUnite(
+            # polyUnite returns a tuple of the resulting object and the node that performed the operation.
+            cmb, _ = pm.polyUnite(
                 "cmbA", "cmbB", ch=1, mergeUVSets=1, centerPivot=1, name="cmb"
             )
 
-        self.perform_test(
-            {
-                "list(self.get_islands('cmb'))": [
-                    [
-                        "cmb.f[0]",
-                        "cmb.f[5]",
-                        "cmb.f[4]",
-                        "cmb.f[9]",
-                        "cmb.f[6]",
-                        "cmb.f[1]",
-                        "cmb.f[10]",
-                        "cmb.f[11]",
-                        "cmb.f[14]",
-                        "cmb.f[8]",
-                        "cmb.f[7]",
-                        "cmb.f[3]",
-                        "cmb.f[13]",
-                        "cmb.f[2]",
-                        "cmb.f[12]",
-                    ],
-                    [
-                        "cmb.f[15]",
-                        "cmb.f[20]",
-                        "cmb.f[19]",
-                        "cmb.f[24]",
-                        "cmb.f[21]",
-                        "cmb.f[16]",
-                        "cmb.f[25]",
-                        "cmb.f[26]",
-                        "cmb.f[29]",
-                        "cmb.f[23]",
-                        "cmb.f[22]",
-                        "cmb.f[18]",
-                        "cmb.f[28]",
-                        "cmb.f[17]",
-                        "cmb.f[27]",
-                    ],
+        # get_islands returns a generator so convert to list.
+        self.assertEqual(
+            list(self.get_islands(cmb)),
+            [
+                [
+                    "cmb.f[0]",
+                    "cmb.f[5]",
+                    "cmb.f[4]",
+                    "cmb.f[9]",
+                    "cmb.f[6]",
+                    "cmb.f[1]",
+                    "cmb.f[10]",
+                    "cmb.f[11]",
+                    "cmb.f[14]",
+                    "cmb.f[8]",
+                    "cmb.f[7]",
+                    "cmb.f[3]",
+                    "cmb.f[13]",
+                    "cmb.f[2]",
+                    "cmb.f[12]",
                 ],
-            }
+                [
+                    "cmb.f[15]",
+                    "cmb.f[20]",
+                    "cmb.f[19]",
+                    "cmb.f[24]",
+                    "cmb.f[21]",
+                    "cmb.f[16]",
+                    "cmb.f[25]",
+                    "cmb.f[26]",
+                    "cmb.f[29]",
+                    "cmb.f[23]",
+                    "cmb.f[22]",
+                    "cmb.f[18]",
+                    "cmb.f[28]",
+                    "cmb.f[17]",
+                    "cmb.f[27]",
+                ],
+            ],
         )
 
     def test_getBorderComponents(self):

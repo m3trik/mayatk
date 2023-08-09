@@ -33,7 +33,7 @@ class Main(unittest.TestCase):
             self.assertEqual(
                 result,
                 expected_result,
-                f"\n\n# Error: {path}\n#\tCall: {method_name}({', '.join(map(str, function_args)) if 'function_args' in locals() else ''})\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
+                f"\n\n# Error: {path}\n#\tCall: {method_name}\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
             )
 
     @staticmethod

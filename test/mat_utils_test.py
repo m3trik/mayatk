@@ -3,7 +3,7 @@
 import unittest
 import importlib
 import pymel.core as pm
-from mayatk.mat_utils import mat_utils
+from mayatk import mat_utils
 
 importlib.reload(mat_utils)
 

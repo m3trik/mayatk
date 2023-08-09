@@ -94,17 +94,21 @@ class Preview:
         if pm.selected():
             self.needs_undo = False
             self.refresh()
+            self.preview_checkbox.setChecked(True)
             self.create_button.setEnabled(True)
+            # Mute the command reporting.
+            pm.commandEcho(state=False)
         else:
             self.message_func("No objects selected.")
             self.disable_preview()
 
     def disable_preview(self):
         """Disable the preview, undo the last operation if needed, and disable the 'Apply Changes' button."""
-        if self.needs_undo:
-            pm.undo()  # Undo the last operation only if needed.
+        self.undo_if_needed()
         self.preview_checkbox.setChecked(False)
         self.create_button.setEnabled(False)
+        # Restore the command reporting to its default state.
+        pm.commandEcho(state=True)
 
     def refresh(self, *args):
         """Refresh the preview if the checkbox is checked and there's no previous operation pending.
@@ -120,10 +124,12 @@ class Preview:
             return
 
         # If we've already performed an operation, undo it before doing a new one.
-        if self.needs_undo:
-            pm.undo()
+        self.undo_if_needed()
 
+        pm.undoInfo(openChunk=True)
         self.operation_func()
+        pm.undoInfo(closeChunk=True)
+
         self.needs_undo = True
 
     def finalize_changes(self):
@@ -135,6 +141,18 @@ class Preview:
 
         if self.finalize_func:
             self.finalize_func()
+
+    def undo_if_needed(self):
+        """Undo the previous operation if there is one pending.
+
+        This method will attempt to perform an undo operation if `self.needs_undo` is True.
+        If there's no command to undo, it catches the RuntimeError and passes.
+        """
+        if self.needs_undo:
+            try:
+                pm.undo()
+            except RuntimeError:  # There are no more commands to undo.
+                pass
 
 
 # -----------------------------------------------------------------------------

@@ -9,7 +9,7 @@ except ImportError as error:
 from mayatk import core_utils
 
 
-class Cam(object):
+class CamUtils(object):
     """ """
 
     @staticmethod

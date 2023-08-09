@@ -288,7 +288,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
-    proj_root_dir = ptk.get_filepath(__file__)
+    proj_root_dir = ptk.get_object_path(__file__)
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -298,8 +298,8 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         # Add filenames|filepaths to the comboBox.
         hdr_path = f"{self.proj_root_dir}/resources/hdr"
-        hdr_filenames = ptk.get_dir_contents(hdr_path, "filenames", inc_files="*.exr")
-        hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepaths", inc_files="*.exr")
+        hdr_filenames = ptk.get_dir_contents(hdr_path, "filename", inc_files="*.exr")
+        hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepath", inc_files="*.exr")
         self.sb.ui.cmb000.add(zip(hdr_filenames, hdr_fullpaths), ascending=False)
 
         self.sb.ui.txt001.setText(self.msg_intro)
@@ -469,7 +469,7 @@ if __name__ == "__main__":
     parent = CoreUtils.get_main_window()
     sb = StingrayArnoldShaderUI(parent)
     sb.ui.set_style(theme="dark")
-    sb.ui.stays_on_top = True
+    sb.ui.set_flags("WindowStaysOnTopHint")
     sb.ui.draggableHeader.hide()
     sb.ui.show(app_exec=True)
 

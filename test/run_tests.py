@@ -8,7 +8,6 @@ def run_test_cases(test_module):
 
     Parameters:
         test_module (str)(module): A module object or a string representing the module name.
-
     """
     if isinstance(test_module, str):
         test_module = importlib.import_module(test_module)
@@ -27,7 +26,6 @@ def run_tests(module_names):
 
     Parameters:
         module_names (list): A list of strings representing the names of the non-test modules.
-
     """
     for module_name in module_names:
         module = __import__(f"mayatk.{module_name}", fromlist=[module_name])
@@ -47,7 +45,7 @@ def run_tests(module_names):
 if __name__ == "__main__":
     run_tests(
         [
-            "utils",
+            "core_utils",
             "node_utils",
             "component_utils",
             "edit_utils",

@@ -8,6 +8,7 @@ try:
     import maya.OpenMaya as om
 except ModuleNotFoundError as error:
     print(__file__, error)
+from uitk import Switchboard
 
 # from this package:
 from mayatk.core_utils import CoreUtils
@@ -182,36 +183,27 @@ class ExplodedViewSlots(ExplodedView):
         self.toggle_explode()
 
 
-def launch_gui(move_to_cursor=False, frameless=False):
-    """Launch the UI"""
-    from PySide2 import QtCore
-    from uitk import Switchboard
-
+class ExplodedViewUiLoader(Switchboard):
     parent = CoreUtils.get_main_window()
-    sb = Switchboard(
-        parent, ui_location="exploded_view.ui", slots_location=ExplodedViewSlots
-    )
-    if frameless:
-        sb.ui.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint)
-        sb.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-    else:
-        sb.ui.setWindowTitle("Exploded View")
 
-    if move_to_cursor:
-        sb.center_widget(sb.ui, "cursor")
-    else:
-        sb.center_widget(sb.ui)
+    def __init__(self, *args, **kwargs):
+        super().__init__(self.parent, *args, **kwargs)
 
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.ui.stays_on_top = True
-    sb.ui.show()
+        self.ui_location = "exploded_view.ui"
+        self.slots_location = ExplodedViewSlots
+
+        self.ui.set_flags(
+            Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+        )
+        self.ui.set_attributes(WA_TranslucentBackground=True)
+        self.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
 
 # -----------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
-    launch_gui()
+    ExplodedViewUiLoader().ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

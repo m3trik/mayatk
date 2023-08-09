@@ -478,6 +478,35 @@ class GetComponentsMixin:
 class ComponentUtils(GetComponentsMixin):
     """ """
 
+    @staticmethod
+    def map_components_to_objects(components_list):
+        """Maps a list of components to their respective objects.
+
+        This function takes in a list of PyMel component objects and returns a
+        dictionary where the keys are the names of the parent objects of the
+        components, and the values are lists of components belonging to each object.
+
+        Parameters:
+            components_list (list): A list of PyMel component objects.
+
+        Returns:
+            dict: A dictionary mapping object names to lists of components.
+                  The components are represented as PyMel objects.
+        """
+        objects_components_dict = {}
+
+        for component in components_list:
+            try:
+                obj_name = component.node().name()
+            except AttributeError:
+                continue
+            try:
+                objects_components_dict[obj_name].append(component)
+            except KeyError:
+                objects_components_dict[obj_name] = [component]
+
+        return objects_components_dict
+
     @classmethod
     def get_contigious_edges(cls, components):
         """Get a list containing sets of adjacent edges.
@@ -526,12 +555,11 @@ class ComponentUtils(GetComponentsMixin):
         return result
 
     @classmethod
-    def get_contigious_islands(cls, faces, face_islands=[]):
+    def get_contigious_islands(cls, faces):
         """Get a list containing sets of adjacent polygon faces grouped by islands.
 
         Parameters:
             faces (str/obj/list): The polygon faces to be filtered for adjacent.
-            face_islands (list/optional): list of sets. ability to add faces from previous calls to the return value.
 
         Returns:
             (list): of sets of adjacent faces.
@@ -539,6 +567,7 @@ class ComponentUtils(GetComponentsMixin):
         Example:
             get_contigious_islands('obj.f[21:26]') #returns: [{'objShape.f[22]', 'objShape.f[21]', 'objShape.f[23]'}, {'objShape.f[26]', 'objShape.f[24]', 'objShape.f[25]'}]
         """
+        face_islands = []
         sets = []
         faces = pm.ls(faces, flatten=1)
         for face in faces:
@@ -548,14 +577,13 @@ class ComponentUtils(GetComponentsMixin):
             if set_:
                 sets.append(set_)
 
-        while len(sets) > 0:  # combine sets in 'sets' that share common elements.
-            first, rest = sets[0], sets[1:]  # python 3: first, *rest = sets
+        while len(sets) > 0:
+            first, rest = sets[0], sets[1:]
             first = set(first)
 
             lf = -1
             while len(first) > lf:
                 lf = len(first)
-
                 rest2 = []
                 for r in rest:
                     if len(first.intersection(set(r))) > 0:
@@ -584,17 +612,20 @@ class ComponentUtils(GetComponentsMixin):
         Example:
             get_islands('combined_obj') #returns: [['combined_obj.f[0]', 'combined_obj.f[5]', ..etc, ['combined_obj.f[15]', ..etc]]
         """
+        if isinstance(obj, str):
+            obj = pm.ls(obj)[0]  # Convert input to a single PyMel object
+        elif not isinstance(obj, pm.nt.Transform):
+            raise ValueError(f"Expected a single mesh object, got {type(obj)}")
+
         # num_shells = pm.polyEvaluate(obj, shell=True)
         num_faces = pm.polyEvaluate(obj, face=True)
-
         unprocessed = set(range(num_faces))
 
-        # shells = []
         while unprocessed:
-            index = next(iter(unprocessed))  # face_index
-            faces = pm.polySelect(
-                obj, extendToShell=index, noSelection=True
-            )  # shell faces
+            # face_index
+            index = next(iter(unprocessed))
+            # shell faces
+            faces = pm.polySelect(obj, extendToShell=index, noSelection=True)
 
             if returned_type == "str":
                 yield ["{}.f[{}]".format(obj, index) for index in faces]
