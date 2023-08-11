@@ -71,7 +71,7 @@ class BevelEdgesUI:
 
         parent = CoreUtils.get_main_window()
         sb = Switchboard(
-            parent, ui_location="bevel_edges.ui", slots_location=BevelEdgesSlots
+            parent, ui_location="bevel_edges.ui", slot_location=BevelEdgesSlots
         )
 
         if frameless:

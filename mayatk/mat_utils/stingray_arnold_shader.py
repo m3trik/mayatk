@@ -457,7 +457,7 @@ class StingrayArnoldShaderUI(Switchboard):
         super().__init__(parent)
 
         self.ui_location = "stingray_arnold_shader.ui"
-        self.slots_location = StingrayArnoldShaderSlots
+        self.slot_location = StingrayArnoldShaderSlots
 
         self.ui.txt001.hide()
         self.ui.resize(self.ui.sizeHint())

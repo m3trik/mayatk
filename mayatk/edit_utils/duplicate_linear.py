@@ -129,7 +129,7 @@ class DuplicateLinearUI:
         sb = Switchboard(
             parent,
             ui_location="duplicate_linear.ui",
-            slots_location=DuplicateLinearSlots,
+            slot_location=DuplicateLinearSlots,
         )
 
         if frameless:

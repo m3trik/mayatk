@@ -212,7 +212,7 @@ class DuplicateRadialUI:
         sb = Switchboard(
             parent,
             ui_location="duplicate_radial.ui",
-            slots_location=DuplicateRadialSlots,
+            slot_location=DuplicateRadialSlots,
         )
         if frameless:
             sb.ui.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint)

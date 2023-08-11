@@ -190,7 +190,7 @@ class ExplodedViewUiLoader(Switchboard):
         super().__init__(self.parent, *args, **kwargs)
 
         self.ui_location = "exploded_view.ui"
-        self.slots_location = ExplodedViewSlots
+        self.slot_location = ExplodedViewSlots
 
         self.ui.set_flags(
             Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
