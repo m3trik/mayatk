@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from ._mat_utils import MatUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 
 # -----------------------------------------------------------------------------
 

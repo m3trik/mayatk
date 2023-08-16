@@ -8,7 +8,6 @@ try:
     import maya.OpenMaya as om
 except ModuleNotFoundError as error:
     print(__file__, error)
-from uitk import Switchboard
 
 # from this package:
 from mayatk.core_utils import CoreUtils
@@ -183,27 +182,25 @@ class ExplodedViewSlots(ExplodedView):
         self.toggle_explode()
 
 
-class ExplodedViewUiLoader(Switchboard):
-    parent = CoreUtils.get_main_window()
+def get_ui_file():
+    import os
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(self.parent, *args, **kwargs)
-
-        self.ui_location = "exploded_view.ui"
-        self.slot_location = ExplodedViewSlots
-
-        self.ui.set_flags(
-            Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-        )
-        self.ui.set_attributes(WA_TranslucentBackground=True)
-        self.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    return os.path.join(os.path.dirname(__file__), "exploded_view.ui")
 
 
 # -----------------------------------------------------------------------------
 
-
 if __name__ == "__main__":
-    ExplodedViewUiLoader().ui.show(pos="screen", app_exec=True)
+    from uitk import Switchboard
+
+    parent = CoreUtils.get_main_window()
+    sb = Switchboard(parent, ui_location=get_ui_file(), slot_location=ExplodedViewSlots)
+
+    sb.ui.set_attributes(WA_TranslucentBackground=True)
+    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+
+    sb.ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

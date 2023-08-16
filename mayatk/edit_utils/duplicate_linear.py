@@ -118,41 +118,27 @@ class DuplicateLinearSlots:
         )
 
 
-class DuplicateLinearUI:
-    @staticmethod
-    def launch(move_to_cursor=False, frameless=False):
-        """Launch the UI"""
-        from PySide2 import QtCore
-        from uitk import Switchboard
+def get_ui_file():
+    import os
 
-        parent = CoreUtils.get_main_window()
-        sb = Switchboard(
-            parent,
-            ui_location="duplicate_linear.ui",
-            slot_location=DuplicateLinearSlots,
-        )
-
-        if frameless:
-            sb.ui.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint)
-            sb.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        else:
-            sb.ui.setWindowTitle("Duplicate Linear")
-
-        if move_to_cursor:
-            sb.center_widget(sb.ui, "cursor")
-        else:
-            sb.center_widget(sb.ui)
-
-        sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-        sb.ui.set_flags("WindowStaysOnTopHint")
-        sb.ui.show()
+    return os.path.join(os.path.dirname(__file__), "duplicate_linear.ui")
 
 
 # -----------------------------------------------------------------------------
 
-
 if __name__ == "__main__":
-    DuplicateLinearUI.launch(frameless=True)
+    from uitk import Switchboard
+
+    parent = CoreUtils.get_main_window()
+    sb = Switchboard(
+        parent, ui_location=get_ui_file(), slot_location=DuplicateLinearSlots
+    )
+
+    sb.ui.set_attributes(WA_TranslucentBackground=True)
+    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+
+    sb.ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from ._edit_utils import EditUtils
+from mayatk.edit_utils._edit_utils import EditUtils
 
 # --------------------------------------------------------------------------------------------
 

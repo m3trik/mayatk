@@ -6,7 +6,6 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from uitk import Switchboard
 import pythontk as ptk
 
 # from this package:
@@ -450,28 +449,27 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             QtWidgets.QApplication.instance().processEvents()
 
 
-class StingrayArnoldShaderUI(Switchboard):
-    """Constructs the main ui window for `StingrayArnoldShader` class."""
+def get_ui_file():
+    import os
 
-    def __init__(self, parent=None, **kwargs):
-        super().__init__(parent)
-
-        self.ui_location = "stingray_arnold_shader.ui"
-        self.slot_location = StingrayArnoldShaderSlots
-
-        self.ui.txt001.hide()
-        self.ui.resize(self.ui.sizeHint())
+    return os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
 
 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from uitk import Switchboard
+
     parent = CoreUtils.get_main_window()
-    sb = StingrayArnoldShaderUI(parent)
-    sb.ui.set_style(theme="dark")
-    sb.ui.set_flags("WindowStaysOnTopHint")
-    sb.ui.draggableHeader.hide()
-    sb.ui.show(app_exec=True)
+    sb = Switchboard(
+        parent, ui_location=get_ui_file(), slot_location=StingrayArnoldShaderSlots
+    )
+
+    sb.ui.set_attributes(WA_TranslucentBackground=True)
+    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+
+    sb.ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

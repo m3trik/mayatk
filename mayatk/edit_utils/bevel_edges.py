@@ -4,7 +4,6 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-
 # from this package:
 from mayatk.core_utils import CoreUtils, Preview
 from mayatk.component_utils import ComponentUtils
@@ -35,14 +34,16 @@ class BevelEdges:
 class BevelEdgesSlots:
     def __init__(self):
         self.sb = self.switchboard()
+        ui = self.sb.bevel_edges
+
         self.preview = Preview(
-            self.sb.ui.chk000,
-            self.sb.ui.b000,
+            ui.chk000,
+            ui.b000,
             operation_func=self.perform_bevel,
             message_func=self.sb.message_box,
         )
         self.sb.connect_multi(
-            self.sb.ui,
+            ui,
             "s000-1",
             "valueChanged",
             self.preview.refresh,
@@ -62,39 +63,25 @@ class BevelEdgesSlots:
         )
 
 
-class BevelEdgesUI:
-    @staticmethod
-    def launch(move_to_cursor=False, frameless=False):
-        """Launch the UI"""
-        from PySide2 import QtCore
-        from uitk import Switchboard
+def get_ui_file():
+    import os
 
-        parent = CoreUtils.get_main_window()
-        sb = Switchboard(
-            parent, ui_location="bevel_edges.ui", slot_location=BevelEdgesSlots
-        )
-
-        if frameless:
-            sb.ui.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint)
-            sb.ui.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        else:
-            sb.ui.setWindowTitle("Bevel Edges")
-
-        if move_to_cursor:
-            sb.center_widget(sb.ui, "cursor")
-        else:
-            sb.center_widget(sb.ui)
-
-        sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-        sb.ui.set_flags("WindowStaysOnTopHint")
-        sb.ui.show()
+    return os.path.join(os.path.dirname(__file__), "bevel_edges.ui")
 
 
 # -----------------------------------------------------------------------------
 
-
 if __name__ == "__main__":
-    BevelEdgesUI.launch(frameless=True)
+    from uitk import Switchboard
+
+    parent = CoreUtils.get_main_window()
+    sb = Switchboard(parent, ui_location=get_ui_file(), slot_location=BevelEdgesSlots)
+
+    sb.ui.set_attributes(WA_TranslucentBackground=True)
+    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+
+    sb.ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

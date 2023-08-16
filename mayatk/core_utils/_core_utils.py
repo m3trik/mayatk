@@ -131,9 +131,7 @@ class CoreUtils:
         layout.setObjectName(layoutName)
         pm.setParent(layoutName)
 
-        from uitk.switchboard import Switchboard
-
-        derivedClass = Switchboard.get_derived_type(container)
+        derivedClass = ptk.get_derived_type(container)
 
         ptr = MQtUtil.findControl(
             control_name
