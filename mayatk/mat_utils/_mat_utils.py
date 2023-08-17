@@ -81,8 +81,9 @@ class MatUtils(object):
         import os.path
         import maya.app.general.tlfavorites as _fav
 
+        version = pm.about(version=True).split(" ")[-1]  # Get the Maya version year
         path = os.path.expandvars(
-            r"%USERPROFILE%/Documents/maya/2022/prefs/renderNodeTypeFavorites"
+            f"%USERPROFILE%/Documents/maya/{version}/prefs/renderNodeTypeFavorites"
         )
         renderNodeTypeFavorites = _fav.readFavorites(path)
         materials = [i for i in renderNodeTypeFavorites if "/" not in i]
@@ -91,34 +92,32 @@ class MatUtils(object):
         return materials
 
     @staticmethod
-    def create_random_mat(name="", prefix=""):
-        """Creates a random Lambert material with a random color.
+    def create_mat(mat_type, prefix="", name=""):
+        """Creates a material based on the provided type or a random Lambert material if 'mat_type' is 'random'.
 
         Parameters:
-            name (str, optional): The name of the material. Defaults to "".
+            mat_type (str): The type of the material, e.g. 'lambert', 'blinn', or 'random' for a random Lambert material.
             prefix (str, optional): An optional prefix to append to the material name. Defaults to "".
+            name (str, optional): The name of the material. Defaults to "".
 
         Returns:
             obj: The created material.
         """
         import random
 
-        rgb = [
-            random.randint(0, 255) for _ in range(3)
-        ]  # generate a list containing 3 values between 0-255
-
-        name = "{}{}_{}_{}_{}".format(
-            prefix, name, str(rgb[0]), str(rgb[1]), str(rgb[2])
-        )
-
-        # create shader
-        mat = pm.shadingNode("lambert", asShader=1, name=name)
-        # convert RGB to 0-1 values and assign to shader
-        convertedRGB = [round(float(v) / 255, 3) for v in rgb]
-        pm.setAttr(name + ".color", convertedRGB)
-        # assign to selected geometry
-        # pm.select(selection) #initial selection is lost upon node creation
-        # pm.hyperShade(assign=mat)
+        if mat_type == "random":
+            rgb = [
+                random.randint(0, 255) for _ in range(3)
+            ]  # Generate a list containing 3 values between 0-255
+            name = "{}{}_{}_{}_{}".format(
+                prefix, name, str(rgb[0]), str(rgb[1]), str(rgb[2])
+            )
+            mat = pm.shadingNode("lambert", asShader=True, name=name)
+            convertedRGB = [round(float(v) / 255, 3) for v in rgb]
+            pm.setAttr(name + ".color", convertedRGB)
+        else:
+            name = prefix + name if name else mat_type
+            mat = pm.shadingNode(mat_type, asShader=True, name=name)
 
         return mat
 
@@ -173,13 +172,12 @@ class MatUtils(object):
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
             )
-
         # If objects are not specified, consider all objects in the scene
         if not objects:
-            objects = set(pm.ls(type="transform", objectsOnly=True, flatten=True))
-        else:
-            # Ensure the objects list only contains the names of the objects
-            objects = set(pm.ls(objects, objectsOnly=True, flatten=True))
+            objects = pm.ls(geometry=True)  # Get all mesh objects
+
+        # Convert mesh shapes to transform nodes
+        objects = node_utils.NodeUtils.get_transform_node(objects)
 
         # Find the shading groups associated with the material
         shading_groups = pm.listConnections(material, type="shadingEngine")
@@ -215,6 +213,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------

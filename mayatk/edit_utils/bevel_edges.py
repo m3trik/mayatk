@@ -34,16 +34,16 @@ class BevelEdges:
 class BevelEdgesSlots:
     def __init__(self):
         self.sb = self.switchboard()
-        ui = self.sb.bevel_edges
+        self.ui = self.sb.bevel_edges
 
         self.preview = Preview(
-            ui.chk000,
-            ui.b000,
+            self.ui.chk000,
+            self.ui.b000,
             operation_func=self.perform_bevel,
             message_func=self.sb.message_box,
         )
         self.sb.connect_multi(
-            ui,
+            self.ui,
             "s000-1",
             "valueChanged",
             self.preview.refresh,
@@ -53,8 +53,8 @@ class BevelEdgesSlots:
         """Perform the linear duplication operation."""
         objects = pm.ls(sl=True)
 
-        width = self.sb.ui.s000.value()
-        segments = self.sb.ui.s001.value()
+        width = self.ui.s000.value()
+        segments = self.ui.s001.value()
 
         BevelEdges.bevel_edges(
             objects,
@@ -77,11 +77,13 @@ if __name__ == "__main__":
     parent = CoreUtils.get_main_window()
     sb = Switchboard(parent, ui_location=get_ui_file(), slot_location=BevelEdgesSlots)
 
-    sb.ui.set_attributes(WA_TranslucentBackground=True)
-    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    sb.current_ui.set_flags(
+        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+    )
+    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.ui.show(pos="screen", app_exec=True)
+    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

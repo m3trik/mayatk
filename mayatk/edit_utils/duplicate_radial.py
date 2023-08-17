@@ -101,21 +101,23 @@ class DuplicateRadial:
 class DuplicateRadialSlots:
     def __init__(self):
         self.sb = self.switchboard()
+        self.ui = self.sb.duplicate_radial
+
         self.preview = Preview(
-            self.sb.ui.chk000,
-            self.sb.ui.b000,
+            self.ui.chk000,
+            self.ui.b000,
             operation_func=self.perform_duplicate_radial,
             finalize_func=self.regroup_copies,
             message_func=self.sb.message_box,
         )
         self.sb.connect_multi(
-            self.sb.ui,
+            self.ui,
             "s000-16",
             "valueChanged",
             self.preview.refresh,
         )
         self.sb.connect_multi(
-            self.sb.ui,
+            self.ui,
             "chk002-4",
             "toggled",
             self.preview.refresh,
@@ -124,37 +126,37 @@ class DuplicateRadialSlots:
     def perform_duplicate_radial(self):
         """Perform the radial duplication operation."""
         objects = pm.ls(sl=True, type="transform")
-        num_copies = self.sb.ui.s009.value()
-        start_angle = self.sb.ui.s013.value()
-        end_angle = self.sb.ui.s014.value()
-        weight_bias = self.sb.ui.s015.value()
-        weight_curve = self.sb.ui.s016.value()
+        num_copies = self.ui.s009.value()
+        start_angle = self.ui.s013.value()
+        end_angle = self.ui.s014.value()
+        weight_bias = self.ui.s015.value()
+        weight_curve = self.ui.s016.value()
         rotate_axis = (
             "x"
-            if self.sb.ui.chk002.isChecked()
+            if self.ui.chk002.isChecked()
             else "y"
-            if self.sb.ui.chk003.isChecked()
+            if self.ui.chk003.isChecked()
             else "z"
         )
         pivot_point = (
-            self.sb.ui.s010.value(),
-            self.sb.ui.s011.value(),
-            self.sb.ui.s012.value(),
+            self.ui.s010.value(),
+            self.ui.s011.value(),
+            self.ui.s012.value(),
         )
         translate = (
-            self.sb.ui.s000.value(),
-            self.sb.ui.s001.value(),
-            self.sb.ui.s002.value(),
+            self.ui.s000.value(),
+            self.ui.s001.value(),
+            self.ui.s002.value(),
         )
         rotate = (
-            self.sb.ui.s003.value(),
-            self.sb.ui.s004.value(),
-            self.sb.ui.s005.value(),
+            self.ui.s003.value(),
+            self.ui.s004.value(),
+            self.ui.s005.value(),
         )
         scale = (
-            self.sb.ui.s006.value(),
-            self.sb.ui.s007.value(),
-            self.sb.ui.s008.value(),
+            self.ui.s006.value(),
+            self.ui.s007.value(),
+            self.ui.s008.value(),
         )
 
         self.copies = DuplicateRadial.duplicate_radial(
@@ -217,11 +219,11 @@ if __name__ == "__main__":
         parent, ui_location=get_ui_file(), slot_location=DuplicateRadialSlots
     )
 
-    sb.ui.set_attributes(WA_TranslucentBackground=True)
-    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    sb.current_ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.ui.show(pos="screen", app_exec=True)
+    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

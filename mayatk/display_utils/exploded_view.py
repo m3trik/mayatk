@@ -196,11 +196,13 @@ if __name__ == "__main__":
     parent = CoreUtils.get_main_window()
     sb = Switchboard(parent, ui_location=get_ui_file(), slot_location=ExplodedViewSlots)
 
-    sb.ui.set_attributes(WA_TranslucentBackground=True)
-    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    sb.current_ui.set_flags(
+        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+    )
+    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.ui.show(pos="screen", app_exec=True)
+    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

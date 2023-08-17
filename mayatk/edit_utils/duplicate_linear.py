@@ -72,14 +72,16 @@ class DuplicateLinear:
 class DuplicateLinearSlots:
     def __init__(self):
         self.sb = self.switchboard()
+        self.ui = self.sb.duplicate_linear
+
         self.preview = Preview(
-            self.sb.ui.chk000,
-            self.sb.ui.b000,
+            self.ui.chk000,
+            self.ui.b000,
             operation_func=self.perform_duplicate_linear,
             message_func=self.sb.message_box,
         )
         self.sb.connect_multi(
-            self.sb.ui,
+            self.ui,
             "s000-11",
             "valueChanged",
             self.preview.refresh,
@@ -88,24 +90,24 @@ class DuplicateLinearSlots:
     def perform_duplicate_linear(self):
         """Perform the linear duplication operation."""
         objects = pm.ls(sl=True, type="transform")
-        num_copies = self.sb.ui.s009.value()
+        num_copies = self.ui.s009.value()
         translate = (
-            self.sb.ui.s000.value(),
-            self.sb.ui.s001.value(),
-            self.sb.ui.s002.value(),
+            self.ui.s000.value(),
+            self.ui.s001.value(),
+            self.ui.s002.value(),
         )
         rotate = (
-            self.sb.ui.s003.value(),
-            self.sb.ui.s004.value(),
-            self.sb.ui.s005.value(),
+            self.ui.s003.value(),
+            self.ui.s004.value(),
+            self.ui.s005.value(),
         )
         scale = (
-            self.sb.ui.s006.value(),
-            self.sb.ui.s007.value(),
-            self.sb.ui.s008.value(),
+            self.ui.s006.value(),
+            self.ui.s007.value(),
+            self.ui.s008.value(),
         )
-        weight_bias = self.sb.ui.s010.value()
-        weight_curve = self.sb.ui.s011.value()
+        weight_bias = self.ui.s010.value()
+        weight_curve = self.ui.s011.value()
 
         self.copies = DuplicateLinear.duplicate_linear(
             objects,
@@ -134,11 +136,11 @@ if __name__ == "__main__":
         parent, ui_location=get_ui_file(), slot_location=DuplicateLinearSlots
     )
 
-    sb.ui.set_attributes(WA_TranslucentBackground=True)
-    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    sb.current_ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.ui.show(pos="screen", app_exec=True)
+    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

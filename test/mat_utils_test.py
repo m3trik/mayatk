@@ -55,13 +55,17 @@ class MatUtilsTest(unittest.TestCase, mat_utils.MatUtils):
         # Check if the favorite materials are not None
         self.assertIsNotNone(fav_mats)
 
-    def test_create_random_mat(self):
-        """Test the create_random_mat method."""
+    def test_create_mat(self):
+        """Test the create_material method."""
         # Create a random material
-        random_mat = self.create_random_mat()
+        random_mat = self.create_mat(mat_type="random")
 
         # Check if the random material is not None
         self.assertIsNotNone(random_mat)
+
+        # Optionally, you can test other material types
+        lambert_mat = self.create_mat(mat_type="lambert")
+        self.assertIsNotNone(lambert_mat)
 
     def test_assign_mat(self):
         """Test the assign_mat method."""

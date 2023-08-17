@@ -293,20 +293,21 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         super().__init__()
         """ """
         self.sb = self.switchboard()
+        self.ui = self.sb.stingray_arnold_shader
         self.image_files = None
 
         # Add filenames|filepaths to the comboBox.
         hdr_path = f"{self.proj_root_dir}/resources/hdr"
         hdr_filenames = ptk.get_dir_contents(hdr_path, "filename", inc_files="*.exr")
         hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepath", inc_files="*.exr")
-        self.sb.ui.cmb000.add(zip(hdr_filenames, hdr_fullpaths), ascending=False)
+        self.ui.cmb000.add(zip(hdr_filenames, hdr_fullpaths), ascending=False)
 
-        self.sb.ui.txt001.setText(self.msg_intro)
+        self.ui.txt001.setText(self.msg_intro)
 
         node = self.hdr_env_transform
         if node:
             rotation = node.rotateY.get()
-            self.sb.ui.slider000.setSliderPosition(rotation)
+            self.ui.slider000.setSliderPosition(rotation)
 
     @property
     def mat_name(self) -> str:
@@ -315,7 +316,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         Returns:
             (str)
         """
-        text = self.sb.ui.txt000.text()
+        text = self.ui.txt000.text()
         return text
 
     @property
@@ -325,7 +326,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         Returns:
             (str) data as string.
         """
-        data = self.sb.ui.cmb000.currentData()
+        data = self.ui.cmb000.currentData()
         return data
 
     @property
@@ -335,7 +336,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         Returns:
             (bool)
         """
-        state = self.sb.ui.chk000.isChecked()
+        state = self.ui.chk000.isChecked()
         return state
 
     @property
@@ -345,7 +346,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         Returns:
             (str)
         """
-        text = self.sb.ui.cmb001.currentText()
+        text = self.ui.cmb001.currentText()
         return text
 
     def cmb000(self, index, widget):
@@ -382,7 +383,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         if self.image_files:
             # pm.mel.HypershadeWindow() #open the hypershade window.
 
-            self.sb.ui.txt001.clear()
+            self.ui.txt001.clear()
             self.callback("Creating network ..<br>")
 
             self.create_network(
@@ -403,7 +404,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         if image_files:
             self.image_files = image_files
-            self.sb.ui.txt001.clear()
+            self.ui.txt001.clear()
 
             msg_mat_selection = self.image_files
             for (
@@ -411,22 +412,22 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             ) in msg_mat_selection:  # format msg_intro using the map_types in imtools.
                 self.callback(ptk.truncate(i, 60))
 
-            self.sb.ui.b000.setDisabled(False)
+            self.ui.b000.setDisabled(False)
         elif not self.image_files:
-            self.sb.ui.b000.setDisabled(True)
+            self.ui.b000.setDisabled(True)
 
     def toggle_expand(self, state, widget):
         """ """
         if state:
             if not hasattr(self, "_height_open"):
-                self._height_closed = self.sb.ui.height()
-                self._height_open = self.sb.ui.sizeHint().height() + 100
-            self.sb.ui.txt001.show()
-            self.sb.ui.resize(self.sb.ui.width(), self._height_open)
+                self._height_closed = self.ui.height()
+                self._height_open = self.ui.sizeHint().height() + 100
+            self.ui.txt001.show()
+            self.ui.resize(self.ui.width(), self._height_open)
         else:
-            self._height_open = self.sb.ui.height()
-            self.sb.ui.txt001.hide()
-            self.sb.ui.resize(self.sb.ui.width(), self._height_closed)
+            self._height_open = self.ui.height()
+            self.ui.txt001.hide()
+            self.ui.resize(self.ui.width(), self._height_closed)
 
     def callback(self, string, progress=None, clear=False):
         """
@@ -436,16 +437,16 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                     Can be given as an int or a tuple as: (progress, total_len)
         """
         if clear:
-            self.sb.ui.txt003.clear()
+            self.ui.txt003.clear()
 
         if isinstance(progress, (list, tuple, set)):
             p, length = progress
             progress = (p / length) * 100
 
-        self.sb.ui.txt001.append(string)
+        self.ui.txt001.append(string)
 
         if progress is not None:
-            self.sb.ui.progressBar.setValue(progress)
+            self.ui.progressBar.setValue(progress)
             QtWidgets.QApplication.instance().processEvents()
 
 
@@ -465,11 +466,13 @@ if __name__ == "__main__":
         parent, ui_location=get_ui_file(), slot_location=StingrayArnoldShaderSlots
     )
 
-    sb.ui.set_attributes(WA_TranslucentBackground=True)
-    sb.ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    sb.current_ui.set_flags(
+        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+    )
+    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.ui.show(pos="screen", app_exec=True)
+    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

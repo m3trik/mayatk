@@ -71,25 +71,25 @@ class Preview:
         self.message_func = message_func
         self.needs_undo = False
 
-        self.preview_checkbox.clicked.connect(self.toggle_preview)
+        self.preview_checkbox.clicked.connect(self.toggle)
         self.create_button.clicked.connect(self.finalize_changes)
         self.window = self.create_button.window()
         if hasattr(self.window, "on_hide"):
             # Un-check the preview button on window hide event.
-            self.window.on_hide.connect(self.disable_preview)
+            self.window.on_hide.connect(self.disable)
 
-    def toggle_preview(self, state):
+    def toggle(self, state):
         """Toggle the preview state based on the provided state.
 
         Parameters:
             state (bool): The state to set the preview to. True for enabled, False for disabled.
         """
         if state:
-            self.enable_preview()
+            self.enable()
         else:
-            self.disable_preview()
+            self.disable()
 
-    def enable_preview(self):
+    def enable(self):
         """Enable the preview, perform the operation, and enable the 'Apply Changes' button."""
         if pm.selected():
             self.needs_undo = False
@@ -100,9 +100,9 @@ class Preview:
             pm.commandEcho(state=False)
         else:
             self.message_func("No objects selected.")
-            self.disable_preview()
+            self.disable()
 
-    def disable_preview(self):
+    def disable(self):
         """Disable the preview, undo the last operation if needed, and disable the 'Apply Changes' button."""
         self.undo_if_needed()
         self.preview_checkbox.setChecked(False)
@@ -137,7 +137,7 @@ class Preview:
         This disables the preview and, if defined, calls the finalize function.
         """
         self.needs_undo = False
-        self.disable_preview()
+        self.disable()
 
         if self.finalize_func:
             self.finalize_func()
