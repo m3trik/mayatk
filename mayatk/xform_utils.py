@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, cmpt_utils
+from mayatk import core_utils, component_utils
 
 
 class XformUtils:
@@ -176,7 +176,7 @@ class XformUtils:
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
-        Paramters:
+        Parameters:
             objects (str/obj/list): Transform node(s) of the objects to orient.
             target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
             aim_vect (tuple): The vector in local coordinates that points at the target.
@@ -187,8 +187,9 @@ class XformUtils:
         """
         if isinstance(target_pos, (tuple, set, list)):
             target = pm.createNode("transform", name="target_helper")
-
-        pm.xform(target, translation=target_pos, absolute=True)
+            pm.xform(target, translation=target_pos, absolute=True)
+        else:
+            target = target_pos  # Assume it's an existing object's name
 
         for obj in ptk.make_iterable(objects):
             const = pm.aimConstraint(
@@ -208,7 +209,7 @@ class XformUtils:
             objects (str/obj/list): Transform node(s) of the objects to orient.
             target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
         """
-        for obj in pm.ls(objects, objectsOnly=True):
+        for obj in pm.ls(objects, type="transform"):
             cls.aim_object_at_point(obj, target_pos)
 
             try:
@@ -483,7 +484,7 @@ class XformUtils:
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = cmpt_utils.CmptUtils.get_closest_verts(
+        closestVerts = component_utils.ComponentUtils.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 

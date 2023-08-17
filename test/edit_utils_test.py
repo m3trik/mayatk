@@ -190,7 +190,7 @@ class EditUtils_test(Main, EditUtils):
         """ """
         self.perform_test(
             {
-                "self.get_overlapping_dup_objects(['cyl', 'cube1', 'cube2'])": set(),
+                "self.get_overlapping_duplicates(['cyl', 'cube1', 'cube2'])": set(),
             }
         )
 

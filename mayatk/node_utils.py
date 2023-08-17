@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, cmpt_utils
+from mayatk import core_utils, component_utils
 
 
 class NodeUtils:
@@ -47,7 +47,7 @@ class NodeUtils:
             elif cls.is_locator(obj):
                 typ = "locator"
             else:
-                typ = cmpt_utils.CmptUtils.get_component_type(obj)
+                typ = component_utils.ComponentUtils.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)
@@ -542,7 +542,6 @@ class NodeUtils:
 
         for attr, value in attributes.items():
             attr_type = cls.get_maya_attribute_type(value)
-            print("attr_type", attr_type)
 
             if not pm.attributeQuery(attr, node=node, exists=True):
                 if attr_type.endswith("3") or attr_type.endswith(
@@ -656,6 +655,102 @@ class NodeUtils:
 
         return assembly_node
 
+    @staticmethod
+    def get_instances(objects=None, return_parent_objects=False):
+        """get any intances of given object, or if None given; get all instanced objects in the scene.
+
+        Parameters:
+            objects (str/obj/list): Parent object/s.
+            return_parent_objects (bool): Return instances and the given parent objects together.
+
+        Returns:
+            (list)
+        """
+        instances = []
+
+        if objects is None:  # get all instanced objects in the scene.
+            import maya.OpenMaya as om
+
+            iterDag = om.MItDag(om.MItDag.kBreadthFirst)
+            while not iterDag.isDone():
+                instanced = om.MItDag.isInstanced(iterDag)
+                if instanced:
+                    instances.append(iterDag.fullPathName())
+                iterDag.next()
+        else:
+            shapes = pm.listRelatives(objects, s=1)
+            instances = pm.listRelatives(shapes, ap=1)
+            if not return_parent_objects:
+                [instances.remove(obj) for obj in objects]
+
+        return instances
+
+    @classmethod
+    def convert_to_instances(cls, objects=[], append=""):
+        """The first selected object will be instanced across all other selected objects.
+
+        Parameters:
+            objects (list): A list of objects to convert to instances. The first object will be the instance parent.
+            append (str): Append a string to the end of any instanced objects. ie. '_INST'
+
+        Returns:
+            (list) The instanced objects.
+
+        Example:
+            convert_to_instances(pm.ls(sl=1))
+        """
+        pm.undoInfo(openChunk=True)
+        # Get the world space obj pivot.
+        p0x, p0y, p0z = pm.xform(objects[0], q=True, rotatePivot=1, worldSpace=1)
+        # Get the obj pivot.
+        # pivot = pm.xform(objects[0], q=True, rotatePivot=1, objectSpace=1)
+
+        for obj in objects[1:]:
+            name = obj.name()
+            objParent = pm.listRelatives(obj, parent=1)
+
+            instance = pm.instance(objects[0])
+
+            cls.uninstance(obj)
+            pm.makeIdentity(obj, apply=1, translate=1, rotate=0, scale=0)
+
+            # Move object to center of the last selected items bounding box # pm.xform(instance, translation=pos, worldSpace=1, relative=1) #move to the original objects location.
+            pm.matchTransform(instance, obj, position=1, rotation=1, scale=1, pivots=1)
+
+            try:
+                # Parent the instance under the original objects parent.
+                pm.parent(instance, objParent)
+            except RuntimeError:  # It is already a child of the parent.
+                pass
+
+            # Delete history for the object so that the namespace is cleared.
+            pm.delete(obj, constructionHistory=True)
+            pm.delete(obj)
+            pm.rename(instance, name + append)
+        pm.select(objects[1:])
+        pm.undoInfo(closeChunk=True)
+
+        return objects[1:]
+
+    @classmethod
+    def uninstance(cls, objects):
+        """Un-Instance the given objects.
+
+        Parameters:
+            objects (str/obj/list): The objects to un-instance. If 'all' is given all instanced objects in the scene will be uninstanced.
+        """
+        if objects == "all":
+            objects = cls.get_instances()
+
+        for obj in pm.ls(objects):
+            children = pm.listRelatives(obj, fullPath=1, children=1)
+            parents = pm.listRelatives(children[0], fullPath=1, allParents=1)
+
+            if len(parents) > 1:
+                duplicatedObject = pm.duplicate(obj)
+                pm.delete(obj)
+                pm.rename(duplicatedObject[0], obj)
+
 
 # -----------------------------------------------------------------------------
 
@@ -665,6 +760,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------

@@ -33,7 +33,7 @@ class Main(unittest.TestCase):
             self.assertEqual(
                 result,
                 expected_result,
-                f"\n\n# Error: {path}\n#\tCall: {method_name}({', '.join(map(str, function_args)) if 'function_args' in locals() else ''})\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
+                f"\n\n# Error: {path}\n#\tCall: {method_name}\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
             )
 
     @staticmethod
@@ -75,7 +75,7 @@ class CoreUtils_test(Main, CoreUtils):
 
     # test imports:
     import mayatk as mtk
-    from mayatk import CmptUtils
+    from mayatk import ComponentUtils
     from mayatk import get_components
 
     # Tear down the any previous test by creating a new scene:
@@ -164,6 +164,14 @@ class CoreUtils_test(Main, CoreUtils):
         self.perform_test(
             {
                 # "self.get_selected_channels()": None,
+            }
+        )
+
+    def test_generate_unique_name(self):
+        """ """
+        self.perform_test(
+            {
+                # "self.generate_unique_name()": None,
             }
         )
 

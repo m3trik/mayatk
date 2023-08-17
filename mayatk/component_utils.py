@@ -475,8 +475,37 @@ class GetComponentsMixin:
         return result
 
 
-class CmptUtils(GetComponentsMixin):
+class ComponentUtils(GetComponentsMixin):
     """ """
+
+    @staticmethod
+    def map_components_to_objects(components_list):
+        """Maps a list of components to their respective objects.
+
+        This function takes in a list of PyMel component objects and returns a
+        dictionary where the keys are the names of the parent objects of the
+        components, and the values are lists of components belonging to each object.
+
+        Parameters:
+            components_list (list): A list of PyMel component objects.
+
+        Returns:
+            dict: A dictionary mapping object names to lists of components.
+                  The components are represented as PyMel objects.
+        """
+        objects_components_dict = {}
+
+        for component in components_list:
+            try:
+                obj_name = component.node().name()
+            except AttributeError:
+                continue
+            try:
+                objects_components_dict[obj_name].append(component)
+            except KeyError:
+                objects_components_dict[obj_name] = [component]
+
+        return objects_components_dict
 
     @classmethod
     def get_contigious_edges(cls, components):
@@ -526,12 +555,11 @@ class CmptUtils(GetComponentsMixin):
         return result
 
     @classmethod
-    def get_contigious_islands(cls, faces, face_islands=[]):
+    def get_contigious_islands(cls, faces):
         """Get a list containing sets of adjacent polygon faces grouped by islands.
 
         Parameters:
             faces (str/obj/list): The polygon faces to be filtered for adjacent.
-            face_islands (list/optional): list of sets. ability to add faces from previous calls to the return value.
 
         Returns:
             (list): of sets of adjacent faces.
@@ -539,6 +567,7 @@ class CmptUtils(GetComponentsMixin):
         Example:
             get_contigious_islands('obj.f[21:26]') #returns: [{'objShape.f[22]', 'objShape.f[21]', 'objShape.f[23]'}, {'objShape.f[26]', 'objShape.f[24]', 'objShape.f[25]'}]
         """
+        face_islands = []
         sets = []
         faces = pm.ls(faces, flatten=1)
         for face in faces:
@@ -548,14 +577,13 @@ class CmptUtils(GetComponentsMixin):
             if set_:
                 sets.append(set_)
 
-        while len(sets) > 0:  # combine sets in 'sets' that share common elements.
-            first, rest = sets[0], sets[1:]  # python 3: first, *rest = sets
+        while len(sets) > 0:
+            first, rest = sets[0], sets[1:]
             first = set(first)
 
             lf = -1
             while len(first) > lf:
                 lf = len(first)
-
                 rest2 = []
                 for r in rest:
                     if len(first.intersection(set(r))) > 0:
@@ -584,17 +612,20 @@ class CmptUtils(GetComponentsMixin):
         Example:
             get_islands('combined_obj') #returns: [['combined_obj.f[0]', 'combined_obj.f[5]', ..etc, ['combined_obj.f[15]', ..etc]]
         """
+        if isinstance(obj, str):
+            obj = pm.ls(obj)[0]  # Convert input to a single PyMel object
+        elif not isinstance(obj, pm.nt.Transform):
+            raise ValueError(f"Expected a single mesh object, got {type(obj)}")
+
         # num_shells = pm.polyEvaluate(obj, shell=True)
         num_faces = pm.polyEvaluate(obj, face=True)
-
         unprocessed = set(range(num_faces))
 
-        # shells = []
         while unprocessed:
-            index = next(iter(unprocessed))  # face_index
-            faces = pm.polySelect(
-                obj, extendToShell=index, noSelection=True
-            )  # shell faces
+            # face_index
+            index = next(iter(unprocessed))
+            # shell faces
+            faces = pm.polySelect(obj, extendToShell=index, noSelection=True)
 
             if returned_type == "str":
                 yield ["{}.f[{}]".format(obj, index) for index in faces]
@@ -1578,54 +1609,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
-# def filter_components(cls, frm, inc=[], exc=[]):
-#       '''Filter the given 'frm' list for the items in 'exc'.
-
-#       Parameters:
-#           frm (str/obj/list): The components(s) to filter.
-#           inc (str/obj/list): The component(s) to include.
-#           exc (str/obj/list): The component(s) to exclude.
-#                               (exlude take precidence over include)
-#       Returns:
-#           (list)
-
-#       Example: filter_components('obj.vtx[:]', 'obj.vtx[1:23]') #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
-#       '''
-#       exc = pm.ls(exc, flatten=True)
-#       if not exc:
-#           return frm
-
-#       c, *other = components = pm.ls(frm, flatten=True)
-#       #determine the type of items in 'exc' by sampling the first element.
-#       if isinstance(c, str):
-#           if 'Shape' in c:
-#               rtn = 'transform'
-#           else:
-#               rtn = 'str'
-#       elif isinstance(c, int):
-#           rtn = 'int'
-#       else:
-#           rtn = 'obj'
-
-#       if exc and isinstance(exc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           exc = ["{}.{}[{}]".format(obj[0], typ, n) for n in exc]
-
-#       if inc and isinstance(inc[0], int): #attempt to create a component list from the given integers. warning: this will only exclude from a single object.
-#           obj = pm.ls(frm, objectsOnly=1)
-#           if len(obj)>1:
-#               return frm
-#           component_type = cls.get_component_type(frm[0])
-#           typ = cls.convert_alias(component_type) #get the correct component_type variable from possible args.
-#           inc = ["{}.{}[{}]".format(obj[0], typ, n) for n in inc]
-
-#       inc = core_utils.CoreUtils.convert_array_type(inc, returned_type=rtn, flatten=True) #assure both lists are of the same type for comparison.
-#       exc = core_utils.CoreUtils.convert_array_type(exc, returned_type=rtn, flatten=True)
-#       return [i for i in components if i not in exc and (inc and i in inc)]

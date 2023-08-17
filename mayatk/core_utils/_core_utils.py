@@ -131,9 +131,7 @@ class CoreUtils:
         layout.setObjectName(layoutName)
         pm.setParent(layoutName)
 
-        from uitk.switchboard import Switchboard
-
-        derivedClass = Switchboard.get_derived_type(container)
+        derivedClass = ptk.get_derived_type(container)
 
         ptr = MQtUtil.findControl(
             control_name
@@ -293,6 +291,21 @@ class CoreUtils:
 
         for p, v in parameters.items():
             cmd(node, **{p: v})
+
+    @staticmethod
+    def generate_unique_name(base_name):
+        """Generate a unique name based on the base_name."""
+        # Base case: If the base_name doesn't exist, just return it.
+        if not pm.objExists(base_name):
+            return base_name
+
+        # Otherwise, append numbers until we get a unique name.
+        counter = 1
+        new_name = f"{base_name}_{counter}"
+        while pm.objExists(new_name):
+            counter += 1
+            new_name = f"{base_name}_{counter}"
+        return new_name
 
     @staticmethod
     def get_selected_channels():

@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class ProjUtils:
+class Project:
     """ """
 
     @staticmethod
@@ -195,7 +195,7 @@ class ProjUtils:
         workspace_dir = str(pm.workspace(q=True, rd=1))  # get current project path.
 
         files = ptk.get_dir_contents(
-            workspace_dir, "filepaths", inc_files=("*.mb", "*.ma")
+            workspace_dir, "filepath", inc_files=("*.mb", "*.ma")
         )
         # Replace any backslashes with forward slashes.
         result = [ptk.format_path(f) for f in files]
