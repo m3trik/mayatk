@@ -355,15 +355,9 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.hdr_env = data  # set the HDR map.
 
-    def cmb001(self, index, widget):
-        """Normal map output selection."""
-
     def chk000(self, state, widget):
         """ """
         self.set_hdr_map_visibility(state)  # set the HDR map visibility.
-
-    def txt000(self, text, widget):
-        """Material name."""
 
     def slider000(self, value, widget):
         """Rotate the HDR map."""
@@ -400,7 +394,10 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
     def b001(self):
         """Get texture maps."""
-        image_files = ptk.get_image_files()
+        image_files = self.sb.file_dialog(
+            file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
+            title="Select one or more image files to open.",
+        )
 
         if image_files:
             self.image_files = image_files
@@ -415,19 +412,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.ui.b000.setDisabled(False)
         elif not self.image_files:
             self.ui.b000.setDisabled(True)
-
-    def toggle_expand(self, state, widget):
-        """ """
-        if state:
-            if not hasattr(self, "_height_open"):
-                self._height_closed = self.ui.height()
-                self._height_open = self.ui.sizeHint().height() + 100
-            self.ui.txt001.show()
-            self.ui.resize(self.ui.width(), self._height_open)
-        else:
-            self._height_open = self.ui.height()
-            self.ui.txt001.hide()
-            self.ui.resize(self.ui.width(), self._height_closed)
 
     def callback(self, string, progress=None, clear=False):
         """
@@ -467,11 +451,9 @@ if __name__ == "__main__":
     )
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
+    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-
+    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
     sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

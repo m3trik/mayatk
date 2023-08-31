@@ -26,28 +26,33 @@ class MatUtils(object):
         # Initialize an empty set to store the materials
         mats = set()
 
-        # Iterate over each object or component in the list
         for obj in pm.ls(objs, flatten=True):
+            shading_grps = []
+
             if isinstance(obj, pm.MeshFace):
                 all_shading_grps = pm.ls(type="shadingEngine")
                 shading_grps = [
                     sg for sg in all_shading_grps if pm.sets(sg, isMember=obj)
                 ]
-                if not shading_grps:  # Resort to the hacky method
-                    # select the material node
-                    pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=1)
-                    mats_ = pm.ls(pm.selected(), materials=1)
+
+                if not shading_grps:
+                    pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=True)
+                    mats_ = pm.ls(pm.selected(), materials=True)
                     mats.update(mats_)
             else:
-                shape = obj.getShape()
-                shading_grps = pm.listConnections(shape, type="shadingEngine")
+                # Check if the object has a shape node
+                shape = None
+                if hasattr(obj, "getShape"):
+                    shape = obj.getShape()
+
+                if shape:
+                    shading_grps = pm.listConnections(shape, type="shadingEngine")
 
             for shading_grp in shading_grps:
                 materials = pm.ls(
-                    pm.listConnections(shading_grp + ".surfaceShader"), materials=True
+                    pm.listConnections(f"{shading_grp}.surfaceShader"), materials=True
                 )
-                for material in materials:
-                    mats.add(material)
+                mats.update(materials)
 
         return mats
 
@@ -204,11 +209,65 @@ class MatUtils(object):
 
         return objs_with_material
 
+    @staticmethod
+    def get_mat_swatch_icon(mat, size=[20, 20]):
+        """Generates a QIcon representing the color swatch of a given Maya material node.
+
+        Parameters:
+            mat (str or PyNode): The name or PyNode object of the Maya material. Must be of type 'shadingDependNode'.
+            size (list of int): A list [width, height] specifying the dimensions of the QIcon in pixels. Default is [20, 20].
+
+        Returns:
+            QIcon: A QIcon object filled with the color and transparency attributes of the specified material.
+                   Returns None if the material is invalid or an exception occurs.
+        Example:
+            icon = get_mat_swatch_icon('lambert1', [20, 20])
+        """
+        from PySide2.QtGui import QPixmap, QPainter, QColor, QIcon
+
+        try:
+            # Check if the given 'mat' is a valid Maya material node
+            if not pm.objectType(mat, isAType="shadingDependNode"):
+                print(
+                    f"Not a valid material. Expected 'shadingDependNode', got '{mat}' of type '{type(mat).__name__}'."
+                )
+                return None
+
+            # Initialize QPixmap
+            pixmap = QPixmap(size[0], size[1])
+            pixmap.fill(QColor(0, 0, 0, 0))  # Transparent Background
+
+            # Initialize QPainter
+            painter = QPainter(pixmap)
+
+            # Fetch material attributes
+            colorR = pm.getAttr(f"{mat}.colorR") * 255
+            colorG = pm.getAttr(f"{mat}.colorG") * 255
+            colorB = pm.getAttr(f"{mat}.colorB") * 255
+            transparency = pm.getAttr(
+                f"{mat}.transparencyR"
+            )  # Assuming R, G, B are the same for simplicity
+
+            # Set QColor based on material attributes
+            brushColor = QColor(colorR, colorG, colorB)
+            brushColor.setAlpha(255 * (1 - transparency))
+
+            # Draw swatch
+            painter.setBrush(brushColor)
+            painter.drawRect(0, 0, size[0], size[1])
+            painter.end()
+
+            return QIcon(pixmap)
+
+        except Exception as e:
+            print(f"Exception: {e}")
+            return None
+
 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    pass
+    ...
 
 # -----------------------------------------------------------------------------
 # Notes

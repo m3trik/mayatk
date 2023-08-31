@@ -6,97 +6,61 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = '0.7.0'
+__version__ = "0.7.1"
 
 
-# Define dictionaries to map class names, method names, class method names, and sub-modules to their respective modules
 CLASS_TO_MODULE = {}
 METHOD_TO_MODULE = {}
 CLASS_METHOD_TO_MODULE = {}
-SUBMODULE_TO_MODULE = {}
-
-# Build the dictionaries by iterating over all submodules and sub-packages of the package
-for importer, modname, ispkg in pkgutil.walk_packages(__path__, __name__ + "."):
-    module = importlib.import_module(modname)
-    for name, obj in module.__dict__.items():
-        if inspect.isclass(obj):
-            CLASS_TO_MODULE[obj.__name__] = modname
-            for method_name, method_obj in inspect.getmembers(
-                obj, predicate=inspect.isfunction
-            ):
-                METHOD_TO_MODULE[method_name] = (modname, obj.__name__)
-            for method_name, method_obj in inspect.getmembers(
-                obj, predicate=inspect.ismethod
-            ):
-                CLASS_METHOD_TO_MODULE[method_name] = (modname, obj.__name__)
-    if not ispkg:
-        submodule_name = modname.split(".")[-1]
-        SUBMODULE_TO_MODULE[submodule_name] = modname
-
-# Define a dictionary to store imported module objects
 IMPORTED_MODULES = {}
 
 
+def build_dictionaries():
+    for importer, modname, ispkg in pkgutil.walk_packages(__path__, __name__ + "."):
+        module = importlib.import_module(modname)
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            CLASS_TO_MODULE[name] = modname
+            for method_name, _ in inspect.getmembers(obj, inspect.isfunction):
+                METHOD_TO_MODULE[method_name] = (modname, name)
+            for method_name, _ in inspect.getmembers(obj, inspect.ismethod):
+                CLASS_METHOD_TO_MODULE[method_name] = (modname, name)
+
+
+def import_module(module_name):
+    if module_name not in IMPORTED_MODULES:
+        IMPORTED_MODULES[module_name] = importlib.import_module(module_name)
+    return IMPORTED_MODULES[module_name]
+
+
+def get_attribute_from_module(module, attribute_name, class_name=None):
+    if class_name:
+        class_obj = getattr(module, class_name)
+        return getattr(class_obj, attribute_name)
+    return getattr(module, attribute_name)
+
+
 def __getattr__(name):
-    # Check if the requested attribute is a sub-module we need to import
-    if name in SUBMODULE_TO_MODULE:
-        module_name = SUBMODULE_TO_MODULE[name]
-        if module_name not in IMPORTED_MODULES:
-            # If the module hasn't been imported yet, import it and add it to the dictionary
-            module = importlib.import_module(module_name)
-            IMPORTED_MODULES[module_name] = module
-        else:
-            module = IMPORTED_MODULES[module_name]
-        # Return the requested sub-module object from the module
-        return module
-
-    # Check if the requested attribute is a class we need to import
     if name in CLASS_TO_MODULE:
-        module_name = CLASS_TO_MODULE[name]
-        if module_name not in IMPORTED_MODULES:
-            # If the module hasn't been imported yet, import it and add it to the dictionary
-            module = importlib.import_module(module_name)
-            IMPORTED_MODULES[module_name] = module
-        else:
-            module = IMPORTED_MODULES[module_name]
-        # Return the requested class object from the module
-        return getattr(module, name)
+        module = import_module(CLASS_TO_MODULE[name])
+        return get_attribute_from_module(module, name)
 
-    # Check if the requested attribute is a method we need to import
-    elif name in METHOD_TO_MODULE:
+    if name in METHOD_TO_MODULE:
         module_name, class_name = METHOD_TO_MODULE[name]
-        if module_name not in IMPORTED_MODULES:
-            # If the module hasn't been imported yet, import it and add it to the dictionary
-            module = importlib.import_module(module_name)
-            IMPORTED_MODULES[module_name] = module
-        else:
-            module = IMPORTED_MODULES[module_name]
-        # Get the class object and return the requested method object from it
-        class_obj = getattr(module, class_name)
-        return getattr(class_obj, name)
+        module = import_module(module_name)
+        return get_attribute_from_module(module, name, class_name)
 
-    # Check if the requested attribute is a class method we need to import
-    elif name in CLASS_METHOD_TO_MODULE:
+    if name in CLASS_METHOD_TO_MODULE:
         module_name, class_name = CLASS_METHOD_TO_MODULE[name]
-        if module_name not in IMPORTED_MODULES:
-            # If the module hasn't been imported yet, import it and add it to the dictionary
-            module = importlib.import_module(module_name)
-            IMPORTED_MODULES[module_name] = module
-        else:
-            module = IMPORTED_MODULES[module_name]
-        # Get the class object and return the requested class method object from it
-        class_obj = getattr(module, class_name)
-        return getattr(class_obj, name)
+        module = import_module(module_name)
+        return get_attribute_from_module(module, name, class_name)
 
-    # If the requested attribute is not a class, method, class method, or sub-module we handle, raise an AttributeError
     raise AttributeError(f"module {__package__} has no attribute '{name}'")
 
 
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------
+# Build dictionaries at the start
+build_dictionaries()
 
-
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------
 # Notes
-# -----------------------------------------------------------------------------
-
-# deprecated ---------------------
+# --------------------------------------------------------------------------------------------

@@ -10,14 +10,8 @@
     <x>0</x>
     <y>0</y>
     <width>463</width>
-    <height>326</height>
+    <height>405</height>
    </rect>
-  </property>
-  <property name="minimumSize">
-   <size>
-    <width>427</width>
-    <height>175</height>
-   </size>
   </property>
   <property name="windowTitle">
    <string>Create Shader Network</string>
@@ -32,15 +26,9 @@
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
   <widget class="QWidget" name="mainWindow">
-   <property name="minimumSize">
-    <size>
-     <width>0</width>
-     <height>215</height>
-    </size>
-   </property>
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
+     <layout class="QVBoxLayout" name="verticalLayout_1">
       <property name="spacing">
        <number>6</number>
       </property>
@@ -48,7 +36,7 @@
        <enum>QLayout::SetFixedSize</enum>
       </property>
       <item>
-       <widget class="DraggableHeader" name="draggableHeader">
+       <widget class="Header" name="header">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -73,7 +61,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="groupBox_5">
+       <widget class="QGroupBox" name="groupBox_1">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
           <horstretch>0</horstretch>
@@ -83,16 +71,13 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>158</height>
+          <height>154</height>
          </size>
         </property>
         <property name="title">
          <string/>
         </property>
-        <layout class="QVBoxLayout" name="verticalLayout_4">
-         <property name="spacing">
-          <number>0</number>
-         </property>
+        <layout class="QGridLayout" name="gridLayout">
          <property name="leftMargin">
           <number>0</number>
          </property>
@@ -105,209 +90,306 @@
          <property name="bottomMargin">
           <number>0</number>
          </property>
-         <item>
-          <layout class="QGridLayout" name="gridLayout_2">
-           <item row="3" column="3">
-            <widget class="QGroupBox" name="groupBox_4">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>40</height>
-              </size>
-             </property>
-             <property name="title">
-              <string>HDR Rotation</string>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_9">
-              <property name="spacing">
-               <number>0</number>
+         <property name="horizontalSpacing">
+          <number>1</number>
+         </property>
+         <property name="verticalSpacing">
+          <number>2</number>
+         </property>
+         <item row="1" column="2">
+          <widget class="QGroupBox" name="hdr_rotation">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>HDR Rotation</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_9">
+            <property name="spacing">
+             <number>0</number>
+            </property>
+            <property name="leftMargin">
+             <number>1</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="QSlider" name="slider000">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
               </property>
-              <property name="leftMargin">
+              <property name="maximumSize">
+               <size>
+                <width>16777215</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="minimum">
                <number>1</number>
               </property>
-              <property name="topMargin">
-               <number>1</number>
+              <property name="maximum">
+               <number>360</number>
               </property>
-              <property name="rightMargin">
-               <number>0</number>
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
               </property>
-              <property name="bottomMargin">
-               <number>1</number>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_2">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeType">
+               <enum>QSizePolicy::Fixed</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>1</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="1" column="0" colspan="2">
+          <widget class="QGroupBox" name="hdr_map">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>HDR Map</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_8">
+            <property name="spacing">
+             <number>4</number>
+            </property>
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>1</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="ComboBox" name="cmb000">
+              <property name="minimumSize">
+               <size>
+                <width>200</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Select the HDR map.</string>
+              </property>
+              <property name="editable">
+               <bool>false</bool>
+              </property>
+              <property name="maxVisibleItems">
+               <number>30</number>
+              </property>
+              <property name="maxCount">
+               <number>20</number>
+              </property>
+              <property name="insertPolicy">
+               <enum>QComboBox::InsertAtTop</enum>
+              </property>
+              <property name="sizeAdjustPolicy">
+               <enum>QComboBox::AdjustToContents</enum>
+              </property>
+              <property name="frame">
+               <bool>false</bool>
               </property>
               <item>
-               <widget class="QSlider" name="slider000">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>16777215</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="minimum">
-                 <number>1</number>
-                </property>
-                <property name="maximum">
-                 <number>360</number>
-                </property>
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-               </widget>
+               <property name="text">
+                <string>&lt;HDR Map&gt;</string>
+               </property>
               </item>
-              <item>
-               <spacer name="horizontalSpacer_2">
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-                <property name="sizeType">
-                 <enum>QSizePolicy::Fixed</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>1</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item row="1" column="3">
-            <widget class="QGroupBox" name="groupBox_1">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>40</height>
-              </size>
-             </property>
-             <property name="title">
-              <string>Normal Output</string>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_7">
-              <property name="spacing">
-               <number>1</number>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="chk000">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
               </property>
-              <property name="leftMargin">
-               <number>1</number>
+              <property name="toolTip">
+               <string>Set the HDR map visibility.</string>
               </property>
-              <property name="topMargin">
-               <number>1</number>
+              <property name="text">
+               <string>Visible</string>
               </property>
-              <property name="rightMargin">
-               <number>0</number>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QGroupBox" name="normal_output">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>Normal Output</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_7">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="leftMargin">
+             <number>1</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="ComboBox" name="cmb001">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
               </property>
-              <property name="bottomMargin">
-               <number>1</number>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>20</height>
+               </size>
               </property>
-              <item>
-               <widget class="ComboBox" name="cmb001">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>999</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Select the normal map output type.</string>
-                </property>
-                <property name="editable">
-                 <bool>false</bool>
-                </property>
-                <property name="maxVisibleItems">
-                 <number>30</number>
-                </property>
-                <property name="maxCount">
-                 <number>20</number>
-                </property>
-                <property name="insertPolicy">
-                 <enum>QComboBox::InsertAtTop</enum>
-                </property>
-                <property name="sizeAdjustPolicy">
-                 <enum>QComboBox::AdjustToContents</enum>
-                </property>
-                <property name="frame">
-                 <bool>false</bool>
-                </property>
-                <item>
-                 <property name="text">
-                  <string>OpenGL</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>DirectX</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item row="1" column="0" colspan="3">
-            <widget class="QGroupBox" name="groupBox_2">
-             <property name="minimumSize">
-              <size>
-               <width>300</width>
-               <height>40</height>
-              </size>
-             </property>
-             <property name="title">
-              <string>Material Name</string>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_5">
-              <property name="spacing">
-               <number>1</number>
+              <property name="toolTip">
+               <string>Select the normal map output type.</string>
               </property>
-              <property name="leftMargin">
-               <number>0</number>
+              <property name="editable">
+               <bool>false</bool>
               </property>
-              <property name="topMargin">
-               <number>1</number>
+              <property name="maxVisibleItems">
+               <number>30</number>
               </property>
-              <property name="rightMargin">
-               <number>1</number>
+              <property name="maxCount">
+               <number>20</number>
               </property>
-              <property name="bottomMargin">
-               <number>1</number>
+              <property name="insertPolicy">
+               <enum>QComboBox::InsertAtTop</enum>
+              </property>
+              <property name="sizeAdjustPolicy">
+               <enum>QComboBox::AdjustToContents</enum>
+              </property>
+              <property name="frame">
+               <bool>false</bool>
               </property>
               <item>
-               <widget class="QLineEdit" name="txt000">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>999</width>
-                  <height>16777215</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Name the material.</string>
-                </property>
-                <property name="placeholderText">
-                 <string>&lt;Material Name&gt;</string>
-                </property>
-               </widget>
+               <property name="text">
+                <string>OpenGL</string>
+               </property>
               </item>
-             </layout>
-            </widget>
-           </item>
-           <item row="5" column="0" colspan="4">
+              <item>
+               <property name="text">
+                <string>DirectX</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="0" column="0" colspan="2">
+          <widget class="QGroupBox" name="material_name">
+           <property name="minimumSize">
+            <size>
+             <width>300</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>Material Name</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_5">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>1</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="QLineEdit" name="txt000">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Name the material.</string>
+              </property>
+              <property name="placeholderText">
+               <string>&lt;Material Name&gt;</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="6" column="0" colspan="3">
+          <layout class="QVBoxLayout" name="verticalLayout_2">
+           <property name="spacing">
+            <number>1</number>
+           </property>
+           <item>
             <widget class="QPushButton" name="b001">
              <property name="enabled">
               <bool>true</bool>
@@ -321,7 +403,7 @@
              <property name="minimumSize">
               <size>
                <width>200</width>
-               <height>20</height>
+               <height>30</height>
               </size>
              </property>
              <property name="maximumSize">
@@ -335,7 +417,7 @@
              </property>
             </widget>
            </item>
-           <item row="8" column="0" colspan="4">
+           <item>
             <widget class="QPushButton" name="b000">
              <property name="enabled">
               <bool>false</bool>
@@ -363,200 +445,75 @@
              </property>
             </widget>
            </item>
-           <item row="3" column="0" colspan="3">
-            <widget class="QGroupBox" name="groupBox_3">
+           <item>
+            <widget class="QProgressBar" name="progressBar">
              <property name="minimumSize">
               <size>
                <width>0</width>
-               <height>40</height>
+               <height>0</height>
               </size>
              </property>
-             <property name="title">
-              <string>HDR Map</string>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>4</height>
+              </size>
              </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_8">
-              <property name="spacing">
-               <number>0</number>
-              </property>
-              <property name="leftMargin">
-               <number>0</number>
-              </property>
-              <property name="topMargin">
-               <number>1</number>
-              </property>
-              <property name="rightMargin">
-               <number>1</number>
-              </property>
-              <property name="bottomMargin">
-               <number>1</number>
-              </property>
-              <item>
-               <widget class="ComboBox" name="cmb000">
-                <property name="minimumSize">
-                 <size>
-                  <width>200</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>999</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Select the HDR map.</string>
-                </property>
-                <property name="editable">
-                 <bool>false</bool>
-                </property>
-                <property name="maxVisibleItems">
-                 <number>30</number>
-                </property>
-                <property name="maxCount">
-                 <number>20</number>
-                </property>
-                <property name="insertPolicy">
-                 <enum>QComboBox::InsertAtTop</enum>
-                </property>
-                <property name="sizeAdjustPolicy">
-                 <enum>QComboBox::AdjustToContents</enum>
-                </property>
-                <property name="frame">
-                 <bool>false</bool>
-                </property>
-                <item>
-                 <property name="text">
-                  <string>&lt;HDR Map&gt;</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-              <item>
-               <spacer name="horizontalSpacer">
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-                <property name="sizeType">
-                 <enum>QSizePolicy::Fixed</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>4</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-              <item>
-               <widget class="QCheckBox" name="chk000">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>20</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Set the HDR map visibility.</string>
-                </property>
-                <property name="text">
-                 <string>Visible</string>
-                </property>
-               </widget>
-              </item>
-             </layout>
-             <zorder>chk000</zorder>
-             <zorder>cmb000</zorder>
+             <property name="value">
+              <number>0</number>
+             </property>
+             <property name="textVisible">
+              <bool>false</bool>
+             </property>
             </widget>
            </item>
           </layout>
-         </item>
-         <item>
-          <widget class="QProgressBar" name="progressBar">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>0</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>4</height>
-            </size>
-           </property>
-           <property name="value">
-            <number>0</number>
-           </property>
-           <property name="textVisible">
-            <bool>false</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="CheckBox" name="toggle_expand">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>14</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>14</height>
-            </size>
-           </property>
-           <property name="font">
-            <font>
-             <pointsize>8</pointsize>
-            </font>
-           </property>
-           <property name="text">
-            <string>• • •</string>
-           </property>
-          </widget>
          </item>
         </layout>
        </widget>
       </item>
       <item>
-       <layout class="QVBoxLayout" name="verticalLayout_2">
-        <property name="spacing">
-         <number>0</number>
+       <widget class="CollapsableGroup" name="groupBox">
+        <property name="title">
+         <string>• • •</string>
         </property>
-        <item>
-         <widget class="QTextEdit" name="txt001">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>1</height>
-           </size>
-          </property>
-          <property name="frameShape">
-           <enum>QFrame::NoFrame</enum>
-          </property>
-          <property name="frameShadow">
-           <enum>QFrame::Plain</enum>
-          </property>
-          <property name="verticalScrollBarPolicy">
-           <enum>Qt::ScrollBarAlwaysOff</enum>
-          </property>
-          <property name="horizontalScrollBarPolicy">
-           <enum>Qt::ScrollBarAlwaysOff</enum>
-          </property>
-          <property name="readOnly">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-       </layout>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+        <property name="flat">
+         <bool>false</bool>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_5">
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QTextEdit" name="txt001">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Ignored">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="verticalScrollBarPolicy">
+            <enum>Qt::ScrollBarAlwaysOff</enum>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QAbstractScrollArea::AdjustToContents</enum>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
       </item>
      </layout>
     </item>
@@ -565,19 +522,20 @@
  </widget>
  <customwidgets>
   <customwidget>
+   <class>Header</class>
+   <extends>QLabel</extends>
+   <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
   <customwidget>
-   <class>DraggableHeader</class>
-   <extends>QLabel</extends>
-   <header>uitk.widgets.draggableHeader.DraggableHeader.h</header>
-  </customwidget>
-  <customwidget>
-   <class>CheckBox</class>
-   <extends>QCheckBox</extends>
-   <header>uitk.widgets.checkbox.CheckBox.h</header>
+   <class>CollapsableGroup</class>
+   <extends>QGroupBox</extends>
+   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>
