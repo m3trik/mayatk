@@ -434,20 +434,16 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             QtWidgets.QApplication.instance().processEvents()
 
 
-def get_ui_file():
-    import os
-
-    return os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
     from uitk import Switchboard
 
     parent = CoreUtils.get_main_window()
+    ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
     sb = Switchboard(
-        parent, ui_location=get_ui_file(), slot_location=StingrayArnoldShaderSlots
+        parent, ui_location=ui_file, slot_location=StingrayArnoldShaderSlots
     )
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)

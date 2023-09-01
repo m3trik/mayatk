@@ -6,18 +6,9 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>147</width>
+    <width>200</width>
     <height>156</height>
    </rect>
-  </property>
-  <property name="maximumSize">
-   <size>
-    <width>999</width>
-    <height>999</height>
-   </size>
-  </property>
-  <property name="windowTitle">
-   <string>Toolkit</string>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
@@ -31,7 +22,13 @@
   <property name="bnabled" stdset="0">
    <bool>true</bool>
   </property>
-  <widget class="QWidget" name="mainWindow">
+  <widget class="QWidget" name="central_widget">
+   <property name="minimumSize">
+    <size>
+     <width>200</width>
+     <height>0</height>
+    </size>
+   </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
     <item>
      <layout class="QVBoxLayout" name="verticalLayout">
@@ -43,13 +40,13 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>22</height>
+          <height>20</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
-          <width>125</width>
-          <height>22</height>
+          <width>16777215</width>
+          <height>20</height>
          </size>
         </property>
         <property name="font">
@@ -65,18 +62,6 @@
       </item>
       <item>
        <widget class="QGroupBox" name="duplicate">
-        <property name="minimumSize">
-         <size>
-          <width>125</width>
-          <height>0</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>125</width>
-          <height>999</height>
-         </size>
-        </property>
         <property name="title">
          <string/>
         </property>
@@ -114,7 +99,7 @@
              </property>
              <property name="maximumSize">
               <size>
-               <width>999</width>
+               <width>16777215</width>
                <height>20</height>
               </size>
              </property>
@@ -155,7 +140,7 @@
              </property>
              <property name="maximumSize">
               <size>
-               <width>999</width>
+               <width>16777215</width>
                <height>20</height>
               </size>
              </property>
@@ -194,7 +179,7 @@
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
@@ -202,7 +187,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Width:</string>
+            <string>Width:                     </string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -231,7 +216,7 @@
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
@@ -239,7 +224,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Segments:</string>
+            <string>Segments:                       </string>
            </property>
            <property name="minimum">
             <number>1</number>

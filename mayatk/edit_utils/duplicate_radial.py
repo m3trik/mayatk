@@ -203,24 +203,20 @@ class DuplicateRadialSlots:
         pm.undoInfo(closeChunk=True)
 
 
-def get_ui_file():
-    import os
-
-    return os.path.join(os.path.dirname(__file__), "duplicate_radial.ui")
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
     from uitk import Switchboard
 
     parent = CoreUtils.get_main_window()
-    sb = Switchboard(
-        parent, ui_location=get_ui_file(), slot_location=DuplicateRadialSlots
-    )
+    ui_file = os.path.join(os.path.dirname(__file__), "duplicate_radial.ui")
+    sb = Switchboard(parent, ui_location=ui_file, slot_location=DuplicateRadialSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    sb.current_ui.set_flags(
+        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+    )
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
     sb.current_ui.show(pos="screen", app_exec=True)
