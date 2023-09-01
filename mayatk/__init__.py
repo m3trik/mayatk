@@ -6,8 +6,33 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
+"""Dynamic Attribute Resolver for Module-based Packages
+
+This module implements a dynamic attribute resolver that allows accessing attributes
+(classes, methods, and class methods) from a package's modules using the pattern
+'<package>.<attribute>'. The resolver builds dictionaries that map attribute names to
+their respective module names, enabling efficient and maintainable access to these
+attributes.
+
+Key Components:
+- CLASS_TO_MODULE: Dictionary mapping class names to their module names.
+- METHOD_TO_MODULE: Dictionary mapping method names to their module and class names.
+- CLASS_METHOD_TO_MODULE: Dictionary mapping class method names to module and class names.
+- build_dictionaries(): Function to populate the dictionaries by inspecting package modules.
+- import_module(): Function to import a module by its name.
+- get_attribute_from_module(): Function to retrieve an attribute from a module.
+- __getattr__(): Special method invoked when an attribute lookup is not found.
+
+Usage:
+- Access attributes like classes, methods, and class methods dynamically.
+- Improves maintainability by automatically associating attributes with their modules.
+- Follows an order of class, method, and class method resolution.
+
+Note: This module is intended for use with package-based projects where attributes are
+distributed across modules in a structured manner.
+"""
 
 CLASS_TO_MODULE = {}
 METHOD_TO_MODULE = {}
