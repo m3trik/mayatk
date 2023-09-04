@@ -187,7 +187,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Width:                     </string>
+            <string>Width:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -224,7 +224,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Segments:                       </string>
+            <string>Segments:	</string>
            </property>
            <property name="minimum">
             <number>1</number>

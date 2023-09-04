@@ -142,7 +142,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>End Angle:            </string>
+            <string>End Angle:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -179,7 +179,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Rotate Y:                 </string>
+            <string>Rotate Y:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -219,7 +219,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Translate Z:              </string>
+            <string>Translate Z:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -259,7 +259,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Translate Y:              </string>
+            <string>Translate Y:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -299,7 +299,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Translate X:              </string>
+            <string>Translate X:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -339,7 +339,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Rotate Z:                 </string>
+            <string>Rotate Z:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -379,7 +379,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Scale X:                   </string>
+            <string>Scale X:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -419,7 +419,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Rotate X:                 </string>
+            <string>Rotate X:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -459,7 +459,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Scale Y:                   </string>
+            <string>Scale Y:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -502,7 +502,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Offset Z:                  </string>
+            <string>Offset Z:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -542,7 +542,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Offset Y:                  </string>
+            <string>Offset Y:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -582,7 +582,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Offset X:                  </string>
+            <string>Offset X:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -731,7 +731,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Start Angle:              </string>
+            <string>Start Angle:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -768,7 +768,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Scale Z:                   </string>
+            <string>Scale Z:	</string>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -924,7 +924,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Weight Bias:                 </string>
+            <string>Weight Bias:	</string>
            </property>
            <property name="decimals">
             <number>2</number>
@@ -964,7 +964,7 @@
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Weight Curve:            </string>
+            <string>Weight Curve:	</string>
            </property>
            <property name="decimals">
             <number>2</number>

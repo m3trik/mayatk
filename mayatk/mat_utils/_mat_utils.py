@@ -211,57 +211,84 @@ class MatUtils(object):
 
     @staticmethod
     def get_mat_swatch_icon(mat, size=[20, 20]):
-        """Generates a QIcon representing the color swatch of a given Maya material node.
+        """Get an icon with a color fill matching the given materials RBG value.
 
         Parameters:
-            mat (str or PyNode): The name or PyNode object of the Maya material. Must be of type 'shadingDependNode'.
-            size (list of int): A list [width, height] specifying the dimensions of the QIcon in pixels. Default is [20, 20].
+            mat (obj)(str): The material or the material's name.
+            size (list): Desired icon size.
 
         Returns:
-            QIcon: A QIcon object filled with the color and transparency attributes of the specified material.
-                   Returns None if the material is invalid or an exception occurs.
-        Example:
-            icon = get_mat_swatch_icon('lambert1', [20, 20])
+            (obj) pixmap icon.
         """
-        from PySide2.QtGui import QPixmap, QPainter, QColor, QIcon
+        from PySide2.QtGui import QPixmap, QColor, QIcon
 
         try:
-            # Check if the given 'mat' is a valid Maya material node
-            if not pm.objectType(mat, isAType="shadingDependNode"):
-                print(
-                    f"Not a valid material. Expected 'shadingDependNode', got '{mat}' of type '{type(mat).__name__}'."
-                )
-                return None
-
-            # Initialize QPixmap
+            # get the string name if a mat object is given.
+            matName = mat.name() if not isinstance(mat, (str)) else mat
+            # convert from 0-1 to 0-255 value and then to an integer
+            r = int(pm.getAttr(matName + ".colorR") * 255)
+            g = int(pm.getAttr(matName + ".colorG") * 255)
+            b = int(pm.getAttr(matName + ".colorB") * 255)
             pixmap = QPixmap(size[0], size[1])
-            pixmap.fill(QColor(0, 0, 0, 0))  # Transparent Background
-
-            # Initialize QPainter
-            painter = QPainter(pixmap)
-
-            # Fetch material attributes
-            colorR = pm.getAttr(f"{mat}.colorR") * 255
-            colorG = pm.getAttr(f"{mat}.colorG") * 255
-            colorB = pm.getAttr(f"{mat}.colorB") * 255
-            transparency = pm.getAttr(
-                f"{mat}.transparencyR"
-            )  # Assuming R, G, B are the same for simplicity
-
-            # Set QColor based on material attributes
-            brushColor = QColor(colorR, colorG, colorB)
-            brushColor.setAlpha(255 * (1 - transparency))
-
-            # Draw swatch
-            painter.setBrush(brushColor)
-            painter.drawRect(0, 0, size[0], size[1])
-            painter.end()
+            pixmap.fill(QColor.fromRgb(r, g, b))
 
             return QIcon(pixmap)
 
-        except Exception as e:
-            print(f"Exception: {e}")
-            return None
+        except Exception:
+            pass
+
+        #  The following is a version that attempts to build a more accurate material swatch icon, but is crashing Maya
+        # """Generates a QIcon representing the color swatch of a given Maya material node.
+
+        # Parameters:
+        #     mat (str or PyNode): The name or PyNode object of the Maya material. Must be of type 'shadingDependNode'.
+        #     size (list of int): A list [width, height] specifying the dimensions of the QIcon in pixels. Default is [20, 20].
+
+        # Returns:
+        #     QIcon: A QIcon object filled with the color and transparency attributes of the specified material.
+        #            Returns None if the material is invalid or an exception occurs.
+        # Example:
+        #     icon = get_mat_swatch_icon('lambert1', [20, 20])
+        # """
+        # from PySide2.QtGui import QPixmap, QPainter, QColor, QIcon
+
+        # try:
+        #     # Check if the given 'mat' is a valid Maya material node
+        #     if not pm.objectType(mat, isAType="shadingDependNode"):
+        #         print(
+        #             f"Not a valid material. Expected 'shadingDependNode', got '{mat}' of type '{type(mat).__name__}'."
+        #         )
+        #         return None
+
+        #     # Initialize QPixmap
+        #     pixmap = QPixmap(size[0], size[1])
+        #     pixmap.fill(QColor(0, 0, 0, 0))  # Transparent Background
+
+        #     # Initialize QPainter
+        #     painter = QPainter(pixmap)
+
+        #     # Fetch material attributes
+        #     colorR = pm.getAttr(f"{mat}.colorR") * 255
+        #     colorG = pm.getAttr(f"{mat}.colorG") * 255
+        #     colorB = pm.getAttr(f"{mat}.colorB") * 255
+        #     transparency = pm.getAttr(
+        #         f"{mat}.transparencyR"
+        #     )  # Assuming R, G, B are the same for simplicity
+
+        #     # Set QColor based on material attributes
+        #     brushColor = QColor(colorR, colorG, colorB)
+        #     brushColor.setAlpha(255 * (1 - transparency))
+
+        #     # Draw swatch
+        #     painter.setBrush(brushColor)
+        #     painter.drawRect(0, 0, size[0], size[1])
+        #     painter.end()
+
+        #     return QIcon(pixmap)
+
+        # except Exception as e:
+        #     print(f"Exception: {e}")
+        #     return None
 
 
 # -----------------------------------------------------------------------------
