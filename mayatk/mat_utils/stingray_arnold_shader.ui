@@ -25,10 +25,10 @@
   <property name="dockOptions">
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
-  <widget class="QWidget" name="mainWindow">
+  <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
-     <layout class="QVBoxLayout" name="verticalLayout_1">
+     <layout class="QVBoxLayout" name="main_layout">
       <property name="spacing">
        <number>6</number>
       </property>
@@ -61,7 +61,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="groupBox_1">
+       <widget class="QGroupBox" name="main_group">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
           <horstretch>0</horstretch>
@@ -97,7 +97,7 @@
           <number>2</number>
          </property>
          <item row="1" column="2">
-          <widget class="QGroupBox" name="hdr_rotation">
+          <widget class="QGroupBox" name="hdr_rotation_group">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -168,7 +168,7 @@
           </widget>
          </item>
          <item row="1" column="0" colspan="2">
-          <widget class="QGroupBox" name="hdr_map">
+          <widget class="QGroupBox" name="hdr_map_group">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -256,7 +256,7 @@
           </widget>
          </item>
          <item row="0" column="2">
-          <widget class="QGroupBox" name="normal_output">
+          <widget class="QGroupBox" name="normal_output_group">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -333,7 +333,7 @@
           </widget>
          </item>
          <item row="0" column="0" colspan="2">
-          <widget class="QGroupBox" name="material_name">
+          <widget class="QGroupBox" name="material_name_group">
            <property name="minimumSize">
             <size>
              <width>300</width>
@@ -385,7 +385,7 @@
           </widget>
          </item>
          <item row="6" column="0" colspan="3">
-          <layout class="QVBoxLayout" name="verticalLayout_2">
+          <layout class="QVBoxLayout" name="network_group">
            <property name="spacing">
             <number>1</number>
            </property>
@@ -473,7 +473,7 @@
        </widget>
       </item>
       <item>
-       <widget class="CollapsableGroup" name="groupBox">
+       <widget class="CollapsableGroup" name="text_group">
         <property name="title">
          <string>• • •</string>
         </property>
@@ -524,7 +524,7 @@
   <customwidget>
    <class>Header</class>
    <extends>QLabel</extends>
-   <header>uitk.widgets.header.Header.h</header>
+   <header>header.h</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
