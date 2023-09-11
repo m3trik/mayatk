@@ -226,16 +226,16 @@ class EditUtils:
         pm.progressBar(progressBar, edit=True, endProgress=True)
 
     @staticmethod
-    def merge_vertices(objects, selected=False, tolerance=0.001):
+    def merge_vertices(objects, tolerance=0.001, selected_only=False):
         """Merge Vertices on the given objects.
 
         Parameters:
             objects (str/obj/list): The object(s) to merge vertices on.
-            selected (bool): Merge only the currently selected components.
             tolerance (float) = The maximum merge distance.
+            selected_only (bool): Merge only the currently selected components.
         """
         for obj in pm.ls(objects):
-            if selected:  # merge selected components.
+            if selected_only:  # merge selected components.
                 if pm.filterExpand(selectionMask=31):  # selectionMask=vertices
                     sel = pm.ls(obj, sl=1)
                     pm.polyMergeVertex(
