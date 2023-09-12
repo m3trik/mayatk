@@ -391,16 +391,16 @@ class XformUtils:
         """Scale each of the given objects to the combined bounding box of a second set of objects.
 
         Parameters:
-            a (str/obj/list): The object(s) to scale.
-            b (str/obj/list): The object(s) to get a bounding box size from.
+            a (str/obj/list): The object(s) to get a bounding box size from.
+            b (str/obj/list): The object(s) to scale.
             scale (bool): Scale the objects. Else, just return the scale value.
             average (bool): Average the result across all axes.
 
         Returns:
             (list) scale values as [x,y,z,x,y,z...]
         """
-        to = pm.ls(a, flatten=True)
-        frm = pm.ls(b, flatten=True)
+        frm = pm.ls(a, flatten=True)
+        to = pm.ls(b, flatten=True)
 
         xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(frm)
         ax, ay, az = [xmax - xmin, ymax - ymin, zmax - zmin]
