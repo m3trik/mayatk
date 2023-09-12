@@ -1181,7 +1181,6 @@ class ComponentUtils(GetComponentsMixin):
         Raises:
             TypeError: If the 'x' argument is not of the correct type.
         """
-        # If x is a list, handle each item recursively
         if isinstance(x, (list, tuple, set)):
             for item in x:
                 cls.set_edge_hardness(
@@ -1189,7 +1188,6 @@ class ComponentUtils(GetComponentsMixin):
                 )
             return
 
-        # If x is a PyMel object, handle it accordingly
         if isinstance(x, pm.nt.Transform):
             is_group = node_utils.NodeUtils.is_group(x)
             if is_group:
@@ -1198,15 +1196,25 @@ class ComponentUtils(GetComponentsMixin):
                     grp_children, angle_threshold, upper_hardness, lower_hardness
                 )
                 return
+
             shape = x.getShape()
+            if not isinstance(shape, pm.nt.Mesh):
+                raise TypeError(
+                    f"Transform node {x} has a shape of unsupported type {type(shape)}"
+                )
+
             x = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
+
         elif isinstance(x, pm.nt.Mesh):
-            # If it's a mesh, operate on all edges
             x = f"{x.name()}.e[0:{len(x.edges())-1}]"
+
         elif isinstance(x, pm.general.MeshEdge):
             x = x.name()
 
-        # Ensure x is a list of strings
+        else:
+            print(f"Unsupported type {type(x)}")
+            return
+
         if isinstance(x, str):
             x = [x]
 
@@ -1214,25 +1222,20 @@ class ComponentUtils(GetComponentsMixin):
         lower_hardness_edges = []
 
         for obj_name in x:
-            # Create a PyNode of the mesh object
             mesh_obj = pm.PyNode(obj_name.split(".")[0])
-            # Extract edge indices from obj_name using regex
             edge_indices = obj_name.split("[")[-1].split("]")[0].split(":")
-            # Generate all indices between start and end
             edge_start = int(edge_indices[0])
             edge_end = int(edge_indices[1]) if len(edge_indices) > 1 else edge_start
             edge_indices = list(range(edge_start, edge_end + 1))
-            # Iterate over edges
+
             for edge_index in edge_indices:
                 edge = mesh_obj.edges[edge_index]
                 edge_angle = cls.get_normal_angle(edge)
-                # Check edge angle and add to respective list
                 if upper_hardness is not None and edge_angle >= angle_threshold:
                     upper_hardness_edges.append(edge)
                 elif lower_hardness is not None and edge_angle < angle_threshold:
                     lower_hardness_edges.append(edge)
 
-        # Apply softness to edges in the lists
         if upper_hardness_edges:
             pm.polySoftEdge(upper_hardness_edges, a=upper_hardness, ch=True)
 
