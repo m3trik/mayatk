@@ -9,9 +9,6 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
-from mayatk import node_utils
-
 
 class CoreUtils:
     """ """
@@ -152,6 +149,7 @@ class CoreUtils:
             (generator)
         """
         import maya.OpenMaya as om
+        from mayatk import node_utils
 
         selectionList = om.MSelectionList()
         for mesh in node_utils.NodeUtils.get_shape_node(pm.ls(objects)):
@@ -175,6 +173,8 @@ class CoreUtils:
         Returns:
             (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
+        from mayatk import node_utils
+
         try:
             o = ptk.make_iterable(array)[0]
         except IndexError:

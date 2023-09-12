@@ -765,6 +765,7 @@ class ComponentUtils(GetComponentsMixin):
         return vertPairs
 
     @classmethod
+    @core_utils.CoreUtils.undo
     def get_closest_vertex(
         cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type="str"
     ):
@@ -789,7 +790,6 @@ class ComponentUtils(GetComponentsMixin):
         vertices = core_utils.CoreUtils.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
-        pm.undoInfo(openChunk=True)
 
         if freeze_transforms:
             pm.makeIdentity(obj, apply=True)
@@ -829,7 +829,6 @@ class ComponentUtils(GetComponentsMixin):
                 closestVerts[v1] = v2_convertedType
 
         pm.delete(cpmNode)
-        pm.undoInfo(closeChunk=True)
 
         return closestVerts
 
@@ -1086,36 +1085,28 @@ class ComponentUtils(GetComponentsMixin):
         return angle
 
     @classmethod
+    @core_utils.CoreUtils.undo
     def average_normals(cls, objects, by_uv_shell=False):
         """Average the normals of the given objects.
 
         Parameters:
-            objects (str/obj/list): The objects to operate on.
+            objects (str/obj/list): The mesh or mesh faces to averge.
             by_uv_shell (bool): Average each UV shell individually.
         """
-        pm.undoInfo(openChunk=True)  # Open undo chunk to make operation reversible
+        # Map components to their respective objects
+        components_dict = cls.map_components_to_objects(objects)
 
-        if by_uv_shell:
-            uv_shell_sets = cls.get_uv_shell_sets(objects)
-            # Iteratively operate on each uv_shell_set
-            for uv_set in uv_shell_sets:
-                # Convert faces to vertices
-                vertices = pm.polyListComponentConversion(
-                    uv_set, fromFace=True, toVertexFace=True
-                )
-                # Unfreeze normals
-                pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
-                # Soften edges to smooth normals across the entire UV shell
-                pm.polySoftEdge(vertices, a=180)
-        else:
-            # If not by_uv_shell, directly average normals of the object or components
-            vertices = pm.polyListComponentConversion(
-                objects, fromFace=True, toVertexFace=True
-            )
-            pm.polyNormalPerVertex(vertices, unFreezeNormal=True)  # Unfreeze normals
-            pm.polySoftEdge(vertices, a=180)  # Soften edges to smooth normals
-
-        pm.undoInfo(closeChunk=True)  # Close undo chunk after operations are done
+        # Loop through each object and its corresponding components
+        for obj, components in components_dict.items():
+            if by_uv_shell:
+                uv_shell_sets = cls.get_uv_shell_sets(components)
+                for uv_set in uv_shell_sets:
+                    pm.polySoftEdge(uv_set, a=180)
+            else:
+                if components:  # if faces/components are selected
+                    pm.polySoftEdge(components, a=180)
+                else:  # if objects are selected
+                    pm.polySoftEdge(obj, a=180)
 
     @classmethod
     def get_edges_by_normal_angle(cls, objects, low_angle=0, high_angle=180):
@@ -1163,6 +1154,7 @@ class ComponentUtils(GetComponentsMixin):
         return edges
 
     @classmethod
+    @core_utils.CoreUtils.undo
     def set_edge_hardness(
         cls, x, angle_threshold, upper_hardness=None, lower_hardness=None
     ):
@@ -1189,7 +1181,6 @@ class ComponentUtils(GetComponentsMixin):
         Raises:
             TypeError: If the 'x' argument is not of the correct type.
         """
-        # If x is a list, handle each item recursively
         if isinstance(x, (list, tuple, set)):
             for item in x:
                 cls.set_edge_hardness(
@@ -1197,7 +1188,6 @@ class ComponentUtils(GetComponentsMixin):
                 )
             return
 
-        # If x is a PyMel object, handle it accordingly
         if isinstance(x, pm.nt.Transform):
             is_group = node_utils.NodeUtils.is_group(x)
             if is_group:
@@ -1206,15 +1196,25 @@ class ComponentUtils(GetComponentsMixin):
                     grp_children, angle_threshold, upper_hardness, lower_hardness
                 )
                 return
+
             shape = x.getShape()
+            if not isinstance(shape, pm.nt.Mesh):
+                raise TypeError(
+                    f"Transform node {x} has a shape of unsupported type {type(shape)}"
+                )
+
             x = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
+
         elif isinstance(x, pm.nt.Mesh):
-            # If it's a mesh, operate on all edges
             x = f"{x.name()}.e[0:{len(x.edges())-1}]"
+
         elif isinstance(x, pm.general.MeshEdge):
             x = x.name()
 
-        # Ensure x is a list of strings
+        else:
+            print(f"Unsupported type {type(x)}")
+            return
+
         if isinstance(x, str):
             x = [x]
 
@@ -1222,25 +1222,20 @@ class ComponentUtils(GetComponentsMixin):
         lower_hardness_edges = []
 
         for obj_name in x:
-            # Create a PyNode of the mesh object
             mesh_obj = pm.PyNode(obj_name.split(".")[0])
-            # Extract edge indices from obj_name using regex
             edge_indices = obj_name.split("[")[-1].split("]")[0].split(":")
-            # Generate all indices between start and end
             edge_start = int(edge_indices[0])
             edge_end = int(edge_indices[1]) if len(edge_indices) > 1 else edge_start
             edge_indices = list(range(edge_start, edge_end + 1))
-            # Iterate over edges
+
             for edge_index in edge_indices:
                 edge = mesh_obj.edges[edge_index]
                 edge_angle = cls.get_normal_angle(edge)
-                # Check edge angle and add to respective list
                 if upper_hardness is not None and edge_angle >= angle_threshold:
                     upper_hardness_edges.append(edge)
                 elif lower_hardness is not None and edge_angle < angle_threshold:
                     lower_hardness_edges.append(edge)
 
-        # Apply softness to edges in the lists
         if upper_hardness_edges:
             pm.polySoftEdge(upper_hardness_edges, a=upper_hardness, ch=True)
 
@@ -1311,6 +1306,7 @@ class ComponentUtils(GetComponentsMixin):
         return similar_faces
 
     @staticmethod
+    @core_utils.CoreUtils.undo
     def transfer_normals(source, target):
         """Transfer normal information from one object to another.
 
@@ -1318,7 +1314,6 @@ class ComponentUtils(GetComponentsMixin):
             source (str/obj/list): The transform node to copy normals from.
             target (str/obj/list): The transform node(s) to copy normals to.
         """
-        pm.undoInfo(openChunk=1)
         s, *other = pm.ls(source)
         # store source transforms
         sourcePos = pm.xform(s, q=1, t=1, ws=1)
@@ -1345,7 +1340,6 @@ class ComponentUtils(GetComponentsMixin):
             pm.xform(t, t=targetPos, ws=1)
             pm.xform(t, ro=targetRot, ws=1)
             pm.xform(t, s=targetScale, ws=1)
-        pm.undoInfo(closeChunk=1)
 
     @classmethod
     def filter_components_by_connection_count(
