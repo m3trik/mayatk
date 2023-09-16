@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import sys
+from functools import wraps
 
 try:
     import pymel.core as pm
@@ -21,10 +22,14 @@ class CoreUtils:
             fn (obj): The decorated python function that will be placed into the undo que as a single entry.
         """
 
+        @wraps(fn)
         def wrapper(*args, **kwargs):
             with pm.UndoChunk():
-                rtn = fn(*args, **kwargs)
-                return rtn
+                if args and hasattr(args[0], "__class__"):
+                    self = args[0]
+                    return fn(self, *args[1:], **kwargs)
+                else:
+                    return fn(*args, **kwargs)
 
         return wrapper
 
