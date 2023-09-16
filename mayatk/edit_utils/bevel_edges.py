@@ -35,32 +35,16 @@ class BevelEdgesSlots:
     def __init__(self):
         self.sb = self.switchboard()
         self.ui = self.sb.bevel_edges
-
         self.preview = Preview(
-            self.ui.chk000,
-            self.ui.b000,
-            operation_func=self.perform_bevel,
-            message_func=self.sb.message_box,
-        )
-        self.sb.connect_multi(
-            self.ui,
-            "s000-1",
-            "valueChanged",
-            self.preview.refresh,
+            self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
 
-    def perform_bevel(self):
-        """Perform the linear duplication operation."""
-        objects = pm.ls(sl=True)
+        self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
 
+    def perform_operation(self, objects):
         width = self.ui.s000.value()
         segments = self.ui.s001.value()
-
-        BevelEdges.bevel_edges(
-            objects,
-            width,
-            segments,
-        )
+        BevelEdges.bevel_edges(objects, width, segments)
 
 
 # -----------------------------------------------------------------------------

@@ -7,82 +7,114 @@ except ImportError as error:
 
 
 class Preview:
-    """A class to handle preview functionality in a GUI.
-    It provides functionalities for preview toggle, enabling/disabling preview,
-    refreshing the preview, and finalizing the changes.
-
-    Example:
-        from PySide2.QtWidgets import QApplication, QPushButton, QCheckBox, QSlider
-
-        def operation_func():
-            print("Operation performed.")
-
-        def finalize_func():
-            print("Changes finalized.")
-
-        app = QApplication([])  # Required to create a QApplication instance first
-
-        preview_checkbox = QCheckBox()  # Replace with actual instance.
-        create_button = QPushButton()  # Replace with actual instance.
-        value_slider = QSlider()  # Example widget that emits a signal
-
-        preview = Preview(preview_checkbox, create_button, operation_func, finalize_func)
-
-        # Connect value_slider's valueChanged signal to the preview's refresh method
-        value_slider.valueChanged.connect(preview.refresh)
-
-        # Checking the checkbox will execute `operation_func` and print "Operation performed."
-        preview_checkbox.setChecked(True)
-
-        # Moving the slider will also call `operation_func`
-        value_slider.setValue(5)
-
-        # Pressing the button will execute `finalize_func` and print "Changes finalized."
-        create_button.click()
-
-        app.exec_()  # Start the application's event loop
-    """
-
     def __init__(self, *args, **kwargs):
-        """Initialize the Preview class with preview-related UI elements and functions."""
-        self.init_preview_mixin(*args, **kwargs)
+        """Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
 
-    def init_preview_mixin(
-        self,
-        preview_checkbox,
-        create_button,
-        operation_func=None,
-        finalize_func=None,
-        message_func=print,
-    ):
-        """Initialize the mixin for the preview. Connects UI elements to their respective functionalities.
+        This class enables real-time previews of operations by linking UI elements to backend functionality.
+        It efficiently manages the state and execution of operations, maintaining a clean undo stack and enabling
+        rollback of changes during the preview process.
 
         Parameters:
-            preview_checkbox (QWidget): The UI element for the preview checkbox.
-            create_button (QWidget): The UI element for the create/apply button.
-            operation_func (callable, optional): The function to execute for the preview operation.
-            finalize_func (callable, optional): The function to finalize the changes.
-            message_func (callable, optional): The function to display messages. Defaults to print.
+            operation_instance: Instance implementing a perform_operation method.
+            preview_checkbox: QCheckBox instance to toggle the preview.
+            create_button: QPushButton instance to finalize the changes.
+            finalize_func: Optional callable to finalize changes.
+            message_func: Optional callable for messaging, default is print.
+            enable_on_show: Boolean, if True enables the preview when the window shows.
+            disable_on_hide: Boolean, if True disables the preview when the window hides.
+
+        Usage Example:
+            ```python
+            class BevelEdgesSlots:
+                def __init__(self):
+                    self.sb = self.switchboard()
+                    self.ui = self.sb.bevel_edges
+                    self.preview = Preview(
+                        self,
+                        self.ui.chk000,
+                        self.ui.b000,
+                        message_func=self.sb.message_box
+                    )
+                    self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
+
+                def perform_operation(self, objects):
+                    width = self.ui.s000.value()
+                    segments = self.ui.s001.value()
+                    BevelEdges.bevel_edges(objects, width, segments)
+
+            # Instantiate BevelEdgesSlots.
+            # Now toggling the UI checkbox will enable/disable the preview,
+            # and clicking the UI button will apply the beveled edges.
+            ```
         """
+        self.init_preview(*args, **kwargs)
+
+    def init_preview(
+        self,
+        operation_instance,
+        preview_checkbox,
+        create_button,
+        finalize_func=None,
+        message_func=print,
+        enable_on_show=True,
+        disable_on_hide=True,
+    ):
+        """Initialize the state for preview operations."""
+        self.operated_objects = set()
+        self.operation_performed = False
+        self.needs_undo = False
+        self.prevState = None
+        self.operation_instance = operation_instance
+        self.operation_instance.operated_objects = self.operated_objects
         self.preview_checkbox = preview_checkbox
         self.create_button = create_button
-        self.operation_func = operation_func
         self.finalize_func = finalize_func
         self.message_func = message_func
-        self.needs_undo = False
-
         self.preview_checkbox.clicked.connect(self.toggle)
         self.create_button.clicked.connect(self.finalize_changes)
         self.window = self.create_button.window()
-        if hasattr(self.window, "on_hide"):
-            # Un-check the preview button on window hide event.
+
+        self._enable_on_show = None
+        self.enable_on_show = enable_on_show
+
+        self._disable_on_hide = None
+        self.disable_on_hide = disable_on_hide
+
+    @property
+    def enable_on_show(self):
+        """Boolean property to enable or disable the preview when the window shows."""
+        return self._enable_on_show
+
+    @enable_on_show.setter
+    def enable_on_show(self, value):
+        if self._enable_on_show is not None and hasattr(self.window, "on_show"):
+            self.window.on_show.disconnect(self.enable)
+
+        self._enable_on_show = value
+
+        if self._enable_on_show and hasattr(self.window, "on_show"):
+            self.window.on_show.connect(self.enable)
+
+    @property
+    def disable_on_hide(self):
+        """Boolean property to enable or disable the preview when the window hides."""
+        return self._disable_on_hide
+
+    @disable_on_hide.setter
+    def disable_on_hide(self, value):
+        if self._disable_on_hide is not None and hasattr(self.window, "on_hide"):
+            self.window.on_hide.disconnect(self.disable)
+
+        self._disable_on_hide = value
+
+        if self._disable_on_hide and hasattr(self.window, "on_hide"):
             self.window.on_hide.connect(self.disable)
 
     def toggle(self, state):
-        """Toggle the preview state based on the provided state.
+        """Toggles the preview on or off.
 
         Parameters:
-            state (bool): The state to set the preview to. True for enabled, False for disabled.
+            state: Boolean state to set.
         """
         if state:
             self.enable()
@@ -90,73 +122,95 @@ class Preview:
             self.disable()
 
     def enable(self):
-        """Enable the preview, perform the operation, and enable the 'Apply Changes' button."""
-        if pm.selected():
-            self.needs_undo = False
-            self.refresh()
-            self.preview_checkbox.setChecked(True)
-            self.create_button.setEnabled(True)
-            # Mute the command reporting.
-            pm.commandEcho(state=False)
-        else:
-            self.message_func("No objects selected.")
-            self.disable()
+        """Enables the preview and sets up the initial state."""
+        self.prevState = pm.undoInfo(q=True, state=True)
+        pm.undoInfo(state=True)
+        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+
+        try:
+            selected_objs = pm.selected()
+            if selected_objs:
+                self.operated_objects.update(selected_objs)
+                self.needs_undo = True
+
+                self.preview_checkbox.blockSignals(True)  # Block signals temporarily
+                self.preview_checkbox.setChecked(True)
+                self.preview_checkbox.blockSignals(False)  # Unblock signals
+
+                self.create_button.setEnabled(True)
+                self.refresh()  # Perform the operation directly
+                self.operation_performed = True
+            else:
+                self.message_func("No objects selected.")
+                self.disable()
+        except Exception as e:
+            print(f"Exception in enable: {e}")
 
     def disable(self):
-        """Disable the preview, undo the last operation if needed, and disable the 'Apply Changes' button."""
+        """Disables the preview and reverts to the initial state."""
         self.undo_if_needed()
-        self.preview_checkbox.setChecked(False)
-        self.create_button.setEnabled(False)
-        # Restore the command reporting to its default state.
-        pm.commandEcho(state=True)
-
-    def refresh(self, *args):
-        """Refresh the preview if the checkbox is checked and there's no previous operation pending.
-
-        Note:
-            *args is needed because the method may be called as a slot in PyQt,
-            which might pass extra arguments depending on the signal that triggered the slot.
-        """
-        if self.operation_func is None:
-            raise ValueError("Operation function not defined!")
-
-        if not self.preview_checkbox.isChecked():
-            return
-
-        # If we've already performed an operation, undo it before doing a new one.
-        self.undo_if_needed()
-
-        pm.undoInfo(openChunk=True)
-        self.operation_func()
         pm.undoInfo(closeChunk=True)
 
+        if self.prevState is not None:
+            pm.undoInfo(state=self.prevState)
+
+        self.operated_objects.clear()
+        self.preview_checkbox.setChecked(False)
+        self.create_button.setEnabled(False)
+
+    def undo_if_needed(self):
+        """Executes undo operation if required."""
+        if self.needs_undo:
+            pm.undoInfo(closeChunk=True)
+            try:
+                pm.undo()
+            except RuntimeError:
+                pass
+            finally:
+                pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+
+            # Filter out non-existent or invalid nodes
+            valid_operated_objects = {
+                obj for obj in self.operated_objects if pm.objExists(obj)
+            }
+
+            if valid_operated_objects:
+                try:
+                    pm.select(valid_operated_objects)
+                except pm.MayaNodeError:
+                    print(
+                        f"Failed to reselect some objects. Only existing objects will be selected."
+                    )
+
+            self.needs_undo = False
+
+    def refresh(self, *args):
+        """Refreshes the preview to reflect any changes.
+
+        Parameters:
+            *args: Any additional arguments. (Currently unused)
+        """
+        if not self.preview_checkbox.isChecked():
+            return
+        self.undo_if_needed()
+        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        try:
+            self.operation_instance.perform_operation(self.operated_objects)
+        except Exception as e:
+            print(f"Exception during operation: {e}")
+        finally:
+            pm.undoInfo(closeChunk=True)
         self.needs_undo = True
 
     def finalize_changes(self):
-        """Apply Changes and emit signal.
-        This disables the preview and, if defined, calls the finalize function.
-        """
+        """Finalizes the preview changes and calls the finalize_func if provided."""
         self.needs_undo = False
         self.disable()
-
         if self.finalize_func:
             self.finalize_func()
 
-    def undo_if_needed(self):
-        """Undo the previous operation if there is one pending.
-
-        This method will attempt to perform an undo operation if `self.needs_undo` is True.
-        If there's no command to undo, it catches the RuntimeError and passes.
-        """
-        if self.needs_undo:
-            try:
-                pm.undo()
-            except RuntimeError:  # There are no more commands to undo.
-                pass
-
 
 # -----------------------------------------------------------------------------
-
 
 if __name__ == "__main__":
     pass

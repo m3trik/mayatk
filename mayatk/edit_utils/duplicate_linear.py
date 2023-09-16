@@ -75,9 +75,9 @@ class DuplicateLinearSlots:
         self.ui = self.sb.duplicate_linear
 
         self.preview = Preview(
+            self,
             self.ui.chk000,
             self.ui.b000,
-            operation_func=self.perform_duplicate_linear,
             message_func=self.sb.message_box,
         )
         self.sb.connect_multi(
@@ -87,9 +87,8 @@ class DuplicateLinearSlots:
             self.preview.refresh,
         )
 
-    def perform_duplicate_linear(self):
+    def perform_operation(self, objects):
         """Perform the linear duplication operation."""
-        objects = pm.ls(sl=True, type="transform")
         num_copies = self.ui.s009.value()
         translate = (
             self.ui.s000.value(),

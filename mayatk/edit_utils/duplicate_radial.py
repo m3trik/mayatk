@@ -104,9 +104,9 @@ class DuplicateRadialSlots:
         self.ui = self.sb.duplicate_radial
 
         self.preview = Preview(
+            self,
             self.ui.chk000,
             self.ui.b000,
-            operation_func=self.perform_duplicate_radial,
             finalize_func=self.regroup_copies,
             message_func=self.sb.message_box,
         )
@@ -123,9 +123,8 @@ class DuplicateRadialSlots:
             self.preview.refresh,
         )
 
-    def perform_duplicate_radial(self):
+    def perform_operation(self, objects):
         """Perform the radial duplication operation."""
-        objects = pm.ls(sl=True, type="transform")
         num_copies = self.ui.s009.value()
         start_angle = self.ui.s013.value()
         end_angle = self.ui.s014.value()
