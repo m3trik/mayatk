@@ -131,14 +131,15 @@ class Preview:
             selected_objs = pm.selected()
             if selected_objs:
                 self.operated_objects.update(selected_objs)
-                self.needs_undo = True
 
-                self.preview_checkbox.blockSignals(True)  # Block signals temporarily
+                self.needs_undo = False  # Set to False when enabling for the first time
+
+                self.preview_checkbox.blockSignals(True)
                 self.preview_checkbox.setChecked(True)
-                self.preview_checkbox.blockSignals(False)  # Unblock signals
+                self.preview_checkbox.blockSignals(False)
 
                 self.create_button.setEnabled(True)
-                self.refresh()  # Perform the operation directly
+                self.refresh()
                 self.operation_performed = True
             else:
                 self.message_func("No objects selected.")
@@ -169,27 +170,10 @@ class Preview:
             finally:
                 pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
 
-            # Filter out non-existent or invalid nodes
-            valid_operated_objects = {
-                obj for obj in self.operated_objects if pm.objExists(obj)
-            }
-
-            if valid_operated_objects:
-                try:
-                    pm.select(valid_operated_objects)
-                except pm.MayaNodeError:
-                    print(
-                        f"Failed to reselect some objects. Only existing objects will be selected."
-                    )
-
             self.needs_undo = False
 
     def refresh(self, *args):
-        """Refreshes the preview to reflect any changes.
-
-        Parameters:
-            *args: Any additional arguments. (Currently unused)
-        """
+        """Refreshes the preview to reflect any changes."""
         if not self.preview_checkbox.isChecked():
             return
         self.undo_if_needed()
@@ -200,7 +184,7 @@ class Preview:
             print(f"Exception during operation: {e}")
         finally:
             pm.undoInfo(closeChunk=True)
-        self.needs_undo = True
+        self.needs_undo = True  # Set to True once the operation has been performed
 
     def finalize_changes(self):
         """Finalizes the preview changes and calls the finalize_func if provided."""
