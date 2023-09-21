@@ -246,7 +246,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the progression of transformations across the duplicates. &lt;/p&gt;&lt;p&gt;A value of 0.5 results in a linear progression. &lt;/p&gt;&lt;p&gt;Values less than 0.5 make transformations faster at the start and &lt;/p&gt;&lt;p&gt;slower at the end, while values greater than 0.5 do the opposite.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the spacing between each object on all three axis.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
