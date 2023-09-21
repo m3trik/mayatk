@@ -125,6 +125,54 @@ class CamUtils(object):
         else:
             print("No modelPanel found")
 
+    @staticmethod
+    @core_utils.CoreUtils.undo
+    def adjust_camera_clipping(camera=None, near_clip=None, far_clip=None, auto=False):
+        """Adjusts the near and far clipping planes of one or multiple cameras in Autodesk Maya.
+
+        Parameters:
+            camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts all cameras in the scene.
+            near_clip (float/optional): The value to set for the near clipping plane. If None, it will not be changed.
+            far_clip (float/optional): The value to set for the far clipping plane. If None, it will not be changed.
+            auto (bool/optional): If True, automatically sets the near and far clipping based on the scene geometry.
+
+        Examples:
+            adjust_camera_clipping(near_clip=0.2, far_clip=1000)
+            adjust_camera_clipping("persp", near_clip=0.2, far_clip=1000)
+            adjust_camera_clipping(["persp", "top"], near_clip=0.2, far_clip=1000)
+            adjust_camera_clipping(auto=True)
+        """
+        # Automatic setting based on all geometry in the scene
+        if auto:
+            all_geo = pm.ls(dag=True, long=True, geometry=True)
+            if not all_geo:
+                raise ValueError(
+                    "No geometry found in the scene for automatic clipping adjustment."
+                )
+            bbox = pm.exactWorldBoundingBox(all_geo)
+
+            size = [bbox[i + 3] - bbox[i] for i in range(3)]
+            max_size = max(size)
+
+            near_clip = 0.0001 * max_size
+            far_clip = 5.0 * max_size  # Further increased multiplier for more room
+
+        # Resolve the list of target cameras
+        target_cameras = pm.ls(camera) if camera else pm.ls(dag=True, cameras=True)
+        target_cameras = [
+            cam
+            for cam in target_cameras
+            if "startupCameras" not in pm.listRelatives(cam, parent=True)[0].longName()
+        ]
+
+        # Loop through target cameras and adjust their clipping planes
+        for cam in target_cameras:
+            if near_clip:
+                pm.setAttr(f"{cam}.nearClipPlane", near_clip)
+
+            if far_clip:
+                pm.setAttr(f"{cam}.farClipPlane", far_clip)
+
 
 # --------------------------------------------------------------------------------------------
 
