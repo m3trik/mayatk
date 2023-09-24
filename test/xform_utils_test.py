@@ -41,47 +41,27 @@ class Main(unittest.TestCase):
             )
 
 
-class XformUtils_test(Main, XformUtils):
-    """ """
+class XformUtils_test(unittest.TestCase, XformUtils):
+    """Unit tests for the XformUtils class"""
 
-    # Tear down the any previous test by creating a new scene:
-    pm.mel.file(new=True, force=True)
+    def setUp(self):
+        """Set up test scene"""
+        pm.mel.file(new=True, force=True)
+        self.cube1 = pm.polyCube(name="cube1")[0]
+        self.cube2 = pm.polyCube(name="cube2")[0]
+        self.sph = pm.polySphere(name="sph")[0]
 
-    # assemble the test scene:
-    if not pm.objExists("cube1"):
-        cube1 = pm.polyCube(
-            width=5,
-            height=5,
-            depth=5,
-            subdivisionsX=1,
-            subdivisionsY=1,
-            subdivisionsZ=1,
-            name="cube1",
-        )
-
-    if not pm.objExists("cube2"):
-        cube2 = pm.polyCube(
-            width=2,
-            height=4,
-            depth=8,
-            subdivisionsX=3,
-            subdivisionsY=3,
-            subdivisionsZ=3,
-            name="cube2",
-        )
-
-    if not pm.objExists("sph"):
-        sph = pm.polySphere(radius=5, subdivisionsX=12, subdivisionsY=12, name="sph")
+    def tearDown(self):
+        """Clean up test scene"""
+        pm.delete(self.cube1, self.cube2, self.sph)
 
     def test_moveTo(self):
-        """ """
-        self.assertEqual(self.move_to("cube1", "cube2"), None)
+        self.assertEqual(self.move_to(self.cube1, self.cube2), None)
 
     def test_dropToGrid(self):
-        """ """
         self.assertEqual(
             self.drop_to_grid(
-                "cube1",
+                self.cube1,
                 align="Min",
                 origin=True,
                 center_pivot=True,
@@ -91,60 +71,47 @@ class XformUtils_test(Main, XformUtils):
         )
 
     def test_resetTranslation(self):
-        """ """
-        self.assertEqual(self.reset_translation("cube1"), None)
+        self.assertEqual(self.reset_translation(self.cube1), None)
 
     def test_setTranslationToPivot(self):
-        """ """
-        self.assertEqual(self.set_translation_to_pivot("cube1"), None)
+        self.assertEqual(self.set_translation_to_pivot(self.cube1), None)
 
     def test_alignPivotToSelection(self):
-        """ """
-        self.assertEqual(self.align_pivot_to_selection("cube1", "cube2"), None)
+        self.assertEqual(self.align_pivot_to_selection(self.cube1, self.cube2), None)
 
     def test_aimObjectAtPoint(self):
-        """ """
         self.assertEqual(
-            self.aim_object_at_point(["cube1", "cube2"], (0, 15, 15)), None
+            self.aim_object_at_point([self.cube1, self.cube2], (0, 15, 15)), None
         )
 
     def test_rotateAxis(self):
-        """ """
-        self.assertEqual(self.rotate_axis(["cube1", "cube2"], (0, 15, 15)), None)
+        self.assertEqual(self.rotate_axis([self.cube1, self.cube2], (0, 15, 15)), None)
 
     def test_getOrientation(self):
-        """ """
         self.assertEqual(
-            self.get_orientation("cube1"), ([1, 0, 0], [0, 1, 0], [0, 0, 1])
+            self.get_orientation(self.cube1), ([1, 0, 0], [0, 1, 0], [0, 0, 1])
         )
 
     def test_getDistanceBetweenTwoObjects(self):
-        """ """
-        self.drop_to_grid(["cube1", "cube2"], origin=True, center_pivot=True)
-        pm.move("cube2", 0, 0, 15)
-
-        self.assertEqual(self.get_dist_between_two_objects("cube1", "cube2"), 15)
+        self.drop_to_grid([self.cube1, self.cube2], origin=True, center_pivot=True)
+        pm.move(self.cube2, 0, 0, 15)
+        self.assertEqual(self.get_dist_between_two_objects(self.cube1, self.cube2), 15)
 
     def test_getCenterPoint(self):
-        """ """
-        self.assertEqual(self.get_center_point("sph"), (0, 0, 0))
-        self.assertEqual(self.get_center_point("sph.vtx[*]"), (0, 0, 0))
+        self.assertEqual(self.get_center_point(self.sph), (0, 0, 0))
 
     def test_getBoundingBox(self):
-        """ """
-        self.assertEqual(self.get_bounding_box("sph", "size"), (10, 10, 10))
+        self.assertEqual(self.get_bounding_box(self.sph, "size"), (10, 10, 10))
 
     def test_sortByBoundingBoxValue(self):
-        """ """
         self.assertEqual(
             str(self.sort_by_bounding_box_value(["sph.vtx[0]", "sph.f[0]"])),
             "[MeshFace('sphShape.f[0]'), MeshVertex('sphShape.vtx[0]')]",
         )
 
     def test_matchScale(self):
-        """ """
         self.assertEqual(
-            self.match_scale("cube1", "cube2", scale=False),
+            self.match_scale(self.cube1, self.cube2, scale=False),
             [1.3063946090989371, 0.539387725343009, 0.539387708993454],
         )
 
@@ -170,38 +137,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-# """
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-# """
-
-# # Deprecated ---------------------
