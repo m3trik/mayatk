@@ -196,3 +196,8 @@ cython_debug/
 *.bak
 *.bak
 *.bak
+*.exr
+*.tx
+*.tx
+mayatk/mat_utils/resources/hdr/aircraft_workshop_01_4k.tx
+mayatk/mat_utils/resources/hdr/empty_warehouse_01_4k.tx
