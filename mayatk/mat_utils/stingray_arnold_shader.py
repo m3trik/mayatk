@@ -163,12 +163,21 @@ class StingrayArnoldShader:
                 )
 
                 if typ == "Base_Color":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_color_map, force=True)
                     sr_node.use_color_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        texture_node=True,
+                        colorSpace="Raw",
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input1, force=True)
 
@@ -209,12 +218,21 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, ai_node.metalness, force=True)
 
                 elif typ == "Emissive":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_emissive_map, force=True)
                     sr_node.use_emissive_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        colorSpace="Raw",
+                        texture_node=True,
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outAlpha, ai_node.emission, force=True)
                     pm.connectAttr(n2.outColor, ai_node.emissionColor, force=True)
@@ -236,12 +254,21 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, bump_node.bumpValue, force=True)
 
                 elif typ == "Ambient_Occlusion":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_ao_map, force=True)
                     sr_node.use_ao_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        texture_node=True,
+                        colorSpace="Raw",
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input2, force=True)
 

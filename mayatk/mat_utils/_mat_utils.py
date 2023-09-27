@@ -134,13 +134,20 @@ class MatUtils(object):
             objects (list): The objects or components to assign the material to.
             mat (obj): The material to assign.
         """
-        try:  # if the mat is a not a known type; try and create the material.
+        try:
             pm.nodeType(mat)
         except Exception:
-            mat = pm.shadingNode(mat, asShader=1)
+            mat = pm.shadingNode(mat, asShader=True)
 
-        shading_group = pm.sets(renderable=True, noSurfaceShader=True, empty=True)
-        pm.connectAttr(f"{mat}.outColor", f"{shading_group}.surfaceShader", force=True)
+        # Check for existing shading group connected to the material
+        shading_groups = mat.listConnections(type="shadingEngine")
+        if shading_groups:
+            shading_group = shading_groups[0]
+        else:
+            shading_group = pm.sets(renderable=True, noSurfaceShader=True, empty=True)
+            pm.connectAttr(
+                f"{mat}.outColor", f"{shading_group}.surfaceShader", force=True
+            )
 
         for obj in pm.ls(objects):
             pm.sets(shading_group, forceElement=obj)
