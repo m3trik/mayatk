@@ -13,32 +13,45 @@ from mayatk import core_utils, component_utils
 class XformUtils:
     """ """
 
-    @staticmethod
-    def move_to(source, target, center=True):
-        """Move an object(s) to the given target.
+    @classmethod
+    def move_to(cls, source, target, group_move=False):
+        """Move source object(s) to align with the target object(s).
+
+        This method allows the user to move a source object or a list of source objects
+        to a target object or a list of target objects. The objects are moved to the
+        center of the bounding box of the target by default.
 
         Parameters:
-            source (str/obj/list): The objects to move.
-            target (str/obj): The object to move to.
-            center (bool): Move to target pivot pos, or the bounding box center of the target.
-        """
-        if center:  # temporarily move the targets pivot to it's bounding box center.
-            orig_target_piv = pm.xform(
-                target, q=1, worldSpace=1, rp=1
-            )  # get target pivot position.
-            pm.xform(target, centerPivots=1)  # center target pivot.
-            target_pos = pm.xform(
-                target, q=1, worldSpace=1, rp=1
-            )  # get the pivot position at center of object.
-            pm.xform(
-                target, worldSpace=1, rp=orig_target_piv
-            )  # return the target pivot to it's orig position.
-        else:
-            target_pos = pm.xform(
-                target, q=1, worldSpace=1, rp=1
-            )  # get the pivot position.
+            source (str/obj/list): The Maya object(s) to move. Can be a single object or a list of objects.
+            target (str/obj/list): The Maya object(s) to move to. Can be a single object or a list of objects.
+            group_move (bool): If True, move the source objects as a single group centered around their common bounding box.
 
-        pm.xform(source, translation=target_pos, worldSpace=1, relative=1)
+        Example:
+        >>> move_to(['pCube1', 'pCube2'], 'pSphere1')
+        # Moves both pCube1 and pCube2 to the center of pSphere1.
+
+        >>> move_to(['pCube1', 'pCube2'], ['pSphere1', 'pSphere2'], group_move=True)
+        # Moves both pCube1 and pCube2 as a single group to the center of the combined bounding box of pSphere1 and pSphere2.
+        """
+
+        source = pm.ls(source, flatten=True)
+        target = pm.ls(target, flatten=True)
+
+        target_pos = cls.get_bounding_box(target, "center")
+
+        if group_move:
+            group_center = cls.get_bounding_box(source, "center")
+            translation_vector = [t - g for t, g in zip(target_pos, group_center)]
+
+            for src in source:
+                current_pos = pm.xform(
+                    src, query=True, translation=True, worldSpace=True
+                )
+                new_pos = [c + t for c, t in zip(current_pos, translation_vector)]
+                pm.xform(src, translation=new_pos, worldSpace=True)
+        else:
+            for src in source:
+                pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
     @core_utils.CoreUtils.undo

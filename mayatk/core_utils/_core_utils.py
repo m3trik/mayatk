@@ -60,6 +60,68 @@ class CoreUtils:
         return main_window
 
     @staticmethod
+    def get_maya_info(key):
+        """Fetch specific information about the current Maya environment based on the provided key.
+
+        Parameters:
+            key (str): The key corresponding to the specific Maya information to fetch.
+
+        Returns:
+            The corresponding information based on the key, or an error message if the key is invalid.
+        """
+        available_keys = {
+            "install_path": lambda: os.environ.get("MAYA_LOCATION"),
+            "version": lambda: pm.about(version=True),
+            "renderer": lambda: pm.getAttr("defaultRenderGlobals.currentRenderer"),
+            "workspace_dir": lambda: pm.workspace(q=True, rd=True),
+            "scene_name": lambda: pm.sceneName(),
+            "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
+            "ui_language": lambda: pm.about(uiLanguage=True),
+            "os_type": lambda: pm.about(os=True),
+            "linear_units": lambda: pm.currentUnit(q=True, fullName=True),
+            "time_units": lambda: pm.currentUnit(q=True, t=True),
+            "loaded_plugins": lambda: pm.pluginInfo(q=True, listPlugins=True),
+            "api_version": lambda: pm.about(api=True),
+            "host_name": lambda: pm.about(hostName=True),
+            "current_frame": lambda: pm.currentTime(q=True),
+            "frame_range": lambda: (
+                pm.playbackOptions(q=True, min=True),
+                pm.playbackOptions(q=True, max=True),
+            ),
+            "viewport_renderer": lambda: pm.modelEditor(
+                "modelPanel4", q=True, rendererName=True
+            ),
+            "current_camera": lambda: pm.modelEditor(
+                "modelPanel4", q=True, camera=True
+            ),
+            "available_cameras": lambda: pm.listCameras(),
+            "active_layers": lambda: [
+                layer.name()
+                for layer in pm.ls(type="displayLayer")
+                if not layer.attr("visibility").isLocked()
+            ],
+            "current_tool": lambda: pm.currentCtx(),
+            "up_axis": lambda: pm.upAxis(q=True, axis=True),
+            "maya_uptime": lambda: pm.timerX(),
+            "total_polys": lambda: pm.polyEvaluate(scene=True, triangle=True),
+            "total_nodes": lambda: len(pm.ls(dag=True)),
+            "current_selection": lambda: pm.selected(),
+        }
+
+        if key not in available_keys:
+            raise KeyError(
+                "Invalid key. Available keys are: {}".format(
+                    ", ".join(available_keys.keys())
+                )
+            )
+
+        value = available_keys[key]()
+        if value is None:
+            raise ValueError(f"The value for {key} could not be found.")
+
+        return value
+
+    @staticmethod
     def append_maya_paths(maya_version=2023):
         """Adds the required library paths for Maya to the system's Python path.
 
@@ -69,9 +131,8 @@ class CoreUtils:
         Returns:
             (None)
         """
-        maya_install_path = os.environ.get(
-            "MAYA_LOCATION"
-        )  # Get the Maya installation path.
+        # Get the Maya installation path.
+        maya_install_path = os.environ.get("MAYA_LOCATION")
         if not maya_install_path:
             return print(
                 f"# Error: {__file__} in append_maya_paths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set."

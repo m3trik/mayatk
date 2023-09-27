@@ -58,3 +58,13 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
+
+#  Use the following simplified approach in future tests.
+
+# if __name__ == "__main__":
+#     loader = unittest.TestLoader()
+#     suite = loader.discover(
+#         start_dir=r"O:\Cloud\Code\_scripts\mayatk\test", pattern="*_test.py"
+#     )
+#     runner = unittest.TextTestRunner()
+#     runner.run(suite)

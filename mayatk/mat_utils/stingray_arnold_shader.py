@@ -17,8 +17,7 @@ __version__ = "0.5.3"
 
 
 class StingrayArnoldShader:
-    """
-    To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
+    """To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
     If Opaque is enabled, opacity will not work at all. Transmission will work however any shadows cast by
     the object will always be solid and not pick up the Transparent Color or density of the shader.
     """
@@ -37,9 +36,8 @@ class StingrayArnoldShader:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
-        node = (
-            self.hdr_env
-        )  # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
+        # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
+        node = self.hdr_env
         if not node:
             node = NodeUtils.create_render_node(
                 "aiSkyDomeLight",
@@ -86,9 +84,8 @@ class StingrayArnoldShader:
     ):
         """ """
         normal_map_created_from_other_type = False
-        normalMapType = "Normal_" + normalMapType.strip(
-            "Normal_"
-        )  # assure normalMapType is formatted as 'Normal_OpenGL' whether given as 'OpenGL' or 'Normal_OpenGL'
+        # Assure normalMapType is formatted as 'Normal_OpenGL' whether given as 'OpenGL' or 'Normal_OpenGL'
+        normalMapType = "Normal_" + normalMapType.strip("Normal_")
 
         if not textures:
             callback(
@@ -96,10 +93,9 @@ class StingrayArnoldShader:
             )
             return None
         try:
-            pm.loadPlugin("mtoa", quiet=True)  # assure arnold plugin is loaded.
-            pm.loadPlugin(
-                "shaderFXPlugin", quiet=True
-            )  # assure stringray plugin is loaded.
+            pm.loadPlugin("mtoa", quiet=True)  # Assure arnold plugin is loaded.
+            # Assure stringray plugin is loaded.
+            pm.loadPlugin("shaderFXPlugin", quiet=True)
 
             sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
             ai_node = NodeUtils.create_render_node(
@@ -108,10 +104,17 @@ class StingrayArnoldShader:
 
             opacityMap = ptk.filter_images_by_type(textures, "Opacity")
             if opacityMap:
-                pm.shaderfx(
-                    sfxnode="StingrayPBS1",
-                    loadGraph=r"C:/_local/_test/shaderfx/Standard_Transparent.sfx",
+                maya_install_path = CoreUtils.get_maya_info("install_path")
+
+                graph = os.path.join(
+                    maya_install_path,
+                    "presets",
+                    "ShaderFX",
+                    "Scenes",
+                    "StingrayPBS",
+                    "Standard_Transparent.sfx",
                 )
+                pm.shaderfx(sfxnode="StingrayPBS1", loadGraph=graph)
 
             openGLMap = ptk.filter_images_by_type(textures, "Normal_OpenGL")
             directXMap = ptk.filter_images_by_type(textures, "Normal_DirectX")
@@ -131,9 +134,9 @@ class StingrayArnoldShader:
             aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
 
             bump_node = pm.shadingNode("bump2d", asShader=True)
-            bump_node.bumpInterp.set(1)  # set bump node to 'tangent space normals'
+            bump_node.bumpInterp.set(1)  # Set bump node to 'tangent space normals'
 
-            NodeUtils.connect_multi_attr(  # set node connections.
+            NodeUtils.connect_multi_attr(  # Set node connections.
                 (ai_node.outColor, srSG_node.aiSurfaceShader),
                 (aiMult_node.outColor, ai_node.baseColor),
                 (bump_node.outNormal, ai_node.normalCamera),
@@ -146,7 +149,7 @@ class StingrayArnoldShader:
 
                 progress += 1
 
-                # filter normal maps for the correct type.
+                # Filter normal maps for the correct type.
                 if typ == "Normal" and (openGLMap or directXMap):
                     continue
                 elif typ == "Normal_DirectX" and normalMapType == "Normal_OpenGL":
@@ -160,12 +163,21 @@ class StingrayArnoldShader:
                 )
 
                 if typ == "Base_Color":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_color_map, force=True)
                     sr_node.use_color_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        texture_node=True,
+                        colorSpace="Raw",
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input1, force=True)
 
@@ -184,9 +196,10 @@ class StingrayArnoldShader:
                         ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outAlpha, ai_node.specularRoughness, force=True)
+                    # Opacity: same roughness map used in Specular Roughness to provide additional bluriness of refraction.
                     pm.connectAttr(
                         n2.outAlpha, ai_node.transmissionExtraRoughness, force=True
-                    )  # opacity: same roughness map used in Specular Roughness to provide additional bluriness of refraction.
+                    )
 
                 elif typ == "Metallic":
                     n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
@@ -205,12 +218,21 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, ai_node.metalness, force=True)
 
                 elif typ == "Emissive":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_emissive_map, force=True)
                     sr_node.use_emissive_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        colorSpace="Raw",
+                        texture_node=True,
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outAlpha, ai_node.emission, force=True)
                     pm.connectAttr(n2.outColor, ai_node.emissionColor, force=True)
@@ -232,12 +254,21 @@ class StingrayArnoldShader:
                     pm.connectAttr(n2.outAlpha, bump_node.bumpValue, force=True)
 
                 elif typ == "Ambient_Occlusion":
-                    n1 = NodeUtils.create_render_node("file", "as2DTexture", tex=f)
+                    n1 = NodeUtils.create_render_node(
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                    )
                     pm.connectAttr(n1.outColor, sr_node.TEX_ao_map, force=True)
                     sr_node.use_ao_map.set(1)
 
                     n2 = NodeUtils.create_render_node(
-                        "file", "as2DTexture", tex=f, texture_node=True
+                        "file",
+                        "as2DTexture",
+                        tex=f,
+                        texture_node=True,
+                        colorSpace="Raw",
+                        ignoreColorSpaceFileRules=1,
                     )
                     pm.connectAttr(n2.outColor, aiMult_node.input2, force=True)
 
@@ -260,7 +291,8 @@ class StingrayArnoldShader:
 
                 else:
                     if normal_map_created_from_other_type:
-                        continue  # do not show a warning for unconnected normal maps if it resulted from being converted to a different output type.
+                        # Do not show a warning for unconnected normal maps if it resulted from being converted to a different output type.
+                        continue
                     callback(
                         f'<br><hl style="color:rgb(255, 100, 100);"><b>Map type: <b>{typ, ptk.truncate(f, 60)}</b> not connected:<br></hl>',
                         [progress, length],
