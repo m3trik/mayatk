@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>463</width>
-    <height>405</height>
+    <height>423</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -498,12 +498,6 @@
          </property>
          <item>
           <widget class="QTextEdit" name="txt001">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Expanding" vsizetype="Ignored">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
            <property name="verticalScrollBarPolicy">
             <enum>Qt::ScrollBarAlwaysOff</enum>
            </property>
