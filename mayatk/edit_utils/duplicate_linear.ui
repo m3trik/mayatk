@@ -215,7 +215,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>Duplicate: number of copies</string>
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Duplicate: Total number of duplicated objects.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
              <property name="buttonSymbols">
               <enum>QAbstractSpinBox::NoButtons</enum>
