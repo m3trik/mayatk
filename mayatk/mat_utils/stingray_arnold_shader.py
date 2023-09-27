@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import os
 from PySide2 import QtWidgets
 
 try:
@@ -13,7 +14,7 @@ from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 
 class StingrayArnoldShader:
@@ -319,20 +320,24 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
-    proj_root_dir = ptk.get_object_path(__file__)
-
     def __init__(self, **kwargs):
         super().__init__()
-        """ """
+
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
+        self.workspace_dir = CoreUtils.get_maya_info("workspace_dir")
+        self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
-        # Add filenames|filepaths to the comboBox.
-        hdr_path = f"{self.proj_root_dir}/resources/hdr"
-        hdr_filenames = ptk.get_dir_contents(hdr_path, "filename", inc_files="*.exr")
-        hdr_fullpaths = ptk.get_dir_contents(hdr_path, "filepath", inc_files="*.exr")
-        self.ui.cmb000.add(zip(hdr_filenames, hdr_fullpaths), ascending=False)
+        hdr_info = ptk.get_dir_contents(
+            self.source_images_dir,
+            ["filename", "filepath"],
+            inc_files=["*.exr", "*.hdr"],
+            group_by_type=True,
+        )
+        self.ui.cmb000.add(
+            zip(hdr_info["filename"], hdr_info["filepath"]), ascending=False
+        )
 
         self.ui.txt001.setText(self.msg_intro)
 
@@ -359,6 +364,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             (str) data as string.
         """
         data = self.ui.cmb000.currentData()
+        print(666, data)
         return data
 
     @property
@@ -429,6 +435,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         image_files = self.sb.file_dialog(
             file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
             title="Select one or more image files to open.",
+            directory=self.source_images_dir,
         )
 
         if image_files:
@@ -469,7 +476,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
     from uitk import Switchboard
 
     parent = CoreUtils.get_main_window()

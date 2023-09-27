@@ -1,5 +1,5 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.8.3-blue.svg)](https://pypi.org/project/mayatk/)
+[![Version](https://img.shields.io/badge/Version-0.8.4-blue.svg)](https://pypi.org/project/mayatk/)
 [![CoreUtils Tests](https://img.shields.io/badge/CoreUtils-Passing-brightgreen.svg)](../test/core_utils_test.py#CoreUtilsTest)
 [![ProjUtils Tests](https://img.shields.io/badge/ProjUtils-Passing-brightgreen.svg)](../test/proj_utils_test.py#ProjUtilsTest)
 [![XformUtils Tests](https://img.shields.io/badge/XformUtils-Passing-brightgreen.svg)](../test/xform_utils_test.py#XformUtilsTest)
