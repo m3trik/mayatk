@@ -12,74 +12,15 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
-
-
-__version__ = "0.5.4"
+from mayatk.mat_utils import hdr_manager
 
 
 class StingrayArnoldShader:
-    """To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
-    If Opaque is enabled, opacity will not work at all. Transmission will work however any shadows cast by
-    the object will always be solid and not pick up the Transparent Color or density of the shader.
-    """
-
-    hdr_env_name = "aiSkyDomeLight_"
-
-    @property
-    def hdr_env(self) -> object:
-        """ """
-        node = pm.ls(self.hdr_env_name, exactType="aiSkyDomeLight")
-        try:
-            return node[0]
-        except IndexError:
-            return None
-
-    @hdr_env.setter
-    def hdr_env(self, tex) -> None:
-        """ """
-        # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
-        node = self.hdr_env
-        if not node:
-            node = NodeUtils.create_render_node(
-                "aiSkyDomeLight",
-                "asLight",
-                name=self.hdr_env_name,
-                camera=0,
-                skyRadius=0,
-            )  # turn off skydome and viewport visibility.
-            self.hdr_env_transform.hiddenInOutliner.set(1)
-            pm.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
-
-        file_node = NodeUtils.get_incoming_node_by_type(node, "file")
-        if not file_node:
-            file_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", texture_node=True
-            )
-            pm.connectAttr(file_node.outColor, node.color, force=True)
-
-        file_node.fileTextureName.set(str(tex))
-
-    @property
-    def hdr_env_transform(self) -> object:
-        """ """
-        node = NodeUtils.get_transform_node(self.hdr_env)
-        if not node:
-            return None
-        return node
-
-    def set_hdr_map_visibility(self, state):
-        """ """
-        node = self.hdr_env
-        if node:
-            node.camera.set(state)
-
     @CoreUtils.undo
     def create_network(
         self,
         textures,
         name="",
-        hdrMap="",
-        hdrMapVisibility=False,
         normalMapType="OpenGL",
         callback=print,
     ):
@@ -130,7 +71,12 @@ class StingrayArnoldShader:
                 normal_map_created_from_other_type = True
                 callback(f"DirectX map created using {ptk.truncate(openGLMap[0], 20)}.")
 
-            srSG_node = NodeUtils.get_outgoing_node_by_type(sr_node, "shadingEngine")
+            srSG_node = NodeUtils.get_connected_nodes(
+                sr_node,
+                node_type="shadingEngine",
+                direction="outgoing",
+                first_match=True,
+            )
 
             aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
 
@@ -308,15 +254,15 @@ class StingrayArnoldShader:
                 f'<br><hl style="color:rgb(255, 100, 100);"><b>Error:</b>{e}.</hl>'
             )
 
-        self.hdr_env = hdrMap
-        self.set_hdr_map_visibility(hdrMapVisibility)
-
 
 class StingrayArnoldShaderSlots(StingrayArnoldShader):
     msg_intro = """<u>To setup the material:</u>
         <br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
         <br>• Click the <b>Create Network</b> button to create the shader connections.
-        <br>• The HDR map, it's visiblity, and rotation can be changed after creation.
+
+        <p><b>Note:</b> To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
+        If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by
+        the object will always be solid and not pick up the Transparent Color or density of the shader.</p>
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
@@ -329,22 +275,32 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
-        hdr_info = ptk.get_dir_contents(
-            self.source_images_dir,
-            ["filename", "filepath"],
-            inc_files=["*.exr", "*.hdr"],
-            group_by_type=True,
-        )
-        self.ui.cmb000.add(
-            zip(hdr_info["filename"], hdr_info["filepath"]), ascending=False
-        )
-
         self.ui.txt001.setText(self.msg_intro)
+        self.init_header_menu()
 
-        node = self.hdr_env_transform
-        if node:
-            rotation = node.rotateY.get()
-            self.ui.slider000.setSliderPosition(rotation)
+    def init_header_menu(self):
+        """Configure header menu"""
+        self.ui.header.menu.setTitle("OPTIONS")
+        self.ui.header.menu.add(
+            self.sb.PushButton,
+            "HDR Manager",
+            setText="Open HDR Manager",
+            setObjectName="b002",
+        )
+
+        module = hdr_manager
+        slot_class = module.HdrManagerSlots
+
+        # Register and configure HDR Manager UI
+        self.sb.register("hdr_manager.ui", slot_class, base_dir=module)
+        ui = self.sb.hdr_manager
+        ui.set_attributes(WA_TranslucentBackground=True)
+        ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
+        ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+        ui.header.configureButtons(hide_button=True)
+
+        # Connect button click to show HDR Manager
+        self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
 
     @property
     def mat_name(self) -> str:
@@ -357,27 +313,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         return text
 
     @property
-    def hdr_map(self) -> str:
-        """Get the hdr map filepath from the comboBoxes current text.
-
-        Returns:
-            (str) data as string.
-        """
-        data = self.ui.cmb000.currentData()
-        print(666, data)
-        return data
-
-    @property
-    def hdr_map_visibility(self) -> bool:
-        """Get the hdr map visibility state from the checkBoxes current state.
-
-        Returns:
-            (bool)
-        """
-        state = self.ui.chk000.isChecked()
-        return state
-
-    @property
     def normal_map_type(self) -> str:
         """Get the normal map type from the comboBoxes current text.
 
@@ -386,29 +321,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         """
         text = self.ui.cmb001.currentText()
         return text
-
-    def cmb000(self, index, widget):
-        """HDR map selection."""
-        data = widget.currentData()
-
-        self.hdr_env = data  # set the HDR map.
-
-    def chk000(self, state, widget):
-        """ """
-        self.set_hdr_map_visibility(state)  # set the HDR map visibility.
-
-    def slider000(self, value, widget):
-        """Rotate the HDR map."""
-        if self.hdr_env:
-            transform = NodeUtils.get_transform_node(self.hdr_env)
-            pm.rotate(
-                transform,
-                value,
-                rotateY=True,
-                forceOrderXYZ=True,
-                objectSpace=True,
-                absolute=True,
-            )
 
     def b000(self):
         """Create network."""
@@ -421,8 +333,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.create_network(
                 self.image_files,
                 self.mat_name,
-                hdrMap=self.hdr_map,
-                hdrMapVisibility=self.hdr_map_visibility,
                 normalMapType=self.normal_map_type,
                 callback=self.callback,
             )
@@ -487,7 +397,9 @@ if __name__ == "__main__":
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
+    sb.current_ui.header.configureButtons(
+        menu_button=True, minimize_button=True, hide_button=True
+    )
     sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

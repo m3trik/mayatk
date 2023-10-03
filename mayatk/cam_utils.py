@@ -127,37 +127,45 @@ class CamUtils(object):
 
     @staticmethod
     @core_utils.CoreUtils.undo
-    def adjust_camera_clipping(camera=None, near_clip=None, far_clip=None, auto=False):
+    def adjust_camera_clipping(
+        camera=None, near_clip=None, far_clip=None, mode="manual"
+    ):
         """Adjusts the near and far clipping planes of one or multiple cameras in Autodesk Maya.
 
         Parameters:
             camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts all cameras in the scene.
-            near_clip (float/optional): The value to set for the near clipping plane. If None, it will not be changed.
-            far_clip (float/optional): The value to set for the far clipping plane. If None, it will not be changed.
-            auto (bool/optional): If True, automatically sets the near and far clipping based on the scene geometry.
+            near_clip (float/optional): The value to set for the near clipping plane. Only used when mode is 'manual'.
+            far_clip (float/optional): The value to set for the far clipping plane. Only used when mode is 'manual'.
+            mode (str/optional): The mode to operate in. Choices are 'manual', 'auto', 'reset'. Default is 'manual'.
+                - 'manual': Uses the near_clip and far_clip values provided. Ignores them if None.
+                - 'auto': Automatically sets the near and far clipping based on scene geometry.
+                - 'reset': Resets the near and far clipping to default values (0.1 and 10000).
 
         Examples:
-            adjust_camera_clipping(near_clip=0.2, far_clip=1000)
-            adjust_camera_clipping("persp", near_clip=0.2, far_clip=1000)
-            adjust_camera_clipping(["persp", "top"], near_clip=0.2, far_clip=1000)
-            adjust_camera_clipping(auto=True)
+            adjust_camera_clipping(near_clip=0.2, far_clip=1000)  # manual is default mode
+            adjust_camera_clipping("persp", near_clip=0.2, far_clip=1000, mode='manual')
+            adjust_camera_clipping(["persp", "top"], mode='auto')
+            adjust_camera_clipping(mode='reset')
         """
-        # Automatic setting based on all geometry in the scene
-        if auto:
+        if mode == "reset":
+            near_clip = 0.1
+            far_clip = 10000
+        elif mode == "auto":
             all_geo = pm.ls(dag=True, long=True, geometry=True)
             if not all_geo:
                 raise ValueError(
                     "No geometry found in the scene for automatic clipping adjustment."
                 )
             bbox = pm.exactWorldBoundingBox(all_geo)
-
             size = [bbox[i + 3] - bbox[i] for i in range(3)]
             max_size = max(size)
-
             near_clip = 0.0001 * max_size
-            far_clip = 5.0 * max_size  # Further increased multiplier for more room
+            far_clip = 5.0 * max_size
+        elif mode != "manual":
+            raise ValueError(
+                f"Invalid mode: {mode}. Valid modes are 'manual', 'auto', 'reset'."
+            )
 
-        # Resolve the list of target cameras
         target_cameras = pm.ls(camera) if camera else pm.ls(dag=True, cameras=True)
         target_cameras = [
             cam
@@ -165,12 +173,10 @@ class CamUtils(object):
             if "startupCameras" not in pm.listRelatives(cam, parent=True)[0].longName()
         ]
 
-        # Loop through target cameras and adjust their clipping planes
         for cam in target_cameras:
-            if near_clip:
+            if near_clip is not None:
                 pm.setAttr(f"{cam}.nearClipPlane", near_clip)
-
-            if far_clip:
+            if far_clip is not None:
                 pm.setAttr(f"{cam}.farClipPlane", far_clip)
 
 

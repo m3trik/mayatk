@@ -217,6 +217,34 @@ class MatUtils(object):
         return objs_with_material
 
     @staticmethod
+    def reload_textures(materials=None, inc=None, exc=None):
+        """Reloads textures connected to specified materials with inclusion/exclusion filters.
+
+        Parameters:
+            materials (str/obj/list): Material or list of materials to process. Defaults to all materials in the scene.
+            inc (str/list): Inclusion patterns for filtering textures.
+            exc (str/list): Exclusion patterns for filtering textures.
+        """
+        materials = pm.ls(materials) if materials else pm.ls(mat=True)
+
+        file_nodes = []
+        for material in materials:
+            # Traverse the connections to find file nodes
+            file_nodes.extend(
+                node_utils.NodeUtils.get_connected_nodes(material, node_type="file")
+            )
+
+        # Remove duplicates
+        file_nodes = set(file_nodes)
+        # Filter file_nodes based on texture names
+        file_nodes = ptk.filter_list(
+            file_nodes, inc=inc, exc=exc, map_func=lambda fn: fn.fileTextureName.get()
+        )
+
+        for fn in file_nodes:
+            pm.evalDeferred(f"pm.runtime.reloadFile('{fn.fileTextureName.get()}')")
+
+    @staticmethod
     def get_mat_swatch_icon(mat, size=[20, 20]):
         """Get an icon with a color fill matching the given materials RBG value.
 

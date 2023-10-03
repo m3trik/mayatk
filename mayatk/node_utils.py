@@ -380,40 +380,51 @@ class NodeUtils:
         return node
 
     @staticmethod
-    def get_incoming_node_by_type(node, typ, exact=True):
-        """Get the first connected node of the given type with an incoming connection to the given node.
+    def get_connected_nodes(
+        node, node_type=None, direction=None, exact=True, first_match=False
+    ):
+        """Finds connected nodes of a given type and direction (incoming/outgoing).
 
         Parameters:
-            node (str/obj): A node with incoming connections.
-            typ (str): The node type to search for. ie. 'StingrayPBS'
-            exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+            node (PyNode): The node to start searching from.
+            node_type (str, optional): The node type to look for. If None, returns all connected nodes.
+            direction (str, optional): 'incoming' for incoming, 'outgoing' for outgoing, None for both.
+            exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also considered.
+            first_match (bool): Return only the first found node that matches the criteria, if any.
 
         Returns:
-            (obj)(None) node if found.
-
-        Example:
-            env_file_node = get_incoming_node_by_type(env_node, 'file') #get the incoming file node.
+            list or obj or None: List of connected nodes or single node based on the conditions, or None if not found.
         """
-        nodes = pm.listConnections(node, type=typ, source=True, exactType=exact)
-        return ptk.format_return([pm.PyNode(n) for n in nodes])
+        visited = set()
+        stack = [node]
+        filtered_nodes = []
 
-    @staticmethod
-    def get_outgoing_node_by_type(node, typ, exact=True):
-        """Get the connected node of the given type with an outgoing connection to the given node.
+        source, dest = {
+            "incoming": (True, False),
+            "outgoing": (False, True),
+        }.get(direction, (True, True))
 
-        Parameters:
-            node (str/obj): A node with outgoing connections.
-            typ (str): The node type to search for. ie. 'file'
-            exact (bool): Only consider nodes of the exact type. Otherwise, derived types are also taken into account.
+        while stack:
+            current_node = stack.pop()
+            visited.add(current_node)
 
-        Returns:
-            (list)(obj)(None) node(s)
+            connected_nodes = pm.listConnections(
+                current_node, s=source, d=dest, exactType=exact
+            )
 
-        Example:
-            srSG_node = get_outgoing_node_by_type(sr_node, 'shadingEngine') #get the outgoing shadingEngine node.
-        """
-        nodes = pm.listConnections(node, type=typ, destination=True, exactType=exact)
-        return ptk.format_return([pm.PyNode(n) for n in nodes])
+            for n in connected_nodes:
+                if n in visited:
+                    continue
+
+                if node_type is None or pm.nodeType(n) == node_type:
+                    filtered_nodes.append(n)
+                    if first_match:
+                        return n
+
+                if direction is None:
+                    stack.append(n)
+
+        return filtered_nodes if not first_match else None
 
     @staticmethod
     def get_node_attributes(node, inc=[], exc=[], mapping=False, **kwargs):
