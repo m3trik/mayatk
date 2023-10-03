@@ -56,7 +56,7 @@ class Preview:
         create_button,
         finalize_func=None,
         message_func=print,
-        enable_on_show=True,
+        enable_on_show=False,
         disable_on_hide=True,
     ):
         """Initialize the state for preview operations."""
@@ -74,41 +74,24 @@ class Preview:
         self.create_button.clicked.connect(self.finalize_changes)
         self.window = self.create_button.window()
 
-        self._enable_on_show = None
-        self.enable_on_show = enable_on_show
+        self.init_show_hide_behavior(enable_on_show, disable_on_hide)
 
-        self._disable_on_hide = None
+    def init_show_hide_behavior(self, enable_on_show, disable_on_hide):
+        self.enable_on_show = enable_on_show
         self.disable_on_hide = disable_on_hide
 
-    @property
-    def enable_on_show(self):
-        """Boolean property to enable or disable the preview when the window shows."""
-        return self._enable_on_show
+        if hasattr(self.window, "on_show"):
+            self.window.on_show.connect(self.conditionally_enable)
+        if hasattr(self.window, "on_hide"):
+            self.window.on_hide.connect(self.conditionally_disable)
 
-    @enable_on_show.setter
-    def enable_on_show(self, value):
-        if self._enable_on_show is not None and hasattr(self.window, "on_show"):
-            self.window.on_show.disconnect(self.enable)
+    def conditionally_enable(self):
+        if self.enable_on_show:
+            self.enable()
 
-        self._enable_on_show = value
-
-        if self._enable_on_show and hasattr(self.window, "on_show"):
-            self.window.on_show.connect(self.enable)
-
-    @property
-    def disable_on_hide(self):
-        """Boolean property to enable or disable the preview when the window hides."""
-        return self._disable_on_hide
-
-    @disable_on_hide.setter
-    def disable_on_hide(self, value):
-        if self._disable_on_hide is not None and hasattr(self.window, "on_hide"):
-            self.window.on_hide.disconnect(self.disable)
-
-        self._disable_on_hide = value
-
-        if self._disable_on_hide and hasattr(self.window, "on_hide"):
-            self.window.on_hide.connect(self.disable)
+    def conditionally_disable(self):
+        if self.disable_on_hide:
+            self.disable()
 
     def toggle(self, state):
         """Toggles the preview on or off.

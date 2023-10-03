@@ -176,13 +176,9 @@ class NodeUtils_test(Main, NodeUtils):
         """ """
         # self.assertEqual(self.create_render_node(), None)
 
-    def test_getIncomingNodeByType(self):
+    def test_get_connected_nodes(self):
         """ """
         # self.get_incoming_node_by_type(), None)
-
-    def test_getOutgoingNodeByType(self):
-        """ """
-        # self.assertEqual(self.get_outgoing_node_by_type(), None)
 
     def test_connectMultiAttr(self):
         """ """
