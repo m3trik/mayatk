@@ -15,6 +15,8 @@ from mayatk.core_utils import CoreUtils
 class ReferenceManager:
     def __init__(self):
         self.references = {}
+        self._recursive_search = True
+        self._filter_text = ""
 
     @property
     def workspace_root(self):
@@ -24,18 +26,35 @@ class ReferenceManager:
     def workspace_root(self, value):
         pm.workspace(dir=value)
 
-    def _get_workspace_files(self, search_root, filter_text=""):
-        inc_files = ["*.ma", "*.mb"]
+    @property
+    def recursive_search(self):
+        return self._recursive_search
+
+    @recursive_search.setter
+    def recursive_search(self, value):
+        self._recursive_search = value
+
+    @property
+    def filter_text(self):
+        return self._filter_text
+
+    @filter_text.setter
+    def filter_text(self, value):
+        self._filter_text = value
+
+    def _get_workspace_files(self, search_root, extensions=["*.ma", "*.mb"]):
         workspace_files = ptk.get_dir_contents(
             search_root,
             returned_type="filepath",
-            inc_files=inc_files,
+            inc_files=extensions,
             num_threads=4,
-            recursive=True,
-            group_by_type=True,
-        ).get("filepath", [])
-        if filter_text:
-            workspace_files = ptk.filter_list(workspace_files, inc=[f"*{filter_text}*"])
+            recursive=self._recursive_search,
+        )
+        if self._filter_text:
+            workspace_files = ptk.filter_list(
+                workspace_files, inc=[f"*{self._filter_text}*"]
+            )
+
         return workspace_files
 
     def add_reference(self, namespace, file_path):
@@ -65,35 +84,72 @@ class ReferenceManagerSlots(ReferenceManager):
 
         self.ui.txt000.setText(self.workspace_root)
         self.ui.txt000.textChanged.connect(self.set_custom_root)
-
         self.ui.txt001.textChanged.connect(self.update_filtered_list)
 
         self.ui.list000.doubleClicked.connect(self.add_reference_from_list)
         self.ui.list000.itemClicked.connect(self.handle_item_click)
-        self.ui.list000.setSelectionMode(
-            self.sb.QtWidgets.QAbstractItemView.MultiSelection
+        self.ui.list000.setSelectionMode(self.sb.QAbstractItemView.MultiSelection)
+
+        self.update_filtered_list()
+
+    def txt000_init(self, widget):
+        """ """
+        widget.menu.mode = "context"
+        widget.menu.add(
+            "QPushButton",
+            setText="Browse",
+            setObjectName="b000",
+            setToolTip="Open a file browser to select a root directory.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Set To Workspace",
+            setObjectName="b001",
+            setToolTip="Set the root folder to that of the current workspace.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Recursive Search",
+            setObjectName="chk000",
+            setChecked=True,
+            setToolTip="Also search sub-folders.",
         )
 
+        # Connect buttons and checkbox to their respective methods
+        self.ui.b000.clicked.connect(self.browse_for_root_directory)
+        self.ui.b001.clicked.connect(self.set_root_to_workspace)
+        self.ui.chk000.toggled.connect(self.toggle_recursive_search)
+
+    def toggle_recursive_search(self, checked):
+        self.recursive_search = checked
         self.update_filtered_list()
 
     def set_custom_root(self):
         new_dir = self.ui.txt000.text()
         if os.path.isdir(new_dir):
             self.custom_root = new_dir
+            self.ui.txt000.setToolTip(new_dir)
             self.update_filtered_list()
+
+    def update_filtered_list(self):
+        self.filter_text = self.ui.txt001.text().strip()
+        search_root = getattr(self, "custom_root", self.workspace_root)
+        file_list = [
+            os.path.basename(fp) for fp in self._get_workspace_files(search_root)
+        ]
+        self._populate_list(file_list)
+
+    def browse_for_root_directory(self):
+        selected_directory = self.sb.dir_dialog("Select a root directory")
+        if selected_directory:
+            self.ui.txt000.setText(selected_directory)
+
+    def set_root_to_workspace(self):
+        self.ui.txt000.setText(self.workspace_root)
 
     def _populate_list(self, file_list):
         self.ui.list000.clear()
         self.ui.list000.addItems(file_list)
-
-    def update_filtered_list(self):
-        filter_text = self.ui.txt001.text().strip()
-        search_root = getattr(self, "custom_root", self.workspace_root)
-        file_list = [
-            os.path.basename(fp)
-            for fp in self._get_workspace_files(search_root, filter_text)
-        ]
-        self._populate_list(file_list)
 
     def handle_item_click(self, item):
         selected_file = item.text()

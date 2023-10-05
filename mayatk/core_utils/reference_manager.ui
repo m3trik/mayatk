@@ -9,7 +9,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>200</width>
+    <width>350</width>
     <height>300</height>
    </rect>
   </property>
@@ -76,7 +76,7 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="QLineEdit" name="txt000"/>
+          <widget class="LineEdit" name="txt000"/>
          </item>
          <item>
           <widget class="QLineEdit" name="txt001">
@@ -131,6 +131,11 @@
    <extends>QGroupBox</extends>
    <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
    <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>widgets.lineedit.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

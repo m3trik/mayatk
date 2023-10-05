@@ -283,8 +283,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.ui.header.menu.setTitle("OPTIONS")
         self.ui.header.menu.add(
             self.sb.PushButton,
-            "HDR Manager",
-            setText="Open HDR Manager",
+            setText="HDR Manager",
             setObjectName="b002",
         )
 
