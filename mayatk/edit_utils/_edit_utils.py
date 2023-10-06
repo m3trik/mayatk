@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, node_utils, component_utils, xform_utils
+from mayatk import core_utils, node_utils, xform_utils
 
 
 class EditUtils:
@@ -119,7 +119,8 @@ class EditUtils:
     @core_utils.CoreUtils.undo
     def append_location_based_suffix(
         objects,
-        alphanumeric=False,
+        first_obj_as_ref=False,
+        alphabetical=False,
         strip_trailing_ints=True,
         strip_trailing_alpha=True,
         reverse=False,
@@ -128,7 +129,8 @@ class EditUtils:
 
         Parameters:
             objects (str)(int/list): The object(s) to rename.
-            alphanumeric (str): When True use an alphanumeric character as a suffix when there is less than 26 objects else use integers.
+            first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
+            alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
             strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
             strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
             reverse (bool): Reverse the naming order. (Farthest object first)
@@ -136,15 +138,25 @@ class EditUtils:
         import string
         import re
 
+        # Determine the reference point
+        reference_point = [0, 0, 0]
+        if first_obj_as_ref and objects:
+            first_obj_bbox = pm.exactWorldBoundingBox(objects[0])
+            reference_point = [
+                (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
+            ]
+
         length = len(objects)
-        if alphanumeric:
+        if alphabetical:
             if length <= 26:
-                suffix = string.ascii_lowercase.upper()
+                suffix = string.ascii_uppercase
+            else:
+                suffix = [str(n).zfill(len(str(length))) for n in range(length)]
         else:
             suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
         ordered_objs = xform_utils.XformUtils.order_by_distance(
-            objects, reverse=reverse
+            objects, reference_point=reference_point, reverse=reverse
         )
 
         newNames = {}  # the object with the new name set as a key.
@@ -176,15 +188,13 @@ class EditUtils:
                         re.escape(current_name[-1:]) + "$", "", current_name
                     )
 
-            newNames[obj] = current_name + "_" + suffix[n]
+            obj_suffix = suffix[n]
+            newNames[obj] = current_name + "_" + obj_suffix
 
-        for (
-            obj
-        ) in (
-            ordered_objs
-        ):  # rename all with a placeholder first so that there are no conflicts.
+        # Rename all with a placeholder first so that there are no conflicts.
+        for obj in ordered_objs:
             pm.rename(obj, "p0000000000")
-        for obj in ordered_objs:  # rename all with the new names.
+        for obj in ordered_objs:  # Rename all with the new names.
             pm.rename(obj, newNames[obj])
 
     @staticmethod
@@ -197,8 +207,8 @@ class EditUtils:
             tolerance (float) = Maximum search distance.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = component_utils.ComponentUtils.get_components(obj1, "vertices")
-        closestVerts = component_utils.ComponentUtils.get_closest_vertex(
+        vertices = core_utils.Components.get_components(obj1, "vertices")
+        closestVerts = core_utils.Components.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -472,7 +482,7 @@ class EditUtils:
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = component_utils.ComponentUtils.get_components(objects, "vertices")
+        vertices = core_utils.Components.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1

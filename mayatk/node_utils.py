@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, component_utils
+from mayatk import core_utils
 
 
 class NodeUtils:
@@ -47,7 +47,7 @@ class NodeUtils:
             elif cls.is_locator(obj):
                 typ = "locator"
             else:
-                typ = component_utils.ComponentUtils.get_component_type(obj)
+                typ = core_utils.Components.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)

@@ -1,192 +1,87 @@
 # !/usr/bin/python
 # coding=utf-8
-import os
 import unittest
-import inspect
 import pymel.core as pm
-from mayatk import RigUtils
+import mayatk as mtk
 
 
-# sfr = pm.melGlobals['cmdScrollFieldReporter']
-# pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
-
-
-class Main(unittest.TestCase):
-    """Main test class."""
-
-    def perform_test(self, cases):
-        """Execute the test cases."""
-        for case in cases:
-            if isinstance(case, str):
-                expression = case
-                expected_result = cases[case]
-                method_name = str(expression).split("(")[0]
-            else:
-                result, expected_result = case
-                method_name = result.__class__.__name__
-                expression = None
-
-            try:
-                path = os.path.abspath(inspect.getfile(eval(method_name)))
-            except (TypeError, IOError):
-                path = ""
-
-            if expression:
-                result = eval(expression)
-
-            self.assertEqual(
-                result,
-                expected_result,
-                f"\n\n# Error: {path}\n#\tCall: {method_name}({', '.join(map(str, function_args)) if 'function_args' in locals() else ''})\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
-            )
-
-    @staticmethod
-    def replace_mem_address(obj):
-        """Replace memory addresses in a string representation of an object with a fixed format of '0x00000000000'.
-
-        Parameters:
-                obj (object): The input object. The function first converts this object to a string using the `str` function.
-
-        Returns:
-                (str) The string representation of the object with all memory addresses replaced.
-
-        Example:
-                >>> replace_mem_address("<class 'str'> <PySide2.QtWidgets.QWidget(0x1ebe2677e80, name='MayaWindow') at 0x000001EBE6D48500>")
-                "<class 'str'> <PySide2.QtWidgets.QWidget(0x00000000000, name='MayaWindow') at 0x00000000000>"
-        """
-        import re
-
-        return re.sub(r"0x[a-fA-F\d]+", "0x00000000000", str(obj))
-
-
-class RigUtils_test(Main, RigUtils):
-    """ """
-
-    # Tear down the any previous test by creating a new scene:
-    pm.mel.file(new=True, force=True)
-
-    # assemble the test scene:
-    if not pm.objExists("loc"):
-        loc = pm.spaceLocator(name="loc")
-
-    if not pm.objExists("cyl"):
-        cyl = pm.polyCylinder(
-            radius=5,
-            height=10,
-            subdivisionsX=6,
-            subdivisionsY=1,
-            subdivisionsZ=1,
-            name="cyl",
+class RigUtilsTest(unittest.TestCase):
+    def setUp(self):
+        """Set up test scene for each test."""
+        pm.mel.file(new=True, force=True)
+        self.loc = pm.spaceLocator(name="loc")
+        self.cyl = (
+            pm.polyCylinder(
+                radius=5,
+                height=10,
+                subdivisionsX=6,
+                subdivisionsY=1,
+                subdivisionsZ=1,
+                name="cyl",
+            )[0]
+            if not pm.objExists("cyl")
+            else pm.PyNode("cyl")
         )
 
-    def test_createLocator(self):
-        """ """
-        self.perform_test(
-            {
-                "self.create_locator('_loc')": "_loc",
-            }
-        )
+    def test_create_locator(self):
+        result = mtk.create_locator("_loc")
+        self.assertEqual(result, "_loc")
 
-    def test_removeLocator(self):
-        """ """
-        self.perform_test(
-            {
-                "self.remove_locator('loc')": None,
-            }
-        )
+    def test_remove_locator(self):
+        result = mtk.remove_locator("loc")
+        self.assertEqual(result, None)
 
-    def test_resetPivotTransforms(self):
-        """ """
-        self.perform_test(
-            {
-                "self.reset_pivot_transforms('cyl')": None,
-            }
-        )
+    def test_reset_pivot_transforms(self):
+        result = mtk.reset_pivot_transforms("cyl")
+        self.assertEqual(result, None)
 
-    def test_bakeCustomPivot(self):
-        """ """
-        self.perform_test(
-            {
-                "self.bake_custom_pivot('cyl')": None,
-                "self.bake_custom_pivot('cyl', position=True)": None,
-                "self.bake_custom_pivot('cyl', orientation=True)": None,
-            }
-        )
+    def test_bake_custom_pivot(self):
+        with self.subTest(msg="No arguments"):
+            result = mtk.bake_custom_pivot("cyl")
+            self.assertEqual(result, None)
+        with self.subTest(msg="Position argument"):
+            result = mtk.bake_custom_pivot("cyl", position=True)
+            self.assertEqual(result, None)
+        with self.subTest(msg="Orientation argument"):
+            result = mtk.bake_custom_pivot("cyl", orientation=True)
+            self.assertEqual(result, None)
 
-    def test_setAttrLockState(self):
-        """ """
-        self.perform_test(
-            {
-                "self.set_attr_lock_state('cyl')": None,
-            }
-        )
+    def test_set_attr_lock_state(self):
+        result = mtk.set_attr_lock_state("cyl")
+        self.assertEqual(result, None)
 
-    def test_createGroup(self):
-        """ """
-        self.perform_test(
-            {
-                "self.create_group(name='emptyGrp').name()": "emptyGrp",
-            }
-        )
+    def test_create_group(self):
+        result = mtk.create_group(name="emptyGrp").name()
+        self.assertEqual(result, "emptyGrp")
 
-    def test_createGroupLRA(self):
-        """ """
-        self.perform_test(
-            {
-                "self.create_group_with_first_obj_lra('cyl', 'LRAgrp').name()": "LRAgrp",
-            }
-        )
+    def test_create_group_lra(self):
+        result = mtk.create_group_with_first_obj_lra("cyl", "LRAgrp").name()
+        self.assertEqual(result, "LRAgrp")
 
-    def test_createLocatorAtObject(self):
-        """ """
-        self.perform_test(
-            {
-                "self.create_locator_at_object('cyl')": None,
-            }
-        )
+    def test_create_locator_at_object(self):
+        result = mtk.create_locator_at_object("cyl")
+        self.assertEqual(result, None)
 
 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    unittest.main(exit=False)
+    import importlib
+
+    importlib.reload(mtk.edit_utils)
+    mtk.clear_scroll_field_reporter()
+
+    # Create a Test Suite
+    suite = unittest.TestSuite()
+
+    # Add the test case class to the suite
+    suite.addTest(unittest.makeSuite(RigUtilsTest))
+
+    # Run the suite
+    runner = unittest.TextTestRunner(verbosity=2)
+    runner.run(suite)
 
 
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-# """
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-
-
-# def test_(self):
-#   '''
-#   '''
-#   self.perform_test({
-#       # "self.": '',
-#   })
-# """
-
-# # Deprecated ---------------------

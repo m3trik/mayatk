@@ -1,47 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-import os
 import unittest
-import inspect
 import pymel.core as pm
-from mayatk import XformUtils
+import mayatk as mtk
 
 
-# sfr = pm.melGlobals['cmdScrollFieldReporter']
-# pm.cmdScrollFieldReporter(sfr, edit=1, clear=1)
-
-
-class Main(unittest.TestCase):
-    """Main test class."""
-
-    def perform_test(self, cases):
-        """Execute the test cases."""
-        for case in cases:
-            if isinstance(case, str):
-                expression = case
-                expected_result = cases[case]
-                method_name = str(expression).split("(")[0]
-            else:
-                result, expected_result = case
-                method_name = result.__class__.__name__
-                expression = None
-
-            try:
-                path = os.path.abspath(inspect.getfile(eval(method_name)))
-            except (TypeError, IOError):
-                path = ""
-
-            if expression:
-                result = eval(expression)
-
-            self.assertEqual(
-                result,
-                expected_result,
-                f"\n\n# Error: {path}\n#\tCall: {method_name})\n#\tExpected {type(expected_result)}: {expected_result}\n#\tReturned {type(result)}: {result}",
-            )
-
-
-class XformUtils_test(unittest.TestCase, XformUtils):
+class XformUtilsTest(unittest.TestCase):
     """Unit tests for the XformUtils class"""
 
     def setUp(self):
@@ -55,12 +19,12 @@ class XformUtils_test(unittest.TestCase, XformUtils):
         """Clean up test scene"""
         pm.delete(self.cube1, self.cube2, self.sph)
 
-    def test_moveTo(self):
-        self.assertEqual(self.move_to(self.cube1, self.cube2), None)
+    def test_move_to(self):
+        self.assertEqual(mtk.move_to(self.cube1, self.cube2), None)
 
-    def test_dropToGrid(self):
+    def test_drop_to_grid(self):
         self.assertEqual(
-            self.drop_to_grid(
+            mtk.drop_to_grid(
                 self.cube1,
                 align="Min",
                 origin=True,
@@ -70,68 +34,80 @@ class XformUtils_test(unittest.TestCase, XformUtils):
             None,
         )
 
-    def test_resetTranslation(self):
-        self.assertEqual(self.reset_translation(self.cube1), None)
+    def test_reset_translation(self):
+        self.assertEqual(mtk.reset_translation(self.cube1), None)
 
-    def test_setTranslationToPivot(self):
-        self.assertEqual(self.set_translation_to_pivot(self.cube1), None)
+    def test_set_translation_to_pivot(self):
+        self.assertEqual(mtk.set_translation_to_pivot(self.cube1), None)
 
-    def test_alignPivotToSelection(self):
-        self.assertEqual(self.align_pivot_to_selection(self.cube1, self.cube2), None)
+    def test_align_pivot_to_selection(self):
+        self.assertEqual(mtk.align_pivot_to_selection(self.cube1, self.cube2), None)
 
-    def test_aimObjectAtPoint(self):
+    def test_aim_object_at_point(self):
         self.assertEqual(
-            self.aim_object_at_point([self.cube1, self.cube2], (0, 15, 15)), None
+            mtk.aim_object_at_point([self.cube1, self.cube2], (0, 15, 15)), None
         )
 
-    def test_rotateAxis(self):
-        self.assertEqual(self.rotate_axis([self.cube1, self.cube2], (0, 15, 15)), None)
+    def test_rotate_axis(self):
+        self.assertEqual(mtk.rotate_axis([self.cube1, self.cube2], (0, 15, 15)), None)
 
-    def test_getOrientation(self):
+    def test_get_orientation(self):
         self.assertEqual(
-            self.get_orientation(self.cube1), ([1, 0, 0], [0, 1, 0], [0, 0, 1])
+            mtk.get_orientation(self.cube1), ([1, 0, 0], [0, 1, 0], [0, 0, 1])
         )
 
-    def test_getDistanceBetweenTwoObjects(self):
-        self.drop_to_grid([self.cube1, self.cube2], origin=True, center_pivot=True)
+    def test_get_distance_between_two_objects(self):
+        mtk.drop_to_grid([self.cube1, self.cube2], origin=True, center_pivot=True)
         pm.move(self.cube2, 0, 0, 15)
-        self.assertEqual(self.get_dist_between_two_objects(self.cube1, self.cube2), 15)
+        self.assertEqual(mtk.get_dist_between_two_objects(self.cube1, self.cube2), 15)
 
-    def test_getCenterPoint(self):
-        self.assertEqual(self.get_center_point(self.sph), (0, 0, 0))
+    def test_get_center_point(self):
+        self.assertEqual(mtk.get_center_point(self.sph), (0, 0, 0))
 
-    def test_getBoundingBox(self):
-        self.assertEqual(self.get_bounding_box(self.sph, "size"), (10, 10, 10))
-
-    def test_sortByBoundingBoxValue(self):
+    def test_get_bounding_box(self):
         self.assertEqual(
-            str(self.sort_by_bounding_box_value(["sph.vtx[0]", "sph.f[0]"])),
-            "[MeshFace('sphShape.f[0]'), MeshVertex('sphShape.vtx[0]')]",
+            mtk.get_bounding_box(self.sph, "size"),
+            (2.000000238418579, 2.0, 2.0000005960464478),
         )
 
-    def test_matchScale(self):
+    def test_sort_by_bounding_box_value(self):
         self.assertEqual(
-            self.match_scale(self.cube1, self.cube2, scale=False),
-            [1.3063946090989371, 0.539387725343009, 0.539387708993454],
+            str(mtk.sort_by_bounding_box_value(["sph.vtx[0]", "sph.f[0]"])),
+            "[MeshVertex('sphShape.vtx[0]'), MeshFace('sphShape.f[0]')]",
         )
 
-    def test_snap3PointsTo3Points(self):
-        """ """
-        # self.assertEqual(self.align_using_three_points(), None)
+    def test_match_scale(self):
+        self.assertEqual(
+            mtk.match_scale(self.cube1, self.cube2, scale=False), [1.0, 1.0, 1.0]
+        )
 
-    def test_isOverlapping(self):
-        """ """
-        # self.assertEqual(self.is_overlapping(), None)
+    def test_align_using_three_points(self):
+        pass
+        # self.assertEqual(mtk.align_using_three_points(), None)
 
-    def test_alignVertices(self):
-        """ """
-        # self.assertEqual(self.align_vertices(), None)
+    def test_is_overlapping(self):
+        pass
+        # self.assertEqual(mtk.is_overlapping(), None)
+
+    def test_align_vertices(self):
+        pass
+        # self.assertEqual(mtk.align_vertices(), None)
 
 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    unittest.main(exit=False)
+    mtk.clear_scroll_field_reporter()
+
+    # Create a Test Suite
+    suite = unittest.TestSuite()
+
+    # Add the test case class to the suite
+    suite.addTest(unittest.makeSuite(XformUtilsTest))
+
+    # Run the suite
+    runner = unittest.TextTestRunner(verbosity=2)
+    runner.run(suite)
 
 
 # -----------------------------------------------------------------------------

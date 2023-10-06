@@ -505,6 +505,21 @@ class CoreUtils:
         for category, objects in ui_objects.items():
             print(f"{category}:\n{objects}\n")
 
+    def clear_scroll_field_reporter():
+        """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
+
+        This function is useful for cleaning up the script output display in Maya's UI,
+        particularly before executing scripts or operations that generate a lot of output.
+        It iterates over all cmdScrollFieldReporter objects and clears them, ensuring a clean
+        slate for viewing new script or command output.
+        """
+        # Get a list of all UI objects of type "cmdScrollFieldReporter"
+        reporters = pm.lsUI(type="cmdScrollFieldReporter")
+
+        # If any reporters are found, clear them
+        for reporter in reporters:
+            pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
+
 
 # --------------------------------------------------------------------------------------------
 
