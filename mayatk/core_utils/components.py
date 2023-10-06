@@ -475,7 +475,7 @@ class GetComponentsMixin:
         return result
 
 
-class ComponentUtils(GetComponentsMixin):
+class Components(GetComponentsMixin):
     """ """
 
     @staticmethod
@@ -671,10 +671,9 @@ class ComponentUtils(GetComponentsMixin):
             get_border_components('pln.f[3:4]', 'vtx', component_border=True) #returns: ['plnShape.vtx[4:6]', 'plnShape.vtx[8:10]'],
         """
         if not x:
-            print(
-                f'File "{__file__}" in get_border_components\n# Error: Operation requires a given object(s) or component(s). #',
+            raise ValueError(
+                f"get_border_components expected object(s) or component(s), got {type(x)}"
             )
-            return []
 
         origType = cls.get_component_type(x, "abv")
         if not origType:
@@ -683,17 +682,14 @@ class ComponentUtils(GetComponentsMixin):
         origEdges = cls.convert_component_type(x, "edge", flatten=True)
         origFaces = cls.convert_component_type(x, "face", flatten=True)
 
-        if (
-            not component_type
-        ):  # if no component type is specified, return the same type of component as given. in the case of mesh object, edges will be returned.
+        # If no component type is specified, return the same type of component as given. in the case of mesh object, edges will be returned.
+        if not component_type:
             component_type = origType if not origType == "mesh" else "e"
-        else:
-            component_type = cls.convert_alias(
-                component_type
-            )  # get the correct component_type variable from possible args.
+        else:  # Get the correct component_type variable from possible args.
+            component_type = cls.convert_alias(component_type)
 
         result = []
-        if component_border:  # get edges Qthat form the border of the given components.
+        if component_border:  # Get edges Qthat form the border of the given components.
             for edge in origEdges:
                 attachedFaces = cls.convert_component_type(edge, "face", flatten=1)
                 if component_type == "f":
@@ -713,15 +709,14 @@ class ComponentUtils(GetComponentsMixin):
                         if v in origVerts:
                             result.append(v)
 
-        else:  # get edges that form the border of the object.
+        else:  # Get edges that form the border of the object.
             for edge in origEdges:
                 attachedFaces = cls.convert_component_type(edge, "face", flatten=1)
                 if len(attachedFaces) == 1:
                     result.append(edge)
 
-        result = cls.convert_component_type(
-            result, component_type
-        )  # convert back to the original component type and flatten /un-flatten list.
+        # Convert back to the original component type and flatten /un-flatten list.
+        result = cls.convert_component_type(result, component_type)
         result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
@@ -1360,10 +1355,14 @@ class ComponentUtils(GetComponentsMixin):
             faces = filter_components_by_connection_count('sph.f[:]', 4, 'e') #returns faces with four connected edges (four sided faces).
             verts = filter_components_by_connection_count('pln.vtx[:]', (0,2), 'e') #returns vertices with up to two connected edges.
         """
-        try:
+        if isinstance(num_of_connected, (tuple, list)) and len(num_of_connected) == 2:
             lowRange, highRange = num_of_connected
-        except TypeError:
+        elif isinstance(num_of_connected, int):
             lowRange = highRange = num_of_connected
+        else:
+            raise TypeError(
+                f"num_of_connected expected an int or two int tuple, got {type(num_of_connected)}"
+            )
 
         typ = cls.get_component_type(components)
         if connected_type:

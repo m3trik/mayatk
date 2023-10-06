@@ -16,6 +16,30 @@ from mayatk.mat_utils import hdr_manager
 
 
 class StingrayArnoldShader:
+    """The StingrayArnoldShader class encapsulates the process of creating a shader network in Maya, specifically aimed
+    at bridging Stingray PBS and Arnold aiStandardSurface shaders. It provides a method to create a network of
+    interconnected shading nodes based on provided textures, and handles the differences between OpenGL and DirectX
+    normal maps by generating the necessary conversions.
+
+    The main method, create_network, takes a list of texture file paths and optional parameters to control the
+    naming and behavior of the shader network creation. It ensures necessary plugins are loaded, creates and connects
+    shading nodes, sets up the Stingray PBS and Arnold shaders based on the texture types provided, and provides
+    feedback through a callback function.
+
+    Error handling is provided to manage missing textures, plugin loading issues, and other potential exceptions that
+    might occur during the shader network creation. The method returns early with error feedback if critical issues
+    are encountered.
+
+    Attributes:
+        The class does not define any new attributes but relies on Maya's PyMel and other utility functions to operate
+        on Maya objects and settings.
+
+    Methods:
+        create_network(self, textures, name="", normalMapType="OpenGL", callback=print)
+            Generates a shader network in Maya based on the provided textures, handling normal map conversions,
+            plugin loading, and node connections, while providing feedback through a callback function.
+    """
+
     @CoreUtils.undo
     def create_network(
         self,
@@ -258,7 +282,7 @@ class StingrayArnoldShader:
 class StingrayArnoldShaderSlots(StingrayArnoldShader):
     msg_intro = """<u>To setup the material:</u>
         <br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
-        <br>• Click the <b>Create Network</b> button to create the shader connections.
+        <br>• Click the <b>Create Network</b> button to create the shader connections. This will bridge Stingray PBS and Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
 
         <p><b>Note:</b> To correctly render opacity and transmission, the Opaque setting needs to be disabled on the Shape node.
         If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by

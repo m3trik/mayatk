@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, component_utils
+from mayatk import core_utils
 
 
 class XformUtils:
@@ -497,7 +497,7 @@ class XformUtils:
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = component_utils.ComponentUtils.get_closest_verts(
+        closestVerts = core_utils.Components.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 
@@ -576,28 +576,43 @@ class XformUtils:
             for i in zip(ptk.indices(hash_a, h), ptk.indices(hash_b, h))
         ]
 
-    @staticmethod
-    def order_by_distance(objects, point=[0, 0, 0], reverse=False):
-        """Order the given objects by their distance from the given point.
+    @classmethod
+    def order_by_distance(cls, objects, reference_point=None, reverse=False):
+        """Order the given objects by their distance from the given reference point.
 
         Parameters:
             objects (str)(int/list): The object(s) to order.
-            point (list): A three value float list x, y, z.
+            reference_point (list): A three value float list x, y, z.
             reverse (bool): Reverse the naming order. (Farthest object first)
 
         Returns:
             (list) ordered objects
         """
-        distance = {}
-        for obj in pm.ls(objects, flatten=1):
-            xmin, ymin, zmin, xmax, ymax, zmax = pm.xform(obj, q=1, boundingBox=1)
-            bb_pos = ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
-            bb_dist = ptk.get_distance(point, bb_pos)
+        if reference_point is None:
+            reference_point = [0, 0, 0]
 
-            distance[bb_dist] = obj
+        # Create a list to store tuples of (distance, object)
+        distance_object_pairs = []
 
-        result = [distance[i] for i in sorted(distance)]
-        return list(reversed(result)) if reverse else result
+        for obj in pm.ls(objects, flatten=True):
+            # Get the bounding box center
+            bb_center = cls.get_bounding_box(obj, "center")
+            # Calculate the distance from the reference point
+            distance = (
+                (bb_center[0] - reference_point[0]) ** 2
+                + (bb_center[1] - reference_point[1]) ** 2
+                + (bb_center[2] - reference_point[2]) ** 2
+            ) ** 0.5
+            # Append the tuple to the list
+            distance_object_pairs.append((distance, obj))
+
+        # Sort the list based on the distance
+        distance_object_pairs.sort(key=lambda x: x[0], reverse=reverse)
+
+        # Extract the ordered list of objects from the sorted list of tuples
+        ordered_objs = [pair[1] for pair in distance_object_pairs]
+
+        return ordered_objs
 
     @staticmethod
     @core_utils.CoreUtils.undo

@@ -5,8 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk.core_utils import CoreUtils, Preview
-from mayatk.component_utils import ComponentUtils
+from mayatk.core_utils import CoreUtils, Preview, Components
 
 
 class BevelEdges:
@@ -50,7 +49,7 @@ class BevelEdges:
         - angleTolerance: Angular tolerance for creation of extra triangles
         """
 
-        mapped_edges = ComponentUtils.map_components_to_objects(edges)
+        mapped_edges = Components.map_components_to_objects(edges)
 
         for edges in mapped_edges.values():
             pm.polyBevel3(
