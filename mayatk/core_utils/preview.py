@@ -111,9 +111,10 @@ class Preview:
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
 
         try:
-            selected_objs = pm.selected()
-            if selected_objs:
-                self.operated_objects.update(selected_objs)
+            selected_items = pm.selected()
+            if selected_items:
+                # Convert components to strings for hashing
+                self.operated_objects.update(str(item) for item in selected_items)
 
                 self.needs_undo = False  # Set to False when enabling for the first time
 
@@ -162,7 +163,11 @@ class Preview:
         self.undo_if_needed()
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
         try:
-            self.operation_instance.perform_operation(self.operated_objects)
+            # Convert strings back to PyMel objects for operation
+            operated_objects_pymel = [
+                pm.PyNode(obj_str) for obj_str in self.operated_objects
+            ]
+            self.operation_instance.perform_operation(operated_objects_pymel)
         except Exception as e:
             print(f"Exception during operation: {e}")
         finally:
