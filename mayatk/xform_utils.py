@@ -2,6 +2,7 @@
 # coding=utf-8
 try:
     import pymel.core as pm
+    import maya.api.OpenMaya as om2
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -70,34 +71,126 @@ class XformUtils:
         Example:
             drop_to_grid(obj, align='Min') #set the object onto the grid.
         """
-        # pm.undoInfo(openChunk=1)
         for obj in pm.ls(objects, transforms=1):
-            osPivot = pm.xform(
-                obj, q=True, rotatePivot=1, objectSpace=1
-            )  # save the object space obj pivot.
-            wsPivot = pm.xform(
-                obj, q=True, rotatePivot=1, worldSpace=1
-            )  # save the world space obj pivot.
+            # Save the object space obj pivot.
+            osPivot = pm.xform(obj, q=True, rotatePivot=1, objectSpace=1)
+            # Save the world space obj pivot.
+            wsPivot = pm.xform(obj, q=True, rotatePivot=1, worldSpace=1)
 
             pm.xform(obj, centerPivots=1)  # center pivot
             plane = pm.polyPlane(name="temp#")
 
             if not origin:
+                # Move the object to the pivot location
                 pm.xform(
                     plane, translation=(wsPivot[0], 0, wsPivot[2]), absolute=1, ws=1
-                )  # move the object to the pivot location
+                )
 
             pm.align(obj, plane, atl=1, x="Mid", y=align, z="Mid")
             pm.delete(plane)
 
             if not center_pivot:
-                pm.xform(
-                    obj, rotatePivot=osPivot, objectSpace=1
-                )  # return pivot to orig position.
+                # Return pivot to orig position.
+                pm.xform(obj, rotatePivot=osPivot, objectSpace=1)
 
             if freeze_transforms:
                 pm.makeIdentity(obj, apply=True)
-        # pm.undoInfo (closeChunk=1)
+
+    @staticmethod
+    def match_scale(a, b, scale=True, average=False):
+        """Scale each of the given objects to the combined bounding box of a second set of objects.
+
+        Parameters:
+            a (str/obj/list): The object(s) to get a bounding box size from.
+            b (str/obj/list): The object(s) to scale.
+            scale (bool): Scale the objects. Else, just return the scale value.
+            average (bool): Average the result across all axes.
+
+        Returns:
+            (list) scale values as [x,y,z,x,y,z...]
+        """
+        frm = pm.ls(a, flatten=True)
+        to = pm.ls(b, flatten=True)
+
+        xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(frm)
+        ax, ay, az = [xmax - xmin, ymax - ymin, zmax - zmin]
+
+        result = []
+        for obj in to:
+            xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(obj)
+            bx, by, bz = [xmax - xmin, ymax - ymin, zmax - zmin]
+
+            oldx, oldy, oldz = pm.xform(obj, q=1, s=1, r=1)
+
+            try:
+                diffx, diffy, diffz = [ax / bx, ay / by, az / bz]
+            except ZeroDivisionError:
+                diffx, diffy, diffz = [1, 1, 1]
+
+            bScaleNew = [oldx * diffx, oldy * diffy, oldz * diffz]
+
+            if average:
+                bScaleNew = [sum(bScaleNew) / len(bScaleNew) for _ in range(3)]
+
+            if scale:
+                pm.xform(obj, scale=bScaleNew)
+
+            [result.append(i) for i in bScaleNew]
+
+        return result
+
+    @staticmethod
+    @core_utils.CoreUtils.undo
+    def store_transforms(objects, prefix="original"):
+        for obj in pm.ls(objects, type="transform"):
+            # Store the world matrix and pivot points
+            world_matrix = pm.xform(obj, query=True, matrix=True, worldSpace=True)
+            rotate_pivot = pm.xform(obj, query=True, rotatePivot=True, worldSpace=True)
+            scale_pivot = pm.xform(obj, query=True, scalePivot=True, worldSpace=True)
+
+            # Check if attributes already exist, if not then add them
+            if not pm.hasAttr(obj, f"{prefix}_worldMatrix"):
+                pm.addAttr(obj, ln=f"{prefix}_worldMatrix", at="matrix", k=True)
+            if not pm.hasAttr(obj, f"{prefix}_rotatePivot"):
+                pm.addAttr(obj, ln=f"{prefix}_rotatePivot", dt="double3", k=True)
+            if not pm.hasAttr(obj, f"{prefix}_scalePivot"):
+                pm.addAttr(obj, ln=f"{prefix}_scalePivot", dt="double3", k=True)
+
+            # Set the stored values
+            pm.setAttr(f"{obj}.{prefix}_worldMatrix", type="matrix", *world_matrix)
+            pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
+            pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
+
+    @staticmethod
+    @core_utils.CoreUtils.undo
+    def restore_transforms(objects, prefix="original"):
+        for obj in pm.ls(objects, type="transform"):
+            # Get the stored world matrix
+            world_matrix = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
+
+            # Convert the matrix to a pymel Matrix object
+            pm_matrix = pm.dt.Matrix(world_matrix)
+
+            # Decompose the matrix into translation, rotation, and scale
+            trans = pm_matrix.translate
+            quat_rot = pm_matrix.rotate
+            euler_rot = quat_rot.asEulerRotation()  # Convert quaternion to Euler
+
+            # Convert the Euler rotation values to degrees from radians
+            euler_deg = [pm.dt.degrees(angle) for angle in euler_rot]
+
+            # Restore the pivot points
+            rotate_pivot = pm.getAttr(f"{obj}.{prefix}_rotatePivot")
+            scale_pivot = pm.getAttr(f"{obj}.{prefix}_scalePivot")
+            pm.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
+            pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+
+            # Apply translation, rotation, and scale
+            pm.xform(obj, translation=trans, worldSpace=True)
+            pm.xform(
+                obj, rotation=euler_deg, worldSpace=True
+            )  # Now using Euler degrees
+            pm.xform(obj, scale=pm_matrix.scale, worldSpace=True)
 
     @classmethod
     @core_utils.CoreUtils.undo
@@ -107,17 +200,13 @@ class XformUtils:
         Parameters:
             objects (str/obj/list): The object(s) to reset the translation values for.
         """
-        # pm.undoInfo(openChunk=1)
         for obj in pm.ls(objects):
             pos = pm.objectCenter(obj)  # get the object's current position.
-            cls.drop_to_grid(
-                obj, origin=1, center_pivot=1
-            )  # move to origin and center pivot.
+            # Move to origin and center pivot.
+            cls.drop_to_grid(obj, origin=1, center_pivot=1)
             pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # bake transforms
-            pm.xform(
-                obj, translation=pos
-            )  # move the object back to it's original position.
-        # pm.undoInfo(closeChunk=1)
+            # Move the object back to it's original position.
+            pm.xform(obj, translation=pos)
 
     @staticmethod
     def set_translation_to_pivot(node):
@@ -141,7 +230,6 @@ class XformUtils:
             align_to (list): The object to align with.
             translate (bool): Move the object with it's pivot.
         """
-        # pm.undoInfo(openChunk=1)
         pos = pm.xform(align_to, q=1, translation=True, worldSpace=True)
         center_pos = [  # Get center by averaging of all x,y,z points.
             sum(pos[0::3]) / len(pos[0::3]),
@@ -156,6 +244,7 @@ class XformUtils:
             return
 
         for obj in pm.ls(align_from, flatten=1):
+            # Create and align helper plane.
             plane = pm.polyPlane(
                 name="_hptemp#",
                 width=1,
@@ -165,9 +254,7 @@ class XformUtils:
                 axis=[0, 1, 0],
                 createUVs=2,
                 constructionHistory=True,
-            )[
-                0
-            ]  # Create and align helper plane.
+            )[0]
 
             pm.select("%s.vtx[0:2]" % plane, vertices[0:3])
             pm.mel.snap3PointsTo3Points(0)
@@ -182,7 +269,6 @@ class XformUtils:
                 pm.xform(obj, translation=center_pos, worldSpace=True)
 
             pm.delete(plane)
-        # pm.undoInfo(closeChunk=1)
 
     @staticmethod
     @core_utils.CoreUtils.undo
@@ -400,49 +486,6 @@ class XformUtils:
         return [obj for v, obj in sorted_]
 
     @staticmethod
-    def match_scale(a, b, scale=True, average=False):
-        """Scale each of the given objects to the combined bounding box of a second set of objects.
-
-        Parameters:
-            a (str/obj/list): The object(s) to get a bounding box size from.
-            b (str/obj/list): The object(s) to scale.
-            scale (bool): Scale the objects. Else, just return the scale value.
-            average (bool): Average the result across all axes.
-
-        Returns:
-            (list) scale values as [x,y,z,x,y,z...]
-        """
-        frm = pm.ls(a, flatten=True)
-        to = pm.ls(b, flatten=True)
-
-        xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(frm)
-        ax, ay, az = [xmax - xmin, ymax - ymin, zmax - zmin]
-
-        result = []
-        for obj in to:
-            xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(obj)
-            bx, by, bz = [xmax - xmin, ymax - ymin, zmax - zmin]
-
-            oldx, oldy, oldz = pm.xform(obj, q=1, s=1, r=1)
-
-            try:
-                diffx, diffy, diffz = [ax / bx, ay / by, az / bz]
-            except ZeroDivisionError:
-                diffx, diffy, diffz = [1, 1, 1]
-
-            bScaleNew = [oldx * diffx, oldy * diffy, oldz * diffz]
-
-            if average:
-                bScaleNew = [sum(bScaleNew) / len(bScaleNew) for _ in range(3)]
-
-            if scale:
-                pm.xform(obj, scale=bScaleNew)
-
-            [result.append(i) for i in bScaleNew]
-
-        return result
-
-    @staticmethod
     def align_using_three_points(vertices):
         """Move and align the object defined by the first 3 points to the last 3 points.
 
@@ -627,7 +670,6 @@ class XformUtils:
         Example:
             align_vertices(mode=3, average=True, edgeloop=True)
         """
-        # pm.undoInfo (openChunk=True)
         selectTypeEdge = pm.selectType(query=True, edge=True)
 
         if edgeloop:
@@ -678,7 +720,6 @@ class XformUtils:
 
         if selectTypeEdge:
             pm.selectType(edge=True)
-        # pm.undoInfo (closeChunk=True)
 
 
 # -----------------------------------------------------------------------------

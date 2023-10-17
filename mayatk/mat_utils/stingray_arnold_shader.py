@@ -300,30 +300,30 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.image_files = None
 
         self.ui.txt001.setText(self.msg_intro)
-        self.init_header_menu()
+        # self.init_header_menu()
 
-    def init_header_menu(self):
-        """Configure header menu"""
-        self.ui.header.menu.setTitle("OPTIONS")
-        self.ui.header.menu.add(
-            self.sb.PushButton,
-            setText="HDR Manager",
-            setObjectName="b002",
-        )
+    # def init_header_menu(self):
+    #     """Configure header menu"""
+    #     self.ui.header.menu.setTitle("OPTIONS")
+    #     self.ui.header.menu.add(
+    #         self.sb.PushButton,
+    #         setText="HDR Manager",
+    #         setObjectName="b002",
+    #     )
 
-        module = hdr_manager
-        slot_class = module.HdrManagerSlots
+    #     module = hdr_manager
+    #     slot_class = module.HdrManagerSlots
 
-        # Register and configure HDR Manager UI
-        self.sb.register("hdr_manager.ui", slot_class, base_dir=module)
-        ui = self.sb.hdr_manager
-        ui.set_attributes(WA_TranslucentBackground=True)
-        ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-        ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-        ui.header.configureButtons(hide_button=True)
+    #     # Register and configure HDR Manager UI
+    #     self.sb.register("hdr_manager.ui", slot_class, base_dir=module)
+    #     ui = self.sb.hdr_manager
+    #     ui.set_attributes(WA_TranslucentBackground=True)
+    #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
+    #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    #     ui.header.configureButtons(hide_button=True)
 
-        # Connect button click to show HDR Manager
-        self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
+    #     # Connect button click to show HDR Manager
+    #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
 
     @property
     def mat_name(self) -> str:
