@@ -99,7 +99,7 @@ class RigUtils(object):
         pm.manipPivot(ro=1, rp=1)
 
     @staticmethod
-    def bake_custom_pivot(objects, position=False, orientation=False):
+    def bake_pivot(objects, position=False, orientation=False):
         """ """
         transforms = pm.ls(objects, transforms=1)
         shapes = pm.ls(objects, shapes=1)
@@ -280,7 +280,7 @@ class RigUtils(object):
             return None
 
         pm.undoInfo(openChunk=1)
-        cls.bake_custom_pivot(
+        cls.bake_pivot(
             obj, position=True, orientation=True
         )  # pm.mel.BakeCustomPivot(obj) #bake the pivot on the object that will define the LRA.
 
@@ -367,7 +367,7 @@ class RigUtils(object):
 
         for obj in pm.ls(objects, long=True, type="transform"):
             if bake_child_pivot:
-                cls.bake_custom_pivot(obj, position=1, orientation=1)
+                cls.bake_pivot(obj, position=1, orientation=1)
 
             vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
             if vertices:

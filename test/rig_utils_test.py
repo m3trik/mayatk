@@ -37,13 +37,13 @@ class RigUtilsTest(unittest.TestCase):
 
     def test_bake_custom_pivot(self):
         with self.subTest(msg="No arguments"):
-            result = mtk.bake_custom_pivot("cyl")
+            result = mtk.bake_pivot("cyl")
             self.assertEqual(result, None)
         with self.subTest(msg="Position argument"):
-            result = mtk.bake_custom_pivot("cyl", position=True)
+            result = mtk.bake_pivot("cyl", position=True)
             self.assertEqual(result, None)
         with self.subTest(msg="Orientation argument"):
-            result = mtk.bake_custom_pivot("cyl", orientation=True)
+            result = mtk.bake_pivot("cyl", orientation=True)
             self.assertEqual(result, None)
 
     def test_set_attr_lock_state(self):

@@ -80,6 +80,9 @@
          </item>
          <item>
           <widget class="QLineEdit" name="txt001">
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter text to filter the file list.&lt;/p&gt;&lt;p&gt;'text*' matches files starting with 'text', &lt;/p&gt;&lt;p&gt;'*text*' matches files containing 'text', &lt;/p&gt;&lt;p&gt;'*text' matches files ending with 'text', &lt;/p&gt;&lt;p&gt;?text' matches any file with a character followed by 'text'.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
            <property name="placeholderText">
             <string>Filter:</string>
            </property>
@@ -110,6 +113,50 @@
              <widget class="QListWidget" name="list000"/>
             </item>
            </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="b002">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Remove all referenced objects from the current scene.</string>
+           </property>
+           <property name="text">
+            <string>Un-Reference All</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="b003">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Convert all referenced objects to regular scene objects. This action is irreversible.</string>
+           </property>
+           <property name="text">
+            <string>UnLink and Import</string>
+           </property>
           </widget>
          </item>
         </layout>

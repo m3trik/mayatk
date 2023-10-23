@@ -781,6 +781,47 @@ class EditUtils:
         )  # 0:equal,Verts:1,Edges:2,Faces:4,UVSets:8,UVIndices:16,ColorSets:32,ColorIndices:64,UserNormals=128. So a return value of 3 indicates both vertices and edges are different.
         return similar + [obj] if inc_orig else similar
 
+    @staticmethod
+    def delete_selected():
+        """Delete selected components or objects in Autodesk Maya based on user's selection mode.
+
+        Behavior:
+            - If joints are selected, they are removed using `pm.removeJoint`.
+            - If mesh vertices are selected and vertex mask is on, vertices are deleted.
+            - If mesh edges are selected and edge mask is on, edges are deleted.
+            - If no components are selected, the whole mesh object is deleted.
+        """
+        # Query mask settings
+        maskVertex = pm.selectType(q=True, vertex=True)
+        maskEdge = pm.selectType(q=True, edge=True)
+
+        # Get currently selected objects and components
+        objects = pm.ls(sl=True, objectsOnly=True)
+        components = pm.ls(sl=True, flatten=True)
+
+        for obj in objects:
+            # For joints, use removeJoint
+            if pm.objectType(obj, isType="joint"):
+                pm.removeJoint(obj)
+            # For mesh objects, look for component selections
+            elif pm.objectType(obj, isType="mesh"):
+                obj_long_name = obj.longName()  # Convert Mesh object to its long name
+                # Check for selected components of the object
+                selected_components = [
+                    comp
+                    for comp in components
+                    if obj_long_name in comp.node().longName()
+                ]
+
+                # Delete based on selection and mask settings
+                if selected_components:
+                    if maskEdge:
+                        pm.polyDelEdge(selected_components, cleanVertices=True)
+                    elif maskVertex:
+                        pm.polyDelVertex(selected_components)
+                else:
+                    pm.delete(obj)  # Delete entire object if no components selected
+
 
 # -----------------------------------------------------------------------------
 
