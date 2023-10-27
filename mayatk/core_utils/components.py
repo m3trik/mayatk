@@ -641,84 +641,109 @@ class Components(GetComponentsMixin):
     @classmethod
     def get_border_components(
         cls,
-        x,
-        component_type="",
+        components,
         returned_type="str",
         component_border=False,
-        flatten=False,
     ):
-        """Get any object border components from given component(s) or a polygon object.
-        A border is defined as a hole or detached edge.
+        """Get border components from given component(s) or a polygon object based on connectivity.
 
         Parameters:
-            x (str/obj/list): Component(s) (or a polygon object) to find any border components for.
-            component_type (str): The desired returned component type. (valid: 'vertex','edge','face', '',
-                    An empty string returns the same type as the first given component, or edges if an object is given)
-            returned_type (str): The desired returned object type.
-                    (valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
-            component_border (bool): Get the components that border given components instead of the mesh border.
-                    (valid: 'component', 'object'(default))
-            flatten (bool): Flattens the returned list of objects so that each component is it's own element.
+            x (str/obj/list): The component(s) or mesh object to find any border components for.
+            returned_type (str): The desired returned object type (valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
+            component_border (bool): Get the components that border the given components instead of the mesh border.
 
         Returns:
-            (list) components that border an open edge.
+            (list) components that border an open edge or the given components.
 
-        Example:
-        get_border_components('pln', 'vtx') #returns: ['plnShape.vtx[0:4]', 'plnShape.vtx[7:8]', 'plnShape.vtx[11:15]'],
-            get_border_components('pln') #returns: ['plnShape.e[0:2]', 'plnShape.e[4]', 'plnShape.e[6]', 'plnShape.e[8]', 'plnShape.e[13]', 'plnShape.e[15]', 'plnShape.e[20:23]'],
-            get_border_components('pln.e[:]') #returns: ['plnShape.e[0:2]', 'plnShape.e[4]', 'plnShape.e[6]', 'plnShape.e[8]', 'plnShape.e[13]', 'plnShape.e[15]', 'plnShape.e[20:23]'],
-            get_border_components(['pln.e[9]','pln.e[10]', 'pln.e[12]', 'pln.e[16]'], 'f', component_border=True) #returns: ['plnShape.f[1]', 'plnShape.f[3:5]', 'plnShape.f[7]'],
-            get_border_components('pln.f[3:4]', 'vtx', component_border=True) #returns: ['plnShape.vtx[4:6]', 'plnShape.vtx[8:10]'],
         """
-        if not x:
-            raise ValueError(
-                f"get_border_components expected object(s) or component(s), got {type(x)}"
+        components = pm.ls(components, flatten=True)
+
+        if not components:
+            raise ValueError("No valid components given.")
+
+        component_type = cls.get_component_type(components[0], "abv")
+        border_components = []
+
+        def is_border_vertex(comp):
+            connected_vertices = comp.connectedVertices()
+            connected_edges = comp.connectedEdges()
+            return any(cc not in vertex_components for cc in connected_vertices) or any(
+                len(edge.connectedFaces()) == 1 for edge in connected_edges
             )
 
-        origType = cls.get_component_type(x, "abv")
-        if not origType:
-            origType, x = "mesh", cls.get_components(x, "edges")
-        origVerts = cls.convert_component_type(x, "vtx", flatten=True)
-        origEdges = cls.convert_component_type(x, "edge", flatten=True)
-        origFaces = cls.convert_component_type(x, "face", flatten=True)
-
-        # If no component type is specified, return the same type of component as given. in the case of mesh object, edges will be returned.
-        if not component_type:
-            component_type = origType if not origType == "mesh" else "e"
-        else:  # Get the correct component_type variable from possible args.
-            component_type = cls.convert_alias(component_type)
-
-        result = []
-        if component_border:  # Get edges Qthat form the border of the given components.
-            for edge in origEdges:
-                attachedFaces = cls.convert_component_type(edge, "face", flatten=1)
-                if component_type == "f":
-                    for f in attachedFaces:
-                        if origType == "f" and f in origFaces:
-                            continue
-                        result.append(f)
-                    continue
-                attachedEdges = cls.convert_component_type(
-                    attachedFaces, "edge", flatten=1
+        def is_border_edge(edge):
+            return (
+                any(
+                    face_edge_count[(type(face), face.name())] == 1
+                    for face in edge.connectedFaces()
                 )
-                for e in attachedEdges:
-                    if origType == "e" and e in origEdges:
-                        continue
-                    attachedVerts = cls.convert_component_type(e, "vtx", flatten=1)
-                    for v in attachedVerts:
-                        if v in origVerts:
-                            result.append(v)
+                or len(edge.connectedFaces()) == 1
+            )
 
-        else:  # Get edges that form the border of the object.
-            for edge in origEdges:
-                attachedFaces = cls.convert_component_type(edge, "face", flatten=1)
-                if len(attachedFaces) == 1:
-                    result.append(edge)
+        def is_external_edge(edge):
+            return len(cls.convert_component_type(edge, "face", "obj", flatten=1)) == 1
 
-        # Convert back to the original component type and flatten /un-flatten list.
-        result = cls.convert_component_type(result, component_type)
+        def is_external_vertex(vtx):
+            return any(is_external_edge(edge) for edge in vtx.connectedEdges())
+
+        def is_external_face(face):
+            return any(
+                len(edge.connectedFaces()) == 1 for edge in face.connectedEdges()
+            )
+
+        if component_border:
+            vertex_components = cls.convert_component_type(
+                components, "vtx", "obj", flatten=True
+            )
+            border_components = [
+                comp for comp in vertex_components if is_border_vertex(comp)
+            ]
+
+            if component_type == "e":
+                original_edges = cls.convert_component_type(
+                    components, "e", "obj", flatten=True
+                )
+                face_edge_count = {
+                    (type(face), face.name()): 0
+                    for edge in original_edges
+                    for face in edge.connectedFaces()
+                }
+                for edge in original_edges:
+                    for face in edge.connectedFaces():
+                        face_key = (type(face), face.name())
+                        face_edge_count[face_key] += 1
+
+                border_components = [
+                    edge for edge in original_edges if is_border_edge(edge)
+                ]
+            elif component_type == "f":
+                border_faces = cls.convert_component_type(
+                    border_components, "f", "obj", flatten=True
+                )
+                border_components = [
+                    comp for comp in border_faces if comp in components
+                ]
+        else:
+            if component_type == "e":
+                border_components = [
+                    edge for edge in components if is_external_edge(edge)
+                ]
+            elif component_type == "vtx":
+                border_components = [
+                    vtx for vtx in components if is_external_vertex(vtx)
+                ]
+            elif component_type == "f":
+                border_faces = cls.convert_component_type(
+                    components, "f", "obj", flatten=True
+                )
+                border_components = [
+                    face for face in border_faces if is_external_face(face)
+                ]
+            else:
+                raise ValueError(f"Unrecognized component_type: {component_type}")
+
         result = core_utils.CoreUtils.convert_array_type(
-            result, returned_type=returned_type, flatten=flatten
+            border_components, returned_type=returned_type
         )
         return result
 

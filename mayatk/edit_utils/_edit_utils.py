@@ -103,7 +103,6 @@ class EditUtils:
         Example:
             set_case(pm.ls(sl=1), 'upper')
         """
-        # pm.undoInfo(openChunk=1)
         for obj in pm.ls(objects):
             name = obj.name()
 
@@ -113,7 +112,6 @@ class EditUtils:
             except Exception as error:
                 if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
                     print(name + ": ", error)
-        # pm.undoInfo(closeChunk=1)
 
     @staticmethod
     @core_utils.CoreUtils.undo
@@ -388,19 +386,15 @@ class EditUtils:
             lamina,
             invalidComponents,
         )
-        command = (
-            "polyCleanupArgList 4 {" + arg_list + "}"
-        )  # command = 'polyCleanup '+arg_list #(not used because of arg count error, also the quotes in the arg list would need to be removed).
+        command = "polyCleanupArgList 4 {" + arg_list + "}"
 
         if split_non_manifold_vertex:  # Split Non-Manifold Vertex
-            nonManifoldVerts = cls.find_non_manifold_vertex(
-                objects, select=2
-            )  # Select: 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
+            # Select: 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
+            nonManifoldVerts = cls.find_non_manifold_vertex(objects, select=2)
             if repair:
                 for vertex in nonManifoldVerts:
-                    cls.split_non_manifold_vertex(
-                        vertex, select=True
-                    )  # select(bool): Select the vertex after the operation. (default: True)
+                    # Select(bool): Select the vertex after the operation. (default: True)
+                    cls.split_non_manifold_vertex(vertex, select=True)
 
         pm.select(objects)
         pm.mel.eval(command)
@@ -426,7 +420,7 @@ class EditUtils:
         """
         scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
 
-        # attach a unique identifier consisting each objects polyEvaluate attributes, and it's bounding box center point in world space.
+        # Attach a unique identifier consisting each objects polyEvaluate attributes, and it's bounding box center point in world space.
         scene_objs = {
             i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
             for i in scene_objs
@@ -434,29 +428,29 @@ class EditUtils:
         }
         selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
-        objs_inverted = {}  # invert the dict, combining objects with like identifiers.
+        objs_inverted = {}  # Invert the dict, combining objects with like identifiers.
         for k, v in scene_objs.items():
             objs_inverted[v] = objs_inverted.get(v, []) + [k]
 
         duplicates = set()
         for k, v in objs_inverted.items():
             if len(v) > 1:
-                if selected_objs:  # limit scope to only selected objects.
+                if selected_objs:  # Limit scope to only selected objects.
                     if set(selected_objs) & set(
                         v
-                    ):  # if any selected objects in found duplicates:
+                    ):  # If any selected objects in found duplicates:
                         if retain_given_objects:
                             [
                                 duplicates.add(i) for i in v if i not in selected_objs
-                            ]  # add any duplicated of that object, omitting the selected object.
+                            ]  # Add any duplicated of that object, omitting the selected object.
                         else:
                             [
                                 duplicates.add(i) for i in v[1:]
-                            ]  # add all but the first object to the set of duplicates.
+                            ]  # Add all but the first object to the set of duplicates.
                 else:
                     [
                         duplicates.add(i) for i in v[1:]
-                    ]  # add all but the first object to the set of duplicates.
+                    ]  # Add all but the first object to the set of duplicates.
 
         if verbose:
             for i in duplicates:
@@ -831,5 +825,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-# deprecated ---------------------

@@ -7,6 +7,8 @@ import mayatk as mtk
 
 
 class ComponentsTest(unittest.TestCase):
+    maxDiff = 1000
+
     def setUp(self):
         """Set up test scene for each test."""
         pm.mel.file(new=True, force=True)
@@ -230,54 +232,106 @@ class ComponentsTest(unittest.TestCase):
         )
 
     def test_get_border_components(self):
-        # Testing different component types and border conditions
+        # Adjusting the cylinder attributes and deleting faces
+        pm.setAttr("polyCylinder1.subdivisionsHeight", 3)
+        pm.setAttr("polyCylinder1.subdivisionsAxis", 6)
+        pm.delete("cyl.f[24:29]")
+
         test_cases = [
+            # Testing with mesh object
             (
-                ("pln", "vtx"),
-                ["plnShape.vtx[0:4]", "plnShape.vtx[7:8]", "plnShape.vtx[11:15]"],
-            ),
-            (("pln", "face"), ["plnShape.f[0:3]", "plnShape.f[5:8]"]),
-            (
-                ("pln",),
+                (["cyl.vtx[6:23]"]),
                 [
-                    "plnShape.e[0:2]",
-                    "plnShape.e[4]",
-                    "plnShape.e[6]",
-                    "plnShape.e[8]",
-                    "plnShape.e[13]",
-                    "plnShape.e[15]",
-                    "plnShape.e[20:23]",
+                    "cylShape.vtx[18]",
+                    "cylShape.vtx[19]",
+                    "cylShape.vtx[20]",
+                    "cylShape.vtx[21]",
+                    "cylShape.vtx[22]",
+                    "cylShape.vtx[23]",
                 ],
             ),
             (
-                ("pln.e[:]",),
+                (["cyl.e[6:23]"]),
                 [
-                    "plnShape.e[0:2]",
-                    "plnShape.e[4]",
-                    "plnShape.e[6]",
-                    "plnShape.e[8]",
-                    "plnShape.e[13]",
-                    "plnShape.e[15]",
-                    "plnShape.e[20:23]",
+                    "cylShape.e[18]",
+                    "cylShape.e[19]",
+                    "cylShape.e[20]",
+                    "cylShape.e[21]",
+                    "cylShape.e[22]",
+                    "cylShape.e[23]",
                 ],
             ),
             (
-                (["pln.e[9]", "pln.e[10]", "pln.e[12]", "pln.e[16]"], "f", "str", True),
-                ["plnShape.f[1]", "plnShape.f[3:5]", "plnShape.f[7]"],
+                (["cyl.f[6:23]"]),
+                [
+                    "cylShape.f[12]",
+                    "cylShape.f[13]",
+                    "cylShape.f[14]",
+                    "cylShape.f[15]",
+                    "cylShape.f[16]",
+                    "cylShape.f[17]",
+                ],
             ),
-            (("pln.f[3:4]", "f", "str", True), ["plnShape.f[0:1]", "plnShape.f[5:7]"]),
+            # # Testing with components and component_border=True
             (
-                ("pln.f[3:4]", "vtx", "str", True),
-                ["plnShape.vtx[4:6]", "plnShape.vtx[8:10]"],
+                ("cyl.vtx[6:23]", "str", True),
+                [
+                    "cylShape.vtx[6]",
+                    "cylShape.vtx[7]",
+                    "cylShape.vtx[8]",
+                    "cylShape.vtx[9]",
+                    "cylShape.vtx[10]",
+                    "cylShape.vtx[11]",
+                    "cylShape.vtx[18]",
+                    "cylShape.vtx[19]",
+                    "cylShape.vtx[20]",
+                    "cylShape.vtx[21]",
+                    "cylShape.vtx[22]",
+                    "cylShape.vtx[23]",
+                ],
             ),
             (
-                ("pln.vtx[6]", "e", "str", True),
-                ["plnShape.e[5]", "plnShape.e[9]", "plnShape.e[11:12]"],
+                (["cyl.e[6:23]", "cyl.e[30:41]"], "str", True),
+                [
+                    "cylShape.e[6]",
+                    "cylShape.e[7]",
+                    "cylShape.e[8]",
+                    "cylShape.e[9]",
+                    "cylShape.e[10]",
+                    "cylShape.e[11]",
+                    "cylShape.e[18]",
+                    "cylShape.e[19]",
+                    "cylShape.e[20]",
+                    "cylShape.e[21]",
+                    "cylShape.e[22]",
+                    "cylShape.e[23]",
+                ],
+            ),
+            (
+                ("cyl.f[0:17]", "str", True),
+                [
+                    "cylShape.f[0]",
+                    "cylShape.f[1]",
+                    "cylShape.f[2]",
+                    "cylShape.f[3]",
+                    "cylShape.f[4]",
+                    "cylShape.f[5]",
+                    "cylShape.f[12]",
+                    "cylShape.f[13]",
+                    "cylShape.f[14]",
+                    "cylShape.f[15]",
+                    "cylShape.f[16]",
+                    "cylShape.f[17]",
+                ],
             ),
         ]
+
         for args, expected in test_cases:
             with self.subTest(args=args):
                 result = mtk.get_border_components(*args)
+                print("\n# Call:    ", args)
+                print("# Expected:", expected)
+                print("# Result:  ", result)
                 self.assertEqual(result, expected)
 
     def test_get_closest_verts(self):
