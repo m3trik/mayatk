@@ -122,53 +122,90 @@ class CoreUtils:
         return value
 
     @staticmethod
-    def append_maya_paths(maya_version=2023):
-        """Adds the required library paths for Maya to the system's Python path.
+    def load_plugin(plugin):
+        """Loads a specified plugin.
+        This method checks if the plugin is already loaded before attempting to load it.
 
         Parameters:
-            maya_version (int, str, optional): The version of Maya to add the paths for. Defaults to 2023.
+            plugin (str): The name of the plugin to load.
+
+        Examples:
+            >>> load_plugin('nearestPointOnMesh')
+
+        Raises:
+            ValueError: If the plugin is not found or fails to load.
+        """
+        if not pm.pluginInfo(plugin, query=True, loaded=True):
+            try:
+                pm.loadPlugin(plugin)
+            except RuntimeError as e:
+                raise ValueError(f"Failed to load plugin {plugin}: {e}")
+
+    @staticmethod
+    def append_maya_paths(maya_version=None):
+        """Appends various Maya-related paths to the system's Python environment and sys.path.
+        This function sets environment variables and extends sys.path to include paths
+        for Maya's Python API, libraries, and related functionalities. It aims to
+        facilitate the integration of Maya with external Python scripts.
+
+        Parameters:
+        maya_version (int, str, optional): The version of Maya to add the paths for.
+                                          If None, the function will query the version
+                                          using PyMel. Defaults to None.
+        Raises:
+        EnvironmentError: If the MAYA_LOCATION environment variable is not set.
+
+        Example:
+        >>> append_maya_paths()
+        This will set paths for the current Maya version in use.
+
+        >>> append_maya_paths(2023)
+        This will set paths explicitly for Maya version 2023.
 
         Returns:
-            (None)
+        None
         """
-        # Get the Maya installation path.
+        # Query Maya version if not provided
+        if maya_version is None:
+            maya_version = pm.about(version=True)
+
         maya_install_path = os.environ.get("MAYA_LOCATION")
         if not maya_install_path:
-            return print(
-                f"# Error: {__file__} in append_maya_paths\n#\tCould not find the Maya installation path.\n#\tPlease make sure that the MAYA_LOCATION environment variable is set."
-            )
+            raise EnvironmentError("MAYA_LOCATION environment variable not set.")
 
-        # Add the Maya libraries to the Python path.
+        # Setting Environment Variables
         os.environ["PYTHONHOME"] = os.path.join(maya_install_path, "Python")
         os.environ["PATH"] = (
             os.path.join(maya_install_path, "bin") + ";" + os.environ["PATH"]
         )
 
-        sys.path.append(os.path.join(maya_install_path, "bin"))
-        sys.path.append(os.path.join(maya_install_path, "Python"))
-        sys.path.append(os.path.join(maya_install_path, "Python", maya_version, "DLLs"))
-        sys.path.append(os.path.join(maya_install_path, "Python", maya_version, "lib"))
-        sys.path.append(
-            os.path.join(maya_install_path, "Python", maya_version, "lib", "lib-tk")
-        )
-        sys.path.append(
-            os.path.join(maya_install_path, "Python", maya_version, "lib", "plat-win")
-        )
-        sys.path.append(
+        # List of paths to append
+        paths_to_add = [
+            os.path.join(maya_install_path, "bin"),
+            os.path.join(maya_install_path, "Python"),
+            os.path.join(maya_install_path, "Python", str(maya_version), "DLLs"),
+            os.path.join(maya_install_path, "Python", str(maya_version), "lib"),
             os.path.join(
-                maya_install_path, "Python", maya_version, "lib", "site-packages"
-            )
-        )
-        sys.path.append(
+                maya_install_path, "Python", str(maya_version), "lib", "lib-tk"
+            ),
+            os.path.join(
+                maya_install_path, "Python", str(maya_version), "lib", "plat-win"
+            ),
+            os.path.join(
+                maya_install_path, "Python", str(maya_version), "lib", "site-packages"
+            ),
             os.path.join(
                 maya_install_path, "devkit", "other", "pymel", "extras", "modules"
-            )
-        )
-        sys.path.append(
+            ),
             os.path.join(
                 maya_install_path, "devkit", "other", "pymel", "extras", "completion"
-            )
-        )
+            ),
+        ]
+
+        # Append paths only if they are not already in sys.path
+        for path in paths_to_add:
+            if path not in sys.path:
+                sys.path.append(path)
 
     @staticmethod
     def wrap_control(control_name, container):

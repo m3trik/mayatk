@@ -350,12 +350,18 @@ class NodeUtils:
             create_render_node('file', flag='as2DTexture', tex=f, texture_node=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
             create_render_node('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
         """
-        node = pm.PyNode(
-            pm.mel.createRenderNodeCB(
-                "-" + flag, secondary_flag, node_type, post_command
+        # Attempt to create the node, log an error and exit if it fails.
+        try:
+            node = pm.PyNode(
+                pm.mel.createRenderNodeCB(
+                    f"-{flag}", secondary_flag, node_type, post_command
+                )
             )
-        )  # node = pm.shadingNode(typ, asTexture=True)
+        except Exception as e:
+            pm.error(f"Failed to create node of type '{node_type}'. Error: {str(e)}")
+            return None
 
+        # If texture_node is False, attempt to remove unnecessary 'place2dTexture' nodes.
         if not texture_node:
             pm.delete(
                 pm.listConnections(
@@ -363,20 +369,19 @@ class NodeUtils:
                 )
             )
 
+        # Additional configurations
         if tex:
-            try:
-                node.fileTextureName.set(tex)
-            except Exception as error:
-                print("# Error:", __file__, error, "#")
+            node.fileTextureName.set(tex)
 
         if name:
-            try:
-                pm.rename(node, name)
+            node.rename(name)
 
-            except RuntimeError as error:
-                print("# Error:", __file__, error, "#")
+        # Attempt to set additional attributes, log error if it fails.
+        try:
+            cls.set_node_attributes(node, **kwargs)
+        except Exception as e:
+            pm.error(f"Failed to set attributes for node '{node}'. Error: {str(e)}")
 
-        cls.set_node_attributes(node, **kwargs)
         return node
 
     @staticmethod
