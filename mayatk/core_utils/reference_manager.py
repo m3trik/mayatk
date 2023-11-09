@@ -94,11 +94,19 @@ class ReferenceManager:
 
     def add_reference(self, namespace, file_path):
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File {file_path} does not exist.")
+            pm.displayError(f"Could not open file: {file_path}")
+            return
 
         # Remove the file extension from the namespace
         namespace, _ = os.path.splitext(namespace)
-        pm.createReference(file_path, namespace=namespace)
+
+        try:
+            pm.createReference(file_path, namespace=namespace)
+        except RuntimeError as e:
+            if "Could not open file" in str(e):
+                pm.displayError(f"Could not open file: {file_path}")
+            else:
+                raise
 
     def import_references(self, namespaces=None):
         """Imports the referenced objects into the scene.

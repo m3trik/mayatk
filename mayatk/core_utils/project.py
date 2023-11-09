@@ -117,51 +117,74 @@ class Project:
         return result
 
     @staticmethod
-    def get_recent_autosave(index=None, format="standard"):
+    def find_autosave_directories():
         """
-        Returns a list of recent Maya autosave files (.mb and .ma), sorted by timestamp.
-
-        Parameters:
-            index (slice or int): Return the recent autosave file directory path at the given index or slice.
-                    Index 0 would be the most recent autosave file.
-                    For example, use index=slice(0, 5) to get the 5 most recent autosave files.
-                    If there are only 3 autosave files, it will return those 3 autosave files without throwing an error.
-            format (str): Defines the format of the returned paths. Possible options are 'standard', 'timestamp',
-                    'standard|timestamp', 'timestamp|standard'. 'standard' returns paths as strings, 'timestamp'
-                    returns timestamped paths, 'standard|timestamp' returns a dictionary with standard paths as
-                    keys and timestamped paths as values, 'timestamp|standard' does the opposite.
+        Search for and compile a list of existing autosave directories based on
+        predefined locations: the current workspace's autosave directory, the autosave
+        directory specified in the MAYA_AUTOSAVE_FOLDER environment variable, and the
+        user's home directory autosave folder.
 
         Returns:
-            (list or dict): A list or dictionary of recent autosave files depending on the 'format' parameter.
-
-        Examples:
-            get_recent_autosave() --> Returns all recent autosave files in standard format
-            get_recent_autosave(0) --> Returns the most recent autosave file in standard format
-            get_recent_autosave(slice(0, 5)) --> Returns the 5 most recent autosave files in standard format.
-            get_recent_autosave(format='timestamp') --> Returns all recent autosave files in timestamp format.
-            get_recent_autosave(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+            list: A list of strings, each being a path to an existing autosave directory.
         """
-        import glob
         import itertools
 
-        autosave_dirs = [str(pm.workspace(q=True, rd=1)) + "autosave"]
-        env_autosave_dir = os.environ.get("MAYA_AUTOSAVE_FOLDER")
-        if env_autosave_dir is not None:
-            autosave_dirs += env_autosave_dir.split(";")
-        autosave_dirs.append(os.path.expanduser("~/maya/autosave"))
+        # Directories to check for autosave files
+        potential_dirs = [
+            os.path.join(
+                pm.workspace(q=True, rd=True), "autosave"
+            ),  # Workspace autosave
+            os.environ.get("MAYA_AUTOSAVE_FOLDER"),  # Environment variable autosave
+            os.path.expanduser("~/maya/autosave"),  # Home directory autosave
+        ]
 
-        result = []
-        for autosave_dir in autosave_dirs:
-            if not os.path.exists(autosave_dir):
-                continue
-
-        files = itertools.chain(
-            glob.iglob(os.path.join(autosave_dir, "*.mb")),
-            glob.iglob(os.path.join(autosave_dir, "*.ma")),
+        # Split environment autosave paths and filter out non-existing paths
+        autosave_dirs = filter(
+            os.path.exists,
+            itertools.chain.from_iterable(
+                (d.split(";") if d else [] for d in potential_dirs)
+            ),
         )
+        return list(autosave_dirs)
 
-        for file in files:
-            result.append(ptk.format_path(file))
+    @classmethod
+    def get_recent_autosave(cls, index=None, format="standard"):
+        """
+        Retrieves a list or dictionary of recent Maya autosave files, optionally filtered
+        by an index or a slice, and formatted according to the specified output format.
+
+        Parameters:
+            index (slice|int|None): If provided, specifies the subset of autosave files to
+                return. Can be an integer for a specific file, or a slice object for a range.
+                Defaults to None, which returns all autosave files.
+            format (str): Determines the format of the returned paths. Options are 'standard',
+                'timestamp', 'standard|timestamp', and 'timestamp|standard'. 'standard' returns
+                paths as strings, 'timestamp' returns paths with timestamps, and the combined
+                formats return dictionaries with the paths formatted as specified.
+
+        Returns:
+            list|dict: Depending on the 'format' parameter, a list of file paths, a list of
+                timestamped file paths, or a dictionary with file paths as keys and their
+                timestamped counterparts as values, or vice versa.
+
+        Raises:
+            IndexError: If an integer index is out of range.
+            TypeError: If the index is neither an integer nor a slice.
+        """
+        import itertools
+        import glob
+
+        autosave_dirs = cls.find_autosave_directories()
+        result = []
+
+        for autosave_dir in autosave_dirs:
+            files = itertools.chain(
+                glob.iglob(os.path.join(autosave_dir, "*.mb")),
+                glob.iglob(os.path.join(autosave_dir, "*.ma")),
+            )
+
+            for file in files:
+                result.append(ptk.format_path(file))
 
         if index is not None:
             try:
@@ -170,15 +193,19 @@ class Project:
                 print("Incorrect index or slice. Returning empty list.")
                 return []
 
-        format = format.split("|")
-        if len(format) == 2 and "timestamp" in format and "standard" in format:
-            if format[0] == "timestamp":
-                result = {ptk.time_stamp(res): res for res in result}
-            else:
-                result = {res: ptk.time_stamp(res) for res in result}
-        elif "timestamp" in format:
+        format_parts = format.split("|")
+        if (
+            len(format_parts) == 2
+            and "timestamp" in format_parts
+            and "standard" in format_parts
+        ):
+            result = (
+                {res: ptk.time_stamp(res) for res in result}
+                if format_parts[0] == "standard"
+                else {ptk.time_stamp(res): res for res in result}
+            )
+        elif "timestamp" in format_parts:
             result = [ptk.time_stamp(res) for res in result]
-        # else return the standard format
 
         return result
 

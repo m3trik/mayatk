@@ -196,6 +196,7 @@ class EditUtils:
             pm.rename(obj, newNames[obj])
 
     @staticmethod
+    @core_utils.CoreUtils.undo
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -268,72 +269,211 @@ class EditUtils:
                 pm.select(objects)
 
     @staticmethod
-    def get_all_faces_on_axis(obj, axis="-x", localspace=False):
-        """Get all faces on a specified axis.
+    def get_all_faces_on_axis(obj, axis="x", world_space=False):
+        """Get all faces on a specified axis using local or world space bounding box comparisons.
 
         Parameters:
             obj (str/obj): The name of the geometry.
-            axis (str): The representing axis. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-            localspace (bool): Specify world or local space.
+            axis (str): The representing axis. Case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
+            world_space (bool): Specify world or local space.
 
         Example:
             get_all_faces_on_axis('polyObject', 'y')
         """
-        obj = pm.ls(obj)[0] if pm.ls(obj) else None
+        # Ensure obj is a single transform node
+        obj_list = pm.ls(obj, type="transform")
+        if not obj_list:
+            raise ValueError(f"No transform node found with the name: {obj}")
+        obj = obj_list[0]
 
-        if not obj:
-            raise ValueError(f"No such object exists: {obj}")
-
-        # Get shape nodes
-        shapes = obj.getShapes()
-        if not shapes:
-            raise ValueError("The object has no shape nodes.")
-
-        # Validate axis
-        valid_axes = {"x": 0, "-x": 0, "y": 1, "-y": 1, "z": 2, "-z": 2}
-        axis = axis.lower()
-        if axis not in valid_axes:
+        # Validate axis and set the bounding box value
+        axis_key = axis.lower()
+        axis_index = "xyz".find(axis_key.strip("-"))
+        if axis_index == -1:
             raise ValueError(
                 "Invalid axis. Valid options are 'x', '-x', 'y', '-y', 'z', '-z'"
             )
 
-        i = valid_axes[axis]
-        # Collect faces from all geometry type shapes
-        faces = []
-        for shape in shapes:
-            if pm.nodeType(shape) not in ["mesh", "nurbsSurface", "subdiv"]:
-                continue
-            faces.extend(pm.filterExpand(f"{shape.name()}.f[*]", sm=34))
+        # Map the axis to the corresponding bounding box value
+        bbox_values = ["xmin", "ymin", "zmin"]
+        if axis_key.startswith("-"):
+            bbox_values = ["xmax", "ymax", "zmax"]
 
-        if not faces:
-            raise ValueError("The shape nodes have no faces.")
+        bbox_value = bbox_values[axis_index]
 
-        # Get faces on the specified axis
-        if axis.startswith("-"):
-            return [
-                face for face in faces if pm.exactWorldBoundingBox(face)[i] < -0.00001
-            ]
-        else:
-            return [
-                face for face in faces if pm.exactWorldBoundingBox(face)[i] > -0.00001
-            ]
+        # Axis comparison function
+        compare = (
+            (lambda v: v >= -0.00001)
+            if axis_key[0] != "-"
+            else (lambda v: v <= 0.00001)
+        )
+
+        # Collect faces on the specified axis
+        relevant_faces = [
+            face
+            for shape in obj.getShapes()
+            if pm.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]
+            for face in pm.ls(shape.faces, fl=True)
+            if compare(
+                xform_utils.XformUtils.get_bounding_box(
+                    face, value=bbox_value, world_space=world_space
+                )
+            )
+        ]
+
+        return relevant_faces
 
     @classmethod
-    def delete_along_axis(cls, objects, axis="-x"):
+    @core_utils.CoreUtils.undo
+    def cut_along_axis(cls, obj, axis="x", delete=False):
+        """Performs a cut operation on the specified object along a given axis. The cut
+        is made at the object's center. Optionally, faces on the negative side of the
+        cut can be deleted.
+
+        Parameters:
+            obj (str/obj): The name of the object or the object itself to cut.
+            axis (str): Axis along which to cut ('x', '-x', 'y', '-y', 'z', '-z').
+                        Default is 'x'.
+            delete (bool): If True, delete faces on the negative side of the cut plane.
+                           Default is False.
+        Example:
+            cut_along_axis('pCube1', axis='y', delete=True)
+            # This cuts 'pCube1' along the Y-axis at its center and deletes the negative side.
+
+        Note:
+            The function uses the 'mtk' module to calculate the centroid for cutting
+            and to determine the faces to delete. It also assumes that 'mtk' is a
+            previously imported module with the necessary functionality.
+        """
+        centroid = xform_utils.XformUtils.get_bounding_box(obj, "center")
+
+        # The rotation values for the cutting plane based on the axis
+        rotations = {
+            "x": (0, 90, 0),
+            "y": (90, 0, 0),
+            "z": (0, 0, 0),
+            "-x": (0, -90, 0),
+            "-y": (90, 0, 0),
+            "-z": (0, 0, 0),
+        }
+        rotation = rotations.get(axis, (0, 0, 0))
+
+        # Perform the cut operation using PyMEL
+        pm.polyCut(obj, df=False, pc=centroid, ro=rotation, ch=True)
+
+        if delete:
+            cls.delete_along_axis(obj, axis)
+
+    @classmethod
+    @core_utils.CoreUtils.undo
+    def delete_along_axis(cls, objects, axis="-x", world_space=False):
         """Delete components of the given mesh object along the specified axis.
 
         Parameters:
             obj (obj): Mesh object.
             axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted.
+            world_space (bool): Specify world or local space.
         """
         # Get any mesh type child nodes of obj.
         for node in (o for o in pm.ls(objects) if not node_utils.NodeUtils.is_group(o)):
-            faces = cls.get_all_faces_on_axis(node, axis)
+            faces = cls.get_all_faces_on_axis(node, axis, world_space)
             # If all faces fall on the specified axis.
-            if len(faces) == pm.polyEvaluate(node, face=1):
+            if len(faces) == pm.polyEvaluate(node, face=True):
                 pm.delete(node)  # Delete entire node
             else:
                 pm.delete(faces)  # Else, delete any individual faces.
+
+    @staticmethod
+    @core_utils.CoreUtils.undo
+    def mirror(
+        objects,
+        axis="-x",
+        axis_pivot=2,
+        cut_mesh=False,
+        merge_mode=1,
+        merge_threshold=0.005,
+        delete_original=False,
+        deleteHistory=True,
+        uninstance=False,
+    ):
+        """Mirror geometry across a given axis.
+
+        Parameters:
+            objects (obj): The objects to mirror.
+            axis (string): The axis in which to perform the mirror along. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
+            axis_pivot (int): The pivot on which to mirror on. valid: 0) Bounding Box, 1) Object, 2) World.
+            cut_mesh (bool): Perform a delete along specified axis before mirror.
+            merge_mode (int): 0) Do not merge border edges. 1) Border edges merged. 2) Border edges extruded and connected.
+            merge_threshold (float): Merge vertex distance.
+            delete_original (bool): Delete the original objects after mirroring.
+            deleteHistory (bool): Delete non-deformer history on the object(s) before performing the operation.
+            uninstance (bool): Un-instance the object(s) before performing the operation.
+
+        Returns:
+            (obj) The polyMirrorFace history node if a single object, else None.
+        """
+        direction = {
+            # the direction dict:
+            "-x": (0, 0, (-1, 1, 1)),
+            #  first index: axis direction: 0=negative axis, 1=positive.
+            "x": (1, 0, (-1, 1, 1)),
+            #    second index: axis_as_int: 0=x, 1=y, 2=z
+            "-y": (0, 1, (1, -1, 1)),
+            #   remaining three are (x, y, z) scale values. #Used only when scaling an instance.
+            "y": (1, 1, (1, -1, 1)),
+            "-z": (0, 2, (1, 1, -1)),
+            "z": (1, 2, (1, 1, -1)),
+        }
+
+        axis = axis.lower()  # Assure case.
+        axisDirection, axis_as_int, scale = direction[axis]
+        # ex. (1, 5, (1, 1,-1)) broken down as: axisDirection=1, axis_as_int=5, scale: (x=1, y=1, z=-1)
+
+        original_objects = pm.ls(objects, objectsOnly=1)
+        for obj in original_objects:
+            if deleteHistory:
+                pm.mel.BakeNonDefHistory(obj)
+
+            if uninstance:
+                node_utils.NodeUtils.uninstance(obj)
+
+            if cut_mesh:
+                EditUtils.delete_along_axis(obj, axis)
+
+            polyMirrorFaceNode = pm.ls(
+                pm.polyMirrorFace(
+                    obj,
+                    axis=axis_as_int,
+                    axisDirection=axisDirection,
+                    mirrorAxis=axis_pivot,
+                    mergeMode=merge_mode,
+                    mirrorPosition=0,
+                    mergeThresholdType=1,
+                    mergeThreshold=merge_threshold,
+                    smoothingAngle=30,
+                    flipUVs=0,
+                    ch=1,
+                )
+            )[0]
+
+            if merge_mode == 0:
+                orig_obj, new_obj, polySeparateNode = pm.ls(
+                    pm.polySeparate(obj, uss=1, inp=1)
+                )
+
+                pm.connectAttr(
+                    polyMirrorFaceNode.firstNewFace,
+                    polySeparateNode.startFace,
+                    force=True,
+                )
+                pm.connectAttr(
+                    polyMirrorFaceNode.lastNewFace,
+                    polySeparateNode.endFace,
+                    force=True,
+                )
+
+                if delete_original:
+                    pm.delete(orig_obj)
 
     @classmethod
     def clean_geometry(
