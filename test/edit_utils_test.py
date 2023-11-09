@@ -66,18 +66,55 @@ class EditUtilsTest(unittest.TestCase):
         mtk.merge_vertices("cube1")
         # Assuming the function modifies the geometry, so no specific return value to check.
 
-    def test_delete_along_axis(self):
-        """Test deleting geometry along a specified axis."""
-        mtk.delete_along_axis("cube1")
-        # Assuming the function modifies the geometry, so no specific return value to check.
-
     def test_get_all_faces_on_axis(self):
         """Test getting all faces on a specified axis."""
+        pm.setAttr("polyCube1.subdivisionsWidth", 2)
+        # Test with cube moved from origin.
+        pm.move(10, 10, 10, r=True, os=True, wd=True)
+
         result = mtk.get_all_faces_on_axis("cube1")
         self.assertEqual(
-            result,
-            ["cube1.f[0]", "cube1.f[1]", "cube1.f[2]", "cube1.f[3]", "cube1.f[5]"],
+            [str(f) for f in pm.ls(result)],
+            [
+                "cube1Shape.f[1]",
+                "cube1Shape.f[3]",
+                "cube1Shape.f[5]",
+                "cube1Shape.f[7]",
+                "cube1Shape.f[8]",
+            ],
         )
+
+    def test_cut_along_axis(self):
+        """Test cutting geometry along a specified axis."""
+
+        # Ensure we start with the initial cube face count
+        initial_face_count = pm.polyEvaluate(self.cube1, face=True)
+
+        # Perform the cut operation along the 'x' axis without deletion
+        mtk.cut_along_axis(self.cube1, axis="x", delete=False)
+
+        # Verify that the cut operation increased the face count
+        new_face_count = pm.polyEvaluate(self.cube1, face=True)
+        self.assertTrue(
+            new_face_count > initial_face_count, "Cut did not increase face count."
+        )
+
+        # Perform another cut operation along the 'x' axis with deletion
+        mtk.cut_along_axis(self.cube1, axis="x", delete=True)
+
+        # Verify that the cut operation has decreased the face count (due to deletion)
+        final_face_count = pm.polyEvaluate(self.cube1, face=True)
+        self.assertTrue(
+            final_face_count < new_face_count,
+            "Cut with deletion did not decrease face count.",
+        )
+
+    def test_delete_along_axis(self):
+        """Test deleting geometry along a specified axis."""
+        pm.setAttr("polyCube1.subdivisionsWidth", 2)
+
+        mtk.delete_along_axis("cube1")
+        # Assuming the function modifies the geometry, so no specific return value to check.
 
     def test_clean_geometry(self):
         """Test cleaning geometry."""

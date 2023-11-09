@@ -1,29 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
+# try:
+#     import pymel.core as pm
+# except ImportError as error:
+#     print(__file__, error)
 # from this package:
 from mayatk.core_utils import CoreUtils, Preview
 from mayatk.edit_utils import EditUtils
-from mayatk.node_utils import NodeUtils
 
 
 class Mirror:
     @staticmethod
     @CoreUtils.undo
-    def mirror(
-        objects,
-        axis="-x",
-        axis_pivot=2,
-        cut_mesh=False,
-        merge_mode=1,
-        merge_threshold=0.005,
-        delete_original=False,
-        deleteHistory=True,
-        uninstance=False,
-    ):
+    def perform_mirror(*args, **kwargs):
         """Mirror geometry across a given axis.
 
         Parameters:
@@ -40,68 +29,7 @@ class Mirror:
         Returns:
             (obj) The polyMirrorFace history node if a single object, else None.
         """
-        direction = {
-            # the direction dict:
-            "-x": (0, 0, (-1, 1, 1)),
-            #  first index: axis direction: 0=negative axis, 1=positive.
-            "x": (1, 0, (-1, 1, 1)),
-            #    second index: axis_as_int: 0=x, 1=y, 2=z
-            "-y": (0, 1, (1, -1, 1)),
-            #   remaining three are (x, y, z) scale values. #Used only when scaling an instance.
-            "y": (1, 1, (1, -1, 1)),
-            "-z": (0, 2, (1, 1, -1)),
-            "z": (1, 2, (1, 1, -1)),
-        }
-
-        axis = axis.lower()  # Assure case.
-        axisDirection, axis_as_int, scale = direction[axis]
-        # ex. (1, 5, (1, 1,-1)) broken down as: axisDirection=1, axis_as_int=5, scale: (x=1, y=1, z=-1)
-
-        original_objects = pm.ls(objects, objectsOnly=1)
-        for obj in original_objects:
-            if deleteHistory:
-                pm.mel.BakeNonDefHistory(obj)
-
-            if uninstance:
-                NodeUtils.uninstance(obj)
-
-            if cut_mesh:
-                EditUtils.delete_along_axis(obj, axis)
-
-            polyMirrorFaceNode = pm.ls(
-                pm.polyMirrorFace(
-                    obj,
-                    axis=axis_as_int,
-                    axisDirection=axisDirection,
-                    mirrorAxis=axis_pivot,
-                    mergeMode=merge_mode,
-                    mirrorPosition=0,
-                    mergeThresholdType=1,
-                    mergeThreshold=merge_threshold,
-                    smoothingAngle=30,
-                    flipUVs=0,
-                    ch=1,
-                )
-            )[0]
-
-            if merge_mode == 0:
-                orig_obj, new_obj, polySeparateNode = pm.ls(
-                    pm.polySeparate(obj, uss=1, inp=1)
-                )
-
-                pm.connectAttr(
-                    polyMirrorFaceNode.firstNewFace,
-                    polySeparateNode.startFace,
-                    force=True,
-                )
-                pm.connectAttr(
-                    polyMirrorFaceNode.lastNewFace,
-                    polySeparateNode.endFace,
-                    force=True,
-                )
-
-                if delete_original:
-                    pm.delete(orig_obj)
+        EditUtils.mirror(*args, **kwargs)
 
 
 class MirrorSlots:
@@ -126,7 +54,7 @@ class MirrorSlots:
         delete_history = self.ui.chk006.isChecked()
         uninstance = self.ui.chk009.isChecked()
 
-        Mirror.mirror(
+        Mirror.perform_mirror(
             objects,
             axis=axis,
             axis_pivot=axis_pivot,

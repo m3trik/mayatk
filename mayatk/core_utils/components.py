@@ -438,10 +438,9 @@ class GetComponentsMixin:
         flatten=False,
     ):
         """Get the components of the given type from the given object(s).
-        If no objects are given the current selection will be used.
 
         Parameters:
-            objects (str/obj/list): The object(s) to get the components of. (Polygon, Polygon components)(default: current selection)
+            objects (str/obj/list): The object(s) to get the components of.
             component_type (str)(int): The component type to return. (valid: any type allowed in the 'convert_alias' method)
             returned_type (str): The desired returned object type.
                     (valid: 'str'(default), 'obj'(shape object), 'transform'(as string), 'int'(valid only at sub-object level).
@@ -455,11 +454,11 @@ class GetComponentsMixin:
             (list)(dict) Dependant on flags.
 
         Example:
-            get_components(obj, 'vertex', 'str', '', 'obj.vtx[2:23]') #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[24]', 'objShape.vtx[25]']
-            get_components(obj, 'vertex', 'obj', '', 'obj.vtx[:23]') #returns: [MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
-            get_components(obj, 'f', 'int') #returns: {nt.Mesh('objShape'): [(0, 35)]}
-            get_components(obj, 'edges') #returns: ['objShape.e[0:59]']
-            get_components(obj, 'edges', 'str', 'obj.e[:2]') #returns: ['objShape.e[0]', 'objShape.e[1]', 'objShape.e[2]']
+            get_components(obj, 'vertex', 'str', '', 'obj.vtx[2:23]') # Returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[24]', 'objShape.vtx[25]']
+            get_components(obj, 'vertex', 'obj', '', 'obj.vtx[:23]') # Returns: [MeshVertex('objShape.vtx[24]'), MeshVertex('objShape.vtx[25]')]
+            get_components(obj, 'f', 'int') # Returns: {nt.Mesh('objShape'): [(0, 35)]}
+            get_components(obj, 'edges') # Returns: ['objShape.e[0:59]']
+            get_components(obj, 'edges', 'str', 'obj.e[:2]') # Returns: ['objShape.e[0]', 'objShape.e[1]', 'objShape.e[2]']
         """
         components = cls.convert_component_type(objects, component_type)
 
@@ -487,7 +486,7 @@ class Components(GetComponentsMixin):
         components, and the values are lists of components belonging to each object.
 
         Parameters:
-            components_list (list): A list of PyMel component objects.
+            components_list (str, obj, list): A list of component objects.
 
         Returns:
             dict: A dictionary mapping object names to lists of components.
@@ -495,7 +494,7 @@ class Components(GetComponentsMixin):
         """
         objects_components_dict = {}
 
-        for component in components_list:
+        for component in pm.ls(components_list, flatten=True):
             try:
                 obj_name = component.node().name()
             except AttributeError:
@@ -658,10 +657,15 @@ class Components(GetComponentsMixin):
         """
         components = pm.ls(components, flatten=True)
 
+        # Early exit if no valid components given
         if not components:
             raise ValueError("No valid components given.")
 
+        # Get component type early to handle error if None
         component_type = cls.get_component_type(components[0], "abv")
+        if component_type is None:
+            raise ValueError(f"Unrecognized component_type: {component_type}")
+
         border_components = []
 
         def is_border_vertex(comp):
@@ -1495,17 +1499,17 @@ class Components(GetComponentsMixin):
         pm.polyEditUV(uvs, u=u, v=v, relative=relative)
 
     @classmethod
-    def get_uv_shell_sets(cls, objects=None, returned_type="shells"):
+    def get_uv_shell_sets(cls, objects=None, returned_type="shell"):
         """Get UV shells and their corresponding sets of faces.
 
         Parameters:
             objects (obj/list): Polygon object(s) or Polygon face(s).
-            returned_type (str): The desired returned type. valid values are: 'shells', 'IDs'. If None is given, the full dict will be returned.
+            returned_type (str): The desired returned type. valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
 
         Returns:
-            (list)(dict) dependant on the given returned_type arg. ex. {0L:[[MeshFace(u'pShape.f[0]'), MeshFace(u'pShape.f[1]')], 1L:[[MeshFace(u'pShape.f[2]'), MeshFace(u'pShape.f[3]')]}
+            (list)(dict) dependent on the given returned_type arg. ex. {0L:[[MeshFace(u'pShape.f[0]'), MeshFace(u'pShape.f[1]')], 1L:[[MeshFace(u'pShape.f[2]'), MeshFace(u'pShape.f[3]')]}
         """
-        faces = cls.get_components(objects, "faces", flatten=1)
+        faces = cls.get_components(objects, "faces", flatten=True)
 
         shells = {}
         for face in faces:
@@ -1517,14 +1521,16 @@ class Components(GetComponentsMixin):
                 try:
                     shells[shell_Id[0]] = [face]
                 except IndexError:
-                    pass
+                    pm.warning(f"Unable to get UV shell ID for face: {face}")
 
-        if returned_type == "shells":
-            shells = list(shells.values())
-        elif returned_type == "IDs":
-            shells = shells.keys()
-
-        return shells
+        if returned_type == "shell":
+            return list(shells.values())
+        elif returned_type == "id":
+            return list(shells.keys())
+        else:
+            raise ValueError(
+                f"Invalid returned_type: {returned_type}. Valid values are: 'shell', 'id'."
+            )
 
     @staticmethod
     def get_uv_shell_border_edges(objects):
@@ -1574,6 +1580,88 @@ class Components(GetComponentsMixin):
                     uv_border_edges.append(edge)
 
         return uv_border_edges
+
+    @staticmethod
+    def get_texel_density(objects, map_size):
+        """Calculate the texel density for the given objects' faces.
+
+        Parameters:
+            objects (str, obj, list): List of mesh objects or a single mesh object to calculate texel density for.
+            map_size (int): Size of the map to calculate the texel density against.
+
+        Returns (float):
+            The texel density.
+        """
+        from math import sqrt
+
+        area_3d_sum = 0.0
+        area_uv_sum = 0.0
+
+        # Convert objects to faces if they are not already
+        if not isinstance(objects, list):
+            objects = [objects]
+        faces = pm.polyListComponentConversion(objects, toFace=True)
+        faces = pm.filterExpand(
+            faces, ex=True, sm=34
+        )  # Now this will work, as faces are passed
+
+        if not faces:
+            pm.warning("No faces found in the input objects.")
+            return 0
+
+        # Calculate 3D and UV areas
+        for f in faces:
+            world_face_area = pm.polyEvaluate(f, worldFaceArea=True)
+            uv_face_area = pm.polyEvaluate(f, uvFaceArea=True)
+            if (
+                world_face_area and uv_face_area
+            ):  # Check if the area lists are not empty
+                area_3d_sum += world_face_area[0]
+                area_uv_sum += uv_face_area[0]
+
+        # Avoid division by zero
+        if area_3d_sum == 0 or area_uv_sum == 0:
+            pm.warning("Cannot calculate texel density with zero area.")
+            return 0
+
+        # Calculate texel density
+        texel_density = (sqrt(area_uv_sum) / sqrt(area_3d_sum)) * map_size
+        return texel_density
+
+    @classmethod
+    def set_texel_density(cls, objects, density, map_size):
+        """Set the texel density for the given objects.
+
+        Parameters:
+            objects (str, obj, list): List of objects or a single object to set texel density for.
+            density (float): The desired texel density.
+            map_size (int): Size of the map to calculate the texel density against.
+        """
+        # Get UV shell sets
+        shells = cls.get_uv_shell_sets(objects, returned_type="shell")
+
+        for shell_faces in shells:
+            # Convert face list to UVs
+            shell_uvs = pm.polyListComponentConversion(shell_faces, toUV=True)
+            shell_uvs = pm.ls(shell_uvs, flatten=True)  # Flatten the list of UVs
+
+            # Calculate current density and scaling factor
+            current_density = cls.get_texel_density(shell_faces, map_size)
+            if current_density == 0:
+                pm.warning(
+                    f"Cannot set texel density for UV shell with zero area: {shell_faces}"
+                )
+                continue  # Skip this shell and continue with the next one
+
+            scale = density / current_density
+
+            # Calculate bounding box center for UVs
+            bc = pm.polyEvaluate(shell_uvs, bc2=True)
+            pU = (bc[0][0] + bc[1][0]) / 2
+            pV = (bc[0][1] + bc[1][1]) / 2
+
+            # Scale UVs
+            pm.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
 
     @staticmethod
     def transfer_uvs(source, target):

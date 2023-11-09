@@ -405,59 +405,80 @@ class XformUtils:
         )
         return center_pos
 
-    @classmethod
-    def get_bounding_box(cls, objects, value=""):
-        """Get information of the given object(s) combined bounding box.
+    @staticmethod
+    def get_bounding_box(objects, value="", world_space=True):
+        """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s).
+
+        The method computes the bounding box that encompasses all specified objects or components.
+        It can return various properties of this bounding box, such as its minimum and maximum extents,
+        its size along each axis, its total volume, and the central point. The properties to return
+        are specified as strings within the 'value' parameter, which can include multiple values separated by
+        a pipe ('|') character. The calculations can be performed in either world or local object space.
 
         Parameters:
-            objects (str/obj/list): The object(s) or component(s) to query.
-                    Multiple objects will be treated as a combined bounding box.
-            value (str): The type of value to return. Multiple types can be given
-                    separated by '|'. The order given determines the return order.
-                    valid (case insensitive): 'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'size',
-                    'x' or 'sizex', 'y' or 'sizey', 'z' or 'sizez', 'volume', 'center' or 'centroid'
+            objects (str/obj/list): The object(s) or component(s) to query. This can be a single object
+                                    or component, or a list of objects/components.
+            value (str): A string representing the specific bounding box data to return. This can include
+                         multiple properties separated by '|'. Valid options (case insensitive) are:
+                         'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'size', 'sizex', 'sizey',
+                         'sizez', 'volume', 'center', 'centroid', 'minsize', and 'maxsize'.
+            world_space (bool): If True, calculates the bounding box in world space. If False, uses local
+                                object space. Default is True.
         Returns:
-            (float)(tuple) Dependant on args.
-
-        Example:
-            get_bounding_box(sel, 'center|volume') #returns: [[171.9106216430664, 93.622802734375, -1308.4896240234375], 743.2855185396038]
-            get_bounding_box(sel, 'sizeY') #returns: 144.71902465820312
+            float/tuple: The requested bounding box value(s). If a single value is requested, a float is
+                         returned. If multiple values are requested, a tuple of floats is returned.
+        Raises:
+            ValueError: If no objects are provided, if an invalid 'value' is specified, or if other input
+                        parameters are incorrect.
+        Examples:
+            # To get the size of the bounding box:
+            size = YourClassNameHere.get_bounding_box(obj, "size")
+            # To get the x, y, and z sizes individually:
+            sizex, sizey, sizez = YourClassNameHere.get_bounding_box(obj, "sizex|sizey|sizez")
         """
-        if "|" in value:  # use recursion to construct the list using each value.
-            return tuple(cls.get_bounding_box(objects, i) for i in value.split("|"))
+        # Validate input objects
+        if not objects:
+            raise ValueError("No objects provided for bounding box calculation.")
 
-        v = value.lower()
-        xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(objects)
-        if v == "xmin":
-            return xmin
-        elif v == "xmax":
-            return xmax
-        elif v == "ymin":
-            return ymin
-        elif v == "ymax":
-            return ymax
-        elif v == "zmin":
-            return zmin
-        elif v == "zmax":
-            return zmax
-        elif v == "size":
-            return (xmax - xmin, ymax - ymin, zmax - zmin)
-        elif v == "sizex" or v == "x":
-            return xmax - xmin
-        elif v == "sizey" or v == "y":
-            return ymax - ymin
-        elif v == "sizez" or v == "z":
-            return zmax - zmin
-        elif v == "minsize":
-            return min(xmax - xmin, ymax - ymin, zmax - zmin)
-        elif v == "maxsize":
-            return max(xmax - xmin, ymax - ymin, zmax - zmin)
-        elif v == "volume":
-            return (xmax - xmin) * (ymax - ymin) * (zmax - zmin)
-        elif v == "center" or v == "centroid":
-            return ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0)
+        objs = objects if isinstance(objects, (list, tuple)) else [objects]
+
+        if world_space:
+            bbox = pm.exactWorldBoundingBox(objs)
         else:
-            (xmin, ymin, zmin, xmax, ymax, zmax)
+            bbox = pm.xform(objs, q=True, bb=True, ws=False)
+
+        xmin, ymin, zmin, xmax, ymax, zmax = bbox
+        size = (xmax - xmin, ymax - ymin, zmax - zmin)
+        center = ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
+        volume = size[0] * size[1] * size[2]
+
+        bbox_values = {
+            "xmin": xmin,
+            "xmax": xmax,
+            "ymin": ymin,
+            "ymax": ymax,
+            "zmin": zmin,
+            "zmax": zmax,
+            "sizex": size[0],
+            "sizey": size[1],
+            "sizez": size[2],
+            "size": size,
+            "volume": volume,
+            "center": center,
+            "centroid": center,
+            "minsize": min(size),
+            "maxsize": max(size),
+        }
+
+        values = value.lower().split("|")
+        try:
+            return (
+                tuple(bbox_values[val] for val in values)
+                if len(values) > 1
+                else bbox_values[values[0]]
+            )
+        except KeyError as e:
+            raise ValueError(f"Invalid value for bounding box data requested: {e}")
 
     @classmethod
     def sort_by_bounding_box_value(

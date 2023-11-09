@@ -160,6 +160,7 @@ class Preview:
         """Refreshes the preview to reflect any changes."""
         if not self.preview_checkbox.isChecked():
             return
+
         self.undo_if_needed()
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
         try:
