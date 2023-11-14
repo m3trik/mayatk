@@ -124,8 +124,6 @@ class RigUtils(object):
             )  # get custom orientation
             pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
             customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
-            if ctx not in ("moveSuperContext", "manipMoveContext"):  # Move tool
-                otherToolActive = 1  # some other tool
 
         if orientation and customModeActive:
             if not position:
@@ -151,7 +149,7 @@ class RigUtils(object):
                 # Get pivot in parent space
                 m = pm.xform(obj, q=1, m=1)
                 p = pm.xform(obj, q=1, os=1, sp=1)
-                oldX, oldY, oldZ = old = [
+                oldX, oldY, oldZ = [
                     (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
                     (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
                     (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
@@ -160,7 +158,7 @@ class RigUtils(object):
                 pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
 
                 # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
-                newX, newY, newZ = new = pm.getAttr(
+                newX, newY, newZ = pm.getAttr(
                     obj.name() + ".translate"
                 )  # obj.translate
                 pm.move(
@@ -178,7 +176,7 @@ class RigUtils(object):
                 pm.manipPivot(scaleToolOri=0)
             else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
                 pm.manipPivot(moveToolOri=0)
-                if not ctx in ("moveSuperContext", "manipMoveContext"):
+                if ctx not in ("moveSuperContext", "manipMoveContext"):
                     pm.manipPivot(ro=1)
 
     @classmethod
