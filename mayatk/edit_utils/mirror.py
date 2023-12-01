@@ -61,7 +61,7 @@ class MirrorSlots:
             cut_mesh=cut_mesh,
             merge_mode=2 if merge else 0,
             delete_original=delete_original,
-            deleteHistory=delete_history,
+            delete_history=delete_history,
             uninstance=uninstance,
         )
 

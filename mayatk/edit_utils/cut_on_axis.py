@@ -13,24 +13,24 @@ from mayatk.node_utils import NodeUtils
 class CutOnAxis:
     @staticmethod
     @CoreUtils.undo
-    def perform_cut_on_axis(objects, axis="-x", cut=False, delete=False, mirror=False):
+    def perform_cut_on_axis(
+        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False
+    ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
         Parameters:
             objects (list): The list of mesh objects to be processed.
             axis (str): The axis to cut or delete along ('x', '-x', 'y', '-y', 'z', '-z'). Default is '-x'.
-            cut (bool): If True, perform a cut operation. Default is False.
+            cuts (int): The number of cuts to make. Default is 0.
+            cut_offset (float): Offset amount from the center for the cut. Default is 0.
             delete (bool): If True, delete the faces on the specified axis. Default is False.
             mirrot (bool): After deleting, mirror the object(s).
-
-        Note:
-            If both 'cut' and 'delete' are False, no operation is performed.
         """
         axis = axis.lower()  # Assure lower case.
 
         for obj in (o for o in objects if not NodeUtils.is_group(o)):
-            if cut:
-                EditUtils.cut_along_axis(obj, axis, delete)
+            if cuts:
+                EditUtils.cut_along_axis(obj, axis, cuts, cut_offset, delete)
 
             elif delete:
                 EditUtils.delete_along_axis(obj, axis)
@@ -52,17 +52,24 @@ class CutOnAxisSlots:
         )
 
         # Connect sliders and checkboxes to preview refresh function
-        self.sb.connect_multi(self.ui, "chk001-7", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
 
     def perform_operation(self, objects):
         # Read values from UI and execute mirror operation
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
-        cut = self.ui.chk005.isChecked()
-        delete = self.ui.chk006.isChecked()
-        mirror = self.ui.chk007.isChecked()
+        cuts = self.ui.s000.value()
+        cut_offset = self.ui.s001.value()
+        delete = self.ui.chk005.isChecked()
+        mirror = self.ui.chk006.isChecked()
 
         CutOnAxis.perform_cut_on_axis(
-            objects, axis=axis, cut=cut, delete=delete, mirror=mirror
+            objects,
+            axis=axis,
+            cuts=cuts,
+            cut_offset=cut_offset,
+            delete=delete,
+            mirror=mirror,
         )
 
 
