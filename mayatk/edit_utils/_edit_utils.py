@@ -325,27 +325,37 @@ class EditUtils:
 
     @classmethod
     @core_utils.CoreUtils.undo
-    def cut_along_axis(cls, obj, axis="x", delete=False):
-        """Performs a cut operation on the specified object along a given axis. The cut
-        is made at the object's center. Optionally, faces on the negative side of the
-        cut can be deleted.
+    def cut_along_axis(cls, obj, axis="x", amount=1, offset=0, delete=False):
+        """Performs cut operations on the specified object along a given axis with
+        optional multiple cuts and an offset.
 
         Parameters:
-            obj (str/obj): The name of the object or the object itself to cut.
+            obj (str/obj): The object to cut.
             axis (str): Axis along which to cut ('x', '-x', 'y', '-y', 'z', '-z').
-                        Default is 'x'.
+            amount (int): The number of cuts to make. Default is 1.
+            offset (float): Offset amount from the center for the cut. Default is 0.
             delete (bool): If True, delete faces on the negative side of the cut plane.
-                           Default is False.
-        Example:
-            cut_along_axis('pCube1', axis='y', delete=True)
-            # This cuts 'pCube1' along the Y-axis at its center and deletes the negative side.
 
-        Note:
-            The function uses the 'mtk' module to calculate the centroid for cutting
-            and to determine the faces to delete. It also assumes that 'mtk' is a
-            previously imported module with the necessary functionality.
+        Example:
+            cut_along_axis('pCube1', axis='y', delete=True, amount=2, offset=0.1)
         """
-        centroid = xform_utils.XformUtils.get_bounding_box(obj, "center")
+
+        def calculate_cut_position(bounding_box, axis, amount, offset, cut_index):
+            axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
+            sign = -1 if axis.startswith("-") else 1
+            axis_length = bounding_box[axis_index + 3] - bounding_box[axis_index]
+
+            # Calculate the distance between cuts and the position for the current cut
+            cut_spacing = axis_length / (amount + 1)
+
+            cut_position = list(bounding_box[:3])  # Starting from the minimum corner
+            cut_position[axis_index] += cut_spacing * (cut_index + 1) + offset * sign
+
+            return tuple(cut_position)
+
+        bounding_box = xform_utils.XformUtils.get_bounding_box(
+            obj, "xmin|ymin|zmin|xmax|ymax|zmax", True
+        )
 
         # The rotation values for the cutting plane based on the axis
         rotations = {
@@ -358,15 +368,19 @@ class EditUtils:
         }
         rotation = rotations.get(axis, (0, 0, 0))
 
-        # Perform the cut operation using PyMEL
-        pm.polyCut(obj, df=False, pc=centroid, ro=rotation, ch=True)
+        # Perform the cuts
+        for i in range(amount):
+            cut_position = calculate_cut_position(bounding_box, axis, amount, offset, i)
+            pm.polyCut(obj, df=False, pc=cut_position, ro=rotation, ch=True)
 
-        if delete:
-            cls.delete_along_axis(obj, axis)
+            if delete:
+                cls.delete_along_axis(obj, axis)
 
     @classmethod
     @core_utils.CoreUtils.undo
-    def delete_along_axis(cls, objects, axis="-x", world_space=False):
+    def delete_along_axis(
+        cls, objects, axis="-x", world_space=False, delete_history=True
+    ):
         """Delete components of the given mesh object along the specified axis.
 
         Parameters:
@@ -375,13 +389,19 @@ class EditUtils:
             world_space (bool): Specify world or local space.
         """
         # Get any mesh type child nodes of obj.
-        for node in (o for o in pm.ls(objects) if not node_utils.NodeUtils.is_group(o)):
-            faces = cls.get_all_faces_on_axis(node, axis, world_space)
-            # If all faces fall on the specified axis.
-            if len(faces) == pm.polyEvaluate(node, face=True):
-                pm.delete(node)  # Delete entire node
-            else:
-                pm.delete(faces)  # Else, delete any individual faces.
+        for node in pm.ls(objects, objectsOnly=True, flatten=True):
+            if node_utils.NodeUtils.is_group(node):
+                continue
+
+        if delete_history:
+            pm.delete(node, ch=True)
+
+        faces = cls.get_all_faces_on_axis(node, axis, world_space)
+        # If all faces fall on the specified axis.
+        if len(faces) == pm.polyEvaluate(node, face=True):
+            pm.delete(node)  # Delete entire node.
+        else:  # Else, delete any individual faces.
+            pm.delete(faces)
 
     @staticmethod
     @core_utils.CoreUtils.undo
@@ -393,7 +413,7 @@ class EditUtils:
         merge_mode=1,
         merge_threshold=0.005,
         delete_original=False,
-        deleteHistory=True,
+        delete_history=True,
         uninstance=False,
     ):
         """Mirror geometry across a given axis.
@@ -406,7 +426,7 @@ class EditUtils:
             merge_mode (int): 0) Do not merge border edges. 1) Border edges merged. 2) Border edges extruded and connected.
             merge_threshold (float): Merge vertex distance.
             delete_original (bool): Delete the original objects after mirroring.
-            deleteHistory (bool): Delete non-deformer history on the object(s) before performing the operation.
+            delete_history (bool): Delete non-deformer history on the object(s) before performing the operation.
             uninstance (bool): Un-instance the object(s) before performing the operation.
 
         Returns:
@@ -431,7 +451,7 @@ class EditUtils:
 
         original_objects = pm.ls(objects, objectsOnly=1)
         for obj in original_objects:
-            if deleteHistory:
+            if delete_history:
                 pm.mel.BakeNonDefHistory(obj)
 
             if uninstance:

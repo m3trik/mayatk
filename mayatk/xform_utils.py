@@ -2,7 +2,6 @@
 # coding=utf-8
 try:
     import pymel.core as pm
-    import maya.api.OpenMaya as om2
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -96,46 +95,43 @@ class XformUtils:
             if freeze_transforms:
                 pm.makeIdentity(obj, apply=True)
 
-    @staticmethod
-    def match_scale(a, b, scale=True, average=False):
-        """Scale each of the given objects to the combined bounding box of a second set of objects.
+    @classmethod
+    def match_scale(cls, a, b, scale=True, average=False):
+        """Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
 
         Parameters:
-            a (str/obj/list): The object(s) to get a bounding box size from.
-            b (str/obj/list): The object(s) to scale.
+            a (str/obj/list): The object(s) to scale.
+            b (str/obj/list): The object(s) to get a bounding box size from.
             scale (bool): Scale the objects. Else, just return the scale value.
             average (bool): Average the result across all axes.
 
         Returns:
             (list) scale values as [x,y,z,x,y,z...]
         """
-        frm = pm.ls(a, flatten=True)
-        to = pm.ls(b, flatten=True)
+        to_scale = pm.ls(a, flatten=True)
 
-        xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(frm)
-        ax, ay, az = [xmax - xmin, ymax - ymin, zmax - zmin]
+        # Use the get_bounding_box method to compute the bounding box of objects in `b`
+        bx, by, bz = cls.get_bounding_box(b, "size", world_space=True)
 
         result = []
-        for obj in to:
-            xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(obj)
-            bx, by, bz = [xmax - xmin, ymax - ymin, zmax - zmin]
-
-            oldx, oldy, oldz = pm.xform(obj, q=1, s=1, r=1)
+        for obj in to_scale:
+            # Compute the bounding box of the current object to scale
+            ax, ay, az = cls.get_bounding_box(obj, "size", world_space=True)
 
             try:
-                diffx, diffy, diffz = [ax / bx, ay / by, az / bz]
+                diffx, diffy, diffz = [bx / ax, by / ay, bz / az]
             except ZeroDivisionError:
                 diffx, diffy, diffz = [1, 1, 1]
 
-            bScaleNew = [oldx * diffx, oldy * diffy, oldz * diffz]
+            scaleNew = [diffx, diffy, diffz]
 
             if average:
-                bScaleNew = [sum(bScaleNew) / len(bScaleNew) for _ in range(3)]
+                scaleNew = [sum(scaleNew) / len(scaleNew)] * 3
 
             if scale:
-                pm.xform(obj, scale=bScaleNew)
+                pm.xform(obj, s=scaleNew, worldSpace=True, relative=True)
 
-            [result.append(i) for i in bScaleNew]
+            [result.append(i) for i in scaleNew]
 
         return result
 
