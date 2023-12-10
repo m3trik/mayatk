@@ -453,24 +453,6 @@ class RigUtils(object):
 
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    sel = pm.ls(sl=1)
-
-    RigUtils.create_locator_at_object(
-        sel,
-        parent=1,
-        freeze_transforms=1,
-        bake_child_pivot=1,
-        grp_suffix="_GRP",
-        loc_suffix="_LCTR",
-        obj_suffix="_GEO",
-        strip_digits=1,
-        strip_suffix=1,
-        scale=1,
-        lock_translate=0,
-        lock_rotation=0,
-        lock_scale=0,
-    )
 
 if __name__ == "__main__":
     pass
@@ -478,6 +460,3 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
-
-
-# deprecated ---------------------
