@@ -542,6 +542,7 @@ class CoreUtils:
         for category, objects in ui_objects.items():
             print(f"{category}:\n{objects}\n")
 
+    @staticmethod
     def clear_scroll_field_reporter():
         """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
 
@@ -557,6 +558,55 @@ class CoreUtils:
         for reporter in reporters:
             pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
 
+    @staticmethod
+    def get_channel_box_attributes(
+        objects,
+        *args,
+        include_locked=False,
+        include_nonkeyable=False,
+        include_object_name=False,
+    ):
+        """Retrieves the current values of specified attributes from the channel box for given objects.
+
+        Parameters:
+            objects (str/obj/list): Objects to query the attributes of.
+            *args (str, optional): Specific attribute(s) to query. If omitted, 'selected' attributes will be queried.
+            include_locked (bool, optional): Includes locked attributes in the results.
+            include_nonkeyable (bool, optional): Includes non-keyable attributes in the results.
+            include_object_name (bool, optional): Returns full attribute names including the object name if True.
+
+        Returns:
+            dict: Dictionary with attribute names as keys and their current values as values.
+
+        Example:
+            selected_attributes = get_channel_box_attributes(objects, 'translateX', 'rotateY', include_object_name=True)
+            selected_attributes = get_channel_box_attributes(objects, include_object_name=False)
+        """
+        channel_box = pm.melGlobals["gChannelBoxName"]
+        attributes_dict = {}
+
+        for obj in pm.ls(objects):
+            # Determine the attributes to query
+            if args:
+                attrs = list(args)
+            else:
+                # Default to selected attributes if none are specified
+                attrs = pm.channelBox(channel_box, query=True, sma=True) or []
+
+            # Append locked and nonkeyable attributes if requested
+            if include_locked:
+                attrs += pm.listAttr(obj, locked=True)
+            if include_nonkeyable:
+                attrs += pm.listAttr(obj, keyable=False)
+
+            # Fetch attribute values
+            for attr in attrs:
+                attr_name = f"{obj}.{attr}" if include_object_name else attr
+                value = pm.getAttr(f"{obj}.{attr}")
+                attributes_dict[attr_name] = value
+
+        return attributes_dict
+
 
 # --------------------------------------------------------------------------------------------
 
@@ -565,9 +615,4 @@ if __name__ == "__main__":
 
 # --------------------------------------------------------------------------------------------
 # Notes
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# deprecated:
 # --------------------------------------------------------------------------------------------
