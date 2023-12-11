@@ -10,14 +10,8 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>148</height>
+    <height>135</height>
    </rect>
-  </property>
-  <property name="maximumSize">
-   <size>
-    <width>999</width>
-    <height>999</height>
-   </size>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
@@ -68,9 +62,6 @@
       </item>
       <item>
        <widget class="QGroupBox" name="groupBox">
-        <property name="title">
-         <string/>
-        </property>
         <layout class="QVBoxLayout" name="verticalLayout_5">
          <property name="spacing">
           <number>0</number>
@@ -102,7 +93,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string/>
+            <string>Toggle Explode/Un-Explode any selected objects.</string>
            </property>
            <property name="layoutDirection">
             <enum>Qt::RightToLeft</enum>
@@ -142,7 +133,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string/>
+            <string>Explode any selected objects.</string>
            </property>
            <property name="layoutDirection">
             <enum>Qt::RightToLeft</enum>
@@ -182,13 +173,13 @@
             </size>
            </property>
            <property name="toolTip">
-            <string/>
+            <string>Un-Explode any selected objects.</string>
            </property>
            <property name="layoutDirection">
             <enum>Qt::RightToLeft</enum>
            </property>
            <property name="text">
-            <string>Un-Explode Selected</string>
+            <string>Un-Explode</string>
            </property>
            <property name="checkable">
             <bool>false</bool>
@@ -222,7 +213,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string/>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Un-Explode all previously exploded objects.&lt;/p&gt;&lt;p&gt;Does not require a selection.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="layoutDirection">
             <enum>Qt::RightToLeft</enum>
@@ -257,8 +248,8 @@
         </property>
         <property name="sizeHint" stdset="0">
          <size>
-          <width>20</width>
-          <height>40</height>
+          <width>0</width>
+          <height>10</height>
          </size>
         </property>
        </spacer>
@@ -272,7 +263,7 @@
   <customwidget>
    <class>Header</class>
    <extends>QLabel</extends>
-   <header>header.h</header>
+   <header>uitk.widgets.header.Header.h</header>
   </customwidget>
  </customwidgets>
  <resources/>
