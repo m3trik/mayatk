@@ -1,11 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
+import numpy as np
+
 try:
     import pymel.core as pm
 except ModuleNotFoundError as error:
     print(__file__, error)
-try:
-    import maya.OpenMaya as om
 except ModuleNotFoundError as error:
     print(__file__, error)
 
@@ -16,112 +16,76 @@ from mayatk.node_utils import NodeUtils
 
 
 class ExplodedView:
-    exploded_objects = []
+    exploded_objects = {}
 
-    @staticmethod
-    def calculate_repulsive_force(centroid1, size1, centroid2, size2, scale=0.05):
-        """Calculates the repulsive force between two objects based on their centroids and sizes.
-
-        Parameters:
-            centroid1 (tuple): A tuple of floats representing the centroid of the first object in 3D space.
-            size1 (float): The size of the first object.
-            centroid2 (tuple): A tuple of floats representing the centroid of the second object in 3D space.
-            size2 (float): The size of the second object.
-            scale (float, optional): The scaling factor to apply to the force magnitude. Defaults to 0.05.
-
-        Returns:
-            om.MVector: The force vector resulting from the repulsion.
-        """
-        distance = (
-            (centroid1[0] - centroid2[0]) ** 2
-            + (centroid1[1] - centroid2[1]) ** 2
-            + (centroid1[2] - centroid2[2]) ** 2
-        ) ** 0.5
-
+    @classmethod
+    def calculate_repulsive_force_vectorized(cls, positions, sizes, scale=0.05):
+        """Vectorized calculation of repulsive forces between objects."""
         epsilon = 1e-6
-        force_magnitude = (size1 * size2) / ((distance * distance) + epsilon)
-        force_magnitude *= scale
+        n = len(positions)
+        force_matrix = np.zeros((n, n, 3))
 
-        force_vector = om.MVector(
-            centroid1[0] - centroid2[0],
-            centroid1[1] - centroid2[1],
-            centroid1[2] - centroid2[2],
-        )
-        force_vector.normalize()
-        force_vector *= force_magnitude
+        for i in range(n):
+            diff = positions - positions[i]
+            dist_squared = np.sum(diff**2, axis=1) + epsilon
+            force_magnitude = (sizes[i] * sizes) / dist_squared
+            force_magnitude *= scale
+            normalized_diff = diff / np.sqrt(dist_squared)[:, np.newaxis]
+            force_matrix[:, i, :] = normalized_diff * force_magnitude[:, np.newaxis]
 
-        return force_vector
+        return np.sum(force_matrix, axis=1)
 
     @classmethod
     def arrange_objects(
         cls, nodes, convergence_threshold=1e-4, max_iterations=1000, max_movement=1.0
     ):
-        """Arranges a list of objects in 3D space to avoid overlap.
-
-        Parameters:
-            nodes (list): A list of objects to arrange.
-            convergence_threshold (float, optional): The threshold at which to consider the system as having converged.
-            Defaults to 1e-4.
-            max_iterations (int, optional): The maximum number of iterations to run before stopping.
-            Defaults to 10000.
-            max_movement (float, optional): The maximum distance an object can move during a single iteration.
-            Defaults to 1.0.
-
-        Returns:
-            int: The number of iterations required for the system to converge.
-        """
-        iteration_count = 0
-        converged = False
+        """Arranges a list of objects in 3D space to avoid overlap."""
+        node_group_key = tuple(sorted([node.name() for node in nodes]))
+        if node_group_key in cls.exploded_objects:
+            for node in nodes:
+                cached_position = cls.exploded_objects[node_group_key][node.name()]
+                pm.move(
+                    cached_position[0],
+                    cached_position[1],
+                    cached_position[2],
+                    node,
+                    absolute=True,
+                )
+            return 0
 
         node_data = [
             XformUtils.get_bounding_box(node, "center|maxsize") for node in nodes
         ]
+        positions = np.array([data[0] for data in node_data])
+        sizes = np.array([data[1] for data in node_data])
+
+        iteration_count = 0
+        converged = False
 
         while not converged and iteration_count < max_iterations:
-            total_system_force = om.MVector(0, 0, 0)
+            forces = cls.calculate_repulsive_force_vectorized(positions, sizes)
+            movements = np.clip(forces, -max_movement, max_movement)
+            positions += movements
 
-            for idx1, node1 in enumerate(nodes):
-                total_force = om.MVector(0, 0, 0)
-
-                for idx2, node2 in enumerate(nodes):
-                    if node1 != node2:
-                        repulsive_force = cls.calculate_repulsive_force(
-                            node_data[idx1][0],
-                            node_data[idx1][1],
-                            node_data[idx2][0],
-                            node_data[idx2][1],
-                        )
-                        total_force += repulsive_force
-
-                movement_vector = om.MVector(
-                    total_force.x, total_force.y, total_force.z
-                )
-
-                if movement_vector.length() > max_movement:
-                    movement_vector.normalize()
-                    movement_vector *= max_movement
-
+            # Apply movements to nodes
+            for idx, node in enumerate(nodes):
                 pm.move(
-                    movement_vector.x,
-                    movement_vector.y,
-                    movement_vector.z,
-                    node1,
+                    movements[idx][0],
+                    movements[idx][1],
+                    movements[idx][2],
+                    node,
                     relative=True,
                 )
-                total_system_force += movement_vector
 
-                # Update centroid
-                new_centroid = [
-                    node_data[idx1][0][i] + movement_vector[i] for i in range(3)
-                ]
-                node_data[idx1] = (new_centroid, node_data[idx1][1])
-
-            if total_system_force.length() < convergence_threshold:
+            if np.linalg.norm(movements) < convergence_threshold:
                 converged = True
 
             iteration_count += 1
 
-        cls.exploded_objects.append(nodes)
+        cls.exploded_objects[node_group_key] = {
+            node.name(): pm.xform(node, query=True, translation=True, worldSpace=True)
+            for node in nodes
+        }
         return iteration_count
 
     def explode_selected(self):
@@ -134,7 +98,7 @@ class ExplodedView:
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
             NodeUtils.set_node_attributes(obj, original_position=pos)
 
-        iterations = self.arrange_objects(selection)
+        self.arrange_objects(selection)
 
     def un_explode_selected(self):
         """Un-explode selected"""
