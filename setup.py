@@ -26,10 +26,13 @@ setuptools.setup(
     ],
     packages=setuptools.find_packages(exclude=["pymel", "pymel.*"]),
     include_package_data=True,
-    install_requires=ptk.update_requirements(),
+    install_requires=ptk.update_requirements(exc=["pymel", "PySide2"]),
     data_files=ptk.get_dir_contents(
-        __package__, "filepath", exc_files=["*.py", "*.pyc", "*.json"]
-    ),  # ie. ('uitk/ui/0', ['uitk/ui/0/init.ui']),
+        __package__,
+        "filepath",
+        exc_files=["*.py", "*.pyc", "*.json", "*.bak"],
+        recursive=True,
+    ),
 )
 
 
