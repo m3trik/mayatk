@@ -13,42 +13,39 @@ from mayatk import core_utils, node_utils, xform_utils
 class EditUtils:
     """ """
 
-    @staticmethod
+    @classmethod
     @core_utils.CoreUtils.undo
-    def rename(objects, to, fltr="", regex=False, ignore_case=False):
-        """Rename scene objects.
+    def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
+        """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
         Parameters:
-            objects (str/obj/list): The object(s to rename. If nothing is given, all scene objects will be renamed.
-            to (str): Desired name: An optional asterisk modifier can be used for formatting
+            objects (str/obj/list): The object(s) to rename. If empty, all scene objects will be renamed.
+            to (str): Desired name pattern. Asterisk (*) can be used for formatting:
                     chars - replace all.
                     *chars* - replace only.
                     *chars - replace suffix.
                     **chars - append suffix.
                     chars* - replace prefix.
                     chars** - append prefix.
-            fltr (str): Optionally, filter which the given objects to rename using the following:
-                    An asterisk denotes startswith*, *endswith, *contains*, and multiple search strings can be separated by pipe ('|') chars.
-                    chars - Search exact.
-                    *chars* - Search contains chars.
-                    *chars - Search endswith chars.
-                    chars* - Search startswith chars.
-                    chars|chars - Search any of.  can be used in conjuction with other modifiers.
-            regex (bool): If True, regular expression syntax is used instead of the default '*' and '|' modifiers.
-            ignore_case (bool): Ignore case when searching. Applies only to the 'fltr' parameter's search.
+            fltr (str): Filter to apply on object names using wildcards or regular expressions:
+                    chars - exact match.
+                    *chars* - contains chars.
+                    *chars - ends with chars.
+                    chars* - starts with chars.
+                    chars|chars - matches any of the specified patterns.
+            regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
+            ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
+
+        Returns:
+            None: Objects are renamed in the scene directly.
 
         Example:
-            rename(r'Cube', '*001', regex=True) #replace chars after 'fltr' on any object with a name that contains 'Cube'. ie. 'polyCube001' from 'polyCube'
-            rename(r'Cube', '**001', regex=True) #append chars on any object with a name that contains 'Cube'. ie. 'polyCube1001' from 'polyCube1'
+            rename('Cube', '*001', regex=True) # Replace suffix on objects containing 'Cube' in their name, e.g., 'polyCube' becomes 'polyCube001'.
+            rename('Cube', '**001', regex=True) # Append '001' to names of objects containing 'Cube', e.g., 'polyCube1' becomes 'polyCube1001'.
         """
-        # pm.undoInfo (openChunk=1)
         objects = pm.ls(objectsOnly=1) if not objects else pm.ls(objects)
-
-        # get the short names from the long in order to correctly format. ex. 'NUT_' from: 'CENTER_HINGE_FEMALE_GRP|NUT_'
         long_names = [obj.name() for obj in objects]
-        short_names = [
-            ii if ii else i for i, ii in ptk.split_at_chars(long_names)
-        ]  # split the long names at the last '|' to get the short name.
+        short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
 
         names = ptk.find_str_and_format(
             short_names,
@@ -58,38 +55,56 @@ class EditUtils:
             ignore_case=ignore_case,
             return_orig_strings=True,
         )
+
         print("# Rename: Found {} matches. #".format(len(names)))
 
         for i, (oldName, newName) in enumerate(names):
-            oldName = long_names[
-                i
-            ]  # use the long name to reference the object instead.
+            # Strip illegal characters from newName
+            newName = cls.strip_illegal_chars(newName)
+
+            oldName = long_names[i]  # Use the long name to reference the object
             try:
                 if pm.objExists(oldName):
-                    n = pm.rename(
-                        oldName, newName
-                    )  # Rename the object with the new name
+                    n = pm.rename(oldName, newName)  # Rename the object
                     if not n == newName:
                         print(
-                            '# Warning: Attempt to rename "{}" to "{}" failed. Renamed instead to "{}". #'.format(
-                                oldName, newName, n
+                            '# Warning: "{}" renamed to "{}" instead of "{}". #'.format(
+                                oldName, n, newName
                             )
                         )
-                    else:
-                        print(
-                            '# Result: Successfully renamed "{}" to "{}". #'.format(
-                                oldName, newName
-                            )
-                        )
-
             except Exception as e:
-                if not pm.ls(oldName, readOnly=True) == []:  # ignore read-only errors.
+                if not pm.ls(oldName, readOnly=True) == []:  # Ignore read-only errors
                     print(
-                        '# Error: Attempt to rename "{}" to "{}" failed. {} #'.format(
+                        '# Error renaming "{}" to "{}": {} #'.format(
                             oldName, newName, str(e).rstrip()
                         )
                     )
-        # pm.undoInfo (closeChunk=1)
+
+    @staticmethod
+    def strip_illegal_chars(input_data, replace_with="_"):
+        """Strips illegal characters from a string or a list of strings, replacing them with a specified character, conforming to Maya naming conventions.
+
+        Parameters:
+            input_data (str/list): A single string or a list of strings to be sanitized.
+            replace_with (str): The character to replace illegal characters with. Default is underscore (_).
+
+        Returns:
+            str/list: Sanitized string or list of strings, with illegal characters replaced.
+        """
+        import re
+
+        def clean_string(s):
+            pattern = re.compile(r"[^a-zA-Z0-9_]")
+            return pattern.sub(replace_with, s)
+
+        if isinstance(input_data, (list, tuple, set)):
+            return [clean_string(s) for s in input_data]
+        elif isinstance(input_data, str):
+            return clean_string(input_data)
+        else:
+            raise TypeError(
+                "Input data must be a string or a list, tuple, set of strings."
+            )
 
     @staticmethod
     @core_utils.CoreUtils.undo
