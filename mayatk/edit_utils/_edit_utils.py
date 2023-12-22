@@ -10,7 +10,7 @@ import pythontk as ptk
 from mayatk import core_utils, node_utils, xform_utils
 
 
-class EditUtils:
+class EditUtils(ptk.HelpMixin):
     """ """
 
     @classmethod

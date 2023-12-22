@@ -11,7 +11,7 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class CoreUtils:
+class CoreUtils(ptk.HelpMixin):
     """ """
 
     def undo(fn):

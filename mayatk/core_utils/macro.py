@@ -4,9 +4,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+import pythontk as ptk
 
 
-class Macro:
+class Macro(ptk.HelpMixin):
     """Assign macro functions to hotkeys.
 
     Example:

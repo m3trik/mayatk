@@ -4,11 +4,13 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+import pythontk as ptk
+
 # from this package:
 from mayatk import core_utils
 
 
-class DisplayUtils:
+class DisplayUtils(ptk.HelpMixin):
     @staticmethod
     @core_utils.CoreUtils.undo
     def set_visibility(
