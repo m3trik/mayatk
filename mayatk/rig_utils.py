@@ -10,7 +10,7 @@ import pythontk as ptk
 from mayatk import node_utils
 
 
-class RigUtils(object):
+class RigUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod

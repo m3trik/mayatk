@@ -1,15 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List, Optional
+
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+import pythontk as ptk
 
 # from this package:
 from mayatk import core_utils
 
 
-class AnimUtils(object):
+class AnimUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
@@ -56,21 +59,21 @@ class AnimUtils(object):
     @staticmethod
     @core_utils.CoreUtils.undo
     def adjust_key_spacing(
-        objects=None, spacing=1, time=0, relative=True, preserve_keys=False
+        objects: Optional[List[str]] = None,
+        spacing: int = 1,
+        time: int = 0,
+        relative: bool = True,
+        preserve_keys: bool = False,
     ):
         """Adjusts the spacing between keyframes for specified objects at a given time,
         with an option to preserve and adjust a keyframe at the specified time.
 
         Parameters:
-            objects (list or None): Objects to adjust keyframes for. If None, adjusts all scene objects.
+            objects (Optional[List[str]]): Objects to adjust keyframes for. If None, adjusts all scene objects.
             spacing (int): Spacing to add or remove. Negative values remove spacing.
             time (int): Time at which to start adjusting spacing.
             relative (bool): If True, time is relative to the current frame.
             preserve_keys (bool): Preserves and adjusts a keyframe at the specified time if it exists.
-
-        Example:
-            objects = pm.ls(sl=True, type="transform", long=True)
-            adjust_key_spacing(objects, spacing=15, time=0, preserve_keys=True)
         """
         if spacing == 0:
             return
@@ -81,9 +84,23 @@ class AnimUtils(object):
         if objects is None:
             objects = pm.ls(type="transform", long=True)
 
-        def adjust_keyframe(attr_name, key, key_exists_at_time):
-            """Adjusts an individual keyframe."""
-            new_time = max(key + spacing, 0)
+        keyframe_movements = []
+
+        for obj in objects:
+            for attr in pm.listAnimatable(obj):
+                attr_name = f"{obj}.{attr.split('.')[-1]}"
+                keyframes = pm.keyframe(attr_name, query=True)
+
+                if keyframes:
+                    key_exists_at_time = adjusted_time in keyframes
+                    for key in keyframes:
+                        if key >= adjusted_time:
+                            new_time = max(key + spacing, 0)
+                            keyframe_movements.append(
+                                (attr_name, key, new_time, key_exists_at_time)
+                            )
+
+        for attr_name, key, new_time, key_exists_at_time in keyframe_movements:
             value = pm.getAttr(attr_name, time=key)
             pm.setKeyframe(attr_name, time=(new_time,), value=value)
 
@@ -94,18 +111,6 @@ class AnimUtils(object):
 
             if key == adjusted_time and not preserve_keys:
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
-
-        for obj in objects:
-            for attr in pm.listAnimatable(obj):
-                attr_name = f"{obj}.{attr.split('.')[-1]}"
-                keyframes = pm.keyframe(attr_name, query=True)
-
-                if keyframes:
-                    key_exists_at_time = adjusted_time in keyframes
-
-                    for key in sorted(keyframes, reverse=True):
-                        if key >= adjusted_time:
-                            adjust_keyframe(attr_name, key, key_exists_at_time)
 
     @staticmethod
     @core_utils.CoreUtils.undo

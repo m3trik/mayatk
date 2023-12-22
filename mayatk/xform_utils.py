@@ -10,7 +10,7 @@ import pythontk as ptk
 from mayatk import core_utils
 
 
-class XformUtils:
+class XformUtils(ptk.HelpMixin):
     """ """
 
     @classmethod

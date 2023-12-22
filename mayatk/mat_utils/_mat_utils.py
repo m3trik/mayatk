@@ -10,7 +10,7 @@ import pythontk as ptk
 from mayatk import node_utils
 
 
-class MatUtils(object):
+class MatUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
@@ -131,7 +131,7 @@ class MatUtils(object):
         """Assigns a material to a list of objects or components.
 
         Parameters:
-            objects (list): The objects or components to assign the material to.
+            objects (str/obj/list): The objects or components to assign the material to.
             mat (obj): The material to assign.
         """
         try:
@@ -230,19 +230,24 @@ class MatUtils(object):
         file_nodes = []
         for material in materials:
             # Traverse the connections to find file nodes
-            file_nodes.extend(
-                node_utils.NodeUtils.get_connected_nodes(material, node_type="file")
-            )
+            file_nodes.extend(pm.listConnections(material, type="file"))
 
         # Remove duplicates
-        file_nodes = set(file_nodes)
-        # Filter file_nodes based on texture names
-        file_nodes = ptk.filter_list(
-            file_nodes, inc=inc, exc=exc, map_func=lambda fn: fn.fileTextureName.get()
-        )
+        file_nodes = list(set(file_nodes))
+
+        # Apply inclusion and exclusion filters using ptk.filter_list
+        if inc or exc:
+            file_nodes = ptk.filter_list(
+                file_nodes,
+                inc=inc,
+                exc=exc,
+                map_func=lambda fn: fn.fileTextureName.get(),
+            )
 
         for fn in file_nodes:
-            pm.evalDeferred(f"pm.runtime.reloadFile('{fn.fileTextureName.get()}')")
+            # Reload the texture by resetting the file path
+            file_path = fn.fileTextureName.get()
+            fn.fileTextureName.set(file_path)
 
     @staticmethod
     def get_mat_swatch_icon(mat, size=[20, 20]):

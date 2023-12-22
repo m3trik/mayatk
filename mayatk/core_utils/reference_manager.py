@@ -14,7 +14,7 @@ import pythontk as ptk
 from mayatk.core_utils import CoreUtils
 
 
-class ReferenceManager:
+class ReferenceManager(ptk.HelpMixin):
     def __init__(self):
         self._filter_text = ""
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")

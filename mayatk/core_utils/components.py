@@ -474,7 +474,7 @@ class GetComponentsMixin:
         return result
 
 
-class Components(GetComponentsMixin):
+class Components(GetComponentsMixin, ptk.HelpMixin):
     """ """
 
     @staticmethod
