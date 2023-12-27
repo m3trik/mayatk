@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import Any, Union, List
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -11,29 +13,45 @@ from mayatk import core_utils
 
 
 class DisplayUtils(ptk.HelpMixin):
-    @staticmethod
+    NODES_WITH_VISIBILITY = [
+        "mesh",
+        "nurbsCurve",
+        "nurbsSurface",
+        "subdiv",
+        "camera",
+        "joint",
+        "light",
+        "locator",
+        "transform",
+    ]
+
+    @classmethod
     @core_utils.CoreUtils.undo
     def set_visibility(
-        elements, visibility=True, include_ancestors=True, affect_layers=True
-    ):
+        cls,
+        elements: Union[str, object, List],
+        visibility: bool = True,
+        include_ancestors: bool = True,
+        affect_layers: bool = True,
+    ) -> None:
         """Sets the visibility of specified elements in the Maya scene.
         It accepts a wide variety of inputs for the elements parameter, including strings,
         PyMEL objects, or lists of objects. It can also optionally affect the visibility of layers
         and ancestor nodes.
 
         Parameters:
-        elements (str | pm.nt.DependNode | list): A string that represents a Maya object type,
-                       a wildcard expression, a single PyMEL object, or a list of PyMEL objects.
-        visibility (bool): The visibility state to apply. If True, elements are shown; if False, elements are hidden.
-        include_ancestors (bool): If True, will also set visibility for all ancestor transform nodes of the elements.
-        affect_layers (bool): If True, will ensure that all layers except the default layer have their visibility set.
+            elements (str, pm.nt.DependNode, list): A string that represents a Maya object type,
+                           a wildcard expression, a single PyMEL object, or a list of PyMEL objects.
+            visibility (bool): The visibility state to apply. If True, elements are shown; if False, elements are hidden.
+            include_ancestors (bool): If True, will also set visibility for all ancestor transform nodes of the elements.
+            affect_layers (bool): If True, will ensure that all layers except the default layer have their visibility set.
 
-        Usage:
-        set_visibility('geometry', visibility=True)  # Shows all geometry and their ancestors, affects layers.
-        set_visibility('lights', visibility=False, include_ancestors=False)  # Hides all lights without affecting their ancestors.
-        set_visibility('nurbsCurves', visibility=True, affect_layers=False)  # Shows all nurbsCurves, doesn't affect layers.
-        set_visibility([my_geo1, my_geo2], visibility=False)  # Hides specific geometries provided in a list.
-        set_visibility('pCube*', visibility=True)  # Shows all objects with names starting with 'pCube'.
+        Example:
+            set_visibility('geometry', visibility=True)  # Shows all geometry and their ancestors, affects layers.
+            set_visibility('lights', visibility=False, include_ancestors=False)  # Hides all lights without affecting their ancestors.
+            set_visibility('nurbsCurves', visibility=True, affect_layers=False)  # Shows all nurbsCurves, doesn't affect layers.
+            set_visibility([my_geo1, my_geo2], visibility=False)  # Hides specific geometries provided in a list.
+            set_visibility('pCube*', visibility=True)  # Shows all objects with names starting with 'pCube'.
         """
         if affect_layers:
             # Set visibility for all layers except the default layer
@@ -44,19 +62,8 @@ class DisplayUtils(ptk.HelpMixin):
                     except pm.MayaAttributeError:
                         pass  # Skip the layer if visibility cannot be set
 
-        common_visibility_types = [
-            "mesh",
-            "nurbsCurve",
-            "nurbsSurface",
-            "subdiv",
-            "camera",
-            "joint",
-            "light",
-            "locator",
-            "transform",
-        ]
         elements = [elements] if isinstance(elements, str) else elements
-        if set(elements).intersection(common_visibility_types):
+        if set(elements).intersection(cls.NODES_WITH_VISIBILITY):
             scene_elements = pm.ls(type=elements)
         else:
             # Use it as a search pattern or type name
@@ -81,6 +88,30 @@ class DisplayUtils(ptk.HelpMixin):
                 element.visibility.set(visibility)
             except pm.MayaAttributeError:
                 pass  # Skip the element if visibility cannot be set
+
+    @staticmethod
+    def set_wireframe_on_shaded(editor: str, state: bool, **kwargs: Any) -> None:
+        """Set wireframe on shaded for the specified model editor panel.
+
+        Parameters:
+            editor (str): The name of the model editor panel.
+            state (bool): True to enable wireframe on shaded, False to disable.
+            kwargs: Additional keyword arguments for the modelEditor command.
+
+        Notes:
+            The displayAppearance parameter in modelEditor command can have values:
+            "wireframe", "points", "boundingBox", "smoothShaded", "flatShaded".
+            This method adjusts the wireframeOnShaded setting based on the shading mode.
+        """
+        modeIsShaded = pm.modelEditor(editor, query=True, displayAppearance=True) in [
+            "smoothShaded",
+            "flatShaded",
+        ]
+
+        if state and modeIsShaded:
+            pm.modelEditor(editor, edit=True, wireframeOnShaded=1, **kwargs)
+        else:
+            pm.modelEditor(editor, edit=True, wireframeOnShaded=0, **kwargs)
 
 
 # -----------------------------------------------------------------------------
