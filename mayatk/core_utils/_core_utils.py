@@ -437,7 +437,7 @@ class CoreUtils(ptk.HelpMixin):
         Returns:
             (str) An array of panel names.
         """
-        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022.
+        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022,23
 
         result = getPanel(*args, **kwargs)
 
