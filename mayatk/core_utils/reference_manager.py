@@ -92,7 +92,7 @@ class ReferenceManager(ptk.HelpMixin):
 
         return workspace_files
 
-    def add_reference(self, namespace, file_path):
+    def add_reference(self, namespace: str, file_path: str) -> None:
         if not os.path.exists(file_path):
             pm.displayError(f"Could not open file: {file_path}")
             return
@@ -101,7 +101,16 @@ class ReferenceManager(ptk.HelpMixin):
         namespace, _ = os.path.splitext(namespace)
 
         try:
-            pm.createReference(file_path, namespace=namespace)
+            ref = pm.createReference(file_path, namespace=namespace)
+            if ref is None or not hasattr(ref, "_refNode") or ref._refNode is None:
+                raise RuntimeError(
+                    f"Failed to create reference for {file_path}. Reference object or its _refNode attribute is None."
+                )
+            assert ref._refNode.type() == "reference"
+        except AssertionError:
+            pm.displayError(
+                f"Reference created for {file_path} did not result in a valid reference node."
+            )
         except RuntimeError as e:
             if "Could not open file" in str(e):
                 pm.displayError(f"Could not open file: {file_path}")
@@ -301,10 +310,21 @@ class ReferenceManagerSlots(ReferenceManager):
         self.refresh_file_list()
 
     def unlink_all(self):
-        """Slot to handle the unreference all button click."""
-        self.import_references()
-        # Update the filtered list to reflect the changes
-        self.refresh_file_list()
+        """Slot to handle the unlink all button click."""
+        # Display a warning message box to the user
+        user_choice = self.sb.message_box(
+            "<b>Warning:</b> The unlink operation is not undoable. Do you want to proceed?",
+            "Yes",
+            "No",
+        )
+
+        # Proceed with the operation only if the user confirms
+        if user_choice == "Yes":
+            self.import_references()  # Import references, effectively unlinking them
+            self.refresh_file_list()  # Update the filtered list to reflect the changes
+        else:
+            # Optionally, display a message indicating the operation was canceled
+            self.sb.message_box("<b>Unlink operation cancelled.</b>")
 
 
 # -----------------------------------------------------------------------------
