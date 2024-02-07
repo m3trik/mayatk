@@ -1,4 +1,4 @@
 PySide2
 pythontk==0.7.12
-uitk==1.0.10
+uitk==1.0.12
 pymel

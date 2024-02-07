@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import Union, List
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -7,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, node_utils
+from mayatk import core_utils
 
 
 class GetComponentsMixin:
@@ -1109,162 +1111,89 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return angle
 
     @classmethod
-    @core_utils.CoreUtils.undo
-    def average_normals(cls, objects, by_uv_shell=False):
-        """Average the normals of the given objects.
+    def get_edges_by_normal_angle(
+        cls,
+        objects: Union[str, object, List],
+        low_angle: float = 0,
+        high_angle: float = 180,
+    ) -> List[object]:
+        """Extend to support edges, mesh objects, and their string representations.
 
         Parameters:
-            objects (str/obj/list): The mesh or mesh faces to averge.
-            by_uv_shell (bool): Average each UV shell individually.
-        """
-        # Map components to their respective objects
-        components_dict = cls.map_components_to_objects(objects)
-
-        # Loop through each object and its corresponding components
-        for obj, components in components_dict.items():
-            if by_uv_shell:
-                uv_shell_sets = cls.get_uv_shell_sets(components)
-                for uv_set in uv_shell_sets:
-                    pm.polySoftEdge(uv_set, a=180)
-            else:
-                if components:  # if faces/components are selected
-                    pm.polySoftEdge(components, a=180)
-                else:  # if objects are selected
-                    pm.polySoftEdge(obj, a=180)
-
-    @classmethod
-    def get_edges_by_normal_angle(cls, objects, low_angle=0, high_angle=180):
-        """Get a list of edges having normals between the given high and low angles.
-
-        Parameters:
-            objects (str/list)(obj): The object(s) to get edges of.
-            low_angle (int): Normal angle low range.
-            high_angle (int): Normal angle high range.
+            objects: The objects (or their names) to get edges from. Can be a single object or a list of objects.
+            low_angle: The lower bound of the normal angle range.
+            high_angle: The upper bound of the normal angle range.
 
         Returns:
-            list: Polygon edges that have normals within the specified angle range.
-
-        Raises:
-            TypeError: If the input objects are not Mesh or MeshEdge.
+            A list of polygon edges that have normals within the specified angle range.
         """
-        # Assure objects is a list
-        objects = pm.ls(objects)
+        if not isinstance(objects, list):
+            objects = [objects]  # Ensure objects is a list for consistent processing
 
         edges = []
-        # Iterate over the objects
         for obj in objects:
-            # If the object is a transform, get its shape
-            if isinstance(obj, pm.nt.Transform):
-                obj = obj.getShape()
+            if isinstance(obj, str):  # Handle string input
+                obj = pm.ls(obj)[0]
 
-            # If the object is a mesh, get all its edges
-            if isinstance(obj, pm.nt.Mesh):
-                edges.extend(obj.edges)
-
-            # If the object is an edge, add it to the list
-            elif isinstance(obj, pm.general.MeshEdge):
+            if isinstance(obj, pm.general.MeshEdge):  # Directly add if it's an edge
                 edges.append(obj)
-
+            elif isinstance(
+                obj, (pm.nt.Transform, pm.nt.Mesh)
+            ):  # Extract edges from mesh or transform
+                if isinstance(obj, pm.nt.Transform):
+                    obj = obj.getShape()
+                if obj:  # Check if the shape is valid
+                    for edge in obj.edges:
+                        angle = cls.get_normal_angle(edge)
+                        if low_angle <= angle <= high_angle:
+                            edges.append(edge)
             else:
-                raise TypeError(f"Input must be a Mesh or MeshEdge, got {type(obj)}.")
-
-        # Filter the edges based on their normal angle
-        edges = [
-            edge
-            for edge in edges
-            if low_angle <= cls.get_normal_angle(edge) <= high_angle
-        ]
+                raise TypeError(
+                    f"Unsupported type {type(obj)}. Expected string, Transform, Mesh, or MeshEdge."
+                )
 
         return edges
 
     @classmethod
     @core_utils.CoreUtils.undo
     def set_edge_hardness(
-        cls, x, angle_threshold, upper_hardness=None, lower_hardness=None
-    ):
-        """Sets the hardness (softness) of edges in the provided objects based on their normal angles.
-        The function recursively processes lists, tuples, and sets of objects, applying the hardness settings
-        to each item individually. It also supports PyMel Transform, Mesh, and MeshEdge objects.
-        If an edge's normal angle is greater than or equal to the given threshold, the edge is considered
-        for upper hardness application. If an edge's normal angle is less than the threshold, the edge is
-        considered for lower hardness application.
+        cls,
+        x: Union[str, object, List],
+        angle_threshold: float,
+        upper_hardness: float = None,
+        lower_hardness: float = None,
+    ) -> None:
+        """Set edge hardness based on normal angle thresholds using the enhanced get_edges_by_normal_angle.
 
         Parameters:
-            cls (class): The class that the method is part of.
-            x (str, pm.nt.Transform, pm.nt.Mesh, pm.general.MeshEdge, list/tuple/set of these types):
-                The objects whose edge hardness is to be set. For string input, it should be in the format 'object.e[start:end]'.
-            angle_threshold (float): The threshold of the normal angle in degrees to determine hardness.
-            upper_hardness (float, optional): The hardness to apply to edges with a normal angle greater
-                than or equal to the threshold. If None, these edges are not processed. Value should be between 0 and 180.
-            lower_hardness (float, optional): The hardness to apply to edges with a normal angle less
-                than the threshold. If None, these edges are not processed. Value should be between 0 and 180.
-
-        Returns:
-            None: This function doesn't return anything; it modifies the provided objects in-place.
-
-        Raises:
-            TypeError: If the 'x' argument is not of the correct type.
+            cls: The class the method belongs to.
+            x: Objects or collections of objects to process.
+            angle_threshold: Angle in degrees to classify edges.
+            upper_hardness: Hardness to apply to edges above the angle threshold.
+            lower_hardness: Hardness to apply to edges below the angle threshold.
         """
-        if isinstance(x, (list, tuple, set)):
-            for item in x:
-                cls.set_edge_hardness(
-                    item, angle_threshold, upper_hardness, lower_hardness
-                )
-            return
+        # Retrieve all edges within the specified angle range
+        all_edges = cls.get_edges_by_normal_angle(x, 0, 180)
 
-        if isinstance(x, pm.nt.Transform):
-            is_group = node_utils.NodeUtils.is_group(x)
-            if is_group:
-                grp_children = node_utils.NodeUtils.get_unique_children(x)
-                cls.set_edge_hardness(
-                    grp_children, angle_threshold, upper_hardness, lower_hardness
-                )
-                return
+        # Filter edges based on the angle threshold and hardness settings
+        upper_edges = [
+            edge
+            for edge in all_edges
+            if cls.get_normal_angle(edge) >= angle_threshold
+            and upper_hardness is not None
+        ]
+        lower_edges = [
+            edge
+            for edge in all_edges
+            if cls.get_normal_angle(edge) < angle_threshold
+            and lower_hardness is not None
+        ]
 
-            shape = x.getShape()
-            if not isinstance(shape, pm.nt.Mesh):
-                raise TypeError(
-                    f"Transform node {x} has a shape of unsupported type {type(shape)}"
-                )
-
-            x = f"{shape.name()}.e[0:{len(shape.edges)-1}]"
-
-        elif isinstance(x, pm.nt.Mesh):
-            x = f"{x.name()}.e[0:{len(x.edges())-1}]"
-
-        elif isinstance(x, pm.general.MeshEdge):
-            x = x.name()
-
-        else:
-            print(f"Unsupported type {type(x)}")
-            return
-
-        if isinstance(x, str):
-            x = [x]
-
-        upper_hardness_edges = []
-        lower_hardness_edges = []
-
-        for obj_name in x:
-            mesh_obj = pm.PyNode(obj_name.split(".")[0])
-            edge_indices = obj_name.split("[")[-1].split("]")[0].split(":")
-            edge_start = int(edge_indices[0])
-            edge_end = int(edge_indices[1]) if len(edge_indices) > 1 else edge_start
-            edge_indices = list(range(edge_start, edge_end + 1))
-
-            for edge_index in edge_indices:
-                edge = mesh_obj.edges[edge_index]
-                edge_angle = cls.get_normal_angle(edge)
-                if upper_hardness is not None and edge_angle >= angle_threshold:
-                    upper_hardness_edges.append(edge)
-                elif lower_hardness is not None and edge_angle < angle_threshold:
-                    lower_hardness_edges.append(edge)
-
-        if upper_hardness_edges:
-            pm.polySoftEdge(upper_hardness_edges, a=upper_hardness, ch=True)
-
-        if lower_hardness_edges:
-            pm.polySoftEdge(lower_hardness_edges, a=lower_hardness, ch=True)
+        # Apply hardness settings to the filtered edges
+        if upper_edges:
+            pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
+        if lower_edges:
+            pm.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
 
     @classmethod
     def get_faces_with_similar_normals(
@@ -1328,6 +1257,30 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                                     faces.remove(f)
 
         return similar_faces
+
+    @classmethod
+    @core_utils.CoreUtils.undo
+    def average_normals(cls, objects, by_uv_shell=False):
+        """Average the normals of the given objects.
+
+        Parameters:
+            objects (str/obj/list): The mesh or mesh faces to averge.
+            by_uv_shell (bool): Average each UV shell individually.
+        """
+        # Map components to their respective objects
+        components_dict = cls.map_components_to_objects(objects)
+
+        # Loop through each object and its corresponding components
+        for obj, components in components_dict.items():
+            if by_uv_shell:
+                uv_shell_sets = cls.get_uv_shell_sets(components)
+                for uv_set in uv_shell_sets:
+                    pm.polySoftEdge(uv_set, a=180)
+            else:
+                if components:  # if faces/components are selected
+                    pm.polySoftEdge(components, a=180)
+                else:  # if objects are selected
+                    pm.polySoftEdge(obj, a=180)
 
     @staticmethod
     @core_utils.CoreUtils.undo
