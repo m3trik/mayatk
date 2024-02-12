@@ -96,6 +96,24 @@ class NodeUtilsTest(unittest.TestCase):
         # Cleanup
         pm.delete("group2", "emptyGroup")
 
+    def test_get_unique_children(self):
+        pm.polyCube(name="cube")
+        pm.polySphere(name="sphere")
+        pm.group("cube", "sphere", name="group1")
+        pm.polyCone(name="cone")
+        pm.group("group1", "cone", name="group2")
+        pm.group(name="emptyGroup")
+
+        expected_children = ["cube", "sphere", "cone"]
+        result = mtk.get_unique_children("group2")
+
+        assert sorted([str(child) for child in result]) == sorted(
+            expected_children
+        ), "Test failed: Incorrect children list"
+
+        # Cleanup
+        pm.delete("group2", "emptyGroup")
+
     def test_get_groups(self):
         self.assertEqual(mtk.get_groups(), [])
 
@@ -135,7 +153,7 @@ class NodeUtilsTest(unittest.TestCase):
 if __name__ == "__main__":
     import importlib
 
-    importlib.reload(mtk.edit_utils)
+    importlib.reload(mtk.node_utils)
     mtk.clear_scroll_field_reporter()
 
     # Create a Test Suite

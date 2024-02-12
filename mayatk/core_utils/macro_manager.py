@@ -7,12 +7,12 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class Macro(ptk.HelpMixin):
+class MacroManager(ptk.HelpMixin):
     """Assign macro functions to hotkeys.
 
     Example:
-    class MSlots(Macro):
-            '''A class that inherits from `Macro` and holds any macro functions.
+        class Macros(MacroManager):
+            '''A class that inherits from `MacroManager` and holds the actual macro functions.
             '''
             @staticmethod
             def m_back_face_culling():
@@ -34,10 +34,10 @@ class Macro(ptk.HelpMixin):
                     else:
                             print(" Warning: Nothing selected. ")
 
-    #call the `set_macros` function to set a macro for functions you defined in `MSlots`.
-    MSlots.set_macros(macros={
-            'm_back_face_culling': {'k':'1', 'cat':'Display'},
-    }
+        #call the `set_macros` function to set a macro for functions you defined in `Macros`.
+        mtk.Macros.set_macros(
+            "m_back_face_culling,     key=1, cat=Display",
+        )
     """
 
     @classmethod
@@ -45,11 +45,11 @@ class Macro(ptk.HelpMixin):
         """Extends `set_macro` to accept a list of strings representing positional and keyword arguments.
 
         Parameters:
-                *args (str): A variable number of strings, each containing the arguments for a single macro. Each string
-                                should be in the format "<macro name>, <positional arg1>, <positional arg2>, ..., <keyword arg1>=<value1>,
-                                <keyword arg2>=<value2>, ..."
+            *args (str): A variable number of strings, each containing the arguments for a single macro. Each string
+                    should be in the format "<macro name>, <positional arg1>, <positional arg2>, ..., <keyword arg1>=<value1>,
+                    <keyword arg2>=<value2>, ..."
         Example:
-                set_macros('m_back_face_culling, key=1, cat=Display', 'm_smooth_preview, key=2, cat=Display') #Calls `set_macro` with the parsed arguments for each macro in `args`.
+            set_macros('m_back_face_culling, key=1, cat=Display', 'm_smooth_preview, key=2, cat=Display') #Calls `set_macro` with the parsed arguments for each macro in `args`.
         """
         for string in args:
             cls.call_with_input(cls.set_macro, string)
@@ -60,11 +60,11 @@ class Macro(ptk.HelpMixin):
         calls the given function with those arguments.
 
         Parameters:
-                func (callable): The function to call.
-                input_string (str): The input string containing the arguments.
+            func (callable): The function to call.
+            input_string (str): The input string containing the arguments.
 
         Returns:
-                The result of calling `func` with the parsed arguments.
+            The result of calling `func` with the parsed arguments.
         """
         args, kwargs = [], {}
         for i in input_string.split(","):
@@ -83,22 +83,22 @@ class Macro(ptk.HelpMixin):
         """Sets a default runtime command with a keyboard shortcut.
 
         Parameters:
-                name (str): The command name you provide must be unique. (alphanumeric characters, or underscores)
-                cat (str): catagory - Category for the command.
-                ann (str): annotation - Description of the command.
-                key (str): keyShortcut - Specify what key is being set.
-                                        key modifier values are set by adding a '+' between chars. ie. 'sht+z'.
-                                        modifiers:
-                                                alt, ctl, sht
-                                        additional valid keywords are:
-                                                Up, Down, Right, Left,
-                                                Home, End, Page_Up, Page_Down, Insert
-                                                Return, Space
-                                                F1 to F12
-                                                Tab (Will only work when modifiers are specified)
-                                                Delete, Backspace (Will only work when modifiers are specified)
-                default (bool): Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
-                delete_existing = Delete any existing (non-default) runtime commands of the given name.
+            name (str): The command name you provide must be unique. (alphanumeric characters, or underscores)
+            cat (str): catagory - Category for the command.
+            ann (str): annotation - Description of the command.
+            key (str): keyShortcut - Specify what key is being set.
+                                    key modifier values are set by adding a '+' between chars. ie. 'sht+z'.
+                                    modifiers:
+                                            alt, ctl, sht
+                                    additional valid keywords are:
+                                            Up, Down, Right, Left,
+                                            Home, End, Page_Up, Page_Down, Insert
+                                            Return, Space
+                                            F1 to F12
+                                            Tab (Will only work when modifiers are specified)
+                                            Delete, Backspace (Will only work when modifiers are specified)
+            default (bool): Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
+            delete_existing = Delete any existing (non-default) runtime commands of the given name.
         """
         command = f"if 'm_slots' not in globals(): from {cls.__module__} import {cls.__name__}; global m_slots; m_slots = {cls.__name__}();\nm_slots.{name}();"
 
