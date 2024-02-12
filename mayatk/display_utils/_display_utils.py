@@ -113,6 +113,31 @@ class DisplayUtils(ptk.HelpMixin):
         else:
             pm.modelEditor(editor, edit=True, wireframeOnShaded=0, **kwargs)
 
+    @staticmethod
+    def add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]]):
+        """Adds the specified transform objects to the current isolation set if isolation mode is active in the current view panel.
+
+        Parameters:
+            objects (str, obj, list): Transform objects to be added to the isolation set.
+        """
+        # Use pm.ls to ensure all inputs are converted to PyMel transform nodes, even if passed as strings
+        objects = pm.ls(objects, type="transform")
+
+        # Get the currently active model panel
+        currentPanel = pm.paneLayout("viewPanes", q=True, pane1=True)
+
+        # Check if isolation mode is active
+        if pm.modelEditor(currentPanel, q=True, viewSelected=True):
+            # Retrieve the isolation set associated with the current panel
+            isoSet = pm.modelEditor(currentPanel, q=True, viewObjects=True)
+
+            # Add the specified transform nodes to the isolation set
+            for obj in objects:
+                if pm.objExists(obj.name()):  # Ensure the object exists in the scene
+                    pm.sets(isoSet, add=obj)
+        else:
+            print("Isolation mode is not active in the current view panel.")
+
 
 # -----------------------------------------------------------------------------
 

@@ -137,8 +137,8 @@ class NodeUtils(ptk.HelpMixin):
         except IndexError:
             return []
 
-    @staticmethod
-    def get_unique_children(objects):
+    @classmethod
+    def get_unique_children(cls, objects):
         """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves.
 
         This function takes a list of objects in the scene and, if any object is a group, retrieves
@@ -156,24 +156,22 @@ class NodeUtils(ptk.HelpMixin):
         """
         objects = pm.ls(objects, flatten=True)
 
-        final_set = (
-            {  # Combine the selected objects and their children into a single set.
-                child
-                for obj in objects
-                for child in (
-                    pm.listRelatives(obj, children=True, type="transform")
-                    if obj.nodeType() == "transform"
-                    and pm.listRelatives(obj, children=True, type="transform")
-                    else (
-                        [obj]
-                        if obj.nodeType() != "transform"
-                        or obj.listRelatives(children=True)
-                        else []
-                    )
-                )
-            }
-        )
-        return list(final_set)  # Convert the set back to a list.
+        def recurse_children(obj, final_set):
+            """Recursively collects children of the given object, excluding group nodes."""
+            if cls.is_group(obj):
+                # If the object is a group, recurse on its children
+                for child in pm.listRelatives(obj, children=True, type="transform"):
+                    recurse_children(child, final_set)
+            else:
+                # Directly add non-group transform nodes and other types of nodes
+                final_set.add(obj)
+
+        final_set = set()
+
+        for obj in objects:
+            recurse_children(obj, final_set)
+
+        return list(final_set)
 
     @staticmethod
     def get_transform_node(

@@ -955,7 +955,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             A, B = components = cls.convert_component_type(components, ctype)[:2]
         except ValueError as e:
             print(
-                f'File "{__file__}" in get_shortest_path\n# Error: Operation requires exactly two components.\n\t{e}',
+                f"# Error: Operation requires exactly two components.\n\t{e}",
             )
             return []
 
