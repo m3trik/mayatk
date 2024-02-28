@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import sys
+from typing import Union, List
 from functools import wraps
 
 try:
@@ -9,6 +10,9 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+
+# from this package:
+from mayatk import node_utils
 
 
 class CoreUtils(ptk.HelpMixin):
@@ -122,12 +126,12 @@ class CoreUtils(ptk.HelpMixin):
         return value
 
     @staticmethod
-    def load_plugin(plugin):
+    def load_plugin(plugin_name):
         """Loads a specified plugin.
         This method checks if the plugin is already loaded before attempting to load it.
 
         Parameters:
-            plugin (str): The name of the plugin to load.
+            plugin_name (str): The name of the plugin to load.
 
         Examples:
             >>> load_plugin('nearestPointOnMesh')
@@ -135,11 +139,11 @@ class CoreUtils(ptk.HelpMixin):
         Raises:
             ValueError: If the plugin is not found or fails to load.
         """
-        if not pm.pluginInfo(plugin, query=True, loaded=True):
+        if not pm.pluginInfo(plugin_name, query=True, loaded=True):
             try:
-                pm.loadPlugin(plugin)
+                pm.loadPlugin(plugin_name, quiet=True)
             except RuntimeError as e:
-                raise ValueError(f"Failed to load plugin {plugin}: {e}")
+                raise ValueError(f"Failed to load plugin {plugin_name}: {e}")
 
     @staticmethod
     def append_maya_paths(maya_version=None):
@@ -411,6 +415,79 @@ class CoreUtils(ptk.HelpMixin):
         return new_name
 
     @staticmethod
+    def calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
+        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
+
+        Parameters:
+            mesh1: The first mesh to compare.
+            mesh2: The second mesh to compare.
+
+        Returns:
+            A float representing the similarity score, where higher means more similar.
+        """
+        # Get bounding box sizes
+        bbox1 = mesh1.getBoundingBox()
+        bbox2 = mesh2.getBoundingBox()
+
+        # Calculate volume of bounding boxes
+        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
+        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
+
+        # Get vertex counts
+        vertex_count1 = len(mesh1.getVertices())
+        vertex_count2 = len(mesh2.getVertices())
+
+        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
+        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
+        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
+            vertex_count1, vertex_count2
+        )
+
+        # Combine similarities (here, equally weighted for simplicity)
+        similarity_score = (volume_similarity + vertex_similarity) / 2
+
+        return similarity_score
+
+    @classmethod
+    def build_mesh_similarity_mapping(
+        cls,
+        source: Union[str, object, List[Union[str, object]]],
+        target: Union[str, object, List[Union[str, object]]],
+        tolerance: float = 0.1,
+    ) -> dict:
+        """Builds a mapping of source meshes to target meshes based on geometric similarity within a specified tolerance.
+        This method identifies the most similar target mesh for each source mesh to facilitate targeted UV transfer.
+
+        Parameters:
+            source (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The source mesh(es) for
+                which to find matching target mesh(es). Can be a string name, a PyNode object, or a list of these.
+            target (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The target mesh(es) to be
+                matched with the source mesh(es). Can be a string name, a PyNode object, or a list of these.
+            tolerance (float): The similarity tolerance within which two meshes are considered similar.
+                Defaults to 0.1.
+
+        Returns:
+            dict: A dictionary mapping the names of source meshes to their most similar target mesh names.
+        """
+        source_group = node_utils.NodeUtils.get_unique_children(source)
+        target_group = node_utils.NodeUtils.get_unique_children(target)
+
+        mapping = {}
+        for source_child in source_group:
+            highest_similarity = 0
+            best_match = None
+            for target_child in target_group:
+                similarity = cls.calculate_mesh_similarity(source_child, target_child)
+                if similarity > highest_similarity and similarity >= tolerance:
+                    highest_similarity = similarity
+                    best_match = target_child
+
+            if best_match:
+                mapping[source_child.name()] = best_match.name()
+
+        return mapping
+
+    @staticmethod
     def get_selected_channels():
         """Get any attributes (channels) that are selected in the channel box.
 
@@ -543,7 +620,7 @@ class CoreUtils(ptk.HelpMixin):
             print(f"{category}:\n{objects}\n")
 
     @staticmethod
-    def clear_scroll_field_reporter():
+    def clear_scroll_field_reporters():
         """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
 
         This function is useful for cleaning up the script output display in Maya's UI,

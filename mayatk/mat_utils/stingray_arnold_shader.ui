@@ -56,7 +56,7 @@
          </font>
         </property>
         <property name="text">
-         <string>STINGRAY ARNOLD SHADER</string>
+         <string>CREATE STINGRAY SHADER</string>
         </property>
        </widget>
       </item>
@@ -96,147 +96,6 @@
          <property name="verticalSpacing">
           <number>0</number>
          </property>
-         <item row="0" column="0" colspan="2">
-          <widget class="QGroupBox" name="material_name_group">
-           <property name="minimumSize">
-            <size>
-             <width>300</width>
-             <height>40</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>50</height>
-            </size>
-           </property>
-           <property name="title">
-            <string>Material Name</string>
-           </property>
-           <layout class="QHBoxLayout" name="horizontalLayout_5">
-            <property name="spacing">
-             <number>1</number>
-            </property>
-            <property name="leftMargin">
-             <number>0</number>
-            </property>
-            <property name="topMargin">
-             <number>1</number>
-            </property>
-            <property name="rightMargin">
-             <number>1</number>
-            </property>
-            <property name="bottomMargin">
-             <number>1</number>
-            </property>
-            <item>
-             <widget class="QLineEdit" name="txt000">
-              <property name="minimumSize">
-               <size>
-                <width>0</width>
-                <height>20</height>
-               </size>
-              </property>
-              <property name="maximumSize">
-               <size>
-                <width>999</width>
-                <height>16777215</height>
-               </size>
-              </property>
-              <property name="toolTip">
-               <string>Name the material.</string>
-              </property>
-              <property name="placeholderText">
-               <string>&lt;Material Name&gt;</string>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </widget>
-         </item>
-         <item row="0" column="2">
-          <widget class="QGroupBox" name="normal_output_group">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>40</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>40</height>
-            </size>
-           </property>
-           <property name="title">
-            <string>Normal Output</string>
-           </property>
-           <layout class="QHBoxLayout" name="horizontalLayout_7">
-            <property name="spacing">
-             <number>1</number>
-            </property>
-            <property name="leftMargin">
-             <number>1</number>
-            </property>
-            <property name="topMargin">
-             <number>1</number>
-            </property>
-            <property name="rightMargin">
-             <number>0</number>
-            </property>
-            <property name="bottomMargin">
-             <number>1</number>
-            </property>
-            <item>
-             <widget class="ComboBox" name="cmb001">
-              <property name="minimumSize">
-               <size>
-                <width>0</width>
-                <height>20</height>
-               </size>
-              </property>
-              <property name="maximumSize">
-               <size>
-                <width>999</width>
-                <height>20</height>
-               </size>
-              </property>
-              <property name="toolTip">
-               <string>Select the normal map output type.</string>
-              </property>
-              <property name="editable">
-               <bool>false</bool>
-              </property>
-              <property name="maxVisibleItems">
-               <number>30</number>
-              </property>
-              <property name="maxCount">
-               <number>20</number>
-              </property>
-              <property name="insertPolicy">
-               <enum>QComboBox::InsertAtTop</enum>
-              </property>
-              <property name="sizeAdjustPolicy">
-               <enum>QComboBox::AdjustToContents</enum>
-              </property>
-              <property name="frame">
-               <bool>false</bool>
-              </property>
-              <item>
-               <property name="text">
-                <string>OpenGL</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
-                <string>DirectX</string>
-               </property>
-              </item>
-             </widget>
-            </item>
-           </layout>
-          </widget>
-         </item>
          <item row="1" column="0" colspan="3">
           <widget class="QGroupBox" name="create_network_group">
            <property name="title">
@@ -258,6 +117,99 @@
             <property name="bottomMargin">
              <number>0</number>
             </property>
+            <item>
+             <widget class="QGroupBox" name="output_template_group">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>40</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>16777215</width>
+                <height>40</height>
+               </size>
+              </property>
+              <property name="title">
+               <string>Output Template</string>
+              </property>
+              <layout class="QHBoxLayout" name="horizontalLayout_9">
+               <property name="spacing">
+                <number>1</number>
+               </property>
+               <property name="leftMargin">
+                <number>1</number>
+               </property>
+               <property name="topMargin">
+                <number>1</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>1</number>
+               </property>
+               <item>
+                <widget class="ComboBox" name="cmb002">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>999</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                 <property name="toolTip">
+                  <string/>
+                 </property>
+                 <property name="editable">
+                  <bool>false</bool>
+                 </property>
+                 <property name="maxVisibleItems">
+                  <number>30</number>
+                 </property>
+                 <property name="maxCount">
+                  <number>20</number>
+                 </property>
+                 <property name="insertPolicy">
+                  <enum>QComboBox::InsertAtTop</enum>
+                 </property>
+                 <property name="sizeAdjustPolicy">
+                  <enum>QComboBox::AdjustToContents</enum>
+                 </property>
+                 <property name="frame">
+                  <bool>false</bool>
+                 </property>
+                 <item>
+                  <property name="text">
+                   <string>PBR Metal Roughness</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>Unity Univeral Render Pipeline (Metallic Standard)</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="chk000">
+              <property name="toolTip">
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Sets up a basic Arnold shader network for use with the StingrayPBS node.&lt;br/&gt;&lt;br/&gt;This method loads the MtoA plugin if not already loaded, creates an aiStandardSurface&lt;/p&gt;&lt;p&gt;shader, an aiMultiply utility node, and a bump2d node for normal mapping. It connects&lt;/p&gt;&lt;p&gt;these nodes together and to the StingrayPBS node's shading engine to integrate Arnold&lt;/p&gt;&lt;p&gt;rendering with Stingray materials.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              </property>
+              <property name="text">
+               <string>Create Arnold Bridge</string>
+              </property>
+             </widget>
+            </item>
             <item>
              <widget class="QPushButton" name="b001">
               <property name="enabled">
@@ -334,6 +286,147 @@
               <property name="textVisible">
                <bool>false</bool>
               </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="0" column="0" colspan="2">
+          <widget class="QGroupBox" name="material_name_group">
+           <property name="minimumSize">
+            <size>
+             <width>300</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>50</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>Material Name</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_5">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>1</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="QLineEdit" name="txt000">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Name the material.</string>
+              </property>
+              <property name="placeholderText">
+               <string>&lt;Material Name&gt;</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QGroupBox" name="normal_output_group">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>40</height>
+            </size>
+           </property>
+           <property name="title">
+            <string>Normal Map Format</string>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_7">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="leftMargin">
+             <number>1</number>
+            </property>
+            <property name="topMargin">
+             <number>1</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>1</number>
+            </property>
+            <item>
+             <widget class="ComboBox" name="cmb001">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Select the normal map output type.</string>
+              </property>
+              <property name="editable">
+               <bool>false</bool>
+              </property>
+              <property name="maxVisibleItems">
+               <number>30</number>
+              </property>
+              <property name="maxCount">
+               <number>20</number>
+              </property>
+              <property name="insertPolicy">
+               <enum>QComboBox::InsertAtTop</enum>
+              </property>
+              <property name="sizeAdjustPolicy">
+               <enum>QComboBox::AdjustToContents</enum>
+              </property>
+              <property name="frame">
+               <bool>false</bool>
+              </property>
+              <item>
+               <property name="text">
+                <string>OpenGL</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>DirectX</string>
+               </property>
+              </item>
              </widget>
             </item>
            </layout>

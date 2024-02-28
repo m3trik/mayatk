@@ -4,6 +4,8 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+# from this package:
+from mayatk import display_utils
 
 
 class Preview:
@@ -165,10 +167,11 @@ class Preview:
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
         try:
             # Convert strings back to PyMel objects for operation
-            operated_objects_pymel = [
-                pm.PyNode(obj_str) for obj_str in self.operated_objects
-            ]
-            self.operation_instance.perform_operation(operated_objects_pymel)
+            operated_objects = pm.ls(self.operated_objects, flatten=True)
+            self.operation_instance.perform_operation(operated_objects)
+
+            # Add the operated objects to the isolation set if one exists.
+            display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
         except Exception as e:
             print(f"Exception during operation: {e}")
         finally:
