@@ -781,7 +781,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             v1Pos = pm.pointPosition(v1, world=1)
             for v2 in b:
                 v2Pos = pm.pointPosition(v2, world=1)
-                distance = ptk.get_distance(v1Pos, v2Pos)
+                distance = ptk.distance_between_points(v1Pos, v2Pos)
                 if distance < tolerance:
                     vertPairsAndDistance[(v1, v2)] = distance
 
@@ -844,7 +844,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             v2 = obj2Shape.vtx[index]
 
             v2Pos = pm.pointPosition(v2, world=True)
-            distance = ptk.get_distance(v1Pos, v2Pos)
+            distance = ptk.distance_between_points(v1Pos, v2Pos)
 
             v2_convertedType = core_utils.CoreUtils.convert_array_type(
                 v2, returned_type=returned_type
@@ -857,6 +857,63 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         pm.delete(cpmNode)
 
         return closestVerts
+
+    @staticmethod
+    def bridge_connected_edges(edges: Union[str, object, list]) -> None:
+        """Bridges two connected edges by extruding one edge, then moving and merging
+        the new vertices with the corresponding vertices of the second edge.
+
+        Parameters:
+            edges (str, object, list): Two connected MeshEdge objects their identifiers.
+        """
+        # Validate input edges
+        edges = pm.ls(edges, flatten=True)
+        if len(edges) != 2:
+            pm.warning("Exactly two connected edges must be provided.")
+            return
+
+        # Extract vertex names from edges
+        vertices_edge1_names = {v.name() for v in edges[0].connectedVertices()}
+        vertices_edge2_names = {v.name() for v in edges[1].connectedVertices()}
+        common_vertex_name = list(vertices_edge1_names & vertices_edge2_names)[0]
+        common_vertex = pm.PyNode(common_vertex_name)
+
+        # Perform extrusion to create new vertices
+        pm.polyExtrudeEdge(edges[0], ltz=0.1, ls=(1, 1, 1))
+        pm.refresh()
+
+        # Identify new vertices created by the extrusion
+        new_vertices = pm.ls(
+            pm.polyListComponentConversion(toVertex=True), flatten=True
+        )
+        new_vertex_names = {v.name() for v in new_vertices}
+
+        # Determine which new vertex is connected to the common vertex
+        for new_vertex_name in new_vertex_names:
+            new_vertex = pm.PyNode(new_vertex_name)
+            if common_vertex in new_vertex.connectedVertices():
+                connected_new_vertex = new_vertex
+                break
+
+        # Move and merge the connected new vertex with the common vertex
+        pm.move(connected_new_vertex, pm.pointPosition(common_vertex), absolute=True)
+        pm.polyMergeVertex([connected_new_vertex, common_vertex], d=0.0, am=True)
+
+        # Identify the remaining new vertex and the target vertex on edge 2
+        remaining_new_vertex_name = list(
+            new_vertex_names - {connected_new_vertex.name()}
+        )[0]
+        remaining_new_vertex = pm.PyNode(remaining_new_vertex_name)
+        target_vertex_edge2_name = list(vertices_edge2_names - {common_vertex_name})[0]
+        target_vertex_edge2 = pm.PyNode(target_vertex_edge2_name)
+
+        # Move the remaining new vertex to the target vertex and merge
+        pm.move(
+            remaining_new_vertex, pm.pointPosition(target_vertex_edge2), absolute=True
+        )
+        pm.polyMergeVertex([remaining_new_vertex, target_vertex_edge2], d=0.0, am=True)
+
+        pm.select(clear=True)
 
     @classmethod
     def get_edge_path(
@@ -1420,7 +1477,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         Parameters:
             objects (str/obj/list): Polygon mesh objects and/or components.
         """
-        for obj in pm.ls(objects, objectsOnly=1):
+        for obj in pm.ls(objects, objectsOnly=True):
             # filter components for only this object.
             obj_compts = [i for i in objects if obj in pm.ls(i, objectsOnly=1)]
             pm.polyLayoutUV(
@@ -1617,47 +1674,41 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             pm.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
 
     @staticmethod
-    def transfer_uvs(source, target):
-        """ """
-        import maya.api.OpenMaya as om2
+    def transfer_uvs(
+        source: Union[str, object, List[Union[str, object]]],
+        target: Union[str, object, List[Union[str, object]]],
+        tolerance: float = 0.1,
+    ) -> None:
+        """Transfers UVs from source meshes to target meshes based on geometric similarity. This method is
+        topology-agnostic and can work with different mesh structures.
 
-        # Create a MSelectionList
-        sList = om2.MSelectionList()
-
-        # Add objects to the list (accepts both PyNodes and strings)
-        if isinstance(source, str):
-            sList.add(source)
-        else:
-            sList.add(source.name())
-        if isinstance(target, str):
-            sList.add(target)
-        else:
-            sList.add(target.name())
-
-        # Get MObjects of source and target
-        source_obj = sList.getDagPath(0).extendToShape()  # extend to shape node
-        target_obj = sList.getDagPath(1).extendToShape()  # extend to shape node
-
-        # Get the function set for source and target
-        sFnMesh = om2.MFnMesh(source_obj)
-        tFnMesh = om2.MFnMesh(target_obj)
-
-        # Get uv count for source
-        uArray, vArray = sFnMesh.getUVs()
-
-        # Clear target UVs and set them with source UVs
-        tFnMesh.clearUVs()
-        tFnMesh.setUVs(uArray, vArray)
-
-        # Get the number of polygons in source mesh
-        poly_count = sFnMesh.numPolygons
-
-        # Assign UVs to faces
-        for i in range(poly_count):
-            count = sFnMesh.polygonVertexCount(i)
-            for j in range(count):
-                uv_id = sFnMesh.getPolygonUVid(i, j)
-                tFnMesh.assignUV(i, j, uv_id)
+        Parameters:
+            source (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The source mesh(es) from
+                which to transfer UVs. Can be a string name, a PyNode object, or a list of these.
+            target (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The target mesh(es) to
+                which UVs will be transferred. Can be a string name, a PyNode object, or a list of these.
+            tolerance (float): The geometric similarity tolerance within which UV transfer should occur.
+                Defaults to 0.1.
+        """
+        mapping = core_utils.CoreUtils.build_mesh_similarity_mapping(
+            source, target, tolerance
+        )
+        for source_name, target_name in mapping.items():
+            pm.transferAttributes(
+                source_name,
+                target_name,
+                transferPositions=False,
+                transferNormals=False,
+                transferUVs=2,
+                transferColors=0,
+                sampleSpace=4,
+                sourceUvSpace="map1",
+                targetUvSpace="map1",
+                searchMethod=3,
+                flipUVs=False,
+                colorBorders=True,
+            )
+            pm.delete(target_name, ch=True)  # Clean up history on target
 
     @staticmethod
     def crease_edges(edges=None, amount=None, angle=None):

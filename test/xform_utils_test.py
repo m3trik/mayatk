@@ -56,7 +56,7 @@ class XformUtilsTest(unittest.TestCase):
             mtk.get_orientation(self.cube1), ([1, 0, 0], [0, 1, 0], [0, 0, 1])
         )
 
-    def test_get_distance_between_two_objects(self):
+    def test_get_dist_between_two_objects(self):
         mtk.drop_to_grid([self.cube1, self.cube2], origin=True, center_pivot=True)
         pm.move(self.cube2, 0, 0, 15)
         self.assertEqual(mtk.get_dist_between_two_objects(self.cube1, self.cube2), 15)
@@ -97,7 +97,7 @@ class XformUtilsTest(unittest.TestCase):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mtk.clear_scroll_field_reporter()
+    mtk.clear_scroll_field_reporters()
 
     # Create a Test Suite
     suite = unittest.TestSuite()

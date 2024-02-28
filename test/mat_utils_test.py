@@ -53,7 +53,7 @@ if __name__ == "__main__":
     import importlib
 
     importlib.reload(mtk.edit_utils)
-    mtk.clear_scroll_field_reporter()
+    mtk.clear_scroll_field_reporters()
 
     # Create a Test Suite
     suite = unittest.TestSuite()

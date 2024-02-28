@@ -88,6 +88,7 @@ class ExplodedView:
         }
         return iteration_count
 
+    @CoreUtils.undo
     def explode_selected(self):
         """Explode selected"""
         selection = NodeUtils.get_unique_children(pm.ls(sl=True))
@@ -100,6 +101,7 @@ class ExplodedView:
 
         self.arrange_objects(selection)
 
+    @CoreUtils.undo
     def un_explode_selected(self):
         """Un-explode selected"""
         selection = NodeUtils.get_unique_children(pm.ls(sl=True))
@@ -109,6 +111,7 @@ class ExplodedView:
                 pm.move(pos[0], pos[1], pos[2], obj, absolute=True)
                 pm.deleteAttr(obj, attribute="original_position")
 
+    @CoreUtils.undo
     def un_explode_all(self):
         """Un-explode all"""
         all_objects_with_original_position = pm.ls("*.original_position")

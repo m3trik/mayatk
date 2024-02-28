@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import Set
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -54,9 +56,13 @@ class DisplayMacros:
     @staticmethod
     def m_cycle_display_state() -> None:
         """Cycle the display state of all selected objects based on the first object's state."""
-        sel = pm.ls(selection=True, transforms=True)
+        sel = node_utils.NodeUtils.get_unique_children(
+            pm.ls(selection=True, transforms=True)
+        )
 
-        if not sel:
+        try:  # Determine the state of the first object
+            first_obj = sel[0]
+        except IndexError:
             pm.inViewMessage(
                 statusMessage="No objects selected. Please select at least one object.",
                 pos="topCenter",
@@ -64,13 +70,13 @@ class DisplayMacros:
             )
             return
 
-        # Determine the state of the first object
-        first_obj = sel[0]
+        # Validate the object and attributes existence
         is_visible = first_obj.visibility.get()
         is_templated = (
             getattr(first_obj, "template", False) and first_obj.template.get()
         )
-        is_xray = pm.displaySurface(first_obj, xRay=True, query=True)[0]
+        xray_query_result = pm.displaySurface(first_obj, xRay=True, query=True)
+        is_xray = xray_query_result[0] if xray_query_result else False
 
         # Define the next state and action based on the initial state
         if is_visible and not is_templated and not is_xray:
@@ -334,6 +340,8 @@ class EditMacros:
     @staticmethod
     def m_object_selection() -> None:
         """Set object selection mask."""
+        object_mode = pm.selectMode(query=True, object=True)
+        pm.selectMode(co=object_mode)
         pm.selectMode(object=True)
         pm.selectType(allObjects=True)
 
@@ -381,38 +389,57 @@ class EditMacros:
 
     @staticmethod
     def m_paste_and_rename() -> None:
-        """Paste and rename by removing 'pasted__' prefix and reference file name. Remove group if single object."""
+        """Paste and rename by removing 'pasted__' prefix and reference file names,
+        and handle grouping for the pasted objects elegantly.
+        """
+        # Get a list of all nodes in the scene before pasting
+        before_paste = set(pm.ls())
+
         # Perform the paste operation
         pm.mel.cutCopyPaste("paste")
-        pasted_group = pm.ls(selection=True)
 
-        # Retrieve unique children from the pasted objects, excluding the groups themselves
-        objects = node_utils.NodeUtils.get_unique_children(pasted_group)
+        # Get a list of all nodes in the scene after pasting and find the difference
+        after_paste = set(pm.ls())
+        pasted_nodes = list(after_paste - before_paste)
+        if not pasted_nodes:
+            return
 
-        for obj in objects:
-            # Use nodeName() to get the short name of the object
-            base_name = obj.nodeName()
+        def strip_names(nodes: Set[pm.PyNode]) -> None:
+            """Strip 'pasted__' prefix and reference file names from node names."""
+            for node in nodes:
+                base_name = node.nodeName()
+                new_name = base_name.replace("pasted__", "").split(":")[-1]
 
-            # Remove the 'pasted__' prefix
-            new_name = base_name.replace("pasted__", "")
-            # Remove any reference namespace if present ('fileName:objectName')
-            new_name = new_name.split(":")[-1]
+                # Attempt to rename the node with the new name
+                try:
+                    node.rename(new_name)
+                except RuntimeError as e:
+                    print(f"Error renaming {node}: {e}")
 
-            # Attempt to rename the object with the new name
-            try:
-                pm.rename(obj, new_name)
-            except RuntimeError as e:
-                # Log the error if the renaming fails
-                print(f"Error renaming {obj}: {e}")
+        # Call strip_names on the pasted nodes
+        strip_names(set(pasted_nodes))
 
-        # If there's only one object, remove the group
-        if len(objects) == 1:
-            single_object = objects[0]
-            if node_utils.NodeUtils.is_group(pasted_group[0]):
-                # Reparent the single object to the world if it's not already
-                pm.parent(single_object, world=True)
-                # Delete the empty group
-                pm.delete(pasted_group)
+        # Identify the topmost new group among the pasted nodes
+        top_level_group = next(
+            (
+                node
+                for node in pasted_nodes
+                if isinstance(node, pm.nt.Transform)
+                and not node in before_paste
+                and node.getParent() is None
+            ),
+            None,
+        )
+
+        if top_level_group:
+            children = top_level_group.getChildren()
+
+            if len(children) == 1:
+                # Unparent the single child to the world (top level of the scene)
+                pm.parent(children, world=True)
+                pm.delete(top_level_group)  # Delete the now-empty top-level group
+            else:  # Rename the top-level group to 'pasted' if there are multiple children
+                top_level_group.rename("pasted")
 
     @staticmethod
     def m_multi_component() -> None:

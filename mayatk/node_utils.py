@@ -466,17 +466,18 @@ class NodeUtils(ptk.HelpMixin):
         return result if mapping else result.values()
 
     @classmethod
-    def set_node_attributes(cls, node, **attributes):
-        """Set node attribute values. If the attribute doesn't exist, it will be created.
+    def set_node_attributes(cls, node, **attributes) -> None:
+        """Set node attribute values. Creates attribute if it doesn't exist.
 
         Parameters:
-            node (str/obj): The node to set attributes of.
-            attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+            node (str/obj): The node to set attributes on.
+            attributes (dict): Dictionary of attribute names and values.
         """
         for attr, value in attributes.items():
             try:
                 pm.setAttr(f"{node}.{attr}", value)
             except AttributeError:
+                # Handle the case where the attribute does not exist
                 cls.set_node_custom_attributes(node, **{attr: value})
 
     @classmethod
