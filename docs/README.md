@@ -12,7 +12,7 @@
 
 ---
 <!-- short_description_start -->
-*mayattk is a collection of backend utilities for Autodesk Maya.*
+*mayatk is a collection of backend utilities for Autodesk Maya.*
 <!-- short_description_end -->
 
 ### Installation:
