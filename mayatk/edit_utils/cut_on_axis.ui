@@ -88,7 +88,7 @@
           <number>1</number>
          </property>
          <item row="7" column="0" colspan="4">
-          <widget class="QDoubleSpinBox" name="s001">
+          <widget class="DoubleSpinBox" name="s001">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -332,6 +332,11 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

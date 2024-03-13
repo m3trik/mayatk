@@ -5,6 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 from mayatk.core_utils import CoreUtils, Preview
+from mayatk.display_utils import DisplayUtils
 
 
 class DuplicateGrid:
@@ -61,8 +62,11 @@ class DuplicateGrid:
                     ungrouped_dups = pm.ungroup(duplicate_group)
                     if ungrouped_dups:
                         duplicates.extend(ungrouped_dups)
+                        DisplayUtils.add_to_isolation_set(ungrouped_dups)
                     else:
                         duplicates.append(duplicate_group)
+                        # Add the group itself if there are no ungrouped duplicates
+                        DisplayUtils.add_to_isolation_set(duplicate_group)
 
         pm.ungroup(original_group)
 

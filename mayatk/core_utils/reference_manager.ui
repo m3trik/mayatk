@@ -116,6 +116,28 @@
           </widget>
          </item>
          <item>
+          <widget class="QPushButton" name="b004">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Refresh the list of references based on the current workspace and filter settings.</string>
+           </property>
+           <property name="text">
+            <string>Refresh</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QPushButton" name="b002">
            <property name="minimumSize">
             <size>

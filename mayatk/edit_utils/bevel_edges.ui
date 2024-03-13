@@ -198,7 +198,7 @@
           </layout>
          </item>
          <item row="3" column="0" colspan="2">
-          <widget class="QDoubleSpinBox" name="s000">
+          <widget class="DoubleSpinBox" name="s000">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -260,6 +260,11 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

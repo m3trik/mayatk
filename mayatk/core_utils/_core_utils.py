@@ -77,7 +77,13 @@ class CoreUtils(ptk.HelpMixin):
             "install_path": lambda: os.environ.get("MAYA_LOCATION"),
             "version": lambda: pm.about(version=True),
             "renderer": lambda: pm.getAttr("defaultRenderGlobals.currentRenderer"),
-            "workspace_dir": lambda: pm.workspace(q=True, rd=True),
+            "workspace": lambda: pm.workspace(q=True, rd=True),
+            "workspace_dir": lambda: ptk.format_path(
+                pm.workspace(q=True, rd=True), "dir"
+            ),
+            "workspace_path": lambda: ptk.format_path(
+                pm.workspace(q=True, rd=True), "path"
+            ),
             "scene_name": lambda: pm.sceneName(),
             "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
             "ui_language": lambda: pm.about(uiLanguage=True),
@@ -109,7 +115,6 @@ class CoreUtils(ptk.HelpMixin):
             "maya_uptime": lambda: pm.timerX(),
             "total_polys": lambda: pm.polyEvaluate(scene=True, triangle=True),
             "total_nodes": lambda: len(pm.ls(dag=True)),
-            "current_selection": lambda: pm.selected(),
         }
 
         if key not in available_keys:

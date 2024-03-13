@@ -93,14 +93,21 @@ class ReferenceManager(ptk.HelpMixin):
         return workspace_files
 
     def add_reference(self, namespace: str, file_path: str) -> None:
+        # Ensure the file exists before proceeding
         if not os.path.exists(file_path):
             pm.displayError(f"Could not open file: {file_path}")
             return
 
-        # Remove the file extension from the namespace
-        namespace, _ = os.path.splitext(namespace)
+        # Normalize the file path to ensure consistent comparison
+        normalized_file_path = os.path.normpath(file_path)
 
-        try:
+        # Check if the file is already referenced
+        for ref in self.current_references:
+            if os.path.normpath(ref.path) == normalized_file_path:
+                print(f"File already referenced: {file_path}")
+                return  # Exit the method if the file is already referenced
+
+        try:  # Proceed with adding the reference since it's not already referenced
             ref = pm.createReference(file_path, namespace=namespace)
             if ref is None or not hasattr(ref, "_refNode") or ref._refNode is None:
                 raise RuntimeError(
@@ -172,9 +179,20 @@ class ReferenceManagerSlots(ReferenceManager):
         self.ui.txt000.textChanged.connect(self.update_current_dir)
         self.ui.txt001.textEdited.connect(self.refresh_file_list)
         self.ui.list000.itemSelectionChanged.connect(self.handle_item_selection)
-        self.ui.list000.setSelectionMode(self.sb.QAbstractItemView.MultiSelection)
+        self.ui.list000.setSelectionMode(
+            self.sb.QtWidgets.QAbstractItemView.MultiSelection
+        )
         self.ui.b002.clicked.connect(self.unreference_all)
         self.ui.b003.clicked.connect(self.unlink_all)
+        self.ui.b004.clicked.connect(lambda: self.refresh_file_list(invalidate=True))
+
+        # Connect scene change event to refresh_file_list method
+        self.script_job = pm.scriptJob(event=["SceneOpened", self.refresh_file_list])
+
+    def __del__(self):
+        """Ensure the scriptJob is killed when the instance is deleted."""
+        if pm.scriptJob(exists=self.script_job):
+            pm.scriptJob(kill=self.script_job, force=True)
 
     def txt000_init(self, widget):
         """ """
@@ -263,9 +281,9 @@ class ReferenceManagerSlots(ReferenceManager):
         # Populate list and set selection states
         items_to_select = []
         for file in file_list:
-            item = self.sb.QListWidgetItem(file)
+            item = self.sb.QtWidgets.QListWidgetItem(file)
             full_path = self.resolve_file_path(file)
-            item.setData(self.sb.Qt.UserRole, full_path)
+            item.setData(self.sb.QtCore.Qt.UserRole, full_path)
 
             if any(
                 os.path.normpath(ref.path) == os.path.normpath(full_path)
@@ -287,7 +305,8 @@ class ReferenceManagerSlots(ReferenceManager):
         # Fetch selected items and associated data
         selected_items = self.ui.list000.selectedItems()
         selected_data = {
-            (item.text(), item.data(self.sb.Qt.UserRole)) for item in selected_items
+            (item.text(), item.data(self.sb.QtCore.Qt.UserRole))
+            for item in selected_items
         }
 
         current_references = self.current_references

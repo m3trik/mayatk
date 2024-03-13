@@ -90,30 +90,6 @@ class DisplayUtils(ptk.HelpMixin):
                 pass  # Skip the element if visibility cannot be set
 
     @staticmethod
-    def set_wireframe_on_shaded(editor: str, state: bool, **kwargs: Any) -> None:
-        """Set wireframe on shaded for the specified model editor panel.
-
-        Parameters:
-            editor (str): The name of the model editor panel.
-            state (bool): True to enable wireframe on shaded, False to disable.
-            kwargs: Additional keyword arguments for the modelEditor command.
-
-        Notes:
-            The displayAppearance parameter in modelEditor command can have values:
-            "wireframe", "points", "boundingBox", "smoothShaded", "flatShaded".
-            This method adjusts the wireframeOnShaded setting based on the shading mode.
-        """
-        modeIsShaded = pm.modelEditor(editor, query=True, displayAppearance=True) in [
-            "smoothShaded",
-            "flatShaded",
-        ]
-
-        if state and modeIsShaded:
-            pm.modelEditor(editor, edit=True, wireframeOnShaded=1, **kwargs)
-        else:
-            pm.modelEditor(editor, edit=True, wireframeOnShaded=0, **kwargs)
-
-    @staticmethod
     def add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]]):
         """Adds the specified transform objects to the current isolation set if isolation mode is active in the current view panel.
 

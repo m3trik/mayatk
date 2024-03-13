@@ -10,6 +10,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils, Preview
+from mayatk.display_utils import DisplayUtils
 
 
 class DuplicateRadial:
@@ -91,6 +92,7 @@ class DuplicateRadial:
                     t = [x * i / (num_copies - 1) for x in translate]
 
                     pm.move(copy_group, t)
+                    DisplayUtils.add_to_isolation_set(copy)
 
             pm.xform(group_node, piv=original_pivot)
             originals_to_copies[node] = copies

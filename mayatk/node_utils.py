@@ -447,11 +447,7 @@ class NodeUtils(ptk.HelpMixin):
         kwargs.setdefault("hasData", True)
         kwargs.setdefault("settable", True)
 
-        attr_names = ptk.filter_list(
-            pm.listAttr(node, **kwargs),
-            inc,
-            exc,
-        )
+        attr_names = ptk.filter_list(pm.listAttr(node, **kwargs), inc, exc)
 
         result = {}
         for attr_name in attr_names:
@@ -459,7 +455,7 @@ class NodeUtils(ptk.HelpMixin):
                 result[attr_name] = pm.getAttr(f"{node}.{attr_name}", silent=True)
             except pm.MayaAttributeError as e:
                 print(
-                    f"Error encountered while extracting attribute {attr_name} from node {node}: {e}"
+                    f"Error encountered while extracting attribute '{attr_name}' from node '{node}': {e}"
                 )
                 continue
 
@@ -467,7 +463,7 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     def set_node_attributes(cls, node, **attributes) -> None:
-        """Set node attribute values. Creates attribute if it doesn't exist.
+        """Set node attribute values. Creates an attribute if it doesn't exist.
 
         Parameters:
             node (str/obj): The node to set attributes on.

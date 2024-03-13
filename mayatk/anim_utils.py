@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Optional
+from typing import List, Dict, ClassVar, Optional
 
 try:
     import pymel.core as pm
@@ -14,6 +14,33 @@ from mayatk import core_utils
 
 class AnimUtils(ptk.HelpMixin):
     """ """
+
+    # Map frame rate types to their numerical values
+    FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
+        "game": 15,
+        "film": 24,
+        "pal": 25,
+        "ntsc": 30,
+        "show": 48,
+        "palf": 50,
+        "ntscf": 60,
+    }
+
+    @classmethod
+    def format_frame_rate_str(cls, key: str) -> str:
+        """Formats and returns a user-friendly frame rate description based on the internal key.
+
+        Parameters:
+        key (str): The internal frame rate key.
+
+        Returns:
+        str: A formatted frame rate string for display.
+        """
+        value = cls.FRAME_RATE_VALUES.get(key, 0)
+        if value == 0:
+            return "Unknown Frame Rate"
+        else:
+            return f"{value} fps ({key})"
 
     @staticmethod
     def setCurrentFrame(time=1, update=True, relative=False):

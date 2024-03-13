@@ -9,6 +9,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils, Preview
+from mayatk.display_utils import DisplayUtils
 
 
 class DuplicateLinear:
@@ -38,6 +39,9 @@ class DuplicateLinear:
 
             for i in range(num_copies):
                 dup = pm.instance(node)[0]
+
+                # After applying transformations, add the duplicate to the isolation set
+                DisplayUtils.add_to_isolation_set(dup)
 
                 x = (i + 1) / num_copies
                 f_x = ptk.lerp(

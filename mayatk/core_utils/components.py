@@ -867,15 +867,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             edges (str, object, list): Two connected MeshEdge objects their identifiers.
         """
         # Validate input edges
-        edges = pm.ls(edges, flatten=True)
-        if len(edges) != 2:
-            pm.warning("Exactly two connected edges must be provided.")
-            return
+        edges = pm.ls(pm.filterExpand(edges, sm=32))
+        if not edges or len(edges) < 2:
+            raise ValueError(
+                "Invalid input: At least two edges are required for bridging."
+            )
 
         # Extract vertex names from edges
         vertices_edge1_names = {v.name() for v in edges[0].connectedVertices()}
         vertices_edge2_names = {v.name() for v in edges[1].connectedVertices()}
-        common_vertex_name = list(vertices_edge1_names & vertices_edge2_names)[0]
+        try:
+            common_vertex_name = list(vertices_edge1_names & vertices_edge2_names)[0]
+        except IndexError:
+            raise ValueError(
+                "Cannot bridge edges: The provided edges do not share a common vertex."
+            )
         common_vertex = pm.PyNode(common_vertex_name)
 
         # Perform extrusion to create new vertices

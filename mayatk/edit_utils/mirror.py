@@ -7,6 +7,7 @@
 # from this package:
 from mayatk.core_utils import CoreUtils, Preview
 from mayatk.edit_utils import EditUtils
+from mayatk.display_utils import DisplayUtils
 
 
 class Mirror:
@@ -27,9 +28,10 @@ class Mirror:
             uninstance (bool): Un-instance the object(s) before performing the operation.
 
         Returns:
-            (obj) The polyMirrorFace history node if a single object, else None.
+            (obj or list) The mirrored object's transform node or list of transform nodes if muliple objects given.
         """
-        EditUtils.mirror(*args, **kwargs)
+        nodes = EditUtils.mirror(*args, **kwargs)
+        DisplayUtils.add_to_isolation_set(nodes)
 
 
 class MirrorSlots:

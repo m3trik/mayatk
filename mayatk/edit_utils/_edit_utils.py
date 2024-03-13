@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List, Union
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -445,7 +447,7 @@ class EditUtils(ptk.HelpMixin):
             uninstance (bool): Un-instance the object(s) before performing the operation.
 
         Returns:
-            (obj) The polyMirrorFace history node if a single object, else None.
+            (obj or list) The mirrored object's transform node or list of transform nodes if muliple objects given.
         """
         direction = {
             # the direction dict:
@@ -465,9 +467,11 @@ class EditUtils(ptk.HelpMixin):
         # ex. (1, 5, (1, 1,-1)) broken down as: axisDirection=1, axis_as_int=5, scale: (x=1, y=1, z=-1)
 
         original_objects = pm.ls(objects, objectsOnly=1)
+        result = []
         for obj in original_objects:
-            if delete_history:
-                pm.mel.BakeNonDefHistory(obj)
+            if delete_history and not obj.isReferenced():
+                # Only attempt to delete history on non-referenced objects
+                pm.delete(obj, constructionHistory=True)
 
             if uninstance:
                 node_utils.NodeUtils.uninstance(obj)
@@ -510,38 +514,50 @@ class EditUtils(ptk.HelpMixin):
                 if delete_original:
                     pm.delete(orig_obj)
 
+            transform_node = node_utils.NodeUtils.get_transform_node(polyMirrorFaceNode)
+            result.append(transform_node)
+        return ptk.format_return(result)
+
     @classmethod
     def clean_geometry(
         cls,
-        objects,
-        allMeshes=False,
-        repair=False,
-        quads=False,
-        nsided=False,
-        concave=False,
-        holed=False,
-        nonplanar=False,
-        zeroGeom=False,
-        zeroGeomTol=0.000010,
-        zeroEdge=False,
-        zeroEdgeTol=0.000010,
-        zeroMap=False,
-        zeroMapTol=0.000010,
-        sharedUVs=False,
-        nonmanifold=False,
-        lamina=False,
-        invalidComponents=False,
-        split_non_manifold_vertex=False,
-        historyOn=True,
-    ):
-        """Select or remove unwanted geometry from a polygon mesh.
+        objects: Union[str, object, List[Union[str, object]]],
+        allMeshes: bool = False,
+        repair: bool = False,
+        quads: bool = False,
+        nsided: bool = False,
+        concave: bool = False,
+        holed: bool = False,
+        nonplanar: bool = False,
+        zeroGeom: bool = False,
+        zeroGeomTol: float = 0.000010,
+        zeroEdge: bool = False,
+        zeroEdgeTol: float = 0.000010,
+        zeroMap: bool = False,
+        zeroMapTol: float = 0.000010,
+        sharedUVs: bool = False,
+        nonmanifold: bool = False,
+        lamina: bool = False,
+        invalidComponents: bool = False,
+        historyOn: bool = True,
+    ) -> None:
+        """Select or remove unwanted geometry from a polygon mesh using polyCleanupArgList.
 
         Parameters:
-            objects (str/obj/list): The polygon objects to clean.
-            allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
+            objects (Union[str, pm.nt.DependNode, List[Union[str, pm.nt.DependNode]]]): The polygon objects to clean.
+            allMeshes (bool): Clean all geometry in the scene instead of only the current selection.
             repair (bool): Attempt to repair instead of just selecting geometry.
         """
-        arg_list = '"{0}","{1}","{2}","{3}","{4}","{5}","{6}","{7}","{8}","{9}","{10}","{11}","{12}","{13}","{14}","{15}","{16}","{17}"'.format(
+        if allMeshes:
+            objects = pm.ls(geometry=True)
+        elif not isinstance(objects, list):
+            objects = [objects]
+
+        # Prepare selection for cleanup
+        pm.select(objects)
+
+        # Configure cleanup options
+        options = [
             allMeshes,
             1 if repair else 2,
             historyOn,
@@ -560,20 +576,15 @@ class EditUtils(ptk.HelpMixin):
             nonmanifold,
             lamina,
             invalidComponents,
-        )
-        command = "polyCleanupArgList 4 {" + arg_list + "}"
+        ]
 
-        if split_non_manifold_vertex:  # Split Non-Manifold Vertex
-            # Select: 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
-            nonManifoldVerts = cls.find_non_manifold_vertex(objects, select=2)
-            if repair:
-                for vertex in nonManifoldVerts:
-                    # Select(bool): Select the vertex after the operation. (default: True)
-                    cls.split_non_manifold_vertex(vertex, select=True)
+        # Construct the polyCleanup command argument string
+        arg_list = ",".join([f'"{option}"' for option in options])
+        command = f"polyCleanupArgList 4 {{{arg_list}}}"
 
-        pm.select(objects)
+        # Execute the cleanup command
         pm.mel.eval(command)
-        # print (command)
+        pm.select(objects)
 
     @staticmethod
     def get_overlapping_duplicates(

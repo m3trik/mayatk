@@ -231,21 +231,23 @@ class DisplayMacros:
         focused_panel = core_utils.CoreUtils.get_panel(withFocus=True)
 
         if state == 0:  # Full Wireframe
+            pm.modelEditor(focused_panel, edit=True, wireframeOnShaded=1)
             pm.displayPref(wireframeOnShadedActive="full")
             pm.inViewMessage(
                 position="topCenter", fade=1, statusMessage="Wireframe <hl>Full</hl>."
             )
-        elif state == 1:  # Wireframe Off
-            pm.displayPref(wireframeOnShadedActive="none")
-            pm.inViewMessage(
-                position="topCenter", fade=1, statusMessage="Wireframe <hl>Off</hl>."
-            )
-        elif state == 2 and "modelPanel" in focused_panel:  # Wireframe On Shaded
-            display_utils.DisplayUtils.set_wireframe_on_shaded(focused_panel, True)
+        elif state == 1:  # Wireframe Selected
+            pm.modelEditor(focused_panel, edit=True, wireframeOnShaded=0)
+            pm.displayPref(wireframeOnShadedActive="reduced")
             pm.inViewMessage(
                 position="topCenter",
                 fade=1,
-                statusMessage="Wireframe <hl>On Shaded</hl>.",
+                statusMessage="Wireframe <hl>Reduced</hl>.",
+            )
+        elif state == 2:  # Wireframe Off
+            pm.displayPref(wireframeOnShadedActive="none")
+            pm.inViewMessage(
+                position="topCenter", fade=1, statusMessage="Wireframe <hl>None</hl>."
             )
 
     @classmethod

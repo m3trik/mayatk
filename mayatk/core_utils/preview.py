@@ -77,6 +77,24 @@ class Preview:
         self.window = self.create_button.window()
 
         self.init_show_hide_behavior(enable_on_show, disable_on_hide)
+        # Create a scriptJob to disable preview on undo event
+        self.script_job = pm.scriptJob(event=["Undo", self.disable_on_external_undo])
+        self.is_refreshing = False
+
+    def __del__(self):
+        """Ensure the scriptJob is killed when the instance is deleted."""
+        if pm.scriptJob(exists=self.script_job):
+            pm.scriptJob(kill=self.script_job, force=True)
+
+    def disable_on_external_undo(self):
+        """Disables the preview functionality on external undo operations only."""
+        if (
+            not self.internal_undo_triggered
+            and not self.is_refreshing
+            and self.preview_checkbox.isChecked()
+        ):
+            self.disable()
+        self.internal_undo_triggered = False  # Reset flag after checking
 
     def init_show_hide_behavior(self, enable_on_show, disable_on_hide):
         self.enable_on_show = enable_on_show
@@ -148,6 +166,7 @@ class Preview:
     def undo_if_needed(self):
         """Executes undo operation if required."""
         if self.needs_undo:
+            self.internal_undo_triggered = True
             pm.undoInfo(closeChunk=True)
             try:
                 pm.undo()
@@ -162,7 +181,7 @@ class Preview:
         """Refreshes the preview to reflect any changes."""
         if not self.preview_checkbox.isChecked():
             return
-
+        self.is_refreshing = True
         self.undo_if_needed()
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
         try:
@@ -177,6 +196,7 @@ class Preview:
         finally:
             pm.undoInfo(closeChunk=True)
         self.needs_undo = True  # Set to True once the operation has been performed
+        self.is_refreshing = False
 
     def finalize_changes(self):
         """Finalizes the preview changes and calls the finalize_func if provided."""
