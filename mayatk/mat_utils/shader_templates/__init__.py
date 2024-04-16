@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from mayatk.mat_utils._mat_utils import *
+from mayatk.mat_utils.shader_templates._shader_templates import *
 
 # -----------------------------------------------------------------------------
 

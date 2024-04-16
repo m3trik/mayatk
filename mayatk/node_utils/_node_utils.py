@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class NodeUtils(ptk.HelpMixin):
@@ -177,44 +177,38 @@ class NodeUtils(ptk.HelpMixin):
     def get_transform_node(
         nodes, returned_type="obj", attributes=False, inc=[], exc=[]
     ):
-        """Get transform node(s) or node attributes.
-
-        Parameters:
-            nodes (str/obj/list): A relative of a transform Node.
-            returned_type (str): The desired returned object type. Not valid with the `attributes` parameter.
-                    (valid: 'str'(default), 'obj').
-            attributes (bool): Return the attributes of the node, rather then the node itself.
-
-        Returns:
-            (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
-        """
+        """Get transform node(s) or node attributes."""
         result = []
-        for node in pm.ls(nodes):
-            transforms = pm.ls(node, type="transform")
-            if not transforms:  # from shape
-                shapeNodes = pm.ls(node, objectsOnly=1)
-                transforms = pm.listRelatives(shapeNodes, parent=1)
-                if not transforms:  # from history
-                    try:
-                        transforms = pm.listRelatives(
-                            pm.listHistory(node, future=1), parent=1
-                        )
-                    except Exception:
-                        transforms = []
-            for n in transforms:
-                result.append(n)
+        for node in pm.ls(nodes, long=True):
+            # Check if node is a transform and directly add it
+            if isinstance(node, pm.nt.Transform):
+                result.append(node)
+            elif isinstance(node, pm.nt.Mesh):
+                # For mesh nodes, add their parent transform to the result
+                parent = pm.listRelatives(node, parent=True, type="transform")
+                if parent:
+                    result.extend(parent)
+            else:
+                # Handle other types by examining their history for transform nodes
+                history_transforms = pm.listRelatives(
+                    pm.listHistory(node, future=True), parent=True, type="transform"
+                )
+                if history_transforms:
+                    result.extend(history_transforms)
+
+        # Remove any duplicates and ensure only transforms are in the final result
+        result = list(set(result))  # Remove any duplicates
 
         if attributes:
-            result = pm.listAttr(result, read=1, hasData=1)
+            result = pm.listAttr(result, read=True, hasData=True)
 
-        # convert element type.
-        result = core_utils.CoreUtils.convert_array_type(
+        # Convert element type and apply filters
+        result = _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
-        # filter
         result = ptk.filter_list(result, inc, exc)
-        # return as list if `nodes` was given as a list.
-        return ptk.format_return(list(set(result)), nodes)
+
+        return ptk.format_return(result, nodes)
 
     @classmethod
     def get_shape_node(
@@ -232,7 +226,7 @@ class NodeUtils(ptk.HelpMixin):
             (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
-        for node in pm.ls(nodes):
+        for node in pm.ls(nodes, long=True):
             shapes = pm.listRelatives(
                 node, children=1, shapes=1
             )  # get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]
@@ -246,14 +240,13 @@ class NodeUtils(ptk.HelpMixin):
                         shapes = cls.get_shape_node(transforms)
                     except Exception:
                         shapes = []
-            for n in shapes:
-                result.append(n)
+            result.extend(shapes)
 
         if attributes:
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -275,7 +268,7 @@ class NodeUtils(ptk.HelpMixin):
             (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
-        for node in pm.ls(nodes):
+        for node in pm.ls(nodes, long=True):
             shapes = pm.listRelatives(
                 node, children=1, shapes=1
             )  # get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]
@@ -299,7 +292,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -311,76 +304,74 @@ class NodeUtils(ptk.HelpMixin):
     def create_render_node(
         cls,
         node_type,
-        flag="asShader",
-        secondary_flag="surfaceShader",
-        name="",
-        tex="",
-        texture_node=False,
-        post_command="",
-        **kwargs,
+        classification=None,
+        category=None,
+        name=None,
+        create_placement=False,
+        create_shading_group=True,
+        **attributes,
     ):
-        """Procedure to create the node classified as specified by the inputs.
+        """Creates a Maya node of a specified type with enhanced control over the creation process, including decisions
+        on associated shading groups and placement nodes, direct flag specifications, and optional node renaming.
 
         Parameters:
-            node_type (str): The type of node to be created. ie. 'StingrayPBS' or 'aiStandardSurface'
-            flag (str): A flag specifying which how to classify the node created.
-                    valid:  as2DTexture, as3DTexture, asEnvTexture, asShader, asLight, asUtility
-            secondary_flag (str): A secondary flag used to make decisions in combination with 'asType'
-                    valid:  -asBump : defines a created texture as a bump
-                                    -asNoShadingGroup : for materials; create without a shading group
-                                    -asDisplacement : for anything; map the created node to a displacement material.
-                                    -asUtility : for anything; do whatever the $as flag says, but also classify as a utility
-                                    -asPostProcess : for any postprocess node
-            name (str): The desired node name.
-            tex (str): The path to a texture file for those nodes that support one.
-            texture_node (bool): If not needed, the `place2dTexture` node will be deleted after creation.
-            post_command (str): A command entered by the user when invoking create_render_node.
-                            The command will substitute the string %node with the name of the
-                            node it creates.  createRenderWindow will be closed if a command
-                            is not the null string ("").
-            kwargs () = Set additional node attributes after creation. ie. colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1
+            node_type (str): The type of node to be created (e.g., 'StingrayPBS', 'aiStandardSurface').
+            classification (str, optional): Primary flag to control the node classification (e.g., 'asShader').
+            category (str, optional): Secondary flag for additional control (e.g., 'surfaceShader').
+            name (str, optional): Custom name for the created node. Defaults to Maya's convention if None.
+            create_shading_group (bool): Whether to create a shading group for shader nodes.
+            create_placement (bool): Whether to create a placement node for texture nodes.
+            **attributes: Additional attributes to set on the created node.
 
         Returns:
-            (obj) node
-
-        Example:
-            create_render_node('StingrayPBS')
-            create_render_node('file', flag='as2DTexture', tex=f, texture_node=True, colorSpace='Raw', alphaIsLuminance=1, ignoreColorSpaceFileRules=1)
-            create_render_node('aiSkyDomeLight', tex=pathToHdrMap, name='env', camera=0, skyRadius=0) #turn off skydome and viewport visibility.
+            The created node (PyNode object) or None if creation fails.
         """
-        # Attempt to create the node, log an error and exit if it fails.
+        # Determine flags based on node classification if not provided
+        if classification is None or category is None:
+            classification_string = pm.getClassification(node_type)
+            if any("shader/surface" in c for c in classification_string):
+                classification = classification or "asShader"
+                category = category or "surfaceShader"
+            elif any("texture/3d" in c for c in classification_string):
+                classification = classification or "as3DTexture"
+                category = category or ""
+            elif any("texture/environment" in c for c in classification_string):
+                classification = classification or "asEnvTexture"
+                category = category or ""
+            elif any("texture" in c for c in classification_string):
+                classification = classification or "as2DTexture"
+                category = category or ""
+            elif any("light" in c for c in classification_string):
+                classification = classification or "asLight"
+                category = category or "defaultLight"
+            else:
+                classification = classification or "asUtility"
+                category = category or "utility"
+
+        # Prepare settings for node creation
+        original_shading_group = pm.optionVar(query="createMaterialsWithShadingGroup")
+        original_placement = pm.optionVar(query="createTexturesWithPlacement")
+        pm.optionVar(intValue=("createMaterialsWithShadingGroup", create_shading_group))
+        pm.optionVar(intValue=("createTexturesWithPlacement", create_placement))
+
         try:
-            node = pm.PyNode(
-                pm.mel.createRenderNodeCB(
-                    f"-{flag}", secondary_flag, node_type, post_command
-                )
+            node_name = pm.mel.eval(
+                f'createRenderNodeCB "-{classification}" "{category}" "{node_type}" ""'
             )
+            node = pm.PyNode(node_name)
+            if name:
+                node.rename(name)
+            if node:  # Set attributes if the node was created successfully
+                cls.set_node_attributes(node, option_quiet=False, **attributes)
+            return node
         except Exception as e:
-            pm.error(f"Failed to create node of type '{node_type}'. Error: {str(e)}")
+            print(f"Failed to create node of type '{node_type}'. Error: {e}")
             return None
-
-        # If texture_node is False, attempt to remove unnecessary 'place2dTexture' nodes.
-        if not texture_node:
-            pm.delete(
-                pm.listConnections(
-                    node, type="place2dTexture", source=True, exactType=True
-                )
+        finally:  # Restore original settings
+            pm.optionVar(
+                intValue=("createMaterialsWithShadingGroup", original_shading_group)
             )
-
-        # Additional configurations
-        if tex:
-            node.fileTextureName.set(tex)
-
-        if name:
-            node.rename(name)
-
-        # Attempt to set additional attributes, log error if it fails.
-        try:
-            cls.set_node_attributes(node, **kwargs)
-        except Exception as e:
-            pm.error(f"Failed to set attributes for node '{node}'. Error: {str(e)}")
-
-        return node
+            pm.optionVar(intValue=("createTexturesWithPlacement", original_placement))
 
     @staticmethod
     def get_connected_nodes(
@@ -430,51 +421,100 @@ class NodeUtils(ptk.HelpMixin):
         return filtered_nodes if not first_match else None
 
     @staticmethod
-    def get_node_attributes(node, inc=[], exc=[], mapping=False, **kwargs):
-        """Retrieves specified node's attributes along with their corresponding values, represented as a dictionary.
+    def get_node_attributes(
+        node, inc=[], exc=[], exc_defaults=False, quiet=True, **kwargs
+    ):
+        """Retrieves specified node's attributes along with their corresponding values,
+        optionally excluding those with default values by adding them to the exclusion list.
 
         Parameters:
-            node (obj): The target node from which to extract attributes.
-            inc (str/list): Specifies which attributes to include in the output. Any other attributes will be ignored. If there is any overlap, the exclude parameter takes priority over this.
-            exc (str/list): Determines which attributes to leave out from the result.
-            mapping (bool): If set to True, returns a dictionary mapping attributes to their respective values.
-            kwargs: Supports additional keyword arguments that are passed to the listAttr command in Maya.
+            node (pm.nt.DependNode): The target node from which to extract attributes.
+            inc (list, optional): Attributes to include. Others are ignored unless there's overlap with 'exc'.
+            exc (list, optional): Attributes to exclude. Takes priority over 'inc'.
+            exc_defaults (bool, optional): If True, attributes at their default values are added to 'exc'.
+            quiet (bool, optional): If False, prints errors encountered during attribute processing.
+            **kwargs: Additional keyword arguments passed to pm.listAttr.
 
         Returns:
-            dict: A dictionary that pairs each attribute (as a string) to its current value. If 'mapping' is False, only the values of the attributes are returned.
+            dict: A dictionary where keys are attribute names and values are the attribute values.
         """
-        kwargs.setdefault("read", True)
-        kwargs.setdefault("hasData", True)
-        kwargs.setdefault("settable", True)
+        list_attr_kwargs = {  # Set defaults (Kwargs will overwrite these values)
+            "read": True,
+            "hasData": True,
+            "settable": True,
+            "scalarAndArray": True,
+            "keyable": False,
+            "multi": True,
+        }
+        list_attr_kwargs.update(kwargs)
 
-        attr_names = ptk.filter_list(pm.listAttr(node, **kwargs), inc, exc)
+        all_attr_names = pm.listAttr(node, **list_attr_kwargs)
+        if exc_defaults:
+            for attr_name in all_attr_names:
+                try:
+                    defaults = pm.attributeQuery(attr_name, node=node, listDefault=True)
+                    if defaults:
+                        default_value = defaults[0]
+                        current_value = pm.getAttr(f"{node}.{attr_name}")
+                        # Check for default value and add to 'exc' if matched
+                        if current_value == default_value or (
+                            isinstance(current_value, float)
+                            and abs(current_value - default_value) < 1e-6
+                        ):
+                            exc.append(attr_name)
+                except Exception:
+                    continue  # Skip attribute if any error occurs
+
+        # Apply filtering with the updated 'exc' list
+        filtered_attr_names = ptk.filter_list(
+            pm.listAttr(node, **list_attr_kwargs), inc, exc
+        )
 
         result = {}
-        for attr_name in attr_names:
+        for attr_name in filtered_attr_names:
             try:
-                result[attr_name] = pm.getAttr(f"{node}.{attr_name}", silent=True)
-            except pm.MayaAttributeError as e:
-                print(
-                    f"Error encountered while extracting attribute '{attr_name}' from node '{node}': {e}"
-                )
-                continue
+                attr_value = pm.getAttr(f"{node}.{attr_name}")
+                result[attr_name] = attr_value
+            except Exception as e:
+                if not quiet:
+                    print(f"Error processing attribute '{attr_name}' on '{node}': {e}")
 
-        return result if mapping else result.values()
+        return result
 
     @classmethod
-    def set_node_attributes(cls, node, **attributes) -> None:
-        """Set node attribute values. Creates an attribute if it doesn't exist.
+    def set_node_attributes(
+        cls, node, option_create=False, option_quiet=False, **attributes
+    ):
+        """Set node attribute values, with options to create attributes if they don't exist and to suppress errors.
 
         Parameters:
             node (str/obj): The node to set attributes on.
-            attributes (dict): Dictionary of attribute names and values.
+            option_create (bool): If True, creates the attribute if it doesn't exist. Defaults to False.
+            option_quiet (bool): If True, suppresses any errors encountered. Defaults to False.
+            **attributes: Arbitrary keyword arguments for attribute names and their values.
         """
         for attr, value in attributes.items():
-            try:
-                pm.setAttr(f"{node}.{attr}", value)
-            except AttributeError:
-                # Handle the case where the attribute does not exist
-                cls.set_node_custom_attributes(node, **{attr: value})
+            attribute_name = f"{node}.{attr}"
+            try:  # Check if the attribute is locked
+                if pm.getAttr(attribute_name, lock=True):
+                    pm.warning(f"The attribute '{attribute_name}' is locked.")
+                    continue
+
+                # Set the attribute value
+                pm.setAttr(attribute_name, value)
+
+            except pm.MayaAttributeError:
+                if option_create:  # Attempt to create the attribute and set its value
+                    cls.create_and_set_attribute(node, attr, value)
+                elif not option_quiet:
+                    pm.warning(
+                        f"Attribute '{attr}' does not exist on node '{node}', and 'option_create' is False."
+                    )
+            except Exception as e:
+                if not option_quiet:
+                    pm.warning(
+                        f"Failed to set attribute '{attr}' on node '{node}'. Error: {str(e)}"
+                    )
 
     @classmethod
     def get_maya_attribute_type(cls, value):

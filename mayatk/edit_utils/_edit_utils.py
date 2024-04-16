@@ -9,14 +9,16 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, node_utils, xform_utils
+from mayatk.core_utils import _core_utils
+from mayatk import node_utils
+from mayatk import xform_utils
 
 
 class EditUtils(ptk.HelpMixin):
     """ """
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -109,7 +111,7 @@ class EditUtils(ptk.HelpMixin):
             )
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -131,7 +133,7 @@ class EditUtils(ptk.HelpMixin):
                     print(name + ": ", error)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def append_location_based_suffix(
         objects,
         first_obj_as_ref=False,
@@ -213,7 +215,7 @@ class EditUtils(ptk.HelpMixin):
             pm.rename(obj, newNames[obj])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -341,7 +343,7 @@ class EditUtils(ptk.HelpMixin):
         return relevant_faces
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def cut_along_axis(cls, obj, axis="x", amount=1, offset=0, delete=False):
         """Performs cut operations on the specified object along a given axis with
         optional multiple cuts and an offset.
@@ -394,7 +396,7 @@ class EditUtils(ptk.HelpMixin):
                 cls.delete_along_axis(obj, axis)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def delete_along_axis(
         cls, objects, axis="-x", world_space=False, delete_history=True
     ):
@@ -421,7 +423,7 @@ class EditUtils(ptk.HelpMixin):
             pm.delete(faces)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def mirror(
         objects,
         axis="-x",
@@ -821,7 +823,7 @@ class EditUtils(ptk.HelpMixin):
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mfnMesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 

@@ -9,8 +9,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, Preview
+from mayatk.core_utils import _core_utils
 from mayatk.display_utils import DisplayUtils
+from mayatk.core_utils import preview
 
 
 class DuplicateRadial:
@@ -105,7 +106,7 @@ class DuplicateRadialSlots:
         self.sb = self.switchboard()
         self.ui = self.sb.duplicate_radial
 
-        self.preview = Preview(
+        self.preview = preview.Preview(
             self,
             self.ui.chk000,
             self.ui.b000,
@@ -185,7 +186,7 @@ class DuplicateRadialSlots:
             first_obj_name = copies[0].name()
             name = re.sub(r"\d+$", "", first_obj_name)
             name += "_array"
-            unique_name = CoreUtils.generate_unique_name(name)
+            unique_name = _core_utils.CoreUtils.generate_unique_name(name)
 
             # Find the parent of the parent of the first object and use it as a parent for the new group
             original_parent = copies[0].getParent().getParent()
@@ -210,7 +211,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = CoreUtils.get_main_window()
+    parent = _core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "duplicate_radial.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=DuplicateRadialSlots)
 

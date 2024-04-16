@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class XformUtils(ptk.HelpMixin):
@@ -54,7 +54,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -136,7 +136,7 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -158,7 +158,7 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Get the stored world matrix
@@ -189,7 +189,7 @@ class XformUtils(ptk.HelpMixin):
             pm.xform(obj, scale=pm_matrix.scale, worldSpace=True)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -217,7 +217,7 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -267,7 +267,7 @@ class XformUtils(ptk.HelpMixin):
             pm.delete(plane)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -294,7 +294,7 @@ class XformUtils(ptk.HelpMixin):
         pm.delete(const, target)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -579,7 +579,7 @@ class XformUtils(ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -675,7 +675,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 
@@ -712,8 +712,8 @@ class XformUtils(ptk.HelpMixin):
 
         if len(selection) < 2:
             if len(selection) == 0:
-                core_utils.CoreUtils.viewport_message("No vertices selected")
-            core_utils.CoreUtils.viewport_message(
+                _core_utils.CoreUtils.viewport_message("No vertices selected")
+            _core_utils.CoreUtils.viewport_message(
                 "Selection must contain at least two vertices"
             )
 

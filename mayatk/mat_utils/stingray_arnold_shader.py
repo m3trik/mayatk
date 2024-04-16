@@ -2,7 +2,6 @@
 # coding=utf-8
 import os
 from typing import List, Optional, Tuple, Callable
-from PySide2 import QtWidgets
 
 try:
     import pymel.core as pm
@@ -11,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils import _core_utils
 from mayatk.node_utils import NodeUtils
 
 
@@ -26,7 +25,7 @@ class StingrayArnoldShader:
     color_warning = "rgb(200, 200, 100)"
     color_error = "rgb(255, 100, 100)"
 
-    @CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def create_network(
         self,
         textures: List[str],
@@ -51,6 +50,9 @@ class StingrayArnoldShader:
         opacity_map = ptk.filter_images_by_type(
             textures, ["Opacity", "Albedo_Transparency"]
         )
+
+        name = name if name else ptk.get_base_texture_name(textures[0])
+
         sr_node = self.setup_stringray_node(name, opacity_map)
 
         # Optional: Arnold shader creation
@@ -106,13 +108,13 @@ class StingrayArnoldShader:
         Returns:
             pm.nt.StingrayPBS: The created StingrayPBS shader node.
         """
-        CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        _core_utils.CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
         # Create StingrayPBS node
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = CoreUtils.get_maya_info("install_path")
+            maya_install_path = _core_utils.CoreUtils.get_maya_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -146,7 +148,7 @@ class StingrayArnoldShader:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
-        CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        _core_utils.CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
 
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
@@ -186,14 +188,14 @@ class StingrayArnoldShader:
         """
         if texture_type == "Base_Color":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
             sr_node.use_color_map.set(1)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
             pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
@@ -208,46 +210,46 @@ class StingrayArnoldShader:
                 else sr_node.TEX_metallic_map
             )
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, target_attr, force=True)
             sr_node.setAttr(f"use_{texture_type.lower()}_map", 1)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
-            pm.connectAttr(texture_node.outAlpha, sr_node.TEX_metallic_mapX, force=True)
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
             pm.connectAttr(
-                texture_node.outColorR, sr_node.TEX_roughness_mapX, force=True
+                texture_node.outAlpha, sr_node.TEX_roughness_mapX, force=True
             )
             sr_node.use_metallic_map.set(1)
             sr_node.use_roughness_map.set(1)
 
         elif texture_type in ["Normal_OpenGL", "Normal_DirectX"]:
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_normal_map, force=True)
             sr_node.use_normal_map.set(1)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_emissive_map, force=True)
             sr_node.use_emissive_map.set(1)
 
         elif texture_type == "Ambient_Occlusion":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
             sr_node.use_ao_map.set(1)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", tex=texture
+                "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
             sr_node.use_opacity_map.set(1)
@@ -281,8 +283,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
             )
@@ -292,7 +293,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
             )
@@ -306,8 +307,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
@@ -322,8 +322,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
@@ -334,8 +333,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
@@ -355,9 +353,8 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
+                fileTextureName=texture,
                 colorSpace="Raw",
-                texture_node=True,
                 ignoreColorSpaceFileRules=1,
             )
             pm.connectAttr(texture_node.outAlpha, ai_node.emission, force=True)
@@ -367,8 +364,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
@@ -379,8 +375,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
             )
@@ -390,8 +385,7 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
-                tex=texture,
-                texture_node=True,
+                fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
@@ -622,7 +616,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
-        self.workspace_dir = CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = _core_utils.CoreUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -746,7 +740,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         if progress is not None:
             self.ui.progressBar.setValue(progress)
-            QtWidgets.QApplication.instance().processEvents()
+            self.sb.QtWidgets.QApplication.instance().processEvents()
 
 
 # -----------------------------------------------------------------------------
@@ -754,7 +748,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = CoreUtils.get_main_window()
+    parent = _core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
     sb = Switchboard(
         parent, ui_location=ui_file, slot_location=StingrayArnoldShaderSlots

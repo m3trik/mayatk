@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class DisplayUtils(ptk.HelpMixin):
@@ -26,7 +26,7 @@ class DisplayUtils(ptk.HelpMixin):
     ]
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_visibility(
         cls,
         elements: Union[str, object, List],

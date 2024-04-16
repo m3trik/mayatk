@@ -30,7 +30,7 @@ import mayatk as mtk
 mtk.is_group(<obj>)
 # Returns: bool
 
-mtk.getBoundingBox(<obj>, 'centroid|size') 
+mtk.get_bounding_box(<obj>, 'centroid|size')
 # Returns: tuple containing bounding box center and size.
 # ex. ((-0.02406523456116849, -0.8100277092487823, 0.0), (3.3830200057098523, 4.0155477063595555, 3.40770764056194))
 ```

@@ -6,11 +6,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import display_utils
+from mayatk.core_utils import _core_utils
+from mayatk.core_utils.macro_manager import MacroManager
 from mayatk import node_utils
 
 
@@ -44,7 +43,7 @@ class DisplayMacros:
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=1)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
             pm.isolateSelect(currentPanel, state=0)
@@ -225,37 +224,44 @@ class DisplayMacros:
     @staticmethod
     def m_wireframe() -> None:
         """Toggles the wireframe display state.
-        Possible states include: full, none, and shaded.
+        Possible states include: none, shaded, full
         """
-        state = ptk.cycle([0, 1, 2], "m_wireframe")
-        focused_panel = core_utils.CoreUtils.get_panel(withFocus=True)
+        focused_panel = _core_utils.CoreUtils.get_panel(withFocus=True)
+        # Check if focused_panel is a modelPanel to avoid errors when it's not
+        if not focused_panel or not pm.modelEditor(
+            focused_panel, query=True, exists=True
+        ):
+            print("No focused model panel found.")
+            return
 
-        if state == 0:  # Full Wireframe
-            pm.modelEditor(focused_panel, edit=True, wireframeOnShaded=1)
+        # Query the current wireframe on shaded setting
+        state = pm.displayPref(q=True, wireframeOnShadedActive=True)
+
+        if state == "none":  # Full Wireframe
             pm.displayPref(wireframeOnShadedActive="full")
-            pm.inViewMessage(
-                position="topCenter", fade=1, statusMessage="Wireframe <hl>Full</hl>."
-            )
-        elif state == 1:  # Wireframe Selected
-            pm.modelEditor(focused_panel, edit=True, wireframeOnShaded=0)
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=True)
+            message = "Wireframe <hl>Full</hl>."
+        elif state == "full":  # Wireframe Selected
             pm.displayPref(wireframeOnShadedActive="reduced")
-            pm.inViewMessage(
-                position="topCenter",
-                fade=1,
-                statusMessage="Wireframe <hl>Reduced</hl>.",
-            )
-        elif state == 2:  # Wireframe Off
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            message = "Wireframe <hl>Reduced</hl>."
+        elif state == "reduced":  # Wireframe Off
             pm.displayPref(wireframeOnShadedActive="none")
-            pm.inViewMessage(
-                position="topCenter", fade=1, statusMessage="Wireframe <hl>None</hl>."
-            )
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            message = "Wireframe <hl>None</hl>."
+        else:  # Fallback or error condition, you might want to log an error or set a default state
+            print(f"Unexpected wireframe state encountered: {state}")
+            return
+
+        # Display the message
+        pm.inViewMessage(position="topCenter", fade=True, statusMessage=message)
 
     @classmethod
     def m_shading(cls) -> None:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, query=1, displayAppearance=1)
         displayTextures = pm.modelEditor(currentPanel, query=1, displayTextures=1)
 
@@ -302,7 +308,7 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
         if pm.modelEditor(currentPanel, exists=1):
@@ -558,7 +564,7 @@ class UiMacros:
     def m_toggle_panels() -> None:
         """Toggle UI toolbars."""
         # toggle panel menus
-        panels = core_utils.CoreUtils.get_panel(allPanels=1)
+        panels = _core_utils.CoreUtils.get_panel(allPanels=1)
         state = int(pm.panel(panels[0], menuBarVisible=1, query=1))
         for panel in panels:
             pm.panel(panel, edit=1, menuBarVisible=(not state))
@@ -575,7 +581,7 @@ class AnimationMacros:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = _core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -586,7 +592,7 @@ class AnimationMacros:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = _core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -596,7 +602,7 @@ class AnimationMacros:
 
 
 class Macros(
-    core_utils.MacroManager,
+    MacroManager,
     DisplayMacros,
     EditMacros,
     SelectionMacros,

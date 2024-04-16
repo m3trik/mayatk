@@ -5,7 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk import display_utils
+from mayatk.display_utils import _display_utils
 
 
 class Preview:
@@ -190,7 +190,7 @@ class Preview:
             self.operation_instance.perform_operation(operated_objects)
 
             # Add the operated objects to the isolation set if one exists.
-            display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
+            _display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
         except Exception as e:
             print(f"Exception during operation: {e}")
         finally:
