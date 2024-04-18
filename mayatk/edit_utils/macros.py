@@ -18,27 +18,28 @@ class DisplayMacros:
 
     @staticmethod
     def m_back_face_culling() -> None:
-        """Toggle Back-Face Culling."""
-        sel: list = pm.ls(selection=True)
-        if sel:
-            state: bool = pm.polyOptions(sel, query=True, wireBackCulling=True)[0]
-
+        """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
+        objects = pm.ls(selection=True) or pm.ls(type="mesh")
+        if objects:
+            state: bool = pm.polyOptions(objects, query=True, wireBackCulling=True)[0]
             if state:
-                pm.polyOptions(sel, gl=True, backCulling=True)
-                pm.inViewMessage(
-                    statusMessage="Back-Face Culling is now <hl>ON</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
+                pm.polyOptions(objects, wireBackCulling=False, backCulling=True)
+                message = "OFF"
             else:
-                pm.polyOptions(sel, gl=True, wireBackCulling=True)
-                pm.inViewMessage(
-                    statusMessage="Back-Face Culling is now <hl>OFF</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
-        else:
-            print(" Warning: Nothing selected. ")
+                pm.polyOptions(objects, wireBackCulling=True, backCulling=False)
+                message = "ON"
+
+            pm.inViewMessage(
+                statusMessage=f"Back-Face Culling is now <hl>{message}</hl>.",
+                pos="topCenter",
+                fade=True,
+            )
+        else:  # Feedback if there are no meshes at all in the scene
+            pm.inViewMessage(
+                statusMessage="<hl>No mesh objects found in the scene.</hl>",
+                pos="topCenter",
+                fade=True,
+            )
 
     @staticmethod
     def m_isolate_selected() -> None:

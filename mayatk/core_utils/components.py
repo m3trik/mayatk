@@ -1221,7 +1221,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @_core_utils.CoreUtils.undo
     def set_edge_hardness(
         cls,
-        x: Union[str, object, List],
+        objects: Union[str, object, List],
         angle_threshold: float,
         upper_hardness: float = None,
         lower_hardness: float = None,
@@ -1230,33 +1230,38 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         Parameters:
             cls: The class the method belongs to.
-            x: Objects or collections of objects to process.
+            objects: Objects or collections of objects to process.
             angle_threshold: Angle in degrees to classify edges.
             upper_hardness: Hardness to apply to edges above the angle threshold.
             lower_hardness: Hardness to apply to edges below the angle threshold.
         """
         # Retrieve all edges within the specified angle range
-        all_edges = cls.get_edges_by_normal_angle(x, 0, 180)
+        all_edges = cls.get_edges_by_normal_angle(objects, 0, 180)
 
-        # Filter edges based on the angle threshold and hardness settings
-        upper_edges = [
-            edge
-            for edge in all_edges
-            if cls.get_normal_angle(edge) >= angle_threshold
-            and upper_hardness is not None
-        ]
-        lower_edges = [
-            edge
-            for edge in all_edges
-            if cls.get_normal_angle(edge) < angle_threshold
-            and lower_hardness is not None
-        ]
+        # Map components to their respective objects to ensure single object operation
+        object_to_edges = cls.map_components_to_objects(all_edges)
 
-        # Apply hardness settings to the filtered edges
-        if upper_edges:
-            pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
-        if lower_edges:
-            pm.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
+        # Iterate over each object and apply edge hardness settings
+        for obj, edges in object_to_edges.items():
+            # Filter edges for upper and lower hardness
+            upper_edges = [
+                edge
+                for edge in edges
+                if cls.get_normal_angle(edge) >= angle_threshold
+                and upper_hardness is not None
+            ]
+            lower_edges = [
+                edge
+                for edge in edges
+                if cls.get_normal_angle(edge) < angle_threshold
+                and lower_hardness is not None
+            ]
+
+            # Apply hardness settings to the filtered edges
+            if upper_edges:
+                pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
+            if lower_edges:
+                pm.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
 
     @classmethod
     def get_faces_with_similar_normals(

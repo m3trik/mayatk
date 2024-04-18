@@ -327,11 +327,14 @@ class ColorManagerSlots(ColorManager):
         if not objects or not self.target_color:
             return  # handle_no_selection will log the necessary warning
 
+        apply_to_wireframe = self.ui.chk012.isChecked()
+        apply_to_outliner = self.ui.chk013.isChecked()
+
         ColorManager.apply_color(
             objects,
             color=self.target_color,
-            apply_to_wireframe=True,
-            apply_to_outliner=True,
+            apply_to_wireframe=apply_to_wireframe,
+            apply_to_outliner=apply_to_outliner,
         )
 
     def b002(self):
