@@ -277,58 +277,32 @@ class MatUtils(ptk.HelpMixin):
         except Exception:
             pass
 
-        #  The following is a version that attempts to build a more accurate material swatch icon, but is crashing Maya
-        # """Generates a QIcon representing the color swatch of a given Maya material node.
+    @staticmethod
+    def calculate_uv_padding(map_size, normalize=False):
+        """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
+        Optionally return the padding as a normalized value relative to the map size.
 
-        # Parameters:
-        #     mat (str or PyNode): The name or PyNode object of the Maya material. Must be of type 'shadingDependNode'.
-        #     size (list of int): A list [width, height] specifying the dimensions of the QIcon in pixels. Default is [20, 20].
+        Parameters:
+        map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
+        normalize (bool): If True, returns the padding as a normalized value. Default is False.
 
-        # Returns:
-        #     QIcon: A QIcon object filled with the color and transparency attributes of the specified material.
-        #            Returns None if the material is invalid or an exception occurs.
-        # Example:
-        #     icon = get_mat_swatch_icon('lambert1', [20, 20])
-        # """
-        # from PySide2.QtGui import QPixmap, QPainter, QColor, QIcon
+        Returns:
+        float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
 
-        # try:
-        #     # Check if the given 'mat' is a valid Maya material node
-        #     if not pm.objectType(mat, isAType="shadingDependNode"):
-        #         print(
-        #             f"Not a valid material. Expected 'shadingDependNode', got '{mat}' of type '{type(mat).__name__}'."
-        #         )
-        #         return None
+        Expected Output:
+        - For a 1024 pixel map: 8.0 pixels of padding or 0.0078125 if normalized
+        - For a 2048 pixel map: 16.0 pixels of padding or 0.0078125 if normalized
+        - For a 4096 pixel map: 32.0 pixels of padding or 0.0078125 if normalized
+        - For a 8192 pixel map: 64.0 pixels of padding or 0.0078125 if normalized
 
-        #     # Initialize QPixmap
-        #     pixmap = QPixmap(size[0], size[1])
-        #     pixmap.fill(QColor(0, 0, 0, 0))  # Transparent Background
-
-        #     # Initialize QPainter
-        #     painter = QPainter(pixmap)
-
-        #     # Fetch material attributes
-        #     colorR = pm.getAttr(f"{mat}.colorR") * 255
-        #     colorG = pm.getAttr(f"{mat}.colorG") * 255
-        #     colorB = pm.getAttr(f"{mat}.colorB") * 255
-        #     transparency = pm.getAttr(
-        #         f"{mat}.transparencyR"
-        #     )  # Assuming R, G, B are the same for simplicity
-
-        #     # Set QColor based on material attributes
-        #     brushColor = QColor(colorR, colorG, colorB)
-        #     brushColor.setAlpha(255 * (1 - transparency))
-
-        #     # Draw swatch
-        #     painter.setBrush(brushColor)
-        #     painter.drawRect(0, 0, size[0], size[1])
-        #     painter.end()
-
-        #     return QIcon(pixmap)
-
-        # except Exception as e:
-        #     print(f"Exception: {e}")
-        #     return None
+        Example:
+        >>> calculate_uv_padding(4096, normalize=True)
+        0.0078125
+        """
+        padding = map_size / 128
+        if normalize:
+            return padding / map_size
+        return padding
 
 
 # -----------------------------------------------------------------------------

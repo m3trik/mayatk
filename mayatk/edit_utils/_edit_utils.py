@@ -489,7 +489,7 @@ class EditUtils(ptk.HelpMixin):
                     mirrorAxis=axis_pivot,
                     mergeMode=merge_mode,
                     mirrorPosition=0,
-                    mergeThresholdType=1,
+                    mergeThresholdType=0,
                     mergeThreshold=merge_threshold,
                     smoothingAngle=30,
                     flipUVs=0,

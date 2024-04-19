@@ -859,6 +859,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return closestVerts
 
     @staticmethod
+    @_core_utils.CoreUtils.undo
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging
         the new vertices with the corresponding vertices of the second edge.

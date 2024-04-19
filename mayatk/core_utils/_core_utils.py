@@ -560,40 +560,6 @@ class CoreUtils(ptk.HelpMixin):
         )
 
     @staticmethod
-    def viewport_message(
-        message="", status_message="", assist_message="", position="topCenter"
-    ):
-        """
-        Parameters:
-            message (str): The message to be displayed, (accepts html formatting).
-            status_message (str): The status info message to be displayed (accepts html formatting).
-            assist_message (str): The user assistance message to be displayed, (accepts html formatting).
-            position (str): position on screen. possible values are: topCenter","topRight","midLeft","midCenter","midCenterTop","midCenterBot","midRight","botLeft","botCenter","botRight"
-
-        Example:
-            viewport_message("shutting down:<hl>"+str(timer)+"</hl>")
-        """
-        fontSize = 10
-        fade = 1
-        fadeInTime = 0
-        fadeStayTime = 1000
-        fadeOutTime = 500
-        alpha = 75
-
-        pm.inViewMessage(
-            message=message,
-            statusMessage=status_message,
-            assistMessage=assist_message,
-            position=position,
-            fontSize=fontSize,
-            fade=fade,
-            fadeInTime=fadeInTime,
-            fadeStayTime=fadeStayTime,
-            fadeOutTime=fadeOutTime,
-            alpha=alpha,
-        )  # 1000ms = 1 sec
-
-    @staticmethod
     def get_mel_globals(keyword=None, ignore_case=True):
         """Get global MEL variables."""
         variables = [

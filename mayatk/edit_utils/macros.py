@@ -17,6 +17,121 @@ class DisplayMacros:
     """ """
 
     @staticmethod
+    def m_component_id_display():
+        """Toggle Component Id Display through vertices, edges, faces, UVs, and off."""
+        # Query the current state of component ID display settings for vertices, edges, faces, and UVs
+        current_state = pm.polyOptions(q=True, displayItemNumbers=True)[:4]
+
+        # Determine the next state to switch to
+        if True not in current_state:
+            next_state_index = 0  # If all are False, start with vertices
+        else:
+            # Find the first True, switch to the next state or turn all off if it's the last one
+            current_index = current_state.index(True)
+            next_state_index = (
+                current_index + 1
+            ) % 5  # Cycle through 0-4 (vertices, edges, faces, UVs, off)
+
+        # Define the configurations for toggling component IDs
+        configurations = [
+            {"displayItemNumbers": (1, 0, 0, 0)},  # Vertex IDs
+            {"displayItemNumbers": (0, 1, 0, 0)},  # Edge IDs
+            {"displayItemNumbers": (0, 0, 1, 0)},  # Face IDs
+            {"displayItemNumbers": (0, 0, 0, 1)},  # UV IDs
+            {"displayItemNumbers": (0, 0, 0, 0)},  # Turn all off
+        ]
+        labels = ["vertex IDs", "edge IDs", "face IDs", "UV IDs", "Off"]
+
+        # Apply the selected configuration
+        pm.polyOptions(activeObjects=True, **configurations[next_state_index])
+
+        # Display message in the viewport
+        pm.inViewMessage(
+            amg=f"Component ID Display: <hl>{labels[next_state_index]}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
+
+    @staticmethod
+    def m_normals_display():
+        """Toggle face normals, vertex normals, tangents, and off."""
+        # Query the current state
+        current_tangent = pm.polyOptions(q=True, displayTangent=True)[0]
+        current_normal = pm.polyOptions(q=True, displayNormal=True)[0]
+        is_facet = pm.polyOptions(q=True, facet=True)[0]
+        is_vertex = pm.polyOptions(q=True, point=True)[0]
+
+        # Define the current state based on queries
+        if current_tangent:
+            current_state = 3  # Tangents are displayed
+        elif current_normal and is_vertex:
+            current_state = 2  # Vertex normals are displayed
+        elif current_normal and is_facet:
+            current_state = 1  # Facet normals are displayed
+        else:
+            current_state = 0  # All displays are off
+
+        # Determine the next state to switch to
+        next_state = (current_state + 1) % 4  # Cycle through the states: 0, 1, 2, 3
+
+        # Configuration for each state
+        if next_state == 0:
+            pm.polyOptions(displayNormal=False, displayTangent=False)
+        elif next_state == 1:
+            pm.polyOptions(
+                displayNormal=True,
+                facet=True,
+                point=False,
+                displayTangent=False,
+                sizeNormal=1,
+            )
+        elif next_state == 2:
+            pm.polyOptions(
+                displayNormal=True,
+                point=True,
+                facet=False,
+                displayTangent=False,
+                sizeNormal=1,
+            )
+        elif next_state == 3:
+            pm.polyOptions(displayTangent=True, displayNormal=False)
+
+        # Messages for each state
+        messages = [
+            "Normals Display <hl>Off</hl>",
+            "<hl>Facet</hl> Normals Display <hl>On</hl>",
+            "<hl>Vertex</hl> Normals Display <hl>On</hl>",
+            "<hl>Tangent</hl> Display <hl>On</hl>",
+        ]
+
+        # Display message in the viewport using inViewMessage
+        pm.inViewMessage(amg=messages[next_state], pos="topCenter", fade=True)
+
+    @staticmethod
+    def m_soft_edge_display():
+        """Toggle Soft Edge Display."""
+        # Query the current setting for all edges display
+        all_edges_visible = pm.polyOptions(q=True, ae=True)[0]
+
+        # Toggle the edge display based on the current state
+        if all_edges_visible:
+            # If all edges are currently visible, switch to soft edges only
+            pm.polyOptions(ae=False, se=True)
+            message = "Soft Edge Display <hl>On</hl>"
+        else:
+            # If not all edges are visible, it implies soft edges are active; switch to show all edges
+            pm.polyOptions(se=False, ae=True)
+            message = "All Edges Display <hl>On</hl>"
+
+        # Display message in the viewport using inViewMessage
+        pm.inViewMessage(amg=message, pos="topCenter", fade=True)
+
+    @staticmethod
+    def m_toggle_visibility():
+        """Toggle Visibility"""
+        pm.mel.ToggleVisibilityAndKeepSelection()
+
+    @staticmethod
     def m_back_face_culling() -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
         objects = pm.ls(selection=True) or pm.ls(type="mesh")
@@ -257,6 +372,33 @@ class DisplayMacros:
         # Display the message
         pm.inViewMessage(position="topCenter", fade=True, statusMessage=message)
 
+    @staticmethod
+    def m_material_override():
+        """Toggle Material Override"""
+        currentPanel = pm.playblast(
+            activeEditor=True
+        )  # Use playblast to get the active panel with focus
+        if not currentPanel:
+            pm.inViewMessage(
+                statusMessage="No active panel with focus found.",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        # Query the current state of default material usage
+        state = pm.modelEditor(currentPanel, q=True, useDefaultMaterial=True)
+
+        # Toggle the state of the default material
+        pm.modelEditor(currentPanel, edit=True, useDefaultMaterial=not state)
+
+        # Display the toggle state in the viewport
+        pm.inViewMessage(
+            statusMessage=f"Default Material Override: <hl>{'On' if not state else 'Off'}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
+
     @classmethod
     def m_shading(cls) -> None:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
@@ -347,53 +489,42 @@ class EditMacros:
     """ """
 
     @staticmethod
-    def m_object_selection() -> None:
-        """Set object selection mask."""
-        object_mode = pm.selectMode(query=True, object=True)
-        pm.selectMode(co=object_mode)
-        pm.selectMode(object=True)
-        pm.selectType(allObjects=True)
-
-    @staticmethod
-    def m_vertex_selection() -> None:
-        """Set vertex selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(vertex=True)
-
-    @staticmethod
-    def m_edge_selection() -> None:
-        """Set edge selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(edge=True)
-
-    @staticmethod
-    def m_face_selection() -> None:
-        """Set face selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(facet=True)
-
-    @staticmethod
-    def m_toggle_UV_select_type() -> None:
-        """Toggles between UV shell and UV component selection.
-        Always switches to UV shell mode unless already in UV shell mode,
-        then switches to UV component mode.
-        """
-        inUVShellMode: bool = pm.selectType(query=True, meshUVShell=True)
-        pm.selectMode(component=True)
-
-        if inUVShellMode:  # Switch to UV component mode
-            pm.selectType(polymeshUV=True)
+    def m_lock_vertex_normals():
+        """Toggle lock/unlock vertex normals."""
+        selection = pm.ls(sl=True)
+        if not selection:
             pm.inViewMessage(
-                statusMessage="Select Type: <hl>Polymesh UV</hl>",
+                statusMessage="Operation requires at least one selected object.",
+                pos="topCenter",
                 fade=True,
-                position="topCenter",
             )
-        else:  # Switch to UV shell mode
-            pm.selectType(meshUVShell=True)
+            return
+
+        # Convert selected objects' faces to vertices
+        vertices = pm.polyListComponentConversion(
+            selection, fromFace=True, toVertex=True
+        )
+        vertices = pm.ls(vertices, flatten=True)  # Flatten the list of vertices
+        if not vertices:
             pm.inViewMessage(
-                statusMessage="Select Type: <hl>UV Shell</hl>",
+                statusMessage="No vertices found in the selection.",
+                pos="topCenter",
                 fade=True,
-                position="topCenter",
+            )
+            return
+
+        # Determine the current normal state by querying one vertex
+        current_state = all(pm.polyNormalPerVertex(vertices, q=True, freezeNormal=True))
+        if current_state:
+            # If normals are currently locked, unlock them
+            pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
+            pm.inViewMessage(
+                statusMessage="Normals <hl>UnLocked</hl>.", pos="topCenter", fade=True
+            )
+        else:  # If normals are currently unlocked, lock them
+            pm.polyNormalPerVertex(vertices, freezeNormal=True)
+            pm.inViewMessage(
+                statusMessage="Normals <hl>Locked</hl>.", pos="topCenter", fade=True
             )
 
     @staticmethod
@@ -519,6 +650,56 @@ class EditMacros:
 
 class SelectionMacros:
     """ """
+
+    @staticmethod
+    def m_object_selection() -> None:
+        """Set object selection mask."""
+        object_mode = pm.selectMode(query=True, object=True)
+        pm.selectMode(co=object_mode)
+        pm.selectMode(object=True)
+        pm.selectType(allObjects=True)
+
+    @staticmethod
+    def m_vertex_selection() -> None:
+        """Set vertex selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(vertex=True)
+
+    @staticmethod
+    def m_edge_selection() -> None:
+        """Set edge selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(edge=True)
+
+    @staticmethod
+    def m_face_selection() -> None:
+        """Set face selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(facet=True)
+
+    @staticmethod
+    def m_toggle_UV_select_type() -> None:
+        """Toggles between UV shell and UV component selection.
+        Always switches to UV shell mode unless already in UV shell mode,
+        then switches to UV component mode.
+        """
+        inUVShellMode: bool = pm.selectType(query=True, meshUVShell=True)
+        pm.selectMode(component=True)
+
+        if inUVShellMode:  # Switch to UV component mode
+            pm.selectType(polymeshUV=True)
+            pm.inViewMessage(
+                statusMessage="Select Type: <hl>Polymesh UV</hl>",
+                fade=True,
+                position="topCenter",
+            )
+        else:  # Switch to UV shell mode
+            pm.selectType(meshUVShell=True)
+            pm.inViewMessage(
+                statusMessage="Select Type: <hl>UV Shell</hl>",
+                fade=True,
+                position="topCenter",
+            )
 
     @staticmethod
     def m_invert_component_selection() -> None:
