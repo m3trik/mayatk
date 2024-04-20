@@ -842,11 +842,12 @@ class EditUtils(ptk.HelpMixin):
         return result
 
     @classmethod
-    def get_overlapping_faces(cls, objects):
+    def get_overlapping_faces(cls, objects, delete_history=False):
         """Get any duplicate overlapping faces of the given objects.
 
-        :Parameters:
+        Parameters:
             objects (str/obj/list): Faces or polygon objects.
+            delete_history (bool): If True, deletes the history of the objects before processing.
 
         Returns:
             (list) duplicate overlapping faces.
@@ -856,39 +857,46 @@ class EditUtils(ptk.HelpMixin):
         if not objects:
             return []
 
-        elif not pm.nodeType(objects) == "mesh":  # if the objects are not faces.
-            duplicates = ptk.flatten(
-                [
-                    cls.get_overlapping_faces(obj.faces)
-                    for obj in pm.ls(objects, objectsOnly=1)
-                ]
-            )
-            return list(duplicates)
+        if delete_history:
+            pm.delete(objects, constructionHistory=True)
 
-        face, *otherFaces = pm.ls(objects)
-        face_vtx_positions = [
-            v.getPosition()
-            for v in pm.ls(pm.polyListComponentConversion(face, toVertex=1), flatten=1)
-        ]
-
-        duplicates = []
-        for otherFace in otherFaces:
-            otherFace_vtx_positions = [
-                v.getPosition()
-                for v in pm.ls(
-                    pm.polyListComponentConversion(otherFace, toVertex=1), flatten=1
+        def get_vertex_positions(face):
+            # Convert face to vertices and get their world positions, then make a tuple to be hashable
+            return tuple(
+                sorted(
+                    tuple(v.getPosition(space="world"))
+                    for v in pm.ls(
+                        pm.polyListComponentConversion(face, toVertex=True),
+                        flatten=True,
+                    )
                 )
-            ]
+            )
 
-            if face_vtx_positions == otherFace_vtx_positions:  # duplicate found.
-                duplicates.append(otherFace)
-                otherFaces.remove(otherFace)
+        def find_duplicates(faces):
+            checked = {}
+            duplicates = []
+            for face in faces:
+                positions = get_vertex_positions(face)
+                if positions in checked:
+                    duplicates.append(face)
+                else:
+                    checked[positions] = face
+            return duplicates
 
-        if otherFaces:
-            # after adding any found duplicates, call again with any remaining faces.
-            duplicates += cls.get_overlapping_faces(otherFaces)
+        # Ensure the input is a list
+        if isinstance(objects, str):
+            objects = [objects]
 
-        return duplicates
+        objects = pm.ls(objects, flatten=True, type="transform")
+
+        faces = []
+        for obj in objects:
+            meshes = pm.listRelatives(obj, type="mesh", fullPath=True)
+            for mesh in meshes:
+                all_faces = pm.ls(f"{mesh}.f[*]", flatten=True)
+                faces.extend(all_faces)
+
+        return find_duplicates(faces)
 
     @staticmethod
     def get_similar_mesh(obj, tolerance=0.0, inc_orig=False, **kwargs):
