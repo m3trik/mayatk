@@ -505,7 +505,7 @@ class NodeUtils(ptk.HelpMixin):
 
             except pm.MayaAttributeError:
                 if option_create:  # Attempt to create the attribute and set its value
-                    cls.create_and_set_attribute(node, attr, value)
+                    cls.set_node_custom_attributes(node, **{attr: value})
                 elif not option_quiet:
                     pm.warning(
                         f"Attribute '{attr}' does not exist on node '{node}', and 'option_create' is False."

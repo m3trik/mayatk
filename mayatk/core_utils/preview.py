@@ -9,7 +9,16 @@ from mayatk.display_utils import _display_utils
 
 
 class Preview:
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        operation_instance,
+        preview_checkbox,
+        create_button,
+        finalize_func=None,
+        message_func=print,
+        enable_on_show=False,
+        disable_on_hide=True,
+    ):
         """Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
 
         This class enables real-time previews of operations by linking UI elements to backend functionality.
@@ -49,19 +58,6 @@ class Preview:
             # and clicking the UI button will apply the beveled edges.
             ```
         """
-        self.init_preview(*args, **kwargs)
-
-    def init_preview(
-        self,
-        operation_instance,
-        preview_checkbox,
-        create_button,
-        finalize_func=None,
-        message_func=print,
-        enable_on_show=False,
-        disable_on_hide=True,
-    ):
-        """Initialize the state for preview operations."""
         self.operated_objects = set()
         self.operation_performed = False
         self.needs_undo = False
