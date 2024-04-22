@@ -62,6 +62,7 @@ class Preview:
         self.operation_performed = False
         self.needs_undo = False
         self.prevState = None
+        self.internal_undo_triggered = False
         self.operation_instance = operation_instance
         self.operation_instance.operated_objects = self.operated_objects
         self.preview_checkbox = preview_checkbox
