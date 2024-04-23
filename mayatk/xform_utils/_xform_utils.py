@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class XformUtils(ptk.HelpMixin):
@@ -54,7 +54,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -136,7 +136,7 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -157,39 +157,52 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
+    @classmethod
+    @_core_utils.CoreUtils.undo
+    def freeze_transforms(cls, objects, center_pivot=False, **kwargs):
+        for obj in pm.ls(objects, type="transform"):
+            if center_pivot:
+                pm.xform(objects, centerPivots=True)
+            if not pm.hasAttr(obj, "original_worldMatrix"):
+                cls.store_transforms(obj)
+
+            # Freeze transformations to reset them
+            pm.makeIdentity(obj, apply=True, **kwargs)
+
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
-            # Get the stored world matrix
-            world_matrix = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
+            # Check if the transform attributes are at their default values
+            if not (
+                pm.xform(obj, query=True, translation=True) == [0.0, 0.0, 0.0]
+                and pm.xform(obj, query=True, rotation=True) == [0.0, 0.0, 0.0]
+                and pm.xform(obj, query=True, scale=True) == [1.0, 1.0, 1.0]
+            ):
+                print(
+                    f"Attributes are not frozen for {obj}, or have been changed since being frozen, skipping."
+                )
+                continue  # Skip to next object if default values are not met
 
-            # Convert the matrix to a pymel Matrix object
-            pm_matrix = pm.dt.Matrix(world_matrix)
-
-            # Decompose the matrix into translation, rotation, and scale
-            trans = pm_matrix.translate
-            quat_rot = pm_matrix.rotate
-            euler_rot = quat_rot.asEulerRotation()  # Convert quaternion to Euler
-
-            # Convert the Euler rotation values to degrees from radians
-            euler_deg = [pm.dt.degrees(angle) for angle in euler_rot]
-
+            # Retrieve and print the stored world matrix
+            stored_world_matrix = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
+            # Calculate the inverse of the stored world matrix
+            stored_matrix_obj = pm.dt.Matrix(stored_world_matrix)
+            inverse_matrix = stored_matrix_obj.inverse()
+            # Apply the inverse matrix to negate current transformations
+            pm.xform(obj, matrix=inverse_matrix, worldSpace=True)
+            # Freeze transformations to reset them
+            pm.makeIdentity(obj, apply=True, translate=True, rotate=True, scale=True)
+            # Apply the original stored world matrix
+            pm.xform(obj, matrix=stored_world_matrix, worldSpace=True)
             # Restore the pivot points
             rotate_pivot = pm.getAttr(f"{obj}.{prefix}_rotatePivot")
             scale_pivot = pm.getAttr(f"{obj}.{prefix}_scalePivot")
             pm.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
             pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
-            # Apply translation, rotation, and scale
-            pm.xform(obj, translation=trans, worldSpace=True)
-            pm.xform(
-                obj, rotation=euler_deg, worldSpace=True
-            )  # Now using Euler degrees
-            pm.xform(obj, scale=pm_matrix.scale, worldSpace=True)
-
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -217,7 +230,7 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -267,7 +280,7 @@ class XformUtils(ptk.HelpMixin):
             pm.delete(plane)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -294,7 +307,7 @@ class XformUtils(ptk.HelpMixin):
         pm.delete(const, target)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -579,7 +592,7 @@ class XformUtils(ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -675,7 +688,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 
@@ -712,9 +725,15 @@ class XformUtils(ptk.HelpMixin):
 
         if len(selection) < 2:
             if len(selection) == 0:
-                core_utils.CoreUtils.viewport_message("No vertices selected")
-            core_utils.CoreUtils.viewport_message(
-                "Selection must contain at least two vertices"
+                return pm.inViewMessage(
+                    statusMessage="<hl>No vertices selected.</hl>",
+                    pos="topCenter",
+                    fade=True,
+                )
+            return pm.inViewMessage(
+                statusMessage="<hl>Selection must contain at least two vertices.</hl>",
+                pos="topCenter",
+                fade=True,
             )
 
         for vertex in selection:

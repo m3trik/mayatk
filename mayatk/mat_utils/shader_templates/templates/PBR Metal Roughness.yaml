@@ -1,0 +1,76 @@
+'{{NODE_StingrayPBS_1}}':
+  attributes:
+    use_ao_map: 1.0
+    use_color_map: 1.0
+    use_metallic_map: 1.0
+    use_normal_map: 1.0
+    use_roughness_map: 1.0
+  connections: []
+  metadata:
+    connected_to_shading_engine: true
+  type: StingrayPBS
+'{{NODE_file_1}}':
+  attributes:
+    colorManagementEnabled: true
+    outAlpha: 1.0
+    outSizeX: 1024.0
+    outSizeY: 1024.0
+  connections:
+  - source: '{{NODE_file_1}}.oc'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Roughness
+  type: file
+'{{NODE_file_2}}':
+  attributes:
+    colorManagementEnabled: true
+    outAlpha: 1.0
+    outSizeX: 1024.0
+    outSizeY: 1024.0
+  connections:
+  - source: '{{NODE_file_2}}.oc'
+    target: '{{NODE_StingrayPBS_1}}.TEX_color_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Base_Color
+  type: file
+'{{NODE_file_3}}':
+  attributes:
+    colorManagementEnabled: true
+    outAlpha: 1.0
+    outSizeX: 1024.0
+    outSizeY: 1024.0
+  connections:
+  - source: '{{NODE_file_3}}.oc'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Metallic_Smoothness
+  type: file
+'{{NODE_file_4}}':
+  attributes:
+    colorManagementEnabled: true
+    outAlpha: 1.0
+    outSizeX: 1024.0
+    outSizeY: 1024.0
+  connections:
+  - source: '{{NODE_file_4}}.oc'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Ambient_Occlusion
+  type: file
+'{{NODE_file_5}}':
+  attributes:
+    colorManagementEnabled: true
+    outAlpha: 1.0
+    outSizeX: 1024.0
+    outSizeY: 1024.0
+  connections:
+  - source: '{{NODE_file_5}}.oc'
+    target: '{{NODE_StingrayPBS_1}}.TEX_normal_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Normal_OpenGL
+  type: file

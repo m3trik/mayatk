@@ -6,13 +6,11 @@ try:
     import pymel.core as pm
 except ModuleNotFoundError as error:
     print(__file__, error)
-except ModuleNotFoundError as error:
-    print(__file__, error)
 
 # from this package:
-from mayatk.core_utils import CoreUtils
-from mayatk.xform_utils import XformUtils
-from mayatk.node_utils import NodeUtils
+from mayatk.core_utils import _core_utils
+from mayatk import xform_utils
+from mayatk import node_utils
 
 
 class ExplodedView:
@@ -54,7 +52,8 @@ class ExplodedView:
             return 0
 
         node_data = [
-            XformUtils.get_bounding_box(node, "center|maxsize") for node in nodes
+            xform_utils.XformUtils.get_bounding_box(node, "center|maxsize")
+            for node in nodes
         ]
         positions = np.array([data[0] for data in node_data])
         sizes = np.array([data[1] for data in node_data])
@@ -88,30 +87,32 @@ class ExplodedView:
         }
         return iteration_count
 
-    @CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def explode_selected(self):
         """Explode selected"""
-        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
+        selection = node_utils.NodeUtils.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if obj.hasAttr("original_position"):
                 selection.remove(obj)
                 continue
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
-            NodeUtils.set_node_attributes(obj, original_position=pos)
+            node_utils.NodeUtils.set_node_attributes(
+                obj, option_create=True, original_position=pos
+            )
 
         self.arrange_objects(selection)
 
-    @CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def un_explode_selected(self):
         """Un-explode selected"""
-        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
+        selection = node_utils.NodeUtils.get_unique_children(pm.ls(sl=True))
         for obj in selection:
             if pm.attributeQuery("original_position", node=obj, exists=True):
                 pos = pm.getAttr(obj.original_position)
                 pm.move(pos[0], pos[1], pos[2], obj, absolute=True)
                 pm.deleteAttr(obj, attribute="original_position")
 
-    @CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def un_explode_all(self):
         """Un-explode all"""
         all_objects_with_original_position = pm.ls("*.original_position")
@@ -123,7 +124,7 @@ class ExplodedView:
 
     def toggle_explode(self):
         """Toggle explode"""
-        selection = NodeUtils.get_unique_children(pm.ls(sl=True))
+        selection = node_utils.NodeUtils.get_unique_children(pm.ls(sl=True))
         if selection:
             if pm.attributeQuery("original_position", node=selection[0], exists=True):
                 self.un_explode_selected()
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = CoreUtils.get_main_window()
+    parent = _core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "exploded_view.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=ExplodedViewSlots)
 
@@ -164,6 +165,7 @@ if __name__ == "__main__":
         Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
     )
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
 
     sb.current_ui.show(pos="screen", app_exec=True)
 

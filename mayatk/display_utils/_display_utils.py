@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class DisplayUtils(ptk.HelpMixin):
@@ -26,7 +26,7 @@ class DisplayUtils(ptk.HelpMixin):
     ]
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_visibility(
         cls,
         elements: Union[str, object, List],
@@ -88,30 +88,6 @@ class DisplayUtils(ptk.HelpMixin):
                 element.visibility.set(visibility)
             except pm.MayaAttributeError:
                 pass  # Skip the element if visibility cannot be set
-
-    @staticmethod
-    def set_wireframe_on_shaded(editor: str, state: bool, **kwargs: Any) -> None:
-        """Set wireframe on shaded for the specified model editor panel.
-
-        Parameters:
-            editor (str): The name of the model editor panel.
-            state (bool): True to enable wireframe on shaded, False to disable.
-            kwargs: Additional keyword arguments for the modelEditor command.
-
-        Notes:
-            The displayAppearance parameter in modelEditor command can have values:
-            "wireframe", "points", "boundingBox", "smoothShaded", "flatShaded".
-            This method adjusts the wireframeOnShaded setting based on the shading mode.
-        """
-        modeIsShaded = pm.modelEditor(editor, query=True, displayAppearance=True) in [
-            "smoothShaded",
-            "flatShaded",
-        ]
-
-        if state and modeIsShaded:
-            pm.modelEditor(editor, edit=True, wireframeOnShaded=1, **kwargs)
-        else:
-            pm.modelEditor(editor, edit=True, wireframeOnShaded=0, **kwargs)
 
     @staticmethod
     def add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]]):

@@ -6,11 +6,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import display_utils
+from mayatk.core_utils import _core_utils
+from mayatk.core_utils.macro_manager import MacroManager
 from mayatk import node_utils
 
 
@@ -18,33 +17,149 @@ class DisplayMacros:
     """ """
 
     @staticmethod
-    def m_back_face_culling() -> None:
-        """Toggle Back-Face Culling."""
-        sel: list = pm.ls(selection=True)
-        if sel:
-            state: bool = pm.polyOptions(sel, query=True, wireBackCulling=True)[0]
+    def m_component_id_display():
+        """Toggle Component Id Display through vertices, edges, faces, UVs, and off."""
+        # Query the current state of component ID display settings for vertices, edges, faces, and UVs
+        current_state = pm.polyOptions(q=True, displayItemNumbers=True)[:4]
 
-            if state:
-                pm.polyOptions(sel, gl=True, backCulling=True)
-                pm.inViewMessage(
-                    statusMessage="Back-Face Culling is now <hl>ON</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
-            else:
-                pm.polyOptions(sel, gl=True, wireBackCulling=True)
-                pm.inViewMessage(
-                    statusMessage="Back-Face Culling is now <hl>OFF</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
+        # Determine the next state to switch to
+        if True not in current_state:
+            next_state_index = 0  # If all are False, start with vertices
         else:
-            print(" Warning: Nothing selected. ")
+            # Find the first True, switch to the next state or turn all off if it's the last one
+            current_index = current_state.index(True)
+            next_state_index = (
+                current_index + 1
+            ) % 5  # Cycle through 0-4 (vertices, edges, faces, UVs, off)
+
+        # Define the configurations for toggling component IDs
+        configurations = [
+            {"displayItemNumbers": (1, 0, 0, 0)},  # Vertex IDs
+            {"displayItemNumbers": (0, 1, 0, 0)},  # Edge IDs
+            {"displayItemNumbers": (0, 0, 1, 0)},  # Face IDs
+            {"displayItemNumbers": (0, 0, 0, 1)},  # UV IDs
+            {"displayItemNumbers": (0, 0, 0, 0)},  # Turn all off
+        ]
+        labels = ["vertex IDs", "edge IDs", "face IDs", "UV IDs", "Off"]
+
+        # Apply the selected configuration
+        pm.polyOptions(activeObjects=True, **configurations[next_state_index])
+
+        # Display message in the viewport
+        pm.inViewMessage(
+            amg=f"Component ID Display: <hl>{labels[next_state_index]}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
+
+    @staticmethod
+    def m_normals_display():
+        """Toggle face normals, vertex normals, tangents, and off."""
+        # Query the current state
+        current_tangent = pm.polyOptions(q=True, displayTangent=True)[0]
+        current_normal = pm.polyOptions(q=True, displayNormal=True)[0]
+        is_facet = pm.polyOptions(q=True, facet=True)[0]
+        is_vertex = pm.polyOptions(q=True, point=True)[0]
+
+        # Define the current state based on queries
+        if current_tangent:
+            current_state = 3  # Tangents are displayed
+        elif current_normal and is_vertex:
+            current_state = 2  # Vertex normals are displayed
+        elif current_normal and is_facet:
+            current_state = 1  # Facet normals are displayed
+        else:
+            current_state = 0  # All displays are off
+
+        # Determine the next state to switch to
+        next_state = (current_state + 1) % 4  # Cycle through the states: 0, 1, 2, 3
+
+        # Configuration for each state
+        if next_state == 0:
+            pm.polyOptions(displayNormal=False, displayTangent=False)
+        elif next_state == 1:
+            pm.polyOptions(
+                displayNormal=True,
+                facet=True,
+                point=False,
+                displayTangent=False,
+                sizeNormal=1,
+            )
+        elif next_state == 2:
+            pm.polyOptions(
+                displayNormal=True,
+                point=True,
+                facet=False,
+                displayTangent=False,
+                sizeNormal=1,
+            )
+        elif next_state == 3:
+            pm.polyOptions(displayTangent=True, displayNormal=False)
+
+        # Messages for each state
+        messages = [
+            "Normals Display <hl>Off</hl>",
+            "<hl>Facet</hl> Normals Display <hl>On</hl>",
+            "<hl>Vertex</hl> Normals Display <hl>On</hl>",
+            "<hl>Tangent</hl> Display <hl>On</hl>",
+        ]
+
+        # Display message in the viewport using inViewMessage
+        pm.inViewMessage(amg=messages[next_state], pos="topCenter", fade=True)
+
+    @staticmethod
+    def m_soft_edge_display():
+        """Toggle Soft Edge Display."""
+        # Query the current setting for all edges display
+        all_edges_visible = pm.polyOptions(q=True, ae=True)[0]
+
+        # Toggle the edge display based on the current state
+        if all_edges_visible:
+            # If all edges are currently visible, switch to soft edges only
+            pm.polyOptions(ae=False, se=True)
+            message = "Soft Edge Display <hl>On</hl>"
+        else:
+            # If not all edges are visible, it implies soft edges are active; switch to show all edges
+            pm.polyOptions(se=False, ae=True)
+            message = "All Edges Display <hl>On</hl>"
+
+        # Display message in the viewport using inViewMessage
+        pm.inViewMessage(amg=message, pos="topCenter", fade=True)
+
+    @staticmethod
+    def m_toggle_visibility():
+        """Toggle Visibility"""
+        pm.mel.ToggleVisibilityAndKeepSelection()
+
+    @staticmethod
+    def m_back_face_culling() -> None:
+        """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
+        objects = pm.ls(selection=True) or pm.ls(type="mesh")
+        if objects:
+            state: bool = pm.polyOptions(objects, query=True, wireBackCulling=True)[0]
+            if state:
+                pm.polyOptions(objects, wireBackCulling=False, backCulling=True)
+                message = "OFF"
+            else:
+                pm.polyOptions(objects, wireBackCulling=True, backCulling=False)
+                message = "ON"
+
+            pm.inViewMessage(
+                statusMessage=f"Back-Face Culling is now <hl>{message}</hl>.",
+                pos="topCenter",
+                fade=True,
+            )
+        else:  # Feedback if there are no meshes at all in the scene
+            pm.inViewMessage(
+                statusMessage="<hl>No mesh objects found in the scene.</hl>",
+                pos="topCenter",
+                fade=True,
+            )
 
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=1)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
             pm.isolateSelect(currentPanel, state=0)
@@ -225,35 +340,71 @@ class DisplayMacros:
     @staticmethod
     def m_wireframe() -> None:
         """Toggles the wireframe display state.
-        Possible states include: full, none, and shaded.
+        Possible states include: none, shaded, full
         """
-        state = ptk.cycle([0, 1, 2], "m_wireframe")
-        focused_panel = core_utils.CoreUtils.get_panel(withFocus=True)
+        focused_panel = _core_utils.CoreUtils.get_panel(withFocus=True)
+        # Check if focused_panel is a modelPanel to avoid errors when it's not
+        if not focused_panel or not pm.modelEditor(
+            focused_panel, query=True, exists=True
+        ):
+            print("No focused model panel found.")
+            return
 
-        if state == 0:  # Full Wireframe
+        # Query the current wireframe on shaded setting
+        state = pm.displayPref(q=True, wireframeOnShadedActive=True)
+
+        if state == "none":  # Full Wireframe
             pm.displayPref(wireframeOnShadedActive="full")
-            pm.inViewMessage(
-                position="topCenter", fade=1, statusMessage="Wireframe <hl>Full</hl>."
-            )
-        elif state == 1:  # Wireframe Off
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=True)
+            message = "Wireframe <hl>Full</hl>."
+        elif state == "full":  # Wireframe Selected
+            pm.displayPref(wireframeOnShadedActive="reduced")
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            message = "Wireframe <hl>Reduced</hl>."
+        elif state == "reduced":  # Wireframe Off
             pm.displayPref(wireframeOnShadedActive="none")
+            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            message = "Wireframe <hl>None</hl>."
+        else:  # Fallback or error condition, you might want to log an error or set a default state
+            print(f"Unexpected wireframe state encountered: {state}")
+            return
+
+        # Display the message
+        pm.inViewMessage(position="topCenter", fade=True, statusMessage=message)
+
+    @staticmethod
+    def m_material_override():
+        """Toggle Material Override"""
+        currentPanel = pm.playblast(
+            activeEditor=True
+        )  # Use playblast to get the active panel with focus
+        if not currentPanel:
             pm.inViewMessage(
-                position="topCenter", fade=1, statusMessage="Wireframe <hl>Off</hl>."
+                statusMessage="No active panel with focus found.",
+                pos="topCenter",
+                fade=True,
             )
-        elif state == 2 and "modelPanel" in focused_panel:  # Wireframe On Shaded
-            display_utils.DisplayUtils.set_wireframe_on_shaded(focused_panel, True)
-            pm.inViewMessage(
-                position="topCenter",
-                fade=1,
-                statusMessage="Wireframe <hl>On Shaded</hl>.",
-            )
+            return
+
+        # Query the current state of default material usage
+        state = pm.modelEditor(currentPanel, q=True, useDefaultMaterial=True)
+
+        # Toggle the state of the default material
+        pm.modelEditor(currentPanel, edit=True, useDefaultMaterial=not state)
+
+        # Display the toggle state in the viewport
+        pm.inViewMessage(
+            statusMessage=f"Default Material Override: <hl>{'On' if not state else 'Off'}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
 
     @classmethod
     def m_shading(cls) -> None:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, query=1, displayAppearance=1)
         displayTextures = pm.modelEditor(currentPanel, query=1, displayTextures=1)
 
@@ -300,7 +451,7 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
         if pm.modelEditor(currentPanel, exists=1):
@@ -338,53 +489,42 @@ class EditMacros:
     """ """
 
     @staticmethod
-    def m_object_selection() -> None:
-        """Set object selection mask."""
-        object_mode = pm.selectMode(query=True, object=True)
-        pm.selectMode(co=object_mode)
-        pm.selectMode(object=True)
-        pm.selectType(allObjects=True)
-
-    @staticmethod
-    def m_vertex_selection() -> None:
-        """Set vertex selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(vertex=True)
-
-    @staticmethod
-    def m_edge_selection() -> None:
-        """Set edge selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(edge=True)
-
-    @staticmethod
-    def m_face_selection() -> None:
-        """Set face selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(facet=True)
-
-    @staticmethod
-    def m_toggle_UV_select_type() -> None:
-        """Toggles between UV shell and UV component selection.
-        Always switches to UV shell mode unless already in UV shell mode,
-        then switches to UV component mode.
-        """
-        inUVShellMode: bool = pm.selectType(query=True, meshUVShell=True)
-        pm.selectMode(component=True)
-
-        if inUVShellMode:  # Switch to UV component mode
-            pm.selectType(polymeshUV=True)
+    def m_lock_vertex_normals():
+        """Toggle lock/unlock vertex normals."""
+        selection = pm.ls(sl=True)
+        if not selection:
             pm.inViewMessage(
-                statusMessage="Select Type: <hl>Polymesh UV</hl>",
+                statusMessage="Operation requires at least one selected object.",
+                pos="topCenter",
                 fade=True,
-                position="topCenter",
             )
-        else:  # Switch to UV shell mode
-            pm.selectType(meshUVShell=True)
+            return
+
+        # Convert selected objects' faces to vertices
+        vertices = pm.polyListComponentConversion(
+            selection, fromFace=True, toVertex=True
+        )
+        vertices = pm.ls(vertices, flatten=True)  # Flatten the list of vertices
+        if not vertices:
             pm.inViewMessage(
-                statusMessage="Select Type: <hl>UV Shell</hl>",
+                statusMessage="No vertices found in the selection.",
+                pos="topCenter",
                 fade=True,
-                position="topCenter",
+            )
+            return
+
+        # Determine the current normal state by querying one vertex
+        current_state = all(pm.polyNormalPerVertex(vertices, q=True, freezeNormal=True))
+        if current_state:
+            # If normals are currently locked, unlock them
+            pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
+            pm.inViewMessage(
+                statusMessage="Normals <hl>UnLocked</hl>.", pos="topCenter", fade=True
+            )
+        else:  # If normals are currently unlocked, lock them
+            pm.polyNormalPerVertex(vertices, freezeNormal=True)
+            pm.inViewMessage(
+                statusMessage="Normals <hl>Locked</hl>.", pos="topCenter", fade=True
             )
 
     @staticmethod
@@ -512,6 +652,56 @@ class SelectionMacros:
     """ """
 
     @staticmethod
+    def m_object_selection() -> None:
+        """Set object selection mask."""
+        object_mode = pm.selectMode(query=True, object=True)
+        pm.selectMode(co=object_mode)
+        pm.selectMode(object=True)
+        pm.selectType(allObjects=True)
+
+    @staticmethod
+    def m_vertex_selection() -> None:
+        """Set vertex selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(vertex=True)
+
+    @staticmethod
+    def m_edge_selection() -> None:
+        """Set edge selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(edge=True)
+
+    @staticmethod
+    def m_face_selection() -> None:
+        """Set face selection mask."""
+        pm.selectMode(component=True)
+        pm.selectType(facet=True)
+
+    @staticmethod
+    def m_toggle_UV_select_type() -> None:
+        """Toggles between UV shell and UV component selection.
+        Always switches to UV shell mode unless already in UV shell mode,
+        then switches to UV component mode.
+        """
+        inUVShellMode: bool = pm.selectType(query=True, meshUVShell=True)
+        pm.selectMode(component=True)
+
+        if inUVShellMode:  # Switch to UV component mode
+            pm.selectType(polymeshUV=True)
+            pm.inViewMessage(
+                statusMessage="Select Type: <hl>Polymesh UV</hl>",
+                fade=True,
+                position="topCenter",
+            )
+        else:  # Switch to UV shell mode
+            pm.selectType(meshUVShell=True)
+            pm.inViewMessage(
+                statusMessage="Select Type: <hl>UV Shell</hl>",
+                fade=True,
+                position="topCenter",
+            )
+
+    @staticmethod
     def m_invert_component_selection() -> None:
         """Invert the component selection on the currently selected objects."""
         if not pm.selectMode(query=1, component=1):  # component select mode
@@ -556,7 +746,7 @@ class UiMacros:
     def m_toggle_panels() -> None:
         """Toggle UI toolbars."""
         # toggle panel menus
-        panels = core_utils.CoreUtils.get_panel(allPanels=1)
+        panels = _core_utils.CoreUtils.get_panel(allPanels=1)
         state = int(pm.panel(panels[0], menuBarVisible=1, query=1))
         for panel in panels:
             pm.panel(panel, edit=1, menuBarVisible=(not state))
@@ -573,7 +763,7 @@ class AnimationMacros:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = _core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -584,7 +774,7 @@ class AnimationMacros:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = _core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -594,7 +784,7 @@ class AnimationMacros:
 
 
 class Macros(
-    core_utils.MacroManager,
+    MacroManager,
     DisplayMacros,
     EditMacros,
     SelectionMacros,

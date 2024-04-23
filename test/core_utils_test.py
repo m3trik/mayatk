@@ -107,11 +107,6 @@ class CoreUtilsTest(unittest.TestCase):
         # Provide the missing 'size' argument for main_progress_bar method
         # self.assertEqual(mtk.main_progress_bar(size="<size>"), "<expected result>")
 
-    def test_viewport_message(self):
-        pass
-        # Update the assertion with the returned value
-        # self.assertIsNone(mtk.viewport_message())
-
 
 # -----------------------------------------------------------------------------
 

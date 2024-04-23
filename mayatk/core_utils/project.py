@@ -12,64 +12,66 @@ import pythontk as ptk
 class Project(ptk.HelpMixin):
     """ """
 
+    SCENE_UNIT_VALUES = [
+        "millimeter",
+        "centimeter",
+        "meter",
+        "kilometer",
+        "inch",
+        "foot",
+        "yard",
+        "mile",
+    ]
+
     @staticmethod
-    def get_recent_files(index=None, format="standard"):
-        """
-        Get a list of recent files.
+    def get_recent_files(index=None):
+        """Get a list of recent files sorted by modification time.
 
         Parameters:
             index (slice or int): Return the recent file directory path at the given index or slice.
                     Index 0 would be the most recent file.
                     For example, use index=slice(0, 5) to get the 5 most recent files.
                     If there are only 3 files, it will return those 3 files without throwing an error.
-            format (str): Defines the format of the returned paths. Possible options are 'standard', 'timestamp',
-                    'standard|timestamp', 'timestamp|standard'. 'standard' returns paths as strings, 'timestamp'
-                    returns timestamped paths, 'standard|timestamp' returns a dictionary with standard paths as
-                    keys and timestamped paths as values, 'timestamp|standard' does the opposite.
-
         Returns:
-            (list or dict): A list or dictionary of recent files depending on the 'format' parameter.
+            (list): A list of recent files sorted by last modification time.
 
         Examples:
-            get_recent_files() --> Returns all recent files in standard format
-            get_recent_files(0) --> Returns the most recent file in standard format
-            get_recent_files(slice(0, 5)) --> Returns the 5 most recent files in standard format.
-            get_recent_files(format='timestamp') --> Returns all recent files in timestamp format.
-            get_recent_files(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
+            get_recent_files() --> Returns all recent files sorted by modification time
+            get_recent_files(0) --> Returns the most recent file
+            get_recent_files(slice(0, 5)) --> Returns the 5 most recent files
         """
         files = pm.optionVar(query="RecentFilesList")
         if not files:
             return []
 
-        result = [
-            ptk.format_path(f)
-            for f in reversed(files)
-            if ptk.is_valid(f) and "Autosave" not in f
-        ]
+        # Extend file data with modification times and filter invalid or autosave files
+        file_data = []
+        for f in files:
+            if ptk.is_valid(f) and "Autosave" not in f:
+                try:
+                    mod_time = os.path.getmtime(f)
+                    file_data.append((f, mod_time))
+                except OSError:
+                    continue  # Skip files that cause errors (e.g., not found)
+
+        # Sort files by modification time, most recent first
+        file_data.sort(key=lambda x: x[1], reverse=True)
+
+        # Format paths and extract as a list
+        result = [ptk.format_path(f[0]) for f in file_data]
 
         if index is not None:
             try:
                 result = result[index]
-            except (IndexError, TypeError):
-                print(f"Incorrect index or slice. Returning empty list.")
+            except (IndexError, TypeError) as e:
+                print(f"Incorrect index or slice: {e}. Returning empty list.")
                 return []
-
-        format = format.split("|")
-        if len(format) == 2 and "timestamp" in format and "standard" in format:
-            if format[0] == "timestamp":
-                result = {ptk.time_stamp(res): res for res in result}
-            else:
-                result = {res: ptk.time_stamp(res) for res in result}
-        elif "timestamp" in format:
-            result = [ptk.time_stamp(res) for res in result]
-        # else return the standard format
 
         return result
 
     @staticmethod
     def get_recent_projects(index=None, format="standard"):
-        """
-        Get a list of recently set projects.
+        """Get a list of recently set projects.
 
         Parameters:
             index (slice or int): Return the recent project directory path at the given index or slice.
@@ -118,8 +120,7 @@ class Project(ptk.HelpMixin):
 
     @staticmethod
     def find_autosave_directories():
-        """
-        Search for and compile a list of existing autosave directories based on
+        """Search for and compile a list of existing autosave directories based on
         predefined locations: the current workspace's autosave directory, the autosave
         directory specified in the MAYA_AUTOSAVE_FOLDER environment variable, and the
         user's home directory autosave folder.
@@ -148,66 +149,59 @@ class Project(ptk.HelpMixin):
         return list(autosave_dirs)
 
     @classmethod
-    def get_recent_autosave(cls, index=None, format="standard"):
-        """
-        Retrieves a list or dictionary of recent Maya autosave files, optionally filtered
-        by an index or a slice, and formatted according to the specified output format.
+    def get_recent_autosave(
+        cls, filter_time=None, timestamp_format="%Y-%m-%d %H:%M:%S"
+    ):
+        """Retrieves a list of recent autosave files from Maya autosave directories, optionally filtered by age and sorted.
 
         Parameters:
-            index (slice|int|None): If provided, specifies the subset of autosave files to
-                return. Can be an integer for a specific file, or a slice object for a range.
-                Defaults to None, which returns all autosave files.
-            format (str): Determines the format of the returned paths. Options are 'standard',
-                'timestamp', 'standard|timestamp', and 'timestamp|standard'. 'standard' returns
-                paths as strings, 'timestamp' returns paths with timestamps, and the combined
-                formats return dictionaries with the paths formatted as specified.
+            filter_time (int, optional): Maximum age of the autosave files to include, in hours. Files older than
+                                         this will be omitted. If None, all autosave files are included.
+            timestamp_format (str): The strftime format to use for displaying the file timestamps.
+                                    Defaults to '%Y-%m-%d %H:%M:%S'.
 
         Returns:
-            list|dict: Depending on the 'format' parameter, a list of file paths, a list of
-                timestamped file paths, or a dictionary with file paths as keys and their
-                timestamped counterparts as values, or vice versa.
-
-        Raises:
-            IndexError: If an integer index is out of range.
-            TypeError: If the index is neither an integer nor a slice.
+            list: A list of tuples, where each tuple contains:
+                  (str 'filepath', str 'formatted timestamp')
+                  representing each autosave file.
         """
-        import itertools
-        import glob
+        from glob import glob
+        from datetime import datetime
 
         autosave_dirs = cls.find_autosave_directories()
-        result = []
-
-        for autosave_dir in autosave_dirs:
-            files = itertools.chain(
-                glob.iglob(os.path.join(autosave_dir, "*.mb")),
-                glob.iglob(os.path.join(autosave_dir, "*.ma")),
+        files = []
+        for dir in autosave_dirs:
+            files.extend(
+                glob(os.path.join(dir, "*.mb")) + glob(os.path.join(dir, "*.ma"))
             )
 
-            for file in files:
-                result.append(ptk.format_path(file))
+        # Get file info including paths and timestamps
+        file_info = ptk.get_file_info(
+            files, ["filepath", "unixtimestamp"], force_tuples=True
+        )
 
-        if index is not None:
-            try:
-                result = result[index]
-            except (IndexError, TypeError):
-                print("Incorrect index or slice. Returning empty list.")
-                return []
+        # Prepare cutoff time for filtering
+        cutoff_timestamp = (
+            datetime.now().timestamp() - (filter_time * 3600)
+            if filter_time is not None
+            else None
+        )
 
-        format_parts = format.split("|")
-        if (
-            len(format_parts) == 2
-            and "timestamp" in format_parts
-            and "standard" in format_parts
-        ):
-            result = (
-                {res: ptk.time_stamp(res) for res in result}
-                if format_parts[0] == "standard"
-                else {ptk.time_stamp(res): res for res in result}
-            )
-        elif "timestamp" in format_parts:
-            result = [ptk.time_stamp(res) for res in result]
+        # Filter and format in a single step
+        recent_files = []
+        for filepath, unixtimestamp in file_info:
+            if cutoff_timestamp is None or unixtimestamp > cutoff_timestamp:
+                formatted_time = datetime.fromtimestamp(unixtimestamp).strftime(
+                    timestamp_format
+                )
+                recent_files.append((filepath, formatted_time))
 
-        return result
+        # Sort by unixtimestamp without additional conversion
+        recent_files.sort(
+            key=lambda x: datetime.strptime(x[1], timestamp_format), reverse=True
+        )
+
+        return recent_files
 
     @staticmethod
     def get_workspace_scenes(fullPath=True):

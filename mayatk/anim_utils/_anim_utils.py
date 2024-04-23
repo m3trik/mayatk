@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Optional
+from typing import List, Dict, ClassVar, Optional
 
 try:
     import pymel.core as pm
@@ -9,11 +9,38 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class AnimUtils(ptk.HelpMixin):
     """ """
+
+    # Map frame rate types to their numerical values
+    FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
+        "game": 15,
+        "film": 24,
+        "pal": 25,
+        "ntsc": 30,
+        "show": 48,
+        "palf": 50,
+        "ntscf": 60,
+    }
+
+    @classmethod
+    def format_frame_rate_str(cls, key: str) -> str:
+        """Formats and returns a user-friendly frame rate description based on the internal key.
+
+        Parameters:
+        key (str): The internal frame rate key.
+
+        Returns:
+        str: A formatted frame rate string for display.
+        """
+        value = cls.FRAME_RATE_VALUES.get(key, 0)
+        if value == 0:
+            return "Unknown Frame Rate"
+        else:
+            return f"{value} fps {key.upper()}"
 
     @staticmethod
     def setCurrentFrame(time=1, update=True, relative=False):
@@ -34,7 +61,7 @@ class AnimUtils(ptk.HelpMixin):
         pm.currentTime(currentTime + time, edit=True, update=update)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_keys_for_attributes(objects, **kwargs):
         """Sets keyframes for the specified attributes on given objects at given times.
 
@@ -57,7 +84,7 @@ class AnimUtils(ptk.HelpMixin):
                     pm.setKeyframe(attr_full_name, time=time, value=value)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def adjust_key_spacing(
         objects: Optional[List[str]] = None,
         spacing: int = 1,
@@ -113,7 +140,7 @@ class AnimUtils(ptk.HelpMixin):
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def invert_selected_keys(time=1, relative=True, delete_original=False):
         """Duplicate any selected keyframes and paste them inverted at the given time.
 

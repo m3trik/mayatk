@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List, Union
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -7,14 +9,16 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils, node_utils, xform_utils
+from mayatk.core_utils import _core_utils
+from mayatk import node_utils
+from mayatk import xform_utils
 
 
 class EditUtils(ptk.HelpMixin):
     """ """
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -107,7 +111,7 @@ class EditUtils(ptk.HelpMixin):
             )
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -129,7 +133,7 @@ class EditUtils(ptk.HelpMixin):
                     print(name + ": ", error)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def append_location_based_suffix(
         objects,
         first_obj_as_ref=False,
@@ -211,7 +215,7 @@ class EditUtils(ptk.HelpMixin):
             pm.rename(obj, newNames[obj])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -339,7 +343,7 @@ class EditUtils(ptk.HelpMixin):
         return relevant_faces
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def cut_along_axis(cls, obj, axis="x", amount=1, offset=0, delete=False):
         """Performs cut operations on the specified object along a given axis with
         optional multiple cuts and an offset.
@@ -392,7 +396,7 @@ class EditUtils(ptk.HelpMixin):
                 cls.delete_along_axis(obj, axis)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def delete_along_axis(
         cls, objects, axis="-x", world_space=False, delete_history=True
     ):
@@ -419,7 +423,7 @@ class EditUtils(ptk.HelpMixin):
             pm.delete(faces)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def mirror(
         objects,
         axis="-x",
@@ -445,7 +449,7 @@ class EditUtils(ptk.HelpMixin):
             uninstance (bool): Un-instance the object(s) before performing the operation.
 
         Returns:
-            (obj) The polyMirrorFace history node if a single object, else None.
+            (obj or list) The mirrored object's transform node or list of transform nodes if muliple objects given.
         """
         direction = {
             # the direction dict:
@@ -465,9 +469,11 @@ class EditUtils(ptk.HelpMixin):
         # ex. (1, 5, (1, 1,-1)) broken down as: axisDirection=1, axis_as_int=5, scale: (x=1, y=1, z=-1)
 
         original_objects = pm.ls(objects, objectsOnly=1)
+        result = []
         for obj in original_objects:
-            if delete_history:
-                pm.mel.BakeNonDefHistory(obj)
+            if delete_history and not obj.isReferenced():
+                # Only attempt to delete history on non-referenced objects
+                pm.delete(obj, constructionHistory=True)
 
             if uninstance:
                 node_utils.NodeUtils.uninstance(obj)
@@ -483,7 +489,7 @@ class EditUtils(ptk.HelpMixin):
                     mirrorAxis=axis_pivot,
                     mergeMode=merge_mode,
                     mirrorPosition=0,
-                    mergeThresholdType=1,
+                    mergeThresholdType=0,
                     mergeThreshold=merge_threshold,
                     smoothingAngle=30,
                     flipUVs=0,
@@ -510,38 +516,50 @@ class EditUtils(ptk.HelpMixin):
                 if delete_original:
                     pm.delete(orig_obj)
 
+            transform_node = node_utils.NodeUtils.get_transform_node(polyMirrorFaceNode)
+            result.append(transform_node)
+        return ptk.format_return(result)
+
     @classmethod
     def clean_geometry(
         cls,
-        objects,
-        allMeshes=False,
-        repair=False,
-        quads=False,
-        nsided=False,
-        concave=False,
-        holed=False,
-        nonplanar=False,
-        zeroGeom=False,
-        zeroGeomTol=0.000010,
-        zeroEdge=False,
-        zeroEdgeTol=0.000010,
-        zeroMap=False,
-        zeroMapTol=0.000010,
-        sharedUVs=False,
-        nonmanifold=False,
-        lamina=False,
-        invalidComponents=False,
-        split_non_manifold_vertex=False,
-        historyOn=True,
-    ):
-        """Select or remove unwanted geometry from a polygon mesh.
+        objects: Union[str, object, List[Union[str, object]]],
+        allMeshes: bool = False,
+        repair: bool = False,
+        quads: bool = False,
+        nsided: bool = False,
+        concave: bool = False,
+        holed: bool = False,
+        nonplanar: bool = False,
+        zeroGeom: bool = False,
+        zeroGeomTol: float = 0.000010,
+        zeroEdge: bool = False,
+        zeroEdgeTol: float = 0.000010,
+        zeroMap: bool = False,
+        zeroMapTol: float = 0.000010,
+        sharedUVs: bool = False,
+        nonmanifold: bool = False,
+        lamina: bool = False,
+        invalidComponents: bool = False,
+        historyOn: bool = True,
+    ) -> None:
+        """Select or remove unwanted geometry from a polygon mesh using polyCleanupArgList.
 
         Parameters:
-            objects (str/obj/list): The polygon objects to clean.
-            allMeshes (bool): Clean all geomtry in the scene instead of only the current selection.
+            objects (Union[str, pm.nt.DependNode, List[Union[str, pm.nt.DependNode]]]): The polygon objects to clean.
+            allMeshes (bool): Clean all geometry in the scene instead of only the current selection.
             repair (bool): Attempt to repair instead of just selecting geometry.
         """
-        arg_list = '"{0}","{1}","{2}","{3}","{4}","{5}","{6}","{7}","{8}","{9}","{10}","{11}","{12}","{13}","{14}","{15}","{16}","{17}"'.format(
+        if allMeshes:
+            objects = pm.ls(geometry=True)
+        elif not isinstance(objects, list):
+            objects = [objects]
+
+        # Prepare selection for cleanup
+        pm.select(objects)
+
+        # Configure cleanup options
+        options = [
             allMeshes,
             1 if repair else 2,
             historyOn,
@@ -560,20 +578,15 @@ class EditUtils(ptk.HelpMixin):
             nonmanifold,
             lamina,
             invalidComponents,
-        )
-        command = "polyCleanupArgList 4 {" + arg_list + "}"
+        ]
 
-        if split_non_manifold_vertex:  # Split Non-Manifold Vertex
-            # Select: 0=off, 1=on, 2=on while keeping any existing vertex selections. (default: 1)
-            nonManifoldVerts = cls.find_non_manifold_vertex(objects, select=2)
-            if repair:
-                for vertex in nonManifoldVerts:
-                    # Select(bool): Select the vertex after the operation. (default: True)
-                    cls.split_non_manifold_vertex(vertex, select=True)
+        # Construct the polyCleanup command argument string
+        arg_list = ",".join([f'"{option}"' for option in options])
+        command = f"polyCleanupArgList 4 {{{arg_list}}}"
 
-        pm.select(objects)
+        # Execute the cleanup command
         pm.mel.eval(command)
-        # print (command)
+        pm.select(objects)
 
     @staticmethod
     def get_overlapping_duplicates(
@@ -810,7 +823,7 @@ class EditUtils(ptk.HelpMixin):
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mfnMesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 
@@ -829,11 +842,12 @@ class EditUtils(ptk.HelpMixin):
         return result
 
     @classmethod
-    def get_overlapping_faces(cls, objects):
+    def get_overlapping_faces(cls, objects, delete_history=False):
         """Get any duplicate overlapping faces of the given objects.
 
-        :Parameters:
+        Parameters:
             objects (str/obj/list): Faces or polygon objects.
+            delete_history (bool): If True, deletes the history of the objects before processing.
 
         Returns:
             (list) duplicate overlapping faces.
@@ -843,39 +857,46 @@ class EditUtils(ptk.HelpMixin):
         if not objects:
             return []
 
-        elif not pm.nodeType(objects) == "mesh":  # if the objects are not faces.
-            duplicates = ptk.flatten(
-                [
-                    cls.get_overlapping_faces(obj.faces)
-                    for obj in pm.ls(objects, objectsOnly=1)
-                ]
-            )
-            return list(duplicates)
+        if delete_history:
+            pm.delete(objects, constructionHistory=True)
 
-        face, *otherFaces = pm.ls(objects)
-        face_vtx_positions = [
-            v.getPosition()
-            for v in pm.ls(pm.polyListComponentConversion(face, toVertex=1), flatten=1)
-        ]
-
-        duplicates = []
-        for otherFace in otherFaces:
-            otherFace_vtx_positions = [
-                v.getPosition()
-                for v in pm.ls(
-                    pm.polyListComponentConversion(otherFace, toVertex=1), flatten=1
+        def get_vertex_positions(face):
+            # Convert face to vertices and get their world positions, then make a tuple to be hashable
+            return tuple(
+                sorted(
+                    tuple(v.getPosition(space="world"))
+                    for v in pm.ls(
+                        pm.polyListComponentConversion(face, toVertex=True),
+                        flatten=True,
+                    )
                 )
-            ]
+            )
 
-            if face_vtx_positions == otherFace_vtx_positions:  # duplicate found.
-                duplicates.append(otherFace)
-                otherFaces.remove(otherFace)
+        def find_duplicates(faces):
+            checked = {}
+            duplicates = []
+            for face in faces:
+                positions = get_vertex_positions(face)
+                if positions in checked:
+                    duplicates.append(face)
+                else:
+                    checked[positions] = face
+            return duplicates
 
-        if otherFaces:
-            # after adding any found duplicates, call again with any remaining faces.
-            duplicates += cls.get_overlapping_faces(otherFaces)
+        # Ensure the input is a list
+        if isinstance(objects, str):
+            objects = [objects]
 
-        return duplicates
+        objects = pm.ls(objects, flatten=True, type="transform")
+
+        faces = []
+        for obj in objects:
+            meshes = pm.listRelatives(obj, type="mesh", fullPath=True)
+            for mesh in meshes:
+                all_faces = pm.ls(f"{mesh}.f[*]", flatten=True)
+                faces.extend(all_faces)
+
+        return find_duplicates(faces)
 
     @staticmethod
     def get_similar_mesh(obj, tolerance=0.0, inc_orig=False, **kwargs):

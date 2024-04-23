@@ -9,13 +9,13 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class GetComponentsMixin:
     """ """
 
-    componentTypes = [  # abv, singular, plural, full, int, hex
+    component_mapping = [  # abv, singular, plural, full, int, hex
         (
             "vtx",
             "vertex",
@@ -246,7 +246,7 @@ class GetComponentsMixin:
             get_component_type('cyl.vtx[:]', 'abv') #returns: 'vtx'
             get_component_type('cyl.e[:]', 'int') #returns: 32
         """
-        for a, s, p, f, i, h in cls.componentTypes:
+        for a, s, p, f, i, h in cls.component_mapping:
             try:
                 if pm.filterExpand(component, sm=i):
                     if returned_type == "abv":
@@ -288,7 +288,7 @@ class GetComponentsMixin:
         """
         rtypes = ("abv", "singular", "plural", "full", "int", "hex")
 
-        for t in cls.componentTypes:
+        for t in cls.component_mapping:
             if component_type in t:
                 index = rtypes.index(returned_type)
                 return t[index]
@@ -327,18 +327,42 @@ class GetComponentsMixin:
             "shell": "toShell",
             "vertexFace": "toVertexFace",
         }
-        typ = cls.convert_alias(
-            component_type
-        )  # get the correct component_type variable from possible args.
+        typ = cls.convert_alias(component_type)
 
         if typ not in d:
             return components
         components = pm.polyListComponentConversion(
             components, **{d[typ.lower()]: True}
         )
-        return core_utils.CoreUtils.convert_array_type(
+        return _core_utils.CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
+
+    @staticmethod
+    def get_component_index(components):
+        """Extracts the numerical index or indices of a component or components from their descriptor strings.
+
+        Parameters:
+            components (str/obj/list): A single component descriptor or an iterable of descriptors,
+                                      typically in the format 'nodeName.componentType[index]'.
+        Returns:
+            int or list: The numerical index of the component if a single string is provided, or a list of indices
+                         if an iterable of strings is provided.
+        Raises:
+            ValueError: If any component descriptor does not contain a valid index or if the input is not as expected.
+
+        Examples:
+            >>> ComponentsMixin.get_component_index('pCube1.vtx[32]')
+            32
+            >>> ComponentsMixin.get_component_index(['pCube1.vtx[32]', 'pCube2.vtx[45]'])
+            [32, 45]
+        """
+        try:
+            flattened = pm.ls(components, flatten=True)
+            result = [c.index() for c in flattened]
+            return result[0] if isinstance(components, (str, pm.PyNode)) else result
+        except AttributeError:
+            raise ValueError("Input must be a valid component type.")
 
     @classmethod
     def convert_int_to_component(
@@ -376,7 +400,7 @@ class GetComponentsMixin:
         else:
             result = ["{}.{}[{}]".format(objName, component_type, c) for c in integers]
 
-        return core_utils.CoreUtils.convert_array_type(
+        return _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -399,9 +423,9 @@ class GetComponentsMixin:
             filter_components('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
         """
         typ = cls.get_component_type(components)
-        etyp = core_utils.CoreUtils.get_array_type(components)
-        etyp_inc = core_utils.CoreUtils.get_array_type(inc)
-        etyp_exc = core_utils.CoreUtils.get_array_type(exc)
+        etyp = _core_utils.CoreUtils.get_array_type(components)
+        etyp_inc = _core_utils.CoreUtils.get_array_type(inc)
+        etyp_exc = _core_utils.CoreUtils.get_array_type(exc)
 
         if etyp_inc == "int" or etyp_exc == "int":
             try:
@@ -423,7 +447,7 @@ class GetComponentsMixin:
         components = pm.ls(components, flatten=True)
 
         filtered = ptk.filter_list(components, inc=inc, exc=exc)
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             filtered, returned_type=etyp, flatten=flatten
         )
         return result
@@ -470,7 +494,7 @@ class GetComponentsMixin:
         if randomize:
             components = randomize(pm.ls(components, flatten=1), randomize)
 
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
         return result
@@ -748,10 +772,37 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             else:
                 raise ValueError(f"Unrecognized component_type: {component_type}")
 
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             border_components, returned_type=returned_type
         )
         return result
+
+    @staticmethod
+    def get_furthest_vertices(vertices_a, vertices_b):
+        """Determines the two furthest apart vertices, one from each of the two provided lists of vertices.
+
+        Parameters:
+            vertices_a (str/obj/list): A list of vertices (pm.MeshVertex or string descriptors).
+            vertices_b (str/obj/list): Another list of vertices (pm.MeshVertex or string descriptors).
+
+        Returns:
+            tuple: The pair of vertices (from a_vertices and b_vertices respectively) that are furthest apart.
+        """
+        list_a = pm.ls(vertices_a, flatten=True)
+        list_b = pm.ls(vertices_b, flatten=True)
+
+        max_dist = 0
+        result_a = result_b = None
+        for v1 in list_a:
+            v1_pos = pm.pointPosition(v1, world=True)
+            for v2 in list_b:
+                v2_pos = pm.pointPosition(v2, world=True)
+                dist = (v1_pos - v2_pos).length()
+                if dist > max_dist:
+                    max_dist = dist
+                    result_a = v1
+                    result_b = v2
+        return (result_a, result_b)
 
     @classmethod
     def get_closest_verts(cls, a, b, tolerance=1000):
@@ -770,10 +821,10 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         """
         from operator import itemgetter
 
-        a = core_utils.CoreUtils.convert_array_type(
+        a = _core_utils.CoreUtils.convert_array_type(
             a, returned_type="str", flatten=True
         )
-        b = core_utils.CoreUtils.convert_array_type(
+        b = _core_utils.CoreUtils.convert_array_type(
             b, returned_type="str", flatten=True
         )
         vertPairsAndDistance = {}
@@ -791,7 +842,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return vertPairs
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def get_closest_vertex(
         cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type="str"
     ):
@@ -813,7 +864,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             get_closest_vertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
             get_closest_vertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
         """
-        vertices = core_utils.CoreUtils.convert_array_type(
+        vertices = _core_utils.CoreUtils.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
 
@@ -846,7 +897,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             v2Pos = pm.pointPosition(v2, world=True)
             distance = ptk.distance_between_points(v1Pos, v2Pos)
 
-            v2_convertedType = core_utils.CoreUtils.convert_array_type(
+            v2_convertedType = _core_utils.CoreUtils.convert_array_type(
                 v2, returned_type=returned_type
             )[0]
             if not tolerance:
@@ -859,6 +910,45 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return closestVerts
 
     @staticmethod
+    def get_vertices_within_threshold(reference_vertices, max_distance):
+        """Categorizes vertices of a mesh based on their distance from the first given reference vertex or vertices.
+
+        This function checks if vertices are within a specified maximum distance from the first vertex in the given list
+        or from a single vertex. It returns two lists: one containing vertices within the maximum distance and another
+        containing vertices outside of this distance.
+
+        Parameters:
+            reference_vertices (list or pm.MeshVertex): A single vertex or a list of vertices to use as reference.
+            max_distance (float): The maximum distance to use for categorization.
+
+        Returns:
+            tuple of lists: (inside, outside)
+                            - inside: A list of vertices within the maximum distance.
+                            - outside: A list of vertices outside the maximum distance.
+        Example:
+            >>> inside, outside = get_vertices_within_distance('pCube1.vtx[2:6]', 5.0)
+        """
+        reference_vertices = pm.ls(reference_vertices, flatten=True)
+
+        reference_point = reference_vertices[0].getPosition(space="world")
+        mesh = reference_vertices[0].node()
+
+        inside = []
+        outside = []
+
+        all_vertices = mesh.vtx
+        for vtx in all_vertices:
+            vtx_position = vtx.getPosition(space="world")
+            distance = (vtx_position - reference_point).length()
+            if distance <= max_distance:
+                inside.append(vtx)
+            else:
+                outside.append(vtx)
+
+        return (inside, outside)
+
+    @staticmethod
+    @_core_utils.CoreUtils.undo
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging
         the new vertices with the corresponding vertices of the second edge.
@@ -867,15 +957,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             edges (str, object, list): Two connected MeshEdge objects their identifiers.
         """
         # Validate input edges
-        edges = pm.ls(edges, flatten=True)
-        if len(edges) != 2:
-            pm.warning("Exactly two connected edges must be provided.")
-            return
+        edges = pm.ls(pm.filterExpand(edges, sm=32))
+        if not edges or len(edges) < 2:
+            raise ValueError(
+                "Invalid input: At least two edges are required for bridging."
+            )
 
         # Extract vertex names from edges
         vertices_edge1_names = {v.name() for v in edges[0].connectedVertices()}
         vertices_edge2_names = {v.name() for v in edges[1].connectedVertices()}
-        common_vertex_name = list(vertices_edge1_names & vertices_edge2_names)[0]
+        try:
+            common_vertex_name = list(vertices_edge1_names & vertices_edge2_names)[0]
+        except IndexError:
+            raise ValueError(
+                "Cannot bridge edges: The provided edges do not share a common vertex."
+            )
         common_vertex = pm.PyNode(common_vertex_name)
 
         # Perform extrusion to create new vertices
@@ -982,85 +1078,84 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         result = ptk.remove_duplicates(
             ["{}.e[{}]".format(objName, e) for e in edgesLong]
         )
-        return core_utils.CoreUtils.convert_array_type(
+        return _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
     @classmethod
-    def get_shortest_path(cls, components, returned_type="str", flatten=False):
-        """Get the shortest path between two components.
+    def get_shortest_path(cls, components, flatten=False):
+        """Calculate the shortest path between two specified edge or vertex components within the same 3D object.
+        This method supports only edges and vertices. The path includes the initial and final components.
 
         Parameters:
-            components (obj): A Pair of vertices or edges.
-            returned_type (str): The desired returned object type.
-                    valid: 'str'(default), 'obj', 'int'(valid only at sub-object level)
-            flatten (bool): Flattens the returned list of objects so that each component is it's own element.
-
+            components (list): A list containing exactly two edge or vertex components from which to find the shortest path.
+            flatten (bool): If set to True, the result will be a flat list of all vertices in the path if the components are vertices.
+                            If the components are edges, it will be a list of edges. Defaults to False, which returns components in their hierarchical structures.
         Returns:
-            (list) the components that comprise the path as strings.
-
+            list: A list containing the shortest path between the two components, including the start and end components.
+                  If edges are used, the result includes the original edges. If vertices are used, the result includes all intermediate vertices.
+        Raises:
+            ValueError: If the input does not contain exactly two components, if the components do not belong to the same object,
+                        if the components are not of the same type, or if an unsupported component type is provided.
         Example:
-            get_edge_path('sph.e[12]', 'edgeLoop') #returns: ['sphShape.e[12]', 'sphShape.e[17]', 'sphShape.e[16]', 'sphShape.e[15]', 'sphShape.e[14]', 'sphShape.e[13]']
-            get_edge_path('sph.e[12]', 'edgeLoop', 'int') #returns: [12, 17, 16, 15, 14, 13]
-            get_edge_path('sph.e[12]', 'edgeRing') #returns: ['sphShape.e[0]', 'sphShape.e[6]', 'sphShape.e[12]', 'sphShape.e[18]', 'sphShape.e[24]']
-            get_edge_path(['sph.e[43]', 'sph.e[46]'], 'edgeRingPath') #returns: ['sphShape.e[43]', 'sphShape.e[42]', 'sphShape.e[47]', 'sphShape.e[46]']
-            get_edge_path(['sph.e[54]', 'sph.e[60]'], 'edgeLoopPath') #returns: ['sphShape.e[60]', 'sphShape.e[48]', 'sphShape.e[42]', 'sphShape.e[36]', 'sphShape.e[30]', 'sphShape.e[54]']
+            >>> cls.get_shortest_path(['pCube1.e[1]', 'pCube1.e[3]'])
+            ['pCube1.e[1]', 'pCube1.e[2]', 'pCube1.e[3]']
+
+            >>> cls.get_shortest_path(['pCube1.vtx[1]', 'pCube1.vtx[3]'], flatten=True)
+            ['pCube1.vtx[1]', 'pCube1.vtx[2]', 'pCube1.vtx[3]']
         """
-        obj = pm.ls(components, objectsOnly=1)[0]
-        ctype = cls.get_component_type(components)
         try:
-            A, B = components = cls.convert_component_type(components, ctype)[:2]
-        except ValueError as e:
-            print(
-                f"# Error: Operation requires exactly two components.\n\t{e}",
+            a, b = components = pm.ls(components, flatten=True)
+        except ValueError:
+            raise ValueError(f"Exactly two components are required. Got: {components}")
+
+        obj_a = pm.ls(components[0], objectsOnly=True)[0]
+        obj_b = pm.ls(components[1], objectsOnly=True)[0]
+        if obj_a != obj_b:
+            raise ValueError("Components must belong to the same object")
+
+        a_type = cls.get_component_type(a, returned_type="abv")
+        b_type = cls.get_component_type(b, returned_type="abv")
+        if a_type != b_type:
+            raise ValueError("Both components must be of the same type")
+
+        if a_type == "e":
+            a_vertices = pm.ls(
+                pm.polyListComponentConversion(a, fromEdge=True, toVertex=True),
+                flatten=True,
             )
-            return []
+            b_vertices = pm.ls(
+                pm.polyListComponentConversion(b, fromEdge=True, toVertex=True),
+                flatten=True,
+            )
 
-        returnAsVerts = False
-        if ctype == "vtx":
-            edgesA = cls.convert_component_type(A, "e", flatten=1)
-            vertsA = cls.convert_component_type(edgesA, "vtx", flatten=1)
-            closestA = cls.get_closest_verts(B, [i for i in vertsA if not i == A])[0]
-            edgeA = [
-                e
-                for e in edgesA
-                if closestA[1] in cls.convert_component_type(e, "vtx", flatten=1)
-            ]
+            selected_a, selected_b = cls.get_furthest_vertices(a_vertices, b_vertices)
+            a_index = cls.get_component_index(selected_a)
+            b_index = cls.get_component_index(selected_b)
 
-            edgeB = cls.convert_component_type(B, "e", flatten=1)
-            vertsB = cls.convert_component_type(edgeB, "vtx", flatten=1)
-            closestB = cls.get_closest_verts(A, [i for i in vertsB if not i == B])[0]
-            edgeB = [
-                e
-                for e in edgeB
-                if closestB[1] in cls.convert_component_type(e, "vtx", flatten=1)
-            ]
+        elif a_type == "vtx":
+            a_index = cls.get_component_index(a)
+            b_index = cls.get_component_index(b)
+        else:
+            raise ValueError("Unsupported component type for path calculation")
 
-            components = (edgeA, edgeB)
-            ctype = "e"
-            returnAsVerts = True
+        path_indices = pm.polySelect(obj_a, q=True, shortestEdgePath=[a_index, b_index])
 
-        compNums = cls.convert_component_type(
-            components, ctype, returned_type="int", flatten=True
-        )
+        # Include the starting and ending edges in the results if type is edge
+        if a_type == "e":
+            result = [a] + [f"{obj_a.name()}.e[{idx}]" for idx in path_indices] + [b]
+        elif a_type == "vtx":
+            result = []
+            for idx in path_indices:
+                edge = f"{obj_a.name()}.e[{idx}]"
+                vertices = pm.polyListComponentConversion(
+                    edge, fromEdge=True, toVertex=True
+                )
+                result.extend(pm.ls(vertices, flatten=True))
+        else:
+            result = path_indices
 
-        kwargs = {
-            "shortestFacePath"
-            if ctype == "f"
-            else "shortestEdgePathUV"
-            if ctype == "uv"
-            else "shortestEdgePath": compNums
-        }
-        compLong = set(pm.polySelect(obj, q=True, **kwargs) + compNums)
-
-        result = cls.convert_int_to_component(
-            obj, compLong, ctype, returned_type=returned_type, flatten=flatten
-        )
-
-        if returnAsVerts:
-            result = cls.convert_component_type(result, "vtx", flatten=flatten)
-
-        return result
+        return ptk.remove_duplicates(result)
 
     @staticmethod
     def get_normal(face):
@@ -1212,10 +1307,10 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return edges
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def set_edge_hardness(
         cls,
-        x: Union[str, object, List],
+        objects: Union[str, object, List],
         angle_threshold: float,
         upper_hardness: float = None,
         lower_hardness: float = None,
@@ -1224,33 +1319,38 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         Parameters:
             cls: The class the method belongs to.
-            x: Objects or collections of objects to process.
+            objects: Objects or collections of objects to process.
             angle_threshold: Angle in degrees to classify edges.
             upper_hardness: Hardness to apply to edges above the angle threshold.
             lower_hardness: Hardness to apply to edges below the angle threshold.
         """
         # Retrieve all edges within the specified angle range
-        all_edges = cls.get_edges_by_normal_angle(x, 0, 180)
+        all_edges = cls.get_edges_by_normal_angle(objects, 0, 180)
 
-        # Filter edges based on the angle threshold and hardness settings
-        upper_edges = [
-            edge
-            for edge in all_edges
-            if cls.get_normal_angle(edge) >= angle_threshold
-            and upper_hardness is not None
-        ]
-        lower_edges = [
-            edge
-            for edge in all_edges
-            if cls.get_normal_angle(edge) < angle_threshold
-            and lower_hardness is not None
-        ]
+        # Map components to their respective objects to ensure single object operation
+        object_to_edges = cls.map_components_to_objects(all_edges)
 
-        # Apply hardness settings to the filtered edges
-        if upper_edges:
-            pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
-        if lower_edges:
-            pm.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
+        # Iterate over each object and apply edge hardness settings
+        for obj, edges in object_to_edges.items():
+            # Filter edges for upper and lower hardness
+            upper_edges = [
+                edge
+                for edge in edges
+                if cls.get_normal_angle(edge) >= angle_threshold
+                and upper_hardness is not None
+            ]
+            lower_edges = [
+                edge
+                for edge in edges
+                if cls.get_normal_angle(edge) < angle_threshold
+                and lower_hardness is not None
+            ]
+
+            # Apply hardness settings to the filtered edges
+            if upper_edges:
+                pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
+            if lower_edges:
+                pm.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
 
     @classmethod
     def get_faces_with_similar_normals(
@@ -1316,7 +1416,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return similar_faces
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def average_normals(cls, objects, by_uv_shell=False):
         """Average the normals of the given objects.
 
@@ -1340,7 +1440,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                     pm.polySoftEdge(obj, a=180)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def transfer_normals(source, target):
         """Transfer normal information from one object to another.
 
@@ -1416,7 +1516,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             if n >= lowRange and n <= highRange:
                 result.append(c)
 
-        result = core_utils.CoreUtils.convert_array_type(
+        result = _core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type
         )
         return result
@@ -1443,7 +1543,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         dagPath = selectionList.getDagPath(0)  # create empty dag path object.
         mesh = om.MFnMesh(dagPath)  # get mesh.
 
-        vtxID = core_utils.CoreUtils.convert_array_type(vertex, "int")[0]
+        vtxID = _core_utils.CoreUtils.convert_array_type(vertex, "int")[0]
         # get vertex normal and use om.MSpace.kObject for object space.
         return mesh.getVertexNormal(vtxID, angle_weighted, space=om.MSpace.kWorld)
 
@@ -1690,7 +1790,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             tolerance (float): The geometric similarity tolerance within which UV transfer should occur.
                 Defaults to 0.1.
         """
-        mapping = core_utils.CoreUtils.build_mesh_similarity_mapping(
+        mapping = _core_utils.CoreUtils.build_mesh_similarity_mapping(
             source, target, tolerance
         )
         for source_name, target_name in mapping.items():

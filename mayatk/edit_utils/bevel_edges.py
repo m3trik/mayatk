@@ -5,7 +5,9 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk.core_utils import CoreUtils, Preview, Components
+from mayatk.core_utils import _core_utils
+from mayatk.core_utils import preview
+from mayatk.core_utils import components
 
 
 class BevelEdges:
@@ -49,7 +51,7 @@ class BevelEdges:
         - angleTolerance: Angular tolerance for creation of extra triangles
         """
 
-        mapped_edges = Components.map_components_to_objects(edges)
+        mapped_edges = components.Components.map_components_to_objects(edges)
 
         for edges in mapped_edges.values():
             pm.polyBevel3(
@@ -77,7 +79,7 @@ class BevelEdgesSlots:
     def __init__(self):
         self.sb = self.switchboard()
         self.ui = self.sb.bevel_edges
-        self.preview = Preview(
+        self.preview = preview.Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
 
@@ -95,7 +97,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = CoreUtils.get_main_window()
+    parent = _core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "bevel_edges.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=BevelEdgesSlots)
 

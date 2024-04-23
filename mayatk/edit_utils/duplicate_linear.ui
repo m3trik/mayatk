@@ -85,7 +85,7 @@
           <number>1</number>
          </property>
          <item row="3" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s011">
+          <widget class="DoubleSpinBox" name="s011">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -125,7 +125,7 @@
           </widget>
          </item>
          <item row="6" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s002">
+          <widget class="DoubleSpinBox" name="s002">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -281,7 +281,7 @@
           </layout>
          </item>
          <item row="2" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s010">
+          <widget class="DoubleSpinBox" name="s010">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -321,7 +321,7 @@
           </widget>
          </item>
          <item row="5" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s001">
+          <widget class="DoubleSpinBox" name="s001">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -361,7 +361,7 @@
           </widget>
          </item>
          <item row="7" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s003">
+          <widget class="DoubleSpinBox" name="s003">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -401,7 +401,7 @@
           </widget>
          </item>
          <item row="9" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s005">
+          <widget class="DoubleSpinBox" name="s005">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -441,7 +441,7 @@
           </widget>
          </item>
          <item row="11" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s007">
+          <widget class="DoubleSpinBox" name="s007">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -481,7 +481,7 @@
           </widget>
          </item>
          <item row="4" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s000">
+          <widget class="DoubleSpinBox" name="s000">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -521,7 +521,7 @@
           </widget>
          </item>
          <item row="10" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s006">
+          <widget class="DoubleSpinBox" name="s006">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -561,7 +561,7 @@
           </widget>
          </item>
          <item row="12" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s008">
+          <widget class="DoubleSpinBox" name="s008">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -601,7 +601,7 @@
           </widget>
          </item>
          <item row="8" column="0" colspan="6">
-          <widget class="QDoubleSpinBox" name="s004">
+          <widget class="DoubleSpinBox" name="s004">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -666,6 +666,11 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

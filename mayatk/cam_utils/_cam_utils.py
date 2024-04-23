@@ -7,14 +7,14 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import _core_utils
 
 
 class CamUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
@@ -105,18 +105,18 @@ class CamUtils(ptk.HelpMixin):
         return camPath
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in core_utils.CoreUtils.get_panel(all=True):
-            if core_utils.CoreUtils.get_panel(typeOf=panel) == "modelPanel":
+        for panel in _core_utils.CoreUtils.get_panel(all=True):
+            if _core_utils.CoreUtils.get_panel(typeOf=panel) == "modelPanel":
                 current_panel = panel
                 break
 
         if current_panel:
-            if core_utils.CoreUtils.get_panel(typeOf=current_panel) == "modelPanel":
+            if _core_utils.CoreUtils.get_panel(typeOf=current_panel) == "modelPanel":
                 camera = pm.modelPanel(current_panel, q=1, cam=1)
                 new_camera = pm.duplicate(camera)[0]
                 pm.showHidden(new_camera)
@@ -127,7 +127,7 @@ class CamUtils(ptk.HelpMixin):
             print("No modelPanel found")
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @_core_utils.CoreUtils.undo
     def adjust_camera_clipping(
         camera=None, near_clip=None, far_clip=None, mode="manual"
     ):

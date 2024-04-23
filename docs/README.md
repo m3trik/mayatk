@@ -1,5 +1,5 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.9.16-blue.svg)](https://pypi.org/project/mayatk/)
+[![Version](https://img.shields.io/badge/Version-0.9.18-blue.svg)](https://pypi.org/project/mayatk/)
 [![CoreUtils Tests](https://img.shields.io/badge/CoreUtils-Passing-brightgreen.svg)](../test/core_utils_test.py#CoreUtilsTest)
 [![XformUtils Tests](https://img.shields.io/badge/XformUtils-Passing-brightgreen.svg)](../test/xform_utils_test.py#XformUtilsTest)
 [![EditUtils Tests](https://img.shields.io/badge/EditUtils-Passing-brightgreen.svg)](../test/edit_utils_test.py#EditUtilsTest)
@@ -30,7 +30,7 @@ import mayatk as mtk
 mtk.is_group(<obj>)
 # Returns: bool
 
-mtk.getBoundingBox(<obj>, 'centroid|size') 
+mtk.get_bounding_box(<obj>, 'centroid|size')
 # Returns: tuple containing bounding box center and size.
 # ex. ((-0.02406523456116849, -0.8100277092487823, 0.0), (3.3830200057098523, 4.0155477063595555, 3.40770764056194))
 ```
