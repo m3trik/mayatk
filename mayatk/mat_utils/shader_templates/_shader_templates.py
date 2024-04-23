@@ -109,7 +109,7 @@ class GraphCollector:
 class GraphSaver(GraphCollector):
     def save_graph(
         self,
-        nodes: List[pm.nt.DependNode],
+        nodes: List[object],
         file_path: str,
         exclude_types: Optional[List[str]] = None,  # Accept list of strings directly
     ) -> None:
