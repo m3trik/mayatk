@@ -7,7 +7,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 
 
 class NodeUtils(ptk.HelpMixin):
@@ -189,21 +189,21 @@ class NodeUtils(ptk.HelpMixin):
                 if parent:
                     result.extend(parent)
             else:
-                # Handle other types by examining their history for transform nodes
-                history_transforms = pm.listRelatives(
+                # Handle all other nodes that are not specifically transforms or meshes
+                connected_transforms = pm.listRelatives(
                     pm.listHistory(node, future=True), parent=True, type="transform"
                 )
-                if history_transforms:
-                    result.extend(history_transforms)
+                if connected_transforms:
+                    result.extend(connected_transforms)
 
         # Remove any duplicates and ensure only transforms are in the final result
-        result = list(set(result))  # Remove any duplicates
+        result = list(set(result))
 
         if attributes:
             result = pm.listAttr(result, read=True, hasData=True)
 
         # Convert element type and apply filters
-        result = _core_utils.CoreUtils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         result = ptk.filter_list(result, inc, exc)
@@ -246,7 +246,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = _core_utils.CoreUtils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -292,7 +292,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = _core_utils.CoreUtils.convert_array_type(
+        result = core_utils.CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter

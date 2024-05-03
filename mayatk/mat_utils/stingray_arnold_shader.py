@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 from mayatk.node_utils import NodeUtils
 
 
@@ -25,7 +25,7 @@ class StingrayArnoldShader:
     color_warning = "rgb(200, 200, 100)"
     color_error = "rgb(255, 100, 100)"
 
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def create_network(
         self,
         textures: List[str],
@@ -108,13 +108,13 @@ class StingrayArnoldShader:
         Returns:
             pm.nt.StingrayPBS: The created StingrayPBS shader node.
         """
-        _core_utils.CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        core_utils.CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
         # Create StingrayPBS node
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = _core_utils.CoreUtils.get_maya_info("install_path")
+            maya_install_path = core_utils.CoreUtils.get_maya_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -148,7 +148,7 @@ class StingrayArnoldShader:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
-        _core_utils.CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        core_utils.CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
 
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
@@ -616,7 +616,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
-        self.workspace_dir = _core_utils.CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = core_utils.CoreUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -748,7 +748,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = _core_utils.CoreUtils.get_main_window()
+    parent = core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
     sb = Switchboard(
         parent, ui_location=ui_file, slot_location=StingrayArnoldShaderSlots

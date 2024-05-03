@@ -127,29 +127,36 @@ class MatUtils(ptk.HelpMixin):
         return mat
 
     @staticmethod
-    def assign_mat(objects, mat):
+    def assign_mat(objects, mat_name):
         """Assigns a material to a list of objects or components.
 
         Parameters:
             objects (str/obj/list): The objects or components to assign the material to.
-            mat (obj): The material to assign.
+            mat_name (str): The name of the material to assign.
         """
-        try:
-            pm.nodeType(mat)
-        except Exception:
-            mat = pm.shadingNode(mat, asShader=True)
+        if not objects:
+            raise ValueError("No objects provided to assign material.")
 
-        # Check for existing shading group connected to the material
+        try:  # Retrieve or create material
+            mat = pm.PyNode(mat_name)
+        except pm.MayaNodeError:
+            mat = pm.shadingNode("lambert", name=mat_name, asShader=True)
+
+        # Check if the material has a shading engine, otherwise create one
         shading_groups = mat.listConnections(type="shadingEngine")
-        if shading_groups:
-            shading_group = shading_groups[0]
-        else:
-            shading_group = pm.sets(renderable=True, noSurfaceShader=True, empty=True)
+        if not shading_groups:
+            shading_group = pm.sets(
+                name=f"{mat_name}SG", renderable=True, noSurfaceShader=True, empty=True
+            )
             pm.connectAttr(
                 f"{mat}.outColor", f"{shading_group}.surfaceShader", force=True
             )
+        else:
+            shading_group = shading_groups[0]
 
-        for obj in pm.ls(objects):
+        # Filter for valid objects and assign the material
+        valid_objects = pm.ls(objects, type="transform", flatten=True)
+        for obj in valid_objects:
             pm.sets(shading_group, forceElement=obj)
 
     @classmethod

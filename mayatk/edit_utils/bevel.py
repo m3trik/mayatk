@@ -5,14 +5,14 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 from mayatk.core_utils import preview
 from mayatk.core_utils import components
 
 
-class BevelEdges:
+class Bevel:
     @staticmethod
-    def bevel_edges(
+    def bevel(
         edges,
         width=5,
         segments=1,
@@ -75,10 +75,10 @@ class BevelEdges:
             )
 
 
-class BevelEdgesSlots:
+class BevelSlots:
     def __init__(self):
         self.sb = self.switchboard()
-        self.ui = self.sb.bevel_edges
+        self.ui = self.sb.bevel
         self.preview = preview.Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
@@ -88,7 +88,7 @@ class BevelEdgesSlots:
     def perform_operation(self, objects):
         width = self.ui.s000.value()
         segments = self.ui.s001.value()
-        BevelEdges.bevel_edges(objects, width, segments)
+        Bevel.bevel(objects, width, segments)
 
 
 # -----------------------------------------------------------------------------
@@ -97,9 +97,9 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = _core_utils.CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "bevel_edges.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=BevelEdgesSlots)
+    parent = core_utils.CoreUtils.get_main_window()
+    ui_file = os.path.join(os.path.dirname(__file__), "bevel.ui")
+    sb = Switchboard(parent, ui_location=ui_file, slot_location=BevelSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(

@@ -7,11 +7,8 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>232</height>
+    <height>210</height>
    </rect>
-  </property>
-  <property name="windowTitle">
-   <string>Toolkit</string>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
@@ -33,6 +30,18 @@
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
+    <property name="leftMargin">
+     <number>1</number>
+    </property>
+    <property name="topMargin">
+     <number>1</number>
+    </property>
+    <property name="rightMargin">
+     <number>1</number>
+    </property>
+    <property name="bottomMargin">
+     <number>1</number>
+    </property>
     <item>
      <layout class="QVBoxLayout" name="verticalLayout">
       <property name="spacing">
@@ -94,23 +103,6 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="0">
-          <widget class="QCheckBox" name="chk001">
-           <property name="text">
-            <string>-</string>
-           </property>
-          </widget>
-         </item>
-         <item row="4" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk008">
-           <property name="toolTip">
-            <string>Mirror in world space instead of object space.</string>
-           </property>
-           <property name="text">
-            <string>World Space</string>
-           </property>
-          </widget>
-         </item>
          <item row="2" column="2">
           <widget class="QRadioButton" name="chk003">
            <property name="text">
@@ -118,17 +110,21 @@
            </property>
           </widget>
          </item>
-         <item row="8" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk005">
-           <property name="toolTip">
-            <string>Perform a delete along specified axis before mirror.</string>
-           </property>
+         <item row="2" column="3">
+          <widget class="QRadioButton" name="chk004">
            <property name="text">
-            <string>Cut</string>
+            <string>Z</string>
            </property>
           </widget>
          </item>
-         <item row="12" column="0" colspan="4">
+         <item row="2" column="0">
+          <widget class="QCheckBox" name="chk001">
+           <property name="text">
+            <string>—</string>
+           </property>
+          </widget>
+         </item>
+         <item row="13" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -175,43 +171,6 @@
            </item>
           </layout>
          </item>
-         <item row="2" column="3">
-          <widget class="QRadioButton" name="chk004">
-           <property name="text">
-            <string>Z</string>
-           </property>
-          </widget>
-         </item>
-         <item row="10" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk006">
-           <property name="toolTip">
-            <string>Delete non-deformer history on the object before performing the operation.</string>
-           </property>
-           <property name="text">
-            <string>Delete History</string>
-           </property>
-          </widget>
-         </item>
-         <item row="11" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk009">
-           <property name="toolTip">
-            <string>Un-instance the object(s) before performing the operation.</string>
-           </property>
-           <property name="text">
-            <string>Un-Instance</string>
-           </property>
-          </widget>
-         </item>
-         <item row="7" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk007">
-           <property name="toolTip">
-            <string>Merge the mirrored geometry with the original.</string>
-           </property>
-           <property name="text">
-            <string>Merge</string>
-           </property>
-          </widget>
-         </item>
          <item row="1" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout">
            <property name="spacing">
@@ -250,13 +209,130 @@
            </item>
           </layout>
          </item>
-         <item row="9" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk010">
+         <item row="7" column="0" colspan="4">
+          <widget class="ComboBox" name="cmb000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
            <property name="toolTip">
-            <string>Delete the original objects after mirroring.</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="maxVisibleItems">
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContents</enum>
+           </property>
+           <property name="frame">
+            <bool>true</bool>
+           </property>
+           <item>
+            <property name="text">
+             <string>Axis:  Bounding Box</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Axis:  Object</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Axis:  World</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="8" column="0" colspan="4">
+          <widget class="ComboBox" name="cmb001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="maxVisibleItems">
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContents</enum>
+           </property>
+           <property name="frame">
+            <bool>true</bool>
+           </property>
+           <item>
+            <property name="text">
+             <string>Merge:  OFF</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Merge:  Border Edges</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Merge:  Extrude</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Merge:  Combine</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="9" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk005">
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-weight:600; color:#000000; background-color:#ffffff;&quot;&gt;ON&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; :  All geometrical values are taken in world reference.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-weight:600; color:#000000; background-color:#ffffff;&quot;&gt;OFF&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; :  All geometrical values are taken in object reference.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="text">
-            <string>Delete Original</string>
+            <string>Cut Mesh</string>
+           </property>
+          </widget>
+         </item>
+         <item row="11" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk006">
+           <property name="toolTip">
+            <string>Delete non-deformer history on the object before performing the operation.</string>
+           </property>
+           <property name="text">
+            <string>Delete History</string>
+           </property>
+          </widget>
+         </item>
+         <item row="12" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk007">
+           <property name="toolTip">
+            <string>Un-instance the object(s) before performing the operation.</string>
+           </property>
+           <property name="text">
+            <string>Un-Instance</string>
            </property>
           </widget>
          </item>
@@ -286,6 +362,11 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

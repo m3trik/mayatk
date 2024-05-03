@@ -9,7 +9,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
+from mayatk import display_utils
 from mayatk import node_utils
 from mayatk import xform_utils
 
@@ -18,7 +19,7 @@ class EditUtils(ptk.HelpMixin):
     """ """
 
     @classmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -60,7 +61,7 @@ class EditUtils(ptk.HelpMixin):
             return_orig_strings=True,
         )
 
-        print("# Rename: Found {} matches. #".format(len(names)))
+        print(f"Rename: Found {len(names)} matches.")
 
         for i, (oldName, newName) in enumerate(names):
             # Strip illegal characters from newName
@@ -71,18 +72,12 @@ class EditUtils(ptk.HelpMixin):
                 if pm.objExists(oldName):
                     n = pm.rename(oldName, newName)  # Rename the object
                     if not n == newName:
-                        print(
-                            '# Warning: "{}" renamed to "{}" instead of "{}". #'.format(
-                                oldName, n, newName
-                            )
+                        pm.warning(
+                            f"'{oldName}' renamed to '{n}'' instead of '{newName}'."
                         )
             except Exception as e:
                 if not pm.ls(oldName, readOnly=True) == []:  # Ignore read-only errors
-                    print(
-                        '# Error renaming "{}" to "{}": {} #'.format(
-                            oldName, newName, str(e).rstrip()
-                        )
-                    )
+                    print(f"Error renaming '{oldName}' to '{newName}': {e}")
 
     @staticmethod
     def strip_illegal_chars(input_data, replace_with="_"):
@@ -111,7 +106,7 @@ class EditUtils(ptk.HelpMixin):
             )
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -133,7 +128,7 @@ class EditUtils(ptk.HelpMixin):
                     print(name + ": ", error)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def append_location_based_suffix(
         objects,
         first_obj_as_ref=False,
@@ -215,7 +210,7 @@ class EditUtils(ptk.HelpMixin):
             pm.rename(obj, newNames[obj])
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -343,21 +338,26 @@ class EditUtils(ptk.HelpMixin):
         return relevant_faces
 
     @classmethod
-    @_core_utils.CoreUtils.undo
-    def cut_along_axis(cls, obj, axis="x", amount=1, offset=0, delete=False):
+    @core_utils.CoreUtils.undo
+    def cut_along_axis(
+        cls, obj, axis="x", invert=False, ortho=False, amount=1, offset=0, delete=False
+    ):
         """Performs cut operations on the specified object along a given axis with
         optional multiple cuts and an offset.
 
         Parameters:
             obj (str/obj): The object to cut.
-            axis (str): Axis along which to cut ('x', '-x', 'y', '-y', 'z', '-z').
+            axis (str/int): Axis along which to cut ('x', '-x', 'y', '-y', 'z', '-z').
+            invert (bool): When True, inverts the axis direction.
+            ortho (bool): When True, returns the axis that is orthogonal to the given axis.
             amount (int): The number of cuts to make. Default is 1.
             offset (float): Offset amount from the center for the cut. Default is 0.
-            delete (bool): If True, delete faces on the negative side of the cut plane.
+            delete (bool): If True, delete faces on the opposite side of the cut plane.
 
         Example:
             cut_along_axis('pCube1', axis='y', delete=True, amount=2, offset=0.1)
         """
+        axis = xform_utils.XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
 
         def calculate_cut_position(bounding_box, axis, amount, offset, cut_index):
             axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
@@ -396,129 +396,105 @@ class EditUtils(ptk.HelpMixin):
                 cls.delete_along_axis(obj, axis)
 
     @classmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def delete_along_axis(
-        cls, objects, axis="-x", world_space=False, delete_history=True
+        cls, objects, axis="-x", invert=False, world_space=False, delete_history=True
     ):
         """Delete components of the given mesh object along the specified axis.
 
         Parameters:
-            obj (obj): Mesh object.
-            axis (str): Axis to delete on. ie. '-x' Components belonging to the mesh object given in the 'obj' arg, that fall on this axis, will be deleted.
+            objects (obj): Mesh objects to process.
+            axis (str/int): Axis to delete on, e.g., '-x', or an integer mapped to an axis.
+            invert (bool): When True, inverts the axis direction.
             world_space (bool): Specify world or local space.
+            delete_history (bool): Specify whether to delete construction history.
         """
-        # Get any mesh type child nodes of obj.
-        for node in pm.ls(objects, objectsOnly=True, flatten=True):
+        axis = xform_utils.XformUtils.convert_axis(axis, invert=invert)
+
+        # Process each object individually
+        for node in pm.ls(objects, type="transform", flatten=True):
             if node_utils.NodeUtils.is_group(node):
-                continue
+                continue  # Skip group nodes
 
-        if delete_history:
-            pm.delete(node, ch=True)
+            if delete_history:
+                pm.delete(node, ch=True)
 
-        faces = cls.get_all_faces_on_axis(node, axis, world_space)
-        # If all faces fall on the specified axis.
-        if len(faces) == pm.polyEvaluate(node, face=True):
-            pm.delete(node)  # Delete entire node.
-        else:  # Else, delete any individual faces.
-            pm.delete(faces)
+            faces = cls.get_all_faces_on_axis(node, axis, world_space)
+            if len(faces) == pm.polyEvaluate(node, face=True):
+                # Delete entire node if all faces fall on the specified axis
+                pm.delete(node)
+            else:
+                pm.delete(faces)  # Delete only faces on the specified axis
 
-    @staticmethod
-    @_core_utils.CoreUtils.undo
+    @classmethod
+    @core_utils.CoreUtils.undo
     def mirror(
+        cls,
         objects,
-        axis="-x",
-        axis_pivot=2,
-        cut_mesh=False,
-        merge_mode=1,
-        merge_threshold=0.005,
-        delete_original=False,
-        delete_history=True,
         uninstance=False,
+        delete_history=False,
+        **kwargs,
     ):
         """Mirror geometry across a given axis.
 
         Parameters:
             objects (obj): The objects to mirror.
-            axis (string): The axis in which to perform the mirror along. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-            axis_pivot (int): The pivot on which to mirror on. valid: 0) Bounding Box, 1) Object, 2) World.
-            cut_mesh (bool): Perform a delete along specified axis before mirror.
-            merge_mode (int): 0) Do not merge border edges. 1) Border edges merged. 2) Border edges extruded and connected.
-            merge_threshold (float): Merge vertex distance.
-            delete_original (bool): Delete the original objects after mirroring.
-            delete_history (bool): Delete non-deformer history on the object(s) before performing the operation.
             uninstance (bool): Un-instance the object(s) before performing the operation.
-
+            delete_history (bool): Delete any non-deformer history on the object(s) before performing the operation.
+            kwargs: Any parameter the polyMirrorFace command takes. In addition, the axis parameter can be given as a string.
+                    ie. ('x', '-x', 'y', '-y', 'z', '-z'). When the axis is given as a string, the axisDirection param is not required.
         Returns:
-            (obj or list) The mirrored object's transform node or list of transform nodes if muliple objects given.
+            (obj or list) The mirrored object's transform node or list of transform nodes if multiple objects given.
         """
-        direction = {
-            # the direction dict:
-            "-x": (0, 0, (-1, 1, 1)),
-            #  first index: axis direction: 0=negative axis, 1=positive.
-            "x": (1, 0, (-1, 1, 1)),
-            #    second index: axis_as_int: 0=x, 1=y, 2=z
-            "-y": (0, 1, (1, -1, 1)),
-            #   remaining three are (x, y, z) scale values. #Used only when scaling an instance.
-            "y": (1, 1, (1, -1, 1)),
-            "-z": (0, 2, (1, 1, -1)),
-            "z": (1, 2, (1, 1, -1)),
-        }
+        kwargs["ch"] = True  # Force construction history
 
-        axis = axis.lower()  # Assure case.
-        axisDirection, axis_as_int, scale = direction[axis]
-        # ex. (1, 5, (1, 1,-1)) broken down as: axisDirection=1, axis_as_int=5, scale: (x=1, y=1, z=-1)
+        axis = kwargs.get("axis", "x")  # Default to 'x' axis
+        if isinstance(axis, str):
+            direction_map = {  # Axis direction. axis
+                "-x": (0, 0),
+                "x": (1, 0),
+                "-y": (0, 1),
+                "y": (1, 1),
+                "-z": (0, 2),
+                "z": (1, 2),
+            }
+            axis_direction, axis = direction_map[axis.lower()]
+            kwargs["axisDirection"] = axis_direction
+            kwargs["axis"] = axis  # Update the parameter for polyMirrorFace command
 
-        original_objects = pm.ls(objects, objectsOnly=1)
+        original_objects = pm.ls(objects, type="transform", flatten=True)
         result = []
         for obj in original_objects:
-            if delete_history and not obj.isReferenced():
-                # Only attempt to delete history on non-referenced objects
-                pm.delete(obj, constructionHistory=True)
-
             if uninstance:
                 node_utils.NodeUtils.uninstance(obj)
 
-            if cut_mesh:
-                EditUtils.delete_along_axis(obj, axis)
+            if delete_history and not obj.isReferenced():
+                pm.delete(obj, constructionHistory=True)
 
-            polyMirrorFaceNode = pm.ls(
-                pm.polyMirrorFace(
-                    obj,
-                    axis=axis_as_int,
-                    axisDirection=axisDirection,
-                    mirrorAxis=axis_pivot,
-                    mergeMode=merge_mode,
-                    mirrorPosition=0,
-                    mergeThresholdType=0,
-                    mergeThreshold=merge_threshold,
-                    smoothingAngle=30,
-                    flipUVs=0,
-                    ch=1,
-                )
-            )[0]
+            # Configure the polyMirrorFace command with user and default parameters
+            polyMirrorFaceNode = pm.PyNode(pm.polyMirrorFace(obj, **kwargs)[0])
 
-            if merge_mode == 0:
+            if kwargs.get("mergeMode", 1) == 0:
                 orig_obj, new_obj, polySeparateNode = pm.ls(
-                    pm.polySeparate(obj, uss=1, inp=1)
+                    pm.polySeparate(obj, uss=True, inp=True)
                 )
-
                 pm.connectAttr(
                     polyMirrorFaceNode.firstNewFace,
                     polySeparateNode.startFace,
                     force=True,
                 )
                 pm.connectAttr(
-                    polyMirrorFaceNode.lastNewFace,
-                    polySeparateNode.endFace,
-                    force=True,
+                    polyMirrorFaceNode.lastNewFace, polySeparateNode.endFace, force=True
                 )
+                pm.rename(new_obj, orig_obj.name())
+                parent = pm.listRelatives(orig_obj, parent=True, path=True)
+                if parent:
+                    pm.parent(new_obj, parent[0])
 
-                if delete_original:
-                    pm.delete(orig_obj)
+            result.append(polyMirrorFaceNode)
 
-            transform_node = node_utils.NodeUtils.get_transform_node(polyMirrorFaceNode)
-            result.append(transform_node)
-        return ptk.format_return(result)
+        display_utils.DisplayUtils.add_to_isolation_set(result)
+        return ptk.format_return(result, objects)
 
     @classmethod
     def clean_geometry(
@@ -823,7 +799,7 @@ class EditUtils(ptk.HelpMixin):
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mfnMesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 

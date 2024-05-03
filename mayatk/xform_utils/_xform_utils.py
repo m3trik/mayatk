@@ -7,11 +7,69 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 
 
 class XformUtils(ptk.HelpMixin):
     """ """
+
+    @staticmethod
+    def convert_axis(value, invert=False, ortho=False, to_integer=False):
+        """Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
+
+        Parameters:
+            value (int/str): The axis value to convert, either an integer index or a string representation.
+            invert (bool): When True, inverts the axis direction.
+            ortho (bool): When True, returns the axis that is orthogonal to the given axis.
+            to_integer (bool): If True, returns the converted axis value as an integer index.
+
+        Returns:
+            str/int: The converted axis value as a string unless to_integer is True.
+
+        Raises:
+            TypeError: If `value` is not an int or str.
+            ValueError: If `value` is invalid.
+        """
+        index_to_axis = {0: "x", 1: "-x", 2: "y", 3: "-y", 4: "z", 5: "-z"}
+        axis_to_index = {v: k for k, v in index_to_axis.items()}
+
+        # Function to handle inversion of the axis
+        def get_inverted_axis(axis):
+            return axis[1:] if axis.startswith("-") else "-" + axis
+
+        # Define orthogonal axes
+        orthogonal_axis_map = {
+            "x": "y",
+            "-x": "y",
+            "y": "z",
+            "-y": "z",
+            "z": "x",
+            "-z": "x",
+        }
+
+        # Determine the result based on input type
+        if isinstance(value, int):
+            axis = index_to_axis[value]
+        elif isinstance(value, str):
+            axis = value
+        else:
+            raise TypeError(
+                "Input must be an integer or a string representing an axis."
+            )
+
+        # Apply inversion if needed
+        if invert:
+            axis = get_inverted_axis(axis)
+
+        # Handle orthogonal axis request
+        if ortho:
+            axis = orthogonal_axis_map[axis]
+
+        # Return the result based on the to_integer flag
+        if to_integer:
+            return axis_to_index[axis]
+        else:
+            return axis  # Always returns a string unless to_integer is True
 
     @classmethod
     def move_to(cls, source, target, group_move=False):
@@ -54,7 +112,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -136,7 +194,7 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -158,7 +216,7 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @classmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def freeze_transforms(cls, objects, center_pivot=False, **kwargs):
         for obj in pm.ls(objects, type="transform"):
             if center_pivot:
@@ -170,7 +228,7 @@ class XformUtils(ptk.HelpMixin):
             pm.makeIdentity(obj, apply=True, **kwargs)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Check if the transform attributes are at their default values
@@ -202,7 +260,7 @@ class XformUtils(ptk.HelpMixin):
             pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
     @classmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -230,7 +288,7 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -280,7 +338,7 @@ class XformUtils(ptk.HelpMixin):
             pm.delete(plane)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -307,7 +365,7 @@ class XformUtils(ptk.HelpMixin):
         pm.delete(const, target)
 
     @classmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -592,7 +650,7 @@ class XformUtils(ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in _core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -688,7 +746,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 

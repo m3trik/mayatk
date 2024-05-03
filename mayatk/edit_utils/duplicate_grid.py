@@ -4,7 +4,7 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 from mayatk.display_utils import DisplayUtils
 from mayatk.core_utils import preview
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = _core_utils.CoreUtils.get_main_window()
+    parent = core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "duplicate_grid.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=DuplicateGridSlots)
 

@@ -7,14 +7,14 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 
 
 class CamUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
@@ -105,18 +105,18 @@ class CamUtils(ptk.HelpMixin):
         return camPath
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in _core_utils.CoreUtils.get_panel(all=True):
-            if _core_utils.CoreUtils.get_panel(typeOf=panel) == "modelPanel":
+        for panel in core_utils.CoreUtils.get_panel(all=True):
+            if core_utils.CoreUtils.get_panel(typeOf=panel) == "modelPanel":
                 current_panel = panel
                 break
 
         if current_panel:
-            if _core_utils.CoreUtils.get_panel(typeOf=current_panel) == "modelPanel":
+            if core_utils.CoreUtils.get_panel(typeOf=current_panel) == "modelPanel":
                 camera = pm.modelPanel(current_panel, q=1, cam=1)
                 new_camera = pm.duplicate(camera)[0]
                 pm.showHidden(new_camera)
@@ -127,7 +127,7 @@ class CamUtils(ptk.HelpMixin):
             print("No modelPanel found")
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def adjust_camera_clipping(
         camera=None, near_clip=None, far_clip=None, mode="manual"
     ):
@@ -160,7 +160,7 @@ class CamUtils(ptk.HelpMixin):
             bbox = pm.exactWorldBoundingBox(all_geo)
             size = [bbox[i + 3] - bbox[i] for i in range(3)]
             max_size = max(size)
-            near_clip = 0.0001 * max_size
+            near_clip = 0.001 * max_size
             far_clip = 5.0 * max_size
         elif mode != "manual":
             raise ValueError(

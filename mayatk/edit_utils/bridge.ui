@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>201</height>
+    <height>231</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -68,7 +68,7 @@
          </font>
         </property>
         <property name="text">
-         <string>DUPLICATE GRID</string>
+         <string>BRIDGE</string>
         </property>
        </widget>
       </item>
@@ -116,7 +116,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>Start the duplicate preview using any selected mesh objects.</string>
+              <string>Start the operation using any selected mesh objects.</string>
              </property>
              <property name="text">
               <string>Preview</string>
@@ -134,7 +134,47 @@
            </item>
           </layout>
          </item>
-         <item row="8" column="0" colspan="2">
+         <item row="6" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s003">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt;Taper or Scale along the extrusion path &lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-style:italic; color:#000000; background-color:#ffffff;&quot;&gt;Default:&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; 1.0&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Taper:	</string>
+           </property>
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>10000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="9" column="0" colspan="2">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -157,7 +197,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>Finish the duplicate operation.</string>
+              <string>Finish the operation.</string>
              </property>
              <property name="layoutDirection">
               <enum>Qt::RightToLeft</enum>
@@ -181,109 +221,7 @@
            </item>
           </layout>
          </item>
-         <item row="6" column="0" colspan="2">
-          <widget class="QSpinBox" name="s001">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform Y amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Dimentions Y:	</string>
-           </property>
-           <property name="minimum">
-            <number>-100</number>
-           </property>
-           <property name="maximum">
-            <number>100</number>
-           </property>
-          </widget>
-         </item>
-         <item row="7" column="0" colspan="2">
-          <widget class="QSpinBox" name="s002">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform Z amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Dimentions Z:	</string>
-           </property>
-           <property name="minimum">
-            <number>-100</number>
-           </property>
-           <property name="maximum">
-            <number>100</number>
-           </property>
-          </widget>
-         </item>
-         <item row="4" column="0" colspan="2">
-          <widget class="QDoubleSpinBox" name="s003">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the spacing between each object on all three axis.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Spacing:	</string>
-           </property>
-           <property name="decimals">
-            <number>4</number>
-           </property>
-           <property name="minimum">
-            <double>-100000.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>1000000.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="5" column="0" colspan="2">
+         <item row="3" column="0" colspan="2">
           <widget class="QSpinBox" name="s000">
            <property name="minimumSize">
             <size>
@@ -298,88 +236,183 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: transform X amount</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt;The number of subdivisions in the bridging faces (resulting in (divisions+1) row of faces). &lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-style:italic; color:#000000; background-color:#ffffff;&quot;&gt;Default:&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; 1&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Dimentions X:	</string>
+            <string>Divisions:	</string>
            </property>
            <property name="minimum">
-            <number>-100</number>
+            <number>0</number>
            </property>
            <property name="maximum">
-            <number>100</number>
+            <number>1000</number>
            </property>
           </widget>
          </item>
-         <item row="3" column="0">
-          <widget class="QCheckBox" name="chk001">
+         <item row="5" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s002">
            <property name="minimumSize">
             <size>
-             <width>36</width>
+             <width>0</width>
              <height>20</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: rotate axis X</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt;Add offset to which vertices are connected. &lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-style:italic; color:#000000; background-color:#ffffff;&quot;&gt;Default:&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; 0&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
-           <property name="text">
-            <string>Instance</string>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
-           <property name="iconSize">
-            <size>
-             <width>18</width>
-             <height>18</height>
-            </size>
+           <property name="prefix">
+            <string>Offset:	</string>
            </property>
-           <property name="checkable">
-            <bool>true</bool>
+           <property name="decimals">
+            <number>0</number>
            </property>
-           <property name="checked">
-            <bool>true</bool>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>10000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
            </property>
           </widget>
          </item>
-         <item row="3" column="1">
-          <widget class="QCheckBox" name="chk002">
+         <item row="4" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s001">
            <property name="minimumSize">
             <size>
-             <width>36</width>
+             <width>0</width>
              <height>20</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: rotate axis X</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt;Angle below which new edges will be smoothed &lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-style:italic; color:#000000; background-color:#ffffff;&quot;&gt;Default:&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; kPi/6.0&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
-           <property name="text">
-            <string>Group</string>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
-           <property name="iconSize">
+           <property name="prefix">
+            <string>Smoothing Angle:</string>
+           </property>
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>360.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>6.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s004">
+           <property name="minimumSize">
             <size>
-             <width>18</width>
-             <height>18</height>
+             <width>0</width>
+             <height>20</height>
             </size>
            </property>
-           <property name="checkable">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt;Twist or Rotation along the extrusion path &lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-style:italic; color:#000000; background-color:#ffffff;&quot;&gt;Default:&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; 0.0&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Twist:	</string>
+           </property>
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>10000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0" colspan="2">
+          <widget class="ComboBox" name="cmb000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maxVisibleItems">
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContents</enum>
+           </property>
+           <property name="frame">
             <bool>true</bool>
            </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
+           <item>
+            <property name="text">
+             <string>Type:  Linear</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Type:  Blend</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Type:  Curve</string>
+            </property>
+           </item>
           </widget>
          </item>
         </layout>
@@ -408,6 +441,16 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>
