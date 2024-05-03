@@ -8,7 +8,7 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 from mayatk import xform_utils
 from mayatk import node_utils
 
@@ -87,7 +87,7 @@ class ExplodedView:
         }
         return iteration_count
 
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def explode_selected(self):
         """Explode selected"""
         selection = node_utils.NodeUtils.get_unique_children(pm.ls(sl=True))
@@ -102,7 +102,7 @@ class ExplodedView:
 
         self.arrange_objects(selection)
 
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def un_explode_selected(self):
         """Un-explode selected"""
         selection = node_utils.NodeUtils.get_unique_children(pm.ls(sl=True))
@@ -112,7 +112,7 @@ class ExplodedView:
                 pm.move(pos[0], pos[1], pos[2], obj, absolute=True)
                 pm.deleteAttr(obj, attribute="original_position")
 
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def un_explode_all(self):
         """Un-explode all"""
         all_objects_with_original_position = pm.ls("*.original_position")
@@ -156,7 +156,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = _core_utils.CoreUtils.get_main_window()
+    parent = core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "exploded_view.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=ExplodedViewSlots)
 

@@ -11,7 +11,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 
 
 class ReferenceManager(ptk.HelpMixin):
@@ -351,7 +351,7 @@ class ReferenceManagerSlots(ReferenceManager):
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = _core_utils.CoreUtils.get_main_window()
+    parent = core_utils.CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=ReferenceManagerSlots)
 

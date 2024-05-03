@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 
 
 class AnimUtils(ptk.HelpMixin):
@@ -61,7 +61,7 @@ class AnimUtils(ptk.HelpMixin):
         pm.currentTime(currentTime + time, edit=True, update=update)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def set_keys_for_attributes(objects, **kwargs):
         """Sets keyframes for the specified attributes on given objects at given times.
 
@@ -84,7 +84,7 @@ class AnimUtils(ptk.HelpMixin):
                     pm.setKeyframe(attr_full_name, time=time, value=value)
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def adjust_key_spacing(
         objects: Optional[List[str]] = None,
         spacing: int = 1,
@@ -140,7 +140,7 @@ class AnimUtils(ptk.HelpMixin):
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
 
     @staticmethod
-    @_core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undo
     def invert_selected_keys(time=1, relative=True, delete_original=False):
         """Duplicate any selected keyframes and paste them inverted at the given time.
 

@@ -1,5 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
+import logging
+from typing import Callable, Optional
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -36,10 +39,10 @@ class Preview:
 
         Usage Example:
             ```python
-            class BevelEdgesSlots:
+            class BevelSlots:
                 def __init__(self):
                     self.sb = self.switchboard()
-                    self.ui = self.sb.bevel_edges
+                    self.ui = self.sb.bevel
                     self.preview = Preview(
                         self,
                         self.ui.chk000,
@@ -51,13 +54,18 @@ class Preview:
                 def perform_operation(self, objects):
                     width = self.ui.s000.value()
                     segments = self.ui.s001.value()
-                    BevelEdges.bevel_edges(objects, width, segments)
+                    Bevel.bevel(objects, width, segments)
 
-            # Instantiate BevelEdgesSlots.
+            # Instantiate BevelSlots.
             # Now toggling the UI checkbox will enable/disable the preview,
             # and clicking the UI button will apply the beveled edges.
             ```
         """
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+
+        self.message_func = message_func or self.logger.info
+
         self.operated_objects = set()
         self.operation_performed = False
         self.needs_undo = False
@@ -68,7 +76,6 @@ class Preview:
         self.preview_checkbox = preview_checkbox
         self.create_button = create_button
         self.finalize_func = finalize_func
-        self.message_func = message_func
         self.preview_checkbox.clicked.connect(self.toggle)
         self.create_button.clicked.connect(self.finalize_changes)
         self.window = self.create_button.window()
@@ -146,7 +153,7 @@ class Preview:
                 self.message_func("No objects selected.")
                 self.disable()
         except Exception as e:
-            print(f"Exception in enable: {e}")
+            self.logger.exception(f"Exception in enable: {e}")
 
     def disable(self):
         """Disables the preview and reverts to the initial state."""
@@ -189,7 +196,7 @@ class Preview:
             # Add the operated objects to the isolation set if one exists.
             _display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
         except Exception as e:
-            print(f"Exception during operation: {e}")
+            self.logger.exception(f"Exception during operation: {e}")
         finally:
             pm.undoInfo(closeChunk=True)
         self.needs_undo = True  # Set to True once the operation has been performed

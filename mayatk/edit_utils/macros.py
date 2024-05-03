@@ -8,7 +8,7 @@ except ImportError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk.core_utils import _core_utils
+from mayatk import core_utils
 from mayatk.core_utils.macro_manager import MacroManager
 from mayatk import node_utils
 
@@ -159,7 +159,7 @@ class DisplayMacros:
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=1)
+        currentPanel = core_utils.CoreUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
             pm.isolateSelect(currentPanel, state=0)
@@ -342,7 +342,7 @@ class DisplayMacros:
         """Toggles the wireframe display state.
         Possible states include: none, shaded, full
         """
-        focused_panel = _core_utils.CoreUtils.get_panel(withFocus=True)
+        focused_panel = core_utils.CoreUtils.get_panel(withFocus=True)
         # Check if focused_panel is a modelPanel to avoid errors when it's not
         if not focused_panel or not pm.modelEditor(
             focused_panel, query=True, exists=True
@@ -404,7 +404,7 @@ class DisplayMacros:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, query=1, displayAppearance=1)
         displayTextures = pm.modelEditor(currentPanel, query=1, displayTextures=1)
 
@@ -451,7 +451,7 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = _core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
         if pm.modelEditor(currentPanel, exists=1):
@@ -584,7 +584,7 @@ class EditMacros:
     @staticmethod
     def m_multi_component() -> None:
         """Multi-Component Selection."""
-        pm.SelectMultiComponentMask()
+        pm.mel.SelectMultiComponentMask()
         pm.inViewMessage(
             statusMessage="<hl>Multi-Component Selection Mode</hl><br>Mask is now <hl>ON</hl>.",
             fade=True,
@@ -746,7 +746,7 @@ class UiMacros:
     def m_toggle_panels() -> None:
         """Toggle UI toolbars."""
         # toggle panel menus
-        panels = _core_utils.CoreUtils.get_panel(allPanels=1)
+        panels = core_utils.CoreUtils.get_panel(allPanels=1)
         state = int(pm.panel(panels[0], menuBarVisible=1, query=1))
         for panel in panels:
             pm.panel(panel, edit=1, menuBarVisible=(not state))
@@ -763,7 +763,7 @@ class AnimationMacros:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = _core_utils.CoreUtils.get_selected_channels()
+            attrs = core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -774,7 +774,7 @@ class AnimationMacros:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         sel = pm.ls(selection=True, transforms=1, long=1)
         for obj in sel:
-            attrs = _core_utils.CoreUtils.get_selected_channels()
+            attrs = core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
