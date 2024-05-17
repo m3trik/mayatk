@@ -207,7 +207,6 @@ class NodeUtils(ptk.HelpMixin):
             result, returned_type=returned_type, flatten=True
         )
         result = ptk.filter_list(result, inc, exc)
-
         return ptk.format_return(result, nodes)
 
     @classmethod

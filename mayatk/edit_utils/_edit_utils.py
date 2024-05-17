@@ -107,6 +107,39 @@ class EditUtils(ptk.HelpMixin):
 
     @staticmethod
     @core_utils.CoreUtils.undo
+    def strip_chars(
+        objects: Union[str, object, List[Union[str, object]]],
+        num_chars: int = 1,
+        trailing: bool = False,
+    ) -> List[str]:
+        """Deletes leading or trailing characters from the names of the provided objects.
+
+        Parameters:
+            objects (Union[str, pm.PyNode, List[Union[str, pm.PyNode]]]): The input string, PyNode, or list of either.
+            num_chars (int): The number of characters to delete.
+            trailing (bool): Whether to delete characters from the rear of the name.
+        """
+        # Flatten the list of objects if needed
+        objects = pm.ls(objects, flatten=True)
+        for obj in objects:
+            s = obj.shortName().split("|")[-1]
+            if num_chars > len(s):
+                print(
+                    f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
+                )
+                continue
+            if trailing:
+                new_name = s[:-num_chars]
+            else:
+                new_name = s[num_chars:]
+            try:
+                pm.rename(obj, new_name)
+            except Exception as e:
+                print(f"Unable to rename {s}: {e}")
+                continue
+
+    @staticmethod
+    @core_utils.CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -518,6 +551,7 @@ class EditUtils(ptk.HelpMixin):
         lamina: bool = False,
         invalidComponents: bool = False,
         historyOn: bool = True,
+        bakePartialHistory: bool = False,
     ) -> None:
         """Select or remove unwanted geometry from a polygon mesh using polyCleanupArgList.
 
@@ -531,31 +565,33 @@ class EditUtils(ptk.HelpMixin):
         elif not isinstance(objects, list):
             objects = [objects]
 
+        if bakePartialHistory:
+            pm.bakePartialHistory(objects, prePostDeformers=True)
+
         # Prepare selection for cleanup
         pm.select(objects)
 
         # Configure cleanup options
         options = [
-            allMeshes,
+            int(allMeshes),
             1 if repair else 2,
-            historyOn,
-            quads,
-            nsided,
-            concave,
-            holed,
-            nonplanar,
-            zeroGeom,
-            zeroGeomTol,
-            zeroEdge,
-            zeroEdgeTol,
-            zeroMap,
-            zeroMapTol,
-            sharedUVs,
-            nonmanifold,
-            lamina,
-            invalidComponents,
+            int(historyOn),
+            int(quads),
+            int(nsided),
+            int(concave),
+            int(holed),
+            int(nonplanar),
+            int(zeroGeom),
+            float(zeroGeomTol),
+            int(zeroEdge),
+            float(zeroEdgeTol),
+            int(zeroMap),
+            float(zeroMapTol),
+            int(sharedUVs),
+            int(nonmanifold),
+            int(lamina),
+            int(invalidComponents),
         ]
-
         # Construct the polyCleanup command argument string
         arg_list = ",".join([f'"{option}"' for option in options])
         command = f"polyCleanupArgList 4 {{{arg_list}}}"
@@ -892,8 +928,8 @@ class EditUtils(ptk.HelpMixin):
         Example:
             get_similar_mesh(selection, vertex=1, area=1)
         """
-        lst = (
-            lambda x: list(x)
+        lst = lambda x: (
+            list(x)
             if isinstance(x, (list, tuple, set))
             else list(x.values())
             if isinstance(x, dict)

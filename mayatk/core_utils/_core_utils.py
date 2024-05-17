@@ -11,7 +11,7 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk import node_utils
 
 
@@ -25,7 +25,6 @@ class CoreUtils(ptk.HelpMixin):
         Parameters:
             fn (obj): The decorated python function that will be placed into the undo que as a single entry.
         """
-
         @wraps(fn)
         def wrapper(*args, **kwargs):
             with pm.UndoChunk():
@@ -36,6 +35,63 @@ class CoreUtils(ptk.HelpMixin):
                     return fn(*args, **kwargs)
 
         return wrapper
+
+    @staticmethod
+    def reparent(func):
+        """A decorator to manage reparenting of Maya nodes before and after an operation."""
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            if len(args) < 2:
+                raise ValueError("Insufficient arguments provided. At least two Maya nodes are required.")
+
+            mesh_nodes = []
+            for arg in args:
+                try:
+                    node = pm.PyNode(arg)
+                    mesh_nodes.append(node)
+                except pm.MayaNodeError:
+                    raise ValueError(f"No valid Maya node found for the name: {arg}")
+
+            if not mesh_nodes:
+                raise ValueError("No valid Maya nodes provided.")
+
+            parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
+
+            result_node = func(*args, **kwargs)
+
+            CoreUtils.finalize_reparent(result_node, parent, temp_null)
+
+            return result_node
+
+        return wrapped
+
+    @staticmethod
+    def prepare_reparent(obj):
+        """Prepare reparenting by using a temporary null if needed."""
+        parent = pm.listRelatives(obj, parent=True, fullPath=True) or None
+        children = pm.listRelatives(parent, children=True) if parent else []
+        is_only_child = set(obj) == set(children)
+
+        temp_null = None
+        if is_only_child:
+            temp_null = pm.createNode("transform", n="tempTempNull")
+            pm.parent(temp_null, parent)
+
+        return parent, temp_null
+
+    @staticmethod
+    def finalize_reparent(new_node, parent, temp_null):
+        """Clean up reparenting, handling the parent and temporary null."""
+        if parent:
+            try:
+                pm.parent(new_node, parent)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to re-parent combined mesh: {e}")
+        if temp_null:
+            try:
+                pm.delete(temp_null)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
     def get_main_window():
