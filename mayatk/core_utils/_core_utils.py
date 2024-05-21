@@ -2,7 +2,7 @@
 # coding=utf-8
 import os
 import sys
-from typing import Union, List
+from typing import Union, List, Callable, Any, Tuple, Optional
 from functools import wraps
 
 try:
@@ -18,6 +18,21 @@ from mayatk import node_utils
 class CoreUtils(ptk.HelpMixin):
     """ """
 
+    @staticmethod
+    def selected(func: Callable) -> Callable:
+        """A decorator to pass the current selection to the first parameter if None is given."""
+
+        @wraps(func)
+        def wrapped(*args, **kwargs) -> Any:
+            if not args or args[0] is None:
+                selection = pm.selected()
+                if not selection:
+                    return []
+                args = (selection,) + args[1:]
+            return func(*args, **kwargs)
+
+        return wrapped
+
     def undo(fn):
         """A decorator to place a function into Maya's undo chunk.
         Prevents the undo queue from breaking entirely if an exception is raised within the given function.
@@ -25,6 +40,7 @@ class CoreUtils(ptk.HelpMixin):
         Parameters:
             fn (obj): The decorated python function that will be placed into the undo que as a single entry.
         """
+
         @wraps(fn)
         def wrapper(*args, **kwargs):
             with pm.UndoChunk():
@@ -37,15 +53,18 @@ class CoreUtils(ptk.HelpMixin):
         return wrapper
 
     @staticmethod
-    def reparent(func):
+    def reparent(func: Callable) -> Callable:
         """A decorator to manage reparenting of Maya nodes before and after an operation."""
+
         @wraps(func)
-        def wrapped(*args, **kwargs):
-            if len(args) < 2:
-                raise ValueError("Insufficient arguments provided. At least two Maya nodes are required.")
+        def wrapped(*args, **kwargs) -> Any:
+            if not args or not args[0] or len(args[0]) < 2:
+                raise ValueError(
+                    "Insufficient arguments provided. At least two Maya nodes are required."
+                )
 
             mesh_nodes = []
-            for arg in args:
+            for arg in args[0]:
                 try:
                     node = pm.PyNode(arg)
                     mesh_nodes.append(node)
@@ -57,7 +76,12 @@ class CoreUtils(ptk.HelpMixin):
 
             parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
 
-            result_node = func(*args, **kwargs)
+            try:
+                result_node = func(*args, **kwargs)
+            except Exception as e:
+                # Handle exception and perform necessary cleanup
+                CoreUtils.finalize_reparent(None, parent, temp_null)
+                raise e
 
             CoreUtils.finalize_reparent(result_node, parent, temp_null)
 
@@ -66,23 +90,33 @@ class CoreUtils(ptk.HelpMixin):
         return wrapped
 
     @staticmethod
-    def prepare_reparent(obj):
+    def prepare_reparent(
+        nodes: List[object],
+    ) -> Tuple[Optional[object], Optional[object]]:
         """Prepare reparenting by using a temporary null if needed."""
-        parent = pm.listRelatives(obj, parent=True, fullPath=True) or None
-        children = pm.listRelatives(parent, children=True) if parent else []
-        is_only_child = set(obj) == set(children)
-
+        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
         temp_null = None
-        if is_only_child:
-            temp_null = pm.createNode("transform", n="tempTempNull")
-            pm.parent(temp_null, parent)
+
+        # Determine if any of the nodes are the only child of their parent
+        for node in nodes:
+            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
+            if node_parent:
+                children = pm.listRelatives(node_parent, children=True) or []
+                if len(children) == 1:
+                    temp_null = pm.createNode("transform", n="tempTempNull")
+                    pm.parent(temp_null, node_parent)
+                    break
 
         return parent, temp_null
 
     @staticmethod
-    def finalize_reparent(new_node, parent, temp_null):
+    def finalize_reparent(
+        new_node: Optional[object],
+        parent: Optional[object],
+        temp_null: Optional[object],
+    ) -> None:
         """Clean up reparenting, handling the parent and temporary null."""
-        if parent:
+        if parent and new_node:
             try:
                 pm.parent(new_node, parent)
             except pm.general.MayaNodeError as e:
@@ -352,9 +386,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int"
-            if isinstance(o, int)
-            else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod

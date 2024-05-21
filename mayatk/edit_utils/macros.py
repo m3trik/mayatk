@@ -639,9 +639,11 @@ class EditMacros:
 
     @staticmethod
     @core_utils.CoreUtils.undo
-    def m_combine():
+    @core_utils.CoreUtils.selected
+    @core_utils.CoreUtils.reparent
+    @display_utils.DisplayUtils.add_to_isolation
+    def m_combine(objects=None):
         """Combine multiple meshes"""
-        objects = pm.ls(orderedSelection=True, type="transform")
         if not objects or len(objects) < 2:
             pm.inViewMessage(
                 statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
@@ -650,22 +652,19 @@ class EditMacros:
             )
             return None
 
-        parent, temp_null = core_utils.CoreUtils.prepare_reparent(objects)
-
         combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
         combined_mesh = pm.rename(combined_mesh, objects[0].name())
 
-        core_utils.CoreUtils.finalize_reparent(combined_mesh, parent, temp_null)
-
-        transform_node = node_utils.NodeUtils.get_transform_node(combined_mesh)
-        display_utils.DisplayUtils.add_to_isolation_set(transform_node)
         return combined_mesh
 
     @staticmethod
     @core_utils.CoreUtils.undo
-    def m_boolean(repair_mesh=True, keep_boolean=True, **kwargs):
+    @core_utils.CoreUtils.selected
+    @core_utils.CoreUtils.reparent
+    @display_utils.DisplayUtils.add_to_isolation
+    def m_boolean(objects=None, repair_mesh=True, keep_boolean=True, **kwargs):
         """Perform a boolean operation on two meshes using PyMel, managing shorthand and full parameter names dynamically."""
-        a, *b = pm.ls(orderedSelection=True, type="transform")
+        a, *b = objects
         if not a or not b:
             pm.inViewMessage(
                 statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
@@ -673,8 +672,6 @@ class EditMacros:
                 position="topCenter",
             )
             return None
-
-        parent, temp_null = core_utils.CoreUtils.prepare_reparent(a)
 
         if keep_boolean:
             b = pm.duplicate(b, rr=True)
@@ -684,11 +681,7 @@ class EditMacros:
 
         if repair_mesh:  # Clean any n-gons
             edit_utils.EditUtils.clean_geometry(
-                a,
-                repair=True,
-                nonmanifold=True,
-                nsided=True,
-                bakePartialHistory=True
+                a, repair=True, nonmanifold=True, nsided=True, bakePartialHistory=True
             )
 
         # Resolve operation type, defaulting to 'union'
@@ -704,17 +697,13 @@ class EditMacros:
         # Perform the boolean operation
         result = pm.polyCBoolOp(a, b, op=operation, n=name, ch=ch, **kwargs)[0]
 
-        core_utils.CoreUtils.finalize_reparent(result, parent, temp_null)
-
-        transform_node = node_utils.NodeUtils.get_transform_node(result)
-        display_utils.DisplayUtils.add_to_isolation_set(transform_node)
         return result
 
     @staticmethod
-    def m_lock_vertex_normals():
+    @core_utils.CoreUtils.selected
+    def m_lock_vertex_normals(objects=None):
         """Toggle lock/unlock vertex normals."""
-        selection = pm.ls(sl=True)
-        if not selection:
+        if not objects:
             pm.inViewMessage(
                 statusMessage="Operation requires at least one selected object.",
                 pos="topCenter",
@@ -723,9 +712,7 @@ class EditMacros:
             return
 
         # Convert selected objects' faces to vertices
-        vertices = pm.polyListComponentConversion(
-            selection, fromFace=True, toVertex=True
-        )
+        vertices = pm.polyListComponentConversion(objects, fromFace=True, toVertex=True)
         vertices = pm.ls(vertices, flatten=True)  # Flatten the list of vertices
         if not vertices:
             pm.inViewMessage(
