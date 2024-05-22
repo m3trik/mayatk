@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Any, Union, List
+from typing import Any, Union, List, Callable
+from functools import wraps
 
 try:
     import pymel.core as pm
@@ -10,6 +11,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk import core_utils
+from mayatk import node_utils
 
 
 class DisplayUtils(ptk.HelpMixin):
@@ -24,6 +26,20 @@ class DisplayUtils(ptk.HelpMixin):
         "locator",
         "transform",
     ]
+
+    @staticmethod
+    def add_to_isolation(func: Callable) -> Callable:
+        """A decorator to add the result to the current isolation set."""
+
+        @wraps(func)
+        def wrapped(*args, **kwargs) -> Any:
+            result = func(*args, **kwargs)
+            if result:
+                transforms = node_utils.NodeUtils.get_transform_node(result)
+                DisplayUtils.add_to_isolation_set(transforms)
+            return result
+
+        return wrapped
 
     @classmethod
     @core_utils.CoreUtils.undo

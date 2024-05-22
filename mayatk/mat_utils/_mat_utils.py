@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -95,6 +97,33 @@ class MatUtils(ptk.HelpMixin):
         del _fav
 
         return materials
+
+    @staticmethod
+    def is_connected(mat: object, delete: bool = False) -> bool:
+        """Checks if a given material is assigned and optionally deletes it.
+
+        Parameters:
+            mat (str/obj/list): The material to check.
+            delete (bool): If True, delete the material if it is not assigned to any other objects.
+
+        Returns:
+            bool: True if the material was deleted or is not assigned to any other objects, False otherwise.
+        """
+        try:
+            mat = pm.ls(mat, type="shadingDependNode", flatten=True)[0]
+        except (IndexError, TypeError):
+            print(f"Error: Material {mat} not found or invalid.")
+            return False
+
+        connected_shading_groups = pm.listConnections(
+            f"{mat}.outColor", type="shadingEngine"
+        )
+        if not connected_shading_groups:
+            if delete:
+                pm.delete(mat)
+            return True
+
+        return False
 
     @staticmethod
     def create_mat(mat_type, prefix="", name=""):

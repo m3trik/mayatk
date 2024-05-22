@@ -582,17 +582,13 @@ class XformUtils(ptk.HelpMixin):
                     object to be transformed). The second set of points define
                     the position and plane to transform to.
         """
-        from maya import OpenMaya
+        import maya.api.OpenMaya as om
 
         vertices = pm.ls(vertices, flatten=True)
         objectToMove = pm.ls(vertices[:3], objectsOnly=True)
 
-        p0, p1, p2 = [
-            OpenMaya.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[0:3]
-        ]
-        p3, p4, p5 = [
-            OpenMaya.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[3:6]
-        ]
+        p0, p1, p2 = [om.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[0:3]]
+        p3, p4, p5 = [om.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[3:6]]
 
         # Translate
         pm.move(*(p3 - p0), objectToMove, r=True, ws=True)
@@ -602,7 +598,7 @@ class XformUtils(ptk.HelpMixin):
         axis2 = (p4 - p3).normal()
         # cross_product = axis1 ^ axis2
         angle = axis1.angle(axis2)
-        rotation = OpenMaya.MEulerRotation(0, 0, angle).asVector()
+        rotation = om.MEulerRotation(0, 0, angle).asVector()
         pm.rotate(*rotation, objectToMove, p=p3, r=True, os=True)
 
         # Second rotation
@@ -610,7 +606,7 @@ class XformUtils(ptk.HelpMixin):
         axis4 = (p5 - p3).normal()
         # cross_product = axis3 ^ axis4
         angle = axis3.angle(axis4)
-        rotation = OpenMaya.MEulerRotation(0, 0, angle).asVector()
+        rotation = om.MEulerRotation(0, 0, angle).asVector()
         pm.rotate(*rotation, objectToMove, p=p4, r=True, os=True)
 
     @staticmethod

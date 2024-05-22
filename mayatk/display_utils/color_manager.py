@@ -1,3 +1,4 @@
+from typing import List, Tuple, Optional
 import random
 
 try:
@@ -7,120 +8,134 @@ except ModuleNotFoundError as error:
 
 # from this package:
 from mayatk import core_utils
+from mayatk import mat_utils
 
 
 class ColorUtils:
     @staticmethod
-    def check_and_create_material(obj):
-        """Ensure the object has a shading group and material connected."""
-        shading_groups = pm.listConnections(obj, type="shadingEngine")
-        if not shading_groups:
-            # Create a new material and shading group if not exists
-            material = pm.shadingNode("lambert", asShader=True, name=f"{obj}_material")
-            shading_group = pm.sets(
-                renderable=True, noSurfaceShader=True, empty=True, name=f"{material}_SG"
+    def assign_material(obj: object, color: Tuple[float, float, float]) -> object:
+        """Assigns a material to an object based on the RGB value. Creates the material if it does not exist."""
+        # Convert the RGB tuple to a hex string for the material name
+        color_name = "_".join(f"{int(c * 255):02X}" for c in color)
+        material_name = f"ID_{color_name}"
+
+        # Check if the material already exists
+        if not pm.objExists(material_name):
+            # Create a new material and shading group
+            material = mat_utils.MatUtils.create_mat(
+                "lambert", prefix="ID_", name=color_name
             )
-            pm.connectAttr(f"{material}.outColor", f"{shading_group}.surfaceShader")
-            return material
+            pm.setAttr(
+                f"{material}.color", color[0], color[1], color[2], type="double3"
+            )
         else:
-            return pm.ls(pm.listConnections(shading_groups[0]), materials=True)[0]
+            material = pm.PyNode(material_name)
+
+        # Assign the material to the object
+        mat_utils.MatUtils.assign_mat(obj, material_name)
+        return material
 
     @classmethod
-    def set_color_attribute(cls, obj, color, attr_type, force=False):
+    def set_color_attribute(
+        cls,
+        obj: object,
+        color: Tuple[float, float, float],
+        attr_type: str,
+        force: bool = False,
+    ) -> None:
         """Applies color based on the attribute type specified, optionally overriding attribute locks."""
 
-        def handle_attribute(attribute, value=None, action="set"):
+        def handle_attribute(
+            attribute: str,
+            value: Optional[Tuple[float, float, float]] = None,
+            action: str = "set",
+        ) -> None:
             """Handles attribute modification with optional lock override."""
             locked = pm.getAttr(attribute, lock=True)
             if locked and force:
                 pm.setAttr(attribute, lock=False)
-
-            if action == "set":
+            if action == "set" and value is not None:
                 if isinstance(value, tuple) and attribute.endswith("Color"):
                     pm.setAttr(attribute, *value, type="double3")
                 else:
                     pm.setAttr(attribute, value)
-
             if locked and force:
                 pm.setAttr(attribute, lock=True)
 
         if attr_type == "outliner":
             handle_attribute(f"{obj}.useOutlinerColor", 1)
-            handle_attribute(f"{obj}.outlinerColor", (color[0], color[1], color[2]))
+            handle_attribute(f"{obj}.outlinerColor", color)
         elif attr_type == "vertex":
-            # Direct call, as it's not affected by locking in the same way
-            pm.polyColorPerVertex(
-                obj, rgb=(color[0], color[1], color[2]), colorDisplayOption=True
-            )
+            # Ensure the object has a mesh shape
+            shapes = pm.listRelatives(obj, shapes=True, type="mesh")
+            if not shapes:
+                print(f"Error: {obj} does not have a mesh shape.")
+                return
+            try:
+                pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
+            except RuntimeError as e:
+                print(f"Error applying vertex color to {obj}: {e}")
         elif attr_type == "material":
-            material = cls.check_and_create_material(obj)
-            handle_attribute(f"{material}.color", (color[0], color[1], color[2]))
+            cls.assign_material(obj, color)
         elif attr_type == "wireframe":
+            # Ensure the object is not a material
+            if pm.nodeType(obj) == "lambert":
+                print(f"Error: {obj} is a material, not a mesh.")
+                return
             handle_attribute(f"{obj}.overrideEnabled", 1)
             handle_attribute(f"{obj}.overrideRGBColors", 1)
-            handle_attribute(f"{obj}.overrideColorRGB", (color[0], color[1], color[2]))
+            handle_attribute(f"{obj}.overrideColorRGB", color)
 
     @staticmethod
-    def get_material_color(obj):
+    def get_material_color(obj: object) -> Optional[Tuple[float, float, float]]:
         """Gets the color of the object's material."""
         shading_groups = pm.listConnections(obj, type="shadingEngine")
         if not shading_groups:
-            return None  # No material connected
+            return None
         materials = pm.ls(pm.listConnections(shading_groups[0]), materials=True)
         if not materials:
-            return None  # No material found
-        color = pm.getAttr(f"{materials[0]}.color")[0]
-        return color
+            return None
+        return pm.getAttr(f"{materials[0]}.color")[0]
 
     @staticmethod
-    def get_wireframe_color(obj, normalize=False):
-        """Gets the wireframe color of the given object.
-
-        Parameters:
-            obj: The object (or its name) from which to retrieve the wireframe color.
-            normalize (bool): If False, scales the normalized color values (0.0 to 1.0) up to 0-255. If True, returns the color normalized.
-
-        Returns:
-            A tuple of the RGB values of the wireframe color, either as 8-bit values (default) or normalized if normalize is True. Returns None if the color is not set or the object does not exist.
-        """
-        # Ensure obj is a PyNode object if not already
-        obj = pm.PyNode(obj) if not isinstance(obj, pm.nt.Transform) else obj
-
-        # Check if the drawing overrides (which include wireframe color) are enabled at the transform level
+    def get_wireframe_color(
+        obj: object, normalize: bool = False
+    ) -> Optional[Tuple[float, float, float]]:
+        """Gets the wireframe color of the given object."""
         if not pm.getAttr(f"{obj}.overrideEnabled"):
-            return None  # Drawing overrides not enabled, no custom wireframe color set
-
-        # Check if the RGB color is enabled for overrides
+            return None
         if not pm.getAttr(f"{obj}.overrideRGBColors"):
-            return (
-                None  # RGB color not used, might be using default color index instead
-            )
-
-        # Retrieve and return the RGB values from the transform node directly
+            return None
         color = pm.getAttr(f"{obj}.overrideColorRGB")
-
-        # Convert normalized values to 8-bit integers if normalize is False
         if not normalize:
             color = tuple(int(c * 255) for c in color)
-
         return color
 
     @staticmethod
-    def get_vertex_color(obj, vertex_id):
+    def get_vertex_color(
+        obj: object, vertex_id: int
+    ) -> Optional[Tuple[float, float, float]]:
         """Gets the color of a specific vertex on the object."""
         colors = pm.polyColorPerVertex(f"{obj}.vtx[{vertex_id}]", query=True, rgb=True)
         return colors if colors else None
 
     @staticmethod
-    def set_vertex_color(objects, color):
+    def set_vertex_color(
+        objects: List[object], color: Tuple[float, float, float]
+    ) -> None:
         """Applies the specified color to the object's vertices."""
         for obj in pm.ls(objects, long=True):
-            pm.polyColorPerVertex(
-                obj, rgb=(color[0], color[1], color[2]), colorDisplayOption=True
-            )
+            shapes = pm.listRelatives(obj, shapes=True, type="mesh")
+            if shapes:
+                try:
+                    pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
+                except RuntimeError as e:
+                    print(f"Error applying vertex color to {obj}: {e}")
 
     @staticmethod
-    def get_color_difference(color1, color2):
+    def get_color_difference(
+        color1: Tuple[float, float, float], color2: Tuple[float, float, float]
+    ) -> float:
         """Calculate the average difference between two RGB colors."""
         return sum(abs(c1 - c2) for c1, c2 in zip(color1, color2)) / 3.0
 
@@ -129,42 +144,40 @@ class ColorManager(ColorUtils):
     @classmethod
     def apply_color(
         cls,
-        objects,
-        color=None,
-        use_material_color=False,
-        apply_to_vertex=False,
-        apply_to_wireframe=False,
-        apply_to_outliner=False,
-    ):
+        objects: List[object],
+        color: Optional[Tuple[float, float, float]] = None,
+        apply_to_material: bool = False,
+        apply_to_vertex: bool = False,
+        apply_to_wireframe: bool = False,
+        apply_to_outliner: bool = False,
+    ) -> None:
         """Applies color based on given criteria to objects."""
         for obj in pm.ls(objects, long=True):
-            if color is None:  # Generate a random color if not specified
+            if color is None:
                 color = (random.random(), random.random(), random.random())
-
             if apply_to_vertex:
                 cls.set_color_attribute(obj, color, attr_type="vertex", force=True)
             if apply_to_wireframe:
                 cls.set_color_attribute(obj, color, attr_type="wireframe", force=True)
             if apply_to_outliner:
                 cls.set_color_attribute(obj, color, attr_type="outliner", force=True)
-            if use_material_color:
+            if apply_to_material:
                 cls.set_color_attribute(obj, color, attr_type="material", force=True)
 
     @classmethod
     def get_objects_by_color(
         cls,
-        target_color,
-        threshold=0.1,
-        check_material_color=False,
-        check_vertex_color=False,
-        check_wireframe_color=False,
-        check_outliner_color=False,
-    ):
+        target_color: Tuple[float, float, float],
+        threshold: float = 0.1,
+        check_material_color: bool = False,
+        check_vertex_color: bool = False,
+        check_wireframe_color: bool = False,
+        check_outliner_color: bool = False,
+    ) -> List[object]:
         """Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors."""
         matching_objects = []
 
         for obj in pm.ls(geometry=True, type="transform", long=True):
-            # Check material color
             if check_material_color:
                 for shading_engine in obj.listConnections(type="shadingEngine"):
                     for material in shading_engine.listConnections():
@@ -175,9 +188,7 @@ class ColorManager(ColorUtils):
                                 <= threshold
                             ):
                                 matching_objects.append(obj)
-                                continue  # Skip other checks if a match is found
-
-            # Check wireframe color
+                                continue
             if (
                 check_wireframe_color
                 and obj.overrideEnabled.get()
@@ -187,15 +198,11 @@ class ColorManager(ColorUtils):
                 if cls.get_color_difference(wireframe_color, target_color) <= threshold:
                     matching_objects.append(obj)
                     continue
-
-            # Check outliner color
             if check_outliner_color and obj.useOutlinerColor.get():
                 outliner_color = obj.outlinerColor.get()
                 if cls.get_color_difference(outliner_color, target_color) <= threshold:
                     matching_objects.append(obj)
                     continue
-
-            # Check vertex color
             if check_vertex_color:
                 vtx_colors = pm.polyColorPerVertex(
                     obj, query=True, allVertices=True, rgb=True
@@ -215,40 +222,32 @@ class ColorManager(ColorUtils):
     @classmethod
     def reset_colors(
         cls,
-        objects,
-        reset_outliner=True,
-        reset_wireframe=True,
-        reset_vertex=True,
-        reset_material=True,
-    ):
+        objects: List[object],
+        reset_outliner: bool = True,
+        reset_wireframe: bool = True,
+        reset_vertex: bool = True,
+        reset_material: bool = True,
+    ) -> None:
         """Resets colors to default for given objects, with options to specify which color types to reset."""
         for obj in pm.ls(objects, long=True):
             if reset_outliner:
-                # Reset outliner color
                 pm.setAttr(f"{obj}.useOutlinerColor", 0)
-
             if reset_wireframe or reset_vertex:
-                # Reset drawing overrides for both wireframe and vertex colors
                 pm.setAttr(f"{obj}.overrideEnabled", 0)
-                # Additional reset actions for wireframe and vertex colors can be added here if necessary
-
             if reset_material:
-                # Reset material color, if a material is directly connected to the object or its shading group
-                shading_groups = pm.listConnections(obj, type="shadingEngine")
-                if shading_groups:
-                    for sg in shading_groups:
-                        materials = pm.ls(pm.listConnections(sg), materials=True)
-                        for mat in materials:
-                            # Resetting material color to default may vary depending on material type
-                            # Here we reset it to a default value, like grey for lambert
-                            pm.setAttr(f"{mat}.color", 0.5, 0.5, 0.5, type="double3")
+                # Get all materials assigned to the object
+                mats = mat_utils.MatUtils.get_mats(obj)
+                # Assign the default Lambert material
+                mat_utils.MatUtils.assign_mat(obj, "lambert1")
+                for mat in mats:
+                    # Check if the material is assigned to other objects and optionally delete it
+                    mat_utils.MatUtils.is_connected(mat, delete=True)
 
-        # For vertex colors, since they're more granular, a specific approach is needed
         if reset_vertex:
             cls.reset_vertex_colors(objects)
 
     @staticmethod
-    def reset_vertex_colors(objects):
+    def reset_vertex_colors(objects: List[object]) -> None:
         """Resets vertex colors for the given object(s), handling potential errors gracefully."""
         transforms = pm.ls(objects, type="transform", long=True)
         shapes = pm.listRelatives(transforms, children=True, shapes=True)
@@ -256,7 +255,7 @@ class ColorManager(ColorUtils):
         if shapes:
             for shape in shapes:
                 if pm.nodeType(shape) == "mesh":
-                    try:  # Ensure operation on vertices with colorSet management
+                    try:
                         colorSets = pm.polyColorSet(
                             shape, query=True, allColorSets=True
                         )
@@ -267,24 +266,18 @@ class ColorManager(ColorUtils):
                         print(f"Error removing vertex colors from {shape}: {e}")
 
 
-# -----------------------------------------------------------------------------
-
-
 class ColorManagerSlots(ColorManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.sb = self.switchboard()
         self.ui = self.sb.color_manager
-
-        # Assuming create_button_groups returns a QButtonGroup
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
         for button in self.button_grp.buttons():
             button.settings = self.ui.settings
         self.ui.chk000.setChecked(True)
 
     @property
-    def selected_objects(self):
+    def selected_objects(self) -> List[object]:
         """Return the currently selected objects, or an empty list if no objects are selected."""
         objects = pm.selected()
         if not objects:
@@ -292,7 +285,7 @@ class ColorManagerSlots(ColorManager):
         return objects
 
     @property
-    def selected_button(self):
+    def selected_button(self) -> Optional[object]:
         """Return the currently selected button in the button group."""
         for button in self.button_grp.buttons():
             if button.isChecked():
@@ -300,7 +293,7 @@ class ColorManagerSlots(ColorManager):
         return None
 
     @property
-    def target_color(self):
+    def target_color(self) -> Optional[Tuple[float, float, float]]:
         """Return the color of the selected button, or None if no button is selected."""
         selected_btn = self.selected_button
         if selected_btn:
@@ -310,9 +303,8 @@ class ColorManagerSlots(ColorManager):
             return color
         return None
 
-    def b000(self):
+    def b000(self) -> None:
         """Reset Colors"""
-        # Check if the Alt key is down
         if self.sb.app.keyboardModifiers() == self.sb.QtCore.Qt.ControlModifier:
             objects = pm.ls(geometry=True, type="transform", long=True)
         else:
@@ -321,23 +313,21 @@ class ColorManagerSlots(ColorManager):
             return
         self.reset_colors(objects)
 
-    def b001(self):
+    def b001(self) -> None:
         """Apply selected color to selected objects."""
         objects = self.selected_objects
         if not objects or not self.target_color:
-            return  # handle_no_selection will log the necessary warning
+            return
 
-        apply_to_wireframe = self.ui.chk012.isChecked()
-        apply_to_outliner = self.ui.chk013.isChecked()
+        kwargs = {
+            "apply_to_wireframe": self.ui.chk012.isChecked(),
+            "apply_to_vertex": self.ui.chk015.isChecked(),
+            "apply_to_outliner": self.ui.chk013.isChecked(),
+            "apply_to_material": self.ui.chk014.isChecked(),
+        }
+        ColorManager.apply_color(objects, color=self.target_color, **kwargs)
 
-        ColorManager.apply_color(
-            objects,
-            color=self.target_color,
-            apply_to_wireframe=apply_to_wireframe,
-            apply_to_outliner=apply_to_outliner,
-        )
-
-    def b002(self):
+    def b002(self) -> None:
         """Select objects by the currently selected color."""
         if not self.target_color:
             print("No color was selected.")
@@ -346,22 +336,19 @@ class ColorManagerSlots(ColorManager):
         found_objects = self.get_objects_by_color(
             self.target_color, check_wireframe_color=True, check_outliner_color=True
         )
-        pm.select(found_objects)  # Select all matching objects
+        pm.select(found_objects)
 
-    def b003(self):
+    def b003(self) -> None:
         if len(self.selected_objects) > 1:
             self.sb.message_box("Please select exactly one object.")
             return
 
-        # Fetch the wireframe color of the selected object
         selected_object = self.selected_objects[0]
         wireframe_color = self.get_wireframe_color(selected_object)
-        # Ensure the wireframe color was successfully retrieved
         if wireframe_color is None:
             print("Failed to retrieve wireframe color.")
             return
 
-        # Apply the wireframe color to the selected button
         self.selected_button.color = wireframe_color
 
 

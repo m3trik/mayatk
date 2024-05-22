@@ -204,11 +204,12 @@ class Project(ptk.HelpMixin):
         return recent_files
 
     @staticmethod
-    def get_workspace_scenes(fullPath=True, recursive=False):
+    @ptk.filter_results
+    def get_workspace_scenes(full_path=True, recursive=False):
         """Get a list of maya scene files from the current workspace directory.
 
         Parameters:
-            fullPath (bool): Return the full path instead of just the filename.
+            full_path (bool): Return the full path instead of just the filename.
             recursive (bool): Whether to return results from just the root directory.
 
         Returns:
@@ -222,7 +223,7 @@ class Project(ptk.HelpMixin):
         # Replace any backslashes with forward slashes.
         result = [ptk.format_path(f) for f in files]
 
-        if not fullPath:
+        if not full_path:
             result = [f.split("\\")[-1] for f in result]
 
         return result

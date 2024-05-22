@@ -2,7 +2,7 @@
 # coding=utf-8
 import os
 import sys
-from typing import Union, List
+from typing import Union, List, Callable, Any, Tuple, Optional
 from functools import wraps
 
 try:
@@ -11,12 +11,26 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk import node_utils
 
 
 class CoreUtils(ptk.HelpMixin):
     """ """
+
+    def selected(func: Callable) -> Callable:
+        """A decorator to pass the current selection to the first parameter if None is given."""
+
+        @wraps(func)
+        def wrapped(*args, **kwargs) -> Any:
+            if not args or args[0] is None:
+                selection = pm.selected()
+                if not selection:
+                    return []
+                args = (selection,) + args[1:]
+            return func(*args, **kwargs)
+
+        return wrapped
 
     def undo(fn):
         """A decorator to place a function into Maya's undo chunk.
@@ -36,6 +50,80 @@ class CoreUtils(ptk.HelpMixin):
                     return fn(*args, **kwargs)
 
         return wrapper
+
+    def reparent(func: Callable) -> Callable:
+        """A decorator to manage reparenting of Maya nodes before and after an operation."""
+
+        @wraps(func)
+        def wrapped(*args, **kwargs) -> Any:
+            if not args or not args[0] or len(args[0]) < 2:
+                raise ValueError(
+                    "Insufficient arguments provided. At least two Maya nodes are required."
+                )
+
+            mesh_nodes = []
+            for arg in args[0]:
+                try:
+                    node = pm.PyNode(arg)
+                    mesh_nodes.append(node)
+                except pm.MayaNodeError:
+                    raise ValueError(f"No valid Maya node found for the name: {arg}")
+
+            if not mesh_nodes:
+                raise ValueError("No valid Maya nodes provided.")
+
+            parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
+
+            try:
+                result_node = func(*args, **kwargs)
+            except Exception as e:
+                # Handle exception and perform necessary cleanup
+                CoreUtils.finalize_reparent(None, parent, temp_null)
+                raise e
+
+            CoreUtils.finalize_reparent(result_node, parent, temp_null)
+
+            return result_node
+
+        return wrapped
+
+    @staticmethod
+    def prepare_reparent(
+        nodes: List[object],
+    ) -> Tuple[Optional[object], Optional[object]]:
+        """Prepare reparenting by using a temporary null if needed."""
+        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
+        temp_null = None
+
+        # Determine if any of the nodes are the only child of their parent
+        for node in nodes:
+            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
+            if node_parent:
+                children = pm.listRelatives(node_parent, children=True) or []
+                if len(children) == 1:
+                    temp_null = pm.createNode("transform", n="tempTempNull")
+                    pm.parent(temp_null, node_parent)
+                    break
+
+        return parent, temp_null
+
+    @staticmethod
+    def finalize_reparent(
+        new_node: Optional[object],
+        parent: Optional[object],
+        temp_null: Optional[object],
+    ) -> None:
+        """Clean up reparenting, handling the parent and temporary null."""
+        if parent and new_node:
+            try:
+                pm.parent(new_node, parent)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to re-parent combined mesh: {e}")
+        if temp_null:
+            try:
+                pm.delete(temp_null)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
     def get_main_window():
@@ -296,9 +384,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int"
-            if isinstance(o, int)
-            else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod
