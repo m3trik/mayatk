@@ -281,9 +281,10 @@ class DisplayMacros:
         pm.mel.ToggleVisibilityAndKeepSelection()
 
     @staticmethod
-    def m_back_face_culling() -> None:
+    @core_utils.CoreUtils.selected
+    def m_back_face_culling(objects) -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
-        objects = pm.ls(selection=True) or pm.ls(type="mesh")
+        objects = objects or pm.ls(type="mesh")
         if objects:
             state: bool = pm.polyOptions(objects, query=True, wireBackCulling=True)[0]
             if state:
@@ -318,11 +319,10 @@ class DisplayMacros:
             pm.isolateSelect(currentPanel, addSelected=1)
 
     @staticmethod
-    def m_cycle_display_state() -> None:
+    @core_utils.CoreUtils.selected
+    def m_cycle_display_state(objects) -> None:
         """Cycle the display state of all selected objects based on the first object's state."""
-        sel = node_utils.NodeUtils.get_unique_children(
-            pm.ls(selection=True, transforms=True)
-        )
+        sel = node_utils.NodeUtils.get_unique_children(objects)
 
         try:  # Determine the state of the first object
             first_obj = sel[0]
@@ -392,26 +392,26 @@ class DisplayMacros:
                 )
 
     @staticmethod
-    def m_frame_selected() -> None:
+    @core_utils.CoreUtils.selected
+    def m_frame(objects) -> None:
         """Frame selected by a set amount."""
         pm.melGlobals.initVar("int", "toggleFrame_")
-        selection = pm.ls(selection=1)
-        mode = pm.selectMode(query=1, component=1)
-        maskVertex = pm.selectType(query=1, vertex=1)
-        maskEdge = pm.selectType(query=1, edge=1)
-        maskFacet = pm.selectType(facet=1, query=1)
+        mode = pm.selectMode(q=True, component=True)
+        maskVertex = pm.selectType(q=True, vertex=True)
+        maskEdge = pm.selectType(q=True, edge=True)
+        maskFacet = pm.selectType(q=True, facet=True)
 
         def frame_element(toggleFrameVal, fitFactorVal, elementType):
             pm.viewFit(fitFactor=fitFactorVal)
             pm.melGlobals["toggleFrame_"] = toggleFrameVal
             print("frame {} {}".format(elementType, str(pm.melGlobals["toggleFrame_"])))
 
-        if len(selection) == 0:
+        if len(objects) == 0:
             pm.viewFit(allObjects=1)
         else:
             if mode == 1:
                 if maskVertex == 1:
-                    if len(selection) > 1:
+                    if len(objects) > 1:
                         frame_element(
                             1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
                             0.65 if pm.melGlobals["toggleFrame_"] != 1 else 0.10,
@@ -443,11 +443,10 @@ class DisplayMacros:
                 )
 
     @classmethod
-    def m_smooth_preview(cls) -> None:
+    @core_utils.CoreUtils.selected
+    def m_smooth_preview(cls, objects) -> None:
         """Toggle smooth mesh preview."""
-        selection = pm.ls(selection=1)
-
-        for obj in selection:
+        for obj in objects:
             obj = obj.split(".")[0]
             displaySmoothMeshAttr = str(obj) + ".displaySmoothMesh"
 
@@ -465,7 +464,7 @@ class DisplayMacros:
                 and pm.displayPref(query=1, wireframeOnShadedActive=1) == "none"
             ):
                 pm.setAttr(displaySmoothMeshAttr, 2)  # smooth preview on
-                shapes = pm.listRelatives(selection, children=1, shapes=1)
+                shapes = pm.listRelatives(objects, children=1, shapes=1)
                 [pm.setAttr(s.displaySubdComps, 1) for s in shapes]
                 pm.displayPref(wireframeOnShadedActive="full")
                 pm.inViewMessage(
@@ -554,14 +553,14 @@ class DisplayMacros:
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
         currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
-        displayAppearance = pm.modelEditor(currentPanel, query=1, displayAppearance=1)
-        displayTextures = pm.modelEditor(currentPanel, query=1, displayTextures=1)
+        displayAppearance = pm.modelEditor(currentPanel, q=True, displayAppearance=True)
+        displayTextures = pm.modelEditor(currentPanel, q=True, displayTextures=True)
 
         if pm.modelEditor(currentPanel, exists=1):
             if displayAppearance == "wireframe":
                 pm.modelEditor(
                     currentPanel,
-                    edit=1,
+                    edit=True,
                     displayAppearance="smoothShaded",
                     displayTextures=False,
                 )
@@ -573,7 +572,7 @@ class DisplayMacros:
             elif displayAppearance == "smoothShaded" and not displayTextures:
                 pm.modelEditor(
                     currentPanel,
-                    edit=1,
+                    edit=True,
                     displayAppearance="smoothShaded",
                     displayTextures=True,
                 )
@@ -585,7 +584,7 @@ class DisplayMacros:
             else:
                 pm.modelEditor(
                     currentPanel,
-                    edit=1,
+                    edit=True,
                     displayAppearance="wireframe",
                     displayTextures=False,
                 )
@@ -642,7 +641,7 @@ class EditMacros:
     @core_utils.CoreUtils.selected
     @core_utils.CoreUtils.reparent
     @display_utils.DisplayUtils.add_to_isolation
-    def m_combine(objects=None):
+    def m_combine(objects):
         """Combine multiple meshes"""
         if not objects or len(objects) < 2:
             pm.inViewMessage(
@@ -662,7 +661,7 @@ class EditMacros:
     @core_utils.CoreUtils.selected
     @core_utils.CoreUtils.reparent
     @display_utils.DisplayUtils.add_to_isolation
-    def m_boolean(objects=None, repair_mesh=True, keep_boolean=True, **kwargs):
+    def m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs):
         """Perform a boolean operation on two meshes using PyMel, managing shorthand and full parameter names dynamically."""
         a, *b = objects
         if not a or not b:
@@ -701,7 +700,7 @@ class EditMacros:
 
     @staticmethod
     @core_utils.CoreUtils.selected
-    def m_lock_vertex_normals(objects=None):
+    def m_lock_vertex_normals(objects):
         """Toggle lock/unlock vertex normals."""
         if not objects:
             pm.inViewMessage(
@@ -801,12 +800,12 @@ class EditMacros:
         )
 
     @staticmethod
-    def m_merge_vertices() -> None:
+    @core_utils.CoreUtils.selected
+    def m_merge_vertices(objects, tolerance=0.001) -> None:
         """Merge Vertices."""
-        tolerance = 0.001
-        selection = pm.ls(selection=1, objectsOnly=1)
+        objects = pm.ls(objects, objectsOnly=True)
 
-        if not selection:
+        if not objects:
             pm.inViewMessage(
                 statusMessage="Warning: <hl>Nothing selected</hl>.<br>Must select an object or component.",
                 pos="topCenter",
@@ -814,24 +813,22 @@ class EditMacros:
             )
 
         else:
-            for obj in selection:
-                if pm.selectMode(query=1, component=1):  # merge selected components.
-                    if pm.filterExpand(selectionMask=31):  # selectionMask=vertices
+            for obj in objects:
+                if pm.selectMode(q=True, component=True):  # Merge selected components.
+                    if pm.filterExpand(selectionMask=31):  # Vertices
                         pm.polyMergeVertex(
                             distance=tolerance,
                             alwaysMergeTwoVertices=True,
                             constructionHistory=True,
                         )
-                    else:  # if selection type =edges or facets:
+                    else:  # If selection type is edges or facets:
                         pm.mel.MergeToCenter()
 
-                else:  # if object mode. merge all vertices on the selected object.
-                    for n, obj in enumerate(selection):
-                        # get number of vertices
-                        count = pm.polyEvaluate(obj, vertex=1)
-                        vertices = (
-                            str(obj) + ".vtx [0:" + str(count) + "]"
-                        )  # mel expression: select -r geometry.vtx[0:1135];
+                else:  # If object mode. merge all vertices on the selected object.
+                    for n, obj in enumerate(objects):
+                        # Get number of vertices
+                        count = pm.polyEvaluate(obj, vertex=True)
+                        vertices = str(obj) + ".vtx [0:" + str(count) + "]"
                         pm.polyMergeVertex(
                             vertices,
                             distance=tolerance,
@@ -839,20 +836,19 @@ class EditMacros:
                             constructionHistory=False,
                         )
 
-                    # return to original state
-                    pm.select(clear=1)
-
-                    for obj in selection:
-                        pm.select(obj, add=1)
+                    # Return to original state
+                    pm.select(clear=True)
+                    for obj in objects:
+                        pm.select(obj, add=True)
 
     @staticmethod
-    def m_group() -> None:
+    @core_utils.CoreUtils.selected
+    def m_group(objects) -> None:
         """Group selected object(s)."""
-        selection = pm.ls(orderedSelection=True)
-        if selection:
-            grp = pm.group(selection)
+        if objects:
+            grp = pm.group(objects)
             pm.xform(grp, centerPivots=True)
-            pm.rename(grp, selection[0])
+            pm.rename(grp, objects[0])
         else:  # If nothing selected, create empty group.
             pm.group(empty=True, name="null")
 
@@ -968,10 +964,10 @@ class AnimationMacros:
     """ """
 
     @staticmethod
-    def m_set_selected_keys() -> None:
+    @core_utils.CoreUtils.selected
+    def m_set_selected_keys(objects) -> None:
         """Set keys for any attributes (channels) that are selected in the channel box."""
-        sel = pm.ls(selection=True, transforms=1, long=1)
-        for obj in sel:
+        for obj in objects:
             attrs = core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
@@ -979,10 +975,10 @@ class AnimationMacros:
                 # cutKey -cl -t ":" -f ":" -at "tx" -at "ty" -at "tz" pSphere1; #remove keys
 
     @staticmethod
-    def m_unset_selected_keys() -> None:
+    @core_utils.CoreUtils.selected
+    def m_unset_selected_keys(objects) -> None:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
-        sel = pm.ls(selection=True, transforms=1, long=1)
-        for obj in sel:
+        for obj in objects:
             attrs = core_utils.CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)

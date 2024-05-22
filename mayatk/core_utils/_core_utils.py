@@ -18,7 +18,6 @@ from mayatk import node_utils
 class CoreUtils(ptk.HelpMixin):
     """ """
 
-    @staticmethod
     def selected(func: Callable) -> Callable:
         """A decorator to pass the current selection to the first parameter if None is given."""
 
@@ -52,7 +51,6 @@ class CoreUtils(ptk.HelpMixin):
 
         return wrapper
 
-    @staticmethod
     def reparent(func: Callable) -> Callable:
         """A decorator to manage reparenting of Maya nodes before and after an operation."""
 
