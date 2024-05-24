@@ -172,7 +172,9 @@ class CoreUtils(ptk.HelpMixin):
             "workspace_path": lambda: ptk.format_path(
                 pm.workspace(q=True, rd=True), "path"
             ),
-            "scene_name": lambda: pm.sceneName(),
+            "scene": lambda: pm.sceneName(),
+            "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),
+            "scene_path": lambda: ptk.format_path(pm.sceneName(), "path"),
             "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
             "ui_language": lambda: pm.about(uiLanguage=True),
             "os_type": lambda: pm.about(os=True),
@@ -384,7 +386,9 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
+            else "int"
+            if isinstance(o, int)
+            else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod

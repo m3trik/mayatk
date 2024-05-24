@@ -41,6 +41,21 @@ class DisplayUtils(ptk.HelpMixin):
 
         return wrapped
 
+    @staticmethod
+    def is_templated(obj: Union[str, object]) -> bool:
+        """Check if a given object is templated.
+
+        Parameters:
+            obj (Union[str, pm.PyNode]): The name of the node or a PyNode object.
+
+        Returns:
+            bool: True if the node is templated, False otherwise.
+        """
+        try:
+            return pm.getAttr(f"{obj}.template")
+        except AttributeError:
+            return False
+
     @classmethod
     @core_utils.CoreUtils.undo
     def set_visibility(
@@ -104,6 +119,31 @@ class DisplayUtils(ptk.HelpMixin):
                 element.visibility.set(visibility)
             except pm.MayaAttributeError:
                 pass  # Skip the element if visibility cannot be set
+
+    @classmethod
+    def get_visible_geometry(
+        cls, transforms: bool = True, include_templated: bool = False
+    ) -> List[object]:
+        """Get a list of visible geometry.
+
+        Parameters:
+            transforms (bool): Return transform nodes instead of shapes. Default is True.
+            include_templated (bool): Include templated geometry in the result.
+
+        Returns:
+            List[pm.PyNode]: A list of visible nodes of the specified type.
+        """
+        # Get visible geometries (shape nodes)
+        result = pm.ls(geometry=True, visible=True)
+
+        if transforms:  # Get transform nodes of the visible shapes
+            result = pm.listRelatives(
+                result, parent=True, type="transform", fullPath=True
+            )
+
+        if not include_templated:
+            result = [node for node in result if not cls.is_templated(node)]
+        return result
 
     @staticmethod
     def add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]]):
