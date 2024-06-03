@@ -23,11 +23,22 @@ class CoreUtils(ptk.HelpMixin):
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            if not args or args[0] is None:
-                selection = pm.selected()
-                if not selection:
-                    return []
-                args = (selection,) + args[1:]
+            # Check if it's a method (class or regular) by looking at the first argument
+            if args and (hasattr(args[0], "__class__") or isinstance(args[0], type)):
+                if (
+                    len(args) < 2 or args[1] is None
+                ):  # Skip the 'cls' or 'self' parameter for class/regular methods
+                    selection = pm.selected()
+                    if not selection:
+                        return []
+                    args = (args[0], selection) + args[2:]
+            else:
+                if not args or args[0] is None:
+                    selection = pm.selected()
+                    if not selection:
+                        return []
+                    args = (selection,) + args[1:]
+
             return func(*args, **kwargs)
 
         return wrapped

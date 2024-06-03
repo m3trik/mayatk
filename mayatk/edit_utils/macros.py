@@ -446,12 +446,10 @@ class DisplayMacros:
     @core_utils.CoreUtils.selected
     def m_smooth_preview(cls, objects) -> None:
         """Toggle smooth mesh preview."""
-        for obj in objects:
-            obj = obj.split(".")[0]
-            displaySmoothMeshAttr = str(obj) + ".displaySmoothMesh"
-
-            if pm.getAttr(displaySmoothMeshAttr) != 2:
-                pm.setAttr(displaySmoothMeshAttr, 2)  # smooth preview on
+        objs = node_utils.NodeUtils.get_unique_children(objects)
+        for obj in objs:
+            if pm.getAttr(obj.displaySmoothMesh) != 2:
+                pm.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
                 pm.displayPref(wireframeOnShadedActive="none")
                 pm.inViewMessage(
                     position="topCenter",
@@ -460,10 +458,10 @@ class DisplayMacros:
                 )
 
             elif (
-                pm.getAttr(displaySmoothMeshAttr) == 2
+                pm.getAttr(obj.displaySmoothMesh) == 2
                 and pm.displayPref(query=1, wireframeOnShadedActive=1) == "none"
             ):
-                pm.setAttr(displaySmoothMeshAttr, 2)  # smooth preview on
+                pm.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
                 shapes = pm.listRelatives(objects, children=1, shapes=1)
                 [pm.setAttr(s.displaySubdComps, 1) for s in shapes]
                 pm.displayPref(wireframeOnShadedActive="full")
@@ -474,7 +472,7 @@ class DisplayMacros:
                 )
 
             else:
-                pm.setAttr(displaySmoothMeshAttr, 0)  # smooth preview off
+                pm.setAttr(obj.displaySmoothMesh, 0)  # smooth preview off
                 pm.displayPref(wireframeOnShadedActive="full")
                 pm.inViewMessage(
                     position="topCenter",
@@ -482,8 +480,8 @@ class DisplayMacros:
                     statusMessage="S-Div Preview <hl>OFF</hl>.<br>Wireframe <hl>Full</hl>.",
                 )
 
-            if pm.getAttr(str(obj) + ".smoothLevel") != 1:
-                pm.setAttr((str(obj) + ".smoothLevel"), 1)
+            if pm.getAttr(obj.smoothLevel) != 1:
+                pm.setAttr(obj.smoothLevel, 1)
 
     @staticmethod
     def m_wireframe() -> None:

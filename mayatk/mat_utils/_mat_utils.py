@@ -253,20 +253,32 @@ class MatUtils(ptk.HelpMixin):
         return objs_with_material
 
     @staticmethod
-    def reload_textures(materials=None, inc=None, exc=None):
+    def reload_textures(
+        materials=None,
+        inc=None,
+        exc=None,
+        log=False,
+        refresh_viewport=False,
+        refresh_hypershade=False,
+    ):
         """Reloads textures connected to specified materials with inclusion/exclusion filters.
 
         Parameters:
             materials (str/obj/list): Material or list of materials to process. Defaults to all materials in the scene.
             inc (str/list): Inclusion patterns for filtering textures.
             exc (str/list): Exclusion patterns for filtering textures.
+            log (bool): Whether to log the textures being reloaded.
+            refresh_viewport (bool): Whether to refresh the viewport.
+            refresh_hypershade (bool): Whether to refresh the Hypershade panel.
         """
         materials = pm.ls(materials) if materials else pm.ls(mat=True)
 
+        texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
         file_nodes = []
+
         for material in materials:
-            # Traverse the connections to find file nodes
-            file_nodes.extend(pm.listConnections(material, type="file"))
+            for tex_type in texture_types:
+                file_nodes.extend(pm.listConnections(material, type=tex_type))
 
         # Remove duplicates
         file_nodes = list(set(file_nodes))
@@ -281,9 +293,26 @@ class MatUtils(ptk.HelpMixin):
             )
 
         for fn in file_nodes:
-            # Reload the texture by resetting the file path
-            file_path = fn.fileTextureName.get()
-            fn.fileTextureName.set(file_path)
+            try:
+                # Reload the texture by resetting the file path
+                file_path = fn.fileTextureName.get()
+                fn.fileTextureName.set(file_path)
+                if log:
+                    print(f"Reloaded texture: {file_path}")
+            except AttributeError:
+                if log:
+                    print(f"Skipped non-file node: {fn}")
+
+        # Refresh viewport if requested
+        if refresh_viewport:
+            pm.refresh(force=True)
+
+        # Refresh Hypershade if requested
+        if refresh_hypershade:
+            pm.refreshEditorTemplates()
+            pm.mel.eval(
+                'hypershadePanelMenuCommand("hyperShadePanel1", "refreshAllSwatches");'
+            )
 
     @staticmethod
     def get_mat_swatch_icon(mat, size=[20, 20]):

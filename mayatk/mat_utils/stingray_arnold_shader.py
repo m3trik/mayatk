@@ -437,7 +437,12 @@ class StingrayArnoldShader:
                 if converted_map:
                     return other_textures + [converted_map]
 
-        # If no normal map conversion was possible, return the list without any normal maps
+        # If no normal map conversion was possible, check for a generic normal map
+        generic_normal_map = [nm for nm in normal_maps if "Normal_" not in nm]
+        if generic_normal_map:
+            return other_textures + generic_normal_map
+
+        # If no normal maps are found, return the list unchanged
         return other_textures
 
     def filter_for_correct_metallic_map(
@@ -765,3 +770,50 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
+
+
+# deprecated:
+
+# def filter_for_correct_normal_map(
+#     self, textures: List[str], desired_normal_type: str
+# ) -> List[str]:
+#     """Filters and ensures only the desired type of normal map is in the textures list.
+#     If the desired normal map doesn't exist, attempts to create it by converting from the other type.
+
+#     Parameters:
+#         textures (List[str]): The list of texture file paths.
+#         desired_normal_type (str): The desired normal map type, either 'OpenGL' or 'DirectX'.
+
+#     Returns:
+#         List[str]: The modified list of texture file paths with the correct normal map type.
+#     """
+
+#     # Normalize desired_normal_type to match naming convention in textures
+#     desired_normal_type = "Normal_" + desired_normal_type
+
+#     # Separate normal maps from other textures
+#     normal_maps = [tex for tex in textures if "Normal_" in tex]
+#     other_textures = [tex for tex in textures if "Normal_" not in tex]
+
+#     # Filter normal maps for the desired type
+#     desired_normal_maps = [nm for nm in normal_maps if desired_normal_type in nm]
+
+#     # If the desired normal map is already present, return it with the other textures
+#     if desired_normal_maps:
+#         return other_textures + desired_normal_maps
+
+#     # Attempt to create the desired normal map by converting from the available one
+#     for nm in normal_maps:
+#         if "OpenGL" in desired_normal_type and "DirectX" in nm:
+#             # Convert DirectX to OpenGL
+#             converted_map = ptk.create_gl_from_dx(nm)
+#             if converted_map:
+#                 return other_textures + [converted_map]
+#         elif "DirectX" in desired_normal_type and "OpenGL" in nm:
+#             # Convert OpenGL to DirectX
+#             converted_map = ptk.create_dx_from_gl(nm)
+#             if converted_map:
+#                 return other_textures + [converted_map]
+
+#     # If no normal map conversion was possible, return the list without any normal maps
+#     return other_textures

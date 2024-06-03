@@ -29,7 +29,7 @@
       <Triangulate UIH="0" UID="0" UIG="0" UIBG="0" lbENU="Triangulate" dt="Bool" v="0"/>
       <GeometryNurbsSurfaceAs UIH="0" UID="0" UIG="0" lbENU="Convert NURBS surface to" dt="Enum" enumSelected="NURBS" v="0" enumItem_0="NURBS" enumItem_1="Interactive Display Mesh" enumItem_2="Software Render Mesh"/>
     </Geometry>
-    <Animation UIH="0" UID="0" UIG="0" UIBG="1" UIX="1" lbENU="Animation" dt="Bool" v="0">
+    <Animation UIH="0" UID="0" UIG="0" UIBG="1" UIX="1" lbENU="Animation" dt="Bool" v="1">
       <ExtraGrp UIH="0" UID="0" UIG="1" UIX="1" UIP="0" lbENU="Extra Options">
         <UseSceneName UIH="0" UID="0" UIG="0" UIBG="0" lbENU="Use scene name" dt="Bool" v="0"/>
         <RemoveSingleKey UIH="0" UID="0" UIG="0" UIBG="0" lbENU="Remove single key" dt="Bool" v="0"/>
