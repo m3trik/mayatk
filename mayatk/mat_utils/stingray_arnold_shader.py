@@ -12,6 +12,7 @@ import pythontk as ptk
 # from this package:
 from mayatk import core_utils
 from mayatk.node_utils import NodeUtils
+from mayatk.mat_utils import MatUtils
 
 
 class StingrayArnoldShader:
@@ -482,7 +483,7 @@ class StingrayArnoldShader:
                 invert_alpha = bool(
                     roughness_map
                 )  # Invert alpha if the source is roughness
-                combined_map = self.pack_smoothness_into_metallic(
+                combined_map = MatUtils.pack_smoothness_into_metallic(
                     metallic_map[0], alpha_map, invert_alpha=invert_alpha
                 )
                 return [
@@ -499,33 +500,6 @@ class StingrayArnoldShader:
 
         # Return the textures list unchanged if no conditions are met
         return textures
-
-    def pack_smoothness_into_metallic(
-        self, metallic_map_path: str, alpha_map_path: str, invert_alpha: bool = False
-    ) -> str:
-        """Packs the alpha channel (smoothness or inverted roughness) into the metallic map.
-
-        Parameters:
-            metallic_map_path (str): File path of the metallic texture.
-            alpha_map_path (str): File path of the smoothness or roughness texture to be packed into the alpha channel.
-            invert_alpha (bool): If True, inverts the alpha channel. Useful for converting roughness to smoothness.
-
-        Returns:
-            str: File path of the resulting metallic smoothness map.
-        """
-        # Determine the base name for the output path without the "_Metallic" suffix
-        base_name = os.path.splitext(metallic_map_path)[0].replace("_Metallic", "")
-        output_path = f"{base_name}_MetallicSmoothness.png"
-
-        # Pack the alpha channel into the metallic map
-        success = ptk.pack_channel_into_alpha(
-            metallic_map_path, alpha_map_path, output_path, invert_alpha=invert_alpha
-        )
-
-        if success:
-            return output_path
-        else:
-            raise Exception("Failed to pack smoothness into metallic map.")
 
     def filter_for_correct_base_color_map(
         self, textures: List[str], use_albedo_transparency: bool
@@ -557,7 +531,7 @@ class StingrayArnoldShader:
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
-                combined_map = self.pack_transparency_into_albedo(
+                combined_map = MatUtils.pack_transparency_into_albedo(
                     base_color_map[0], transparency_map[0]
                 )
                 return [
@@ -571,38 +545,6 @@ class StingrayArnoldShader:
 
         # Return the textures list unchanged if no conditions are met
         return textures
-
-    @staticmethod
-    def pack_transparency_into_albedo(
-        albedo_map_path: str, alpha_map_path: str, invert_alpha: bool = False
-    ) -> str:
-        """Packs the transparency channel into the albedo map.
-
-        Parameters:
-            albedo_map_path (str): File path of the albedo texture.
-            alpha_map_path (str): File path of the transparency texture to be packed into the alpha channel.
-            invert_alpha (bool): If True, inverts the alpha channel before packing.
-
-        Returns:
-            str: File path of the resulting AlbedoTransparency map.
-        """
-        # Determine the output path without the "_BaseColor" or "_Albedo" suffix
-        base_name = (
-            os.path.splitext(albedo_map_path)[0]
-            .replace("_BaseColor", "")
-            .replace("_Albedo", "")
-        )
-        output_path = f"{base_name}_AlbedoTransparency.png"
-
-        # Pack the transparency channel into the albedo map
-        success = ptk.pack_channel_into_alpha(
-            albedo_map_path, alpha_map_path, output_path, invert_alpha=invert_alpha
-        )
-
-        if success:
-            return output_path
-        else:
-            raise Exception("Failed to pack transparency into albedo map.")
 
 
 class StingrayArnoldShaderSlots(StingrayArnoldShader):

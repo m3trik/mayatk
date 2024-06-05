@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List
+from typing import List, Union, Dict
 
 try:
     import pymel.core as pm
@@ -59,24 +59,32 @@ class MatUtils(ptk.HelpMixin):
         return mats
 
     @staticmethod
-    def get_scene_mats(inc=[], exc=[]):
-        """Retrieves all materials from the current scene, optionally including or excluding certain objects.
+    def get_scene_mats(
+        inc: Union[str, int, list] = [],
+        exc: Union[str, int, list] = [],
+        sort: bool = False,
+        as_dict: bool = False,
+    ) -> Union[List[str], Dict[str, str]]:
+        """Retrieves all materials from the current scene, optionally including or excluding certain materials by name.
 
         Parameters:
             inc (str/int/obj/list, optional): The objects to include in the search. Supports using the '*' operator for pattern matching. Defaults to [].
             exc (str/int/obj/list, optional): The objects to exclude from the search. Supports using the '*' operator for pattern matching. Defaults to [].
+            sort (bool, optional): Whether to return the materials in alphabetical order. Defaults to False.
+            as_dict (bool, optional): Whether to return the materials as a dictionary. Defaults to False.
 
         Returns:
-            list: A list of materials in the scene.
+            list or dict: A list or dictionary of materials in the scene.
         """
-        matList = pm.ls(mat=1, flatten=1)
+        matList = pm.ls(mat=True, flatten=True)
+        d = {m.name(): m for m in matList}
+        filtered = ptk.filter_dict(d, keys=True, map_func=pm.nodeType, inc=inc, exc=exc)
 
-        # convert to dictionary to filter material names and types.
-        d = {m.name(): pm.nodeType(m) for m in matList}
-        filtered = ptk.filter_dict(d, inc, exc, keys=True, values=True)
+        if as_dict:
+            return dict(sorted(filtered.items())) if sort else filtered
 
-        # use the filtered results to reconstruct a filtered list of actual materials.
-        return [m for m in matList if m.name() in filtered]
+        filtered_mats = list(filtered.values())
+        return sorted(filtered_mats, key=lambda x: x.name()) if sort else filtered_mats
 
     @staticmethod
     def get_fav_mats():
@@ -315,41 +323,52 @@ class MatUtils(ptk.HelpMixin):
             )
 
     @staticmethod
-    def get_mat_swatch_icon(mat, size=[20, 20]):
-        """Get an icon with a color fill matching the given materials RBG value.
+    def get_mat_swatch_icon(
+        mat: Union[str, object],
+        size: List[int] = [20, 20],
+        fallback_to_blank: bool = True,
+    ) -> object:
+        """Get an icon with a color fill matching the given material's RGB value.
 
         Parameters:
             mat (obj)(str): The material or the material's name.
             size (list): Desired icon size.
+            fallback_to_blank (bool): Whether to generate a blank swatch if fetching the material color fails.
 
         Returns:
-            (obj) pixmap icon.
+            (obj) QIcon: The pixmap icon.
         """
         from PySide2.QtGui import QPixmap, QColor, QIcon
 
         try:
             # get the string name if a mat object is given.
-            matName = mat.name() if not isinstance(mat, (str)) else mat
+            matName = mat.name() if not isinstance(mat, str) else mat
             # convert from 0-1 to 0-255 value and then to an integer
-            r = int(pm.getAttr(matName + ".colorR") * 255)
-            g = int(pm.getAttr(matName + ".colorG") * 255)
-            b = int(pm.getAttr(matName + ".colorB") * 255)
+            r = int(pm.getAttr(f"{matName}.colorR") * 255)
+            g = int(pm.getAttr(f"{matName}.colorG") * 255)
+            b = int(pm.getAttr(f"{matName}.colorB") * 255)
             pixmap = QPixmap(size[0], size[1])
             pixmap.fill(QColor.fromRgb(r, g, b))
-
-            return QIcon(pixmap)
-
         except Exception:
-            pass
+            if fallback_to_blank:
+                pixmap = QPixmap(size[0], size[1])
+                pixmap.fill(QColor(255, 255, 255, 0))  # Transparent blank swatch
+            else:
+                raise
+
+        return QIcon(pixmap)
 
     @staticmethod
-    def calculate_uv_padding(map_size, normalize=False):
+    def calculate_uv_padding(
+        map_size: int, normalize: bool = False, factor: int = 128
+    ) -> float:
         """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
         Optionally return the padding as a normalized value relative to the map size.
 
         Parameters:
         map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
         normalize (bool): If True, returns the padding as a normalized value. Default is False.
+        factor (int): The factor by which to divide the map size to calculate the padding. Default is 128.
 
         Returns:
         float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
@@ -364,7 +383,7 @@ class MatUtils(ptk.HelpMixin):
         >>> calculate_uv_padding(4096, normalize=True)
         0.0078125
         """
-        padding = map_size / 128
+        padding = map_size / factor
         if normalize:
             return padding / map_size
         return padding
