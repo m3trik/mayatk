@@ -3,7 +3,7 @@ import re
 import logging
 from datetime import datetime
 from functools import wraps
-from typing import List, Tuple, Dict, Any, Optional, Callable
+from typing import List, Optional, Callable
 
 try:
     import pymel.core as pm
@@ -11,7 +11,8 @@ except ImportError as error:
     print(__file__, error)
 
 # From this package:
-from mayatk import display_utils
+from mayatk.mat_utils import MatUtils
+from mayatk.display_utils import DisplayUtils
 
 
 class EnvironmentTests:
@@ -22,6 +23,16 @@ class EnvironmentTests:
         self.logger.setLevel(log_level)
         self.object_init_func = objects
         self.initialize_objects()
+        self.materials = MatUtils.filter_materials_by_objects(self.objects)
+        ignore = [
+            "diffuse_cube.dds",
+            "specular_cube.dds",
+            "ibl_brdf_lut.dds",
+            "ibl_brdf_lut.png",
+        ]
+        self.material_paths = MatUtils.collect_material_paths(
+            self.materials, ignore=ignore
+        )
 
     def initialize_objects(self):
         if self.object_init_func:
@@ -32,83 +43,11 @@ class EnvironmentTests:
         else:
             self.objects = []
 
-    def find_referenced_objects(self) -> List[str]:
-        referenced_objects = pm.ls(self.objects, references=True)
-        return referenced_objects
-
-    def collect_material_paths(self) -> List[Tuple[str, str, str]]:
-        results = []
-        source_images_dir = pm.workspace(q=True, rd=True) + "sourceimages/"
-        materials = self.get_materials()
-
-        ignore_files = {
-            "diffuse_cube.dds",
-            "specular_cube.dds",
-            "ibl_brdf_lut.dds",
-            "ibl_brdf_lut.png",
-        }
-
-        for material in materials:
-            file_nodes = pm.listConnections(material, type="file")
-            if file_nodes:
-                for file_node in file_nodes:
-                    file_path = pm.getAttr(f"{file_node}.fileTextureName")
-                    if file_path and not any(
-                        file_path.endswith(i) for i in ignore_files
-                    ):
-                        if os.path.isabs(file_path):
-                            if file_path.startswith(source_images_dir):
-                                relative_path = os.path.relpath(
-                                    file_path, source_images_dir
-                                )
-                                results.append((material, "Relative", relative_path))
-                            else:
-                                results.append((material, "Absolute", file_path))
-                        else:
-                            results.append((material, "Relative", file_path))
-
-        return results
-
     def all_material_paths_relative(self) -> bool:
-        results = self.collect_material_paths()
         all_relative = all(
-            path_type == "Relative" for material, path_type, path in results
+            path_type == "Relative" for material, path_type, path in self.material_paths
         )
         return all_relative
-
-    def get_material_properties(self, material) -> Dict[str, Any]:
-        properties = {"shader_type": material.nodeType(), "attributes": {}}
-        common_attrs = [
-            "color",
-            "transparency",
-            "ambientColor",
-            "incandescence",
-            "specularColor",
-        ]
-        for attr in common_attrs:
-            if material.hasAttr(attr):
-                properties["attributes"][attr] = material.attr(attr).get()
-
-        file_textures = pm.listConnections(material, type="file")
-        texture_paths = [
-            pm.getAttr(f"{file}.fileTextureName") for file in file_textures
-        ]
-        properties["textures"] = sorted(texture_paths)
-
-        return properties
-
-    def find_duplicate_materials(self) -> List[str]:
-        materials = self.get_materials()
-        material_properties = [
-            self.get_material_properties(material) for material in materials
-        ]
-        duplicates = []
-        for i, mat_props in enumerate(material_properties):
-            for j in range(i + 1, len(material_properties)):
-                if mat_props == material_properties[j]:
-                    duplicates.append(materials[j].name())
-
-        return duplicates
 
     def check_all_paths_relative(func):
         @wraps(func)
@@ -117,7 +56,7 @@ class EnvironmentTests:
                 all_paths_relative = self.all_material_paths_relative()
                 if not all_paths_relative:
                     self.logger.error("Absolute path(s) found:")
-                    for m, s, p in self.collect_material_paths():
+                    for m, s, p in self.material_paths:
                         if s == "Absolute":
                             self.logger.error(f"\t{s, m, p}")
                     return
@@ -129,7 +68,8 @@ class EnvironmentTests:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             if self.check_duplicate_materials:
-                duplicate_materials = self.find_duplicate_materials()
+                materials = self.materials
+                duplicate_materials = MatUtils.find_duplicate_materials(materials)
                 if duplicate_materials:
                     self.logger.error("Duplicate material(s) found:")
                     for i in duplicate_materials:
@@ -143,7 +83,7 @@ class EnvironmentTests:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             if self.check_referenced_objects:
-                referenced_objects = self.find_referenced_objects()
+                referenced_objects = pm.ls(self.objects, references=True)
                 if referenced_objects:
                     self.logger.error("Referenced object(s) found:")
                     for ref in referenced_objects:
@@ -152,31 +92,6 @@ class EnvironmentTests:
             return func(self, *args, **kwargs)
 
         return wrapper
-
-    def filter_materials_by_objects(self, objects: List[str]) -> List[str]:
-        """Filter materials assigned to the given objects.
-
-        Args:
-            objects (List[str]): List of object names.
-
-        Returns:
-            List[str]: List of material names assigned to the given objects.
-        """
-        assigned_materials = set()
-        for obj in objects:
-            shading_groups = pm.listConnections(obj, type="shadingEngine")
-            for sg in shading_groups:
-                materials = pm.listConnections(sg + ".surfaceShader")
-                assigned_materials.update(materials)
-        return list(assigned_materials)
-
-    def get_materials(self) -> List[str]:
-        """Get materials for the specified objects or the entire scene.
-
-        Returns:
-            List[str]: List of material names.
-        """
-        return self.filter_materials_by_objects(self.objects)
 
 
 class SceneExporter(EnvironmentTests):
@@ -384,13 +299,13 @@ class SceneExporter(EnvironmentTests):
 
 if __name__ == "__main__":
     preset = r"unity_animation.fbxexportpreset"
-    # export_dir = r"%userprofile%/Desktop/test"
-    export_dir = r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03"
+    export_dir = r"%userprofile%/Desktop/test"
+    # export_dir = r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03"
     # export_dir = r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03\TANK_3B_00\Revisions_5_31_2024"
     name_regex = r"_module->"
 
     exporter = SceneExporter(
-        objects=display_utils.DisplayUtils.get_visible_geometry,
+        objects=DisplayUtils.get_visible_geometry,
         export_dir=export_dir,
         preset=preset,
         temp_linear_unit="m",
@@ -685,7 +600,7 @@ if __name__ == "__main__":
 #     @EnvironmentTests.check_for_referenced_objects
 #     @batch_export
 #     def export_visible(self, file_format: str = "FBX export") -> None:
-#         visible_geometry = display_utils.DisplayUtils.get_visible_geometry()
+#         visible_geometry = DisplayUtils.get_visible_geometry()
 #         pm.select(visible_geometry, r=True)
 #         self.export_selected(file_format=file_format)
 
