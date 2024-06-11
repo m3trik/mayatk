@@ -12,7 +12,6 @@ import pythontk as ptk
 # from this package:
 from mayatk import core_utils
 from mayatk.node_utils import NodeUtils
-from mayatk.mat_utils import MatUtils
 
 
 class StingrayArnoldShader:
@@ -66,7 +65,7 @@ class StingrayArnoldShader:
         for texture in textures:
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.get_image_type_from_filename(texture)
+            texture_type = ptk.get_map_type_from_filename(texture)
 
             if texture_type is None:
                 callback(
@@ -483,7 +482,7 @@ class StingrayArnoldShader:
                 invert_alpha = bool(
                     roughness_map
                 )  # Invert alpha if the source is roughness
-                combined_map = MatUtils.pack_smoothness_into_metallic(
+                combined_map = ptk.pack_smoothness_into_metallic(
                     metallic_map[0], alpha_map, invert_alpha=invert_alpha
                 )
                 return [
@@ -531,7 +530,7 @@ class StingrayArnoldShader:
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
-                combined_map = MatUtils.pack_transparency_into_albedo(
+                combined_map = ptk.pack_transparency_into_albedo(
                     base_color_map[0], transparency_map[0]
                 )
                 return [
@@ -652,7 +651,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         image_files = self.sb.file_dialog(
             file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
             title="Select one or more image files to open.",
-            directory=self.source_images_dir,
+            start_dir=self.source_images_dir,
         )
 
         if image_files:

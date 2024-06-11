@@ -298,16 +298,18 @@ class SceneExporter(EnvironmentTests):
 
 
 if __name__ == "__main__":
-    preset = r"unity_animation.fbxexportpreset"
-    export_dir = r"%userprofile%/Desktop/test"
-    # export_dir = r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03"
-    # export_dir = r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03\TANK_3B_00\Revisions_5_31_2024"
+    preset = "unity_animation"
+    # export_dir = r"%userprofile%/Desktop/test"
+    af = "O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF"
+    export_dir = f"{af}/C-130J/Exports_For_Unity/Pressurization"
+    # export_dir = f"{af}/F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03"
+    # export_dir = f"{af}/F-15E\Exports for Unity\Fuel_Tank_Buildup\Module_03\TANK_3B_00\Revisions_5_31_2024"
     name_regex = r"_module->"
 
     exporter = SceneExporter(
         objects=DisplayUtils.get_visible_geometry,
         export_dir=export_dir,
-        preset=preset,
+        preset=f"{preset}.fbxexportpreset",
         temp_linear_unit="m",
         temp_time_unit="ntsc",
         check_duplicate_materials=True,

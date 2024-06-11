@@ -9,8 +9,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import node_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 
 
 class RigUtils(ptk.HelpMixin):
@@ -40,7 +40,7 @@ class RigUtils(ptk.HelpMixin):
         return loc
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def remove_locator(cls, objects):
         """Remove a parented locator from the child object.
 
@@ -52,9 +52,9 @@ class RigUtils(ptk.HelpMixin):
                 continue
 
             elif (
-                node_utils.NodeUtils.is_locator(obj)
-                and not node_utils.NodeUtils.get_type(obj)
-                and not node_utils.NodeUtils.get_children(obj)
+                NodeUtils.is_locator(obj)
+                and not NodeUtils.get_type(obj)
+                and not NodeUtils.get_children(obj)
             ):
                 pm.delete(obj)
                 continue
@@ -62,10 +62,10 @@ class RigUtils(ptk.HelpMixin):
             # unlock attributes
             cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
 
-            if not node_utils.NodeUtils.is_locator(obj):
+            if not NodeUtils.is_locator(obj):
                 try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = node_utils.NodeUtils.get_parent(obj)
-                    if not node_utils.NodeUtils.is_locator(obj):
+                    obj = NodeUtils.get_parent(obj)
+                    if not NodeUtils.is_locator(obj):
                         pm.inViewMessage(
                             status_message="Error: Unable to remove locator for the given object.",
                             pos="topCenter",
@@ -81,7 +81,7 @@ class RigUtils(ptk.HelpMixin):
                     continue
 
             # unparent child object
-            children = node_utils.NodeUtils.get_children(obj)
+            children = NodeUtils.get_children(obj)
             for child in children:
                 pm.parent(child, world=True)
 
@@ -99,89 +99,100 @@ class RigUtils(ptk.HelpMixin):
         pm.manipPivot(ro=1, rp=1)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
-    def bake_pivot(objects, position=False, orientation=False):
-        """ """
-        transforms = pm.ls(objects, transforms=1)
-        shapes = pm.ls(objects, shapes=1)
+    @CoreUtils.undo
+    def bake_pivot(
+        objects: list[str],
+        position: bool = False,
+        orientation: bool = False,
+        delete_history: bool = True,
+    ) -> None:
+        """Bakes the pivot of the given objects.
+
+        Parameters:
+            objects (list[str]): List of objects to bake the pivot for.
+            position (bool): Whether to bake the pivot position.
+            orientation (bool): Whether to bake the pivot orientation.
+            delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
+        """
+        if delete_history:
+            pm.bakePartialHistory(objects, prePostDeformers=True)
+
+        transforms = pm.ls(objects, objectsOnly=True, transforms=True, flatten=True)
+        shapes = NodeUtils.get_shape_node(transforms)
         objects = transforms + pm.listRelatives(
-            shapes, path=1, parent=1, type="transform"
+            shapes, path=True, parent=True, type="transform"
         )
 
         ctx = pm.currentCtx()
-        pivotModeActive = 0
-        customModeActive = 0
-        if ctx in ("RotateSuperContext", "manipRotateContext"):  # Rotate tool
-            customOri = pm.manipRotateContext("Rotate", q=1, orientAxes=1)
-            pivotModeActive = pm.manipRotateContext("Rotate", q=1, editPivotMode=1)
-            customModeActive = pm.manipRotateContext("Rotate", q=1, mode=1) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):  # Scale tool
-            customOri = pm.manipScaleContext("Scale", q=1, orientAxes=1)
-            pivotModeActive = pm.manipScaleContext("Scale", q=1, editPivotMode=1)
-            customModeActive = pm.manipScaleContext("Scale", q=1, mode=1) == 6
-        else:  # use the move tool orientation
-            customOri = pm.manipMoveContext(
-                "Move", q=1, orientAxes=1
-            )  # get custom orientation
-            pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
-            customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
+        pivotModeActive = False
+        customModeActive = False
+        customOri = []
+
+        if ctx in ("RotateSuperContext", "manipRotateContext"):
+            customOri = pm.manipRotateContext("Rotate", q=True, orientAxes=True)
+            pivotModeActive = pm.manipRotateContext(
+                "Rotate", q=True, editPivotMode=True
+            )
+            customModeActive = pm.manipRotateContext("Rotate", q=True, mode=True) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):
+            customOri = pm.manipScaleContext("Scale", q=True, orientAxes=True)
+            pivotModeActive = pm.manipScaleContext("Scale", q=True, editPivotMode=True)
+            customModeActive = pm.manipScaleContext("Scale", q=True, mode=True) == 6
+        else:
+            customOri = pm.manipMoveContext("Move", q=True, orientAxes=True)
+            pivotModeActive = pm.manipMoveContext("Move", q=True, editPivotMode=True)
+            customModeActive = pm.manipMoveContext("Move", q=True, mode=True) == 6
 
         if orientation and customModeActive:
             if not position:
                 pm.mel.error(
-                    (pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))
+                    pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError")
                 )
                 return
 
             from math import degrees
 
-            cX, cY, cZ = customOri = [
-                degrees(customOri[0]),
-                degrees(customOri[1]),
-                degrees(customOri[2]),
-            ]
-
-            pm.rotate(
-                objects, cX, cY, cZ, a=1, pcp=1, pgp=1, ws=1, fo=1
-            )  # Set object(s) rotation to the custom one (preserving child transform positions and geometry positions)
+            customOri = [degrees(ori) for ori in customOri]
+            pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
 
         if position:
             for obj in objects:
-                # Get pivot in parent space
-                m = pm.xform(obj, q=1, m=1)
-                p = pm.xform(obj, q=1, os=1, sp=1)
-                oldX, oldY, oldZ = [
-                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
-                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
-                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
+                m = pm.xform(obj, q=True, m=True)
+                p = pm.xform(obj, q=True, os=True, sp=True)
+                oldPivot = [
+                    p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
+                    p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
+                    p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
                 ]
 
-                pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
-
-                # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
-                newX, newY, newZ = pm.getAttr(
-                    obj.name() + ".translate"
-                )  # obj.translate
+                pm.xform(obj, zeroTransformPivots=True)
+                newPivot = pm.getAttr(f"{obj.name()}.translate")
                 pm.move(
-                    obj, oldX - newX, oldY - newY, oldZ - newZ, pcp=1, pgp=1, ls=1, r=1
+                    obj,
+                    oldPivot[0] - newPivot[0],
+                    oldPivot[1] - newPivot[1],
+                    oldPivot[2] - newPivot[2],
+                    pcp=True,
+                    pgp=True,
+                    ls=True,
+                    r=True,
                 )
 
         if pivotModeActive:
-            pm.ctxEditMode()  # exit pivot mode
+            pm.ctxEditMode()
 
-        # Set the axis orientation mode back to obj
         if orientation and customModeActive:
             if ctx in ("RotateSuperContext", "manipRotateContext"):
                 pm.manipPivot(rotateToolOri=0)
             elif ctx in ("scaleSuperContext", "manipScaleContext"):
                 pm.manipPivot(scaleToolOri=0)
-            else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
+            else:
                 pm.manipPivot(moveToolOri=0)
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=1)
+                    pm.manipPivot(ro=True)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def set_attr_lock_state(
         cls, objects, translate=None, rotate=None, scale=None, **kwargs
     ):
@@ -210,7 +221,7 @@ class RigUtils(ptk.HelpMixin):
 
         for obj in objects:
             try:
-                if node_utils.NodeUtils.is_locator(obj):
+                if NodeUtils.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
             except IndexError:
                 return
@@ -222,7 +233,7 @@ class RigUtils(ptk.HelpMixin):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def create_group(
         objects=[],
         name="",
@@ -264,7 +275,7 @@ class RigUtils(ptk.HelpMixin):
         return grp
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def create_group_with_first_obj_lra(cls, objects, name="", freeze_transforms=True):
         """Creates a group using the first object to define the local rotation axis.
 
@@ -281,9 +292,8 @@ class RigUtils(ptk.HelpMixin):
             )
             return None
 
-        cls.bake_pivot(
-            obj, position=True, orientation=True
-        )  # pm.mel.BakeCustomPivot(obj) #bake the pivot on the object that will define the LRA.
+        # Bake the pivot on the object that will define the LRA.
+        cls.bake_pivot(obj, position=True, orientation=True)
 
         grp = pm.group(empty=True)
         pm.parent(grp, obj)
@@ -317,7 +327,7 @@ class RigUtils(ptk.HelpMixin):
         return grp
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def create_locator_at_object(
         cls,
         objects,
@@ -358,9 +368,9 @@ class RigUtils(ptk.HelpMixin):
         """
         getSuffix = (
             lambda o: loc_suffix
-            if node_utils.NodeUtils.is_locator(o)
+            if NodeUtils.is_locator(o)
             else grp_suffix
-            if node_utils.NodeUtils.is_group(o)
+            if NodeUtils.is_group(o)
             else obj_suffix
         )  # match the correct suffix to the object type.
 
@@ -450,7 +460,7 @@ class RigUtils(ptk.HelpMixin):
                 raise (error)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def setup_telescope_rig(
         cls,
         base_locator: Union[str, List[str]],
