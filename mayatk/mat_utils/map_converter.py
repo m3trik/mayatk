@@ -10,7 +10,6 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk import Switchboard
 
 # from this package:
 from mayatk.core_utils import CoreUtils
@@ -20,7 +19,15 @@ from mayatk.core_utils import CoreUtils
 
 
 class MapConverterSlots(ptk.ImgUtils):
-    texture_file_types = ["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"]
+    texture_file_types = [
+        "*.png",
+        "*.jpg",
+        "*.bmp",
+        "*.tga",
+        "*.tiff",
+        "*.gif",
+        "*.exr",
+    ]
 
     def __init__(self):
         super().__init__()
@@ -173,6 +180,8 @@ class MapConverterSlots(ptk.ImgUtils):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from uitk import Switchboard
+
     parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "map_converter.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=MapConverterSlots)

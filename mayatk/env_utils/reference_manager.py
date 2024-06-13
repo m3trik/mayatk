@@ -72,7 +72,7 @@ class ReferenceManager(ptk.HelpMixin):
         """Check if a file is an auto-save file based on its name."""
         return bool(self.prefilter_regex.match(filename))
 
-    def get_workspace_files(self, omit_autosave=True):
+    def get_workspace_files(self, omit_autosave=True) -> list[str]:
         # Use self.recursive_search to determine whether to search recursively
         workspace_files = glob.glob(
             os.path.join(self.current_working_dir, "**", "*.ma"),
@@ -92,11 +92,33 @@ class ReferenceManager(ptk.HelpMixin):
 
         return workspace_files
 
-    def add_reference(self, namespace: str, file_path: str) -> None:
+    @staticmethod
+    def sanitize_namespace(namespace: str) -> str:
+        """Sanitize the namespace by replacing or removing illegal characters."""
+        return re.sub(r"[^a-zA-Z0-9_]", "_", namespace)
+
+    def add_reference(self, namespace: str, file_path: str) -> bool:
         # Ensure the file exists before proceeding
         if not os.path.exists(file_path):
-            pm.displayError(f"Could not open file: {file_path}")
-            return
+            pm.displayError(
+                f"Could not open file: {file_path} (File does not exist or is not accessible)"
+            )
+            return False
+
+        # Check if the file is fully accessible (not virtual)
+        try:
+            with open(file_path, "rb") as f:
+                f.read(1)  # Try to read a byte to ensure the file is accessible
+        except (OSError, IOError) as e:
+            error_msg = (
+                f"Could not open file: {file_path}\n"
+                f"Possible reasons include:\n"
+                f"- The file is virtual or not fully downloaded\n"
+                f"- There is an issue accessing the file (ex. permissions)\n"
+                f"Error details: {str(e)}"
+            )
+            pm.displayError(error_msg)
+            return False
 
         # Normalize the file path to ensure consistent comparison
         normalized_file_path = os.path.normpath(file_path)
@@ -105,24 +127,33 @@ class ReferenceManager(ptk.HelpMixin):
         for ref in self.current_references:
             if os.path.normpath(ref.path) == normalized_file_path:
                 print(f"File already referenced: {file_path}")
-                return  # Exit the method if the file is already referenced
+                return True  # Exit the method if the file is already referenced
 
-        try:  # Proceed with adding the reference since it's not already referenced
-            ref = pm.createReference(file_path, namespace=namespace)
+        # Sanitize the namespace to ensure it contains only valid characters
+        sanitized_namespace = self.sanitize_namespace(namespace)
+
+        try:
+            # Proceed with adding the reference since it's not already referenced
+            ref = pm.createReference(file_path, namespace=sanitized_namespace)
             if ref is None or not hasattr(ref, "_refNode") or ref._refNode is None:
                 raise RuntimeError(
                     f"Failed to create reference for {file_path}. Reference object or its _refNode attribute is None."
                 )
             assert ref._refNode.type() == "reference"
+            return True
         except AssertionError:
             pm.displayError(
                 f"Reference created for {file_path} did not result in a valid reference node."
             )
+            return False
         except RuntimeError as e:
             if "Could not open file" in str(e):
-                pm.displayError(f"Could not open file: {file_path}")
+                pm.displayError(
+                    f"Could not open file: {file_path} (Maya RuntimeError: {str(e)})"
+                )
             else:
                 raise
+            return False
 
     def import_references(self, namespaces=None):
         """Imports the referenced objects into the scene.
@@ -259,7 +290,7 @@ class ReferenceManagerSlots(ReferenceManager):
         self.ui.txt000.setText(self.current_workspace)
         self.update_current_dir(invalidate_and_refresh=True)
 
-    def refresh_file_list(self, invalidate=False):
+    def refresh_file_list(self, invalidate=False) -> None:
         """Refresh the file list based on the current filter text and workspace root."""
         if invalidate:
             self.invalidate_workspace_files()
@@ -320,7 +351,13 @@ class ReferenceManagerSlots(ReferenceManager):
 
         for namespace in namespaces_to_add:
             file_path = next(fp for ns, fp in selected_data if ns == namespace)
-            self.add_reference(namespace, file_path)
+            success = self.add_reference(namespace, file_path)
+            if not success:
+                # Uncheck the item if the reference could not be added
+                for item in selected_items:
+                    if item.text() == namespace:
+                        item.setSelected(False)
+                        break
 
     def unreference_all(self):
         """Slot to handle the unreference all button click."""

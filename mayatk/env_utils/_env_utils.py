@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+from typing import Dict, ClassVar
 
 try:
     import pymel.core as pm
@@ -9,19 +10,19 @@ except ImportError as error:
 import pythontk as ptk
 
 
-class Project(ptk.HelpMixin):
+class EnvUtils(ptk.HelpMixin):
     """ """
 
-    SCENE_UNIT_VALUES = [
-        "millimeter",
-        "centimeter",
-        "meter",
-        "kilometer",
-        "inch",
-        "foot",
-        "yard",
-        "mile",
-    ]
+    SCENE_UNIT_VALUES: ClassVar[Dict[str, str]] = {
+        "millimeter": "mm",
+        "centimeter": "cm",
+        "meter": "m",
+        "kilometer": "km",
+        "inch": "in",
+        "foot": "ft",
+        "yard": "yd",
+        "mile": "mi",
+    }
 
     @staticmethod
     def get_recent_files(index=None):

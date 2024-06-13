@@ -123,7 +123,7 @@ def __getattr__(name):
 included_modules = [
     "_core_utils",
     "components",
-    "project",
+    "_env_utils",
     "_display_utils",
     "_edit_utils",
     "_mat_utils",

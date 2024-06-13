@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from mayatk.core_utils.scene_exporter._scene_exporter import *
+from mayatk.env_utils.scene_exporter._scene_exporter import *
 
 # --------------------------------------------------------------------------------------------
 
