@@ -265,93 +265,128 @@ class MatUtils(ptk.HelpMixin):
         return objs_with_material
 
     @staticmethod
+    @ptk.filter_results
     def collect_material_paths(
-        materials=None, ignore: List[str] = None
-    ) -> List[Tuple[str, str, str]]:
-        """Collect the file paths of textures connected to the given materials.
+        materials: Optional[List[str]] = None,
+        attributes: Optional[List[str]] = None,
+        include_material: bool = False,
+        include_path_type: bool = False,
+    ) -> Union[List[str], List[Tuple[str, ...]]]:
+        """Collects specified attributes file paths for given materials.
 
         Parameters:
-            materials (List[str]): List of material names.
-            ignore (List[str], optional): List of strings to check if the file path ends with. Defaults to None.
+            materials (Optional[List[str]]): List of material names.
+            attributes (Optional[List[str]]): List of attributes to collect file paths from. Defaults to texture files.
+            include_material (bool): If True, include material name in the result.
+            include_path_type (bool): If True, include path type (Relative/Absolute) in the result.
 
         Returns:
-            List[Tuple[str, str, str]]: List of tuples containing the material name,
-                                        path type ('Relative' or 'Absolute'), and the file path.
+            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
         """
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
 
-        ignore = ignore or []
-        results = []
-        source_images_dir = CoreUtils.get_maya_info("sourceimages")
+        def strip_drive_and_filename(path: str) -> str:
+            """Strip the drive letter and filename from a given path."""
+            drive, path_without_drive = os.path.splitdrive(path)
+            directory = os.path.dirname(path_without_drive)
+            return directory.replace("\\", "/").lower()  # Normalize for comparison
+
+        materials = pm.ls(materials, mat=True) or pm.ls(mat=True)
+        attributes = attributes or ["fileTextureName"]
+
+        material_paths = []
+        project_sourceimages = CoreUtils.get_maya_info("sourceimages")
+
+        stripped_project_path = strip_drive_and_filename(project_sourceimages)
 
         for material in materials:
-            file_nodes = pm.listConnections(material, type="file")
-            if file_nodes:
+            for attr in attributes:
+                file_nodes = pm.listConnections(material, type="file")
                 for file_node in file_nodes:
-                    file_path = pm.getAttr(f"{file_node}.fileTextureName").strip()
-                    if file_path and not any(file_path.endswith(i) for i in ignore):
-                        if os.path.isabs(file_path):
-                            if file_path.startswith(source_images_dir):
-                                relative_path = os.path.relpath(
-                                    file_path, source_images_dir
-                                )
-                                results.append((material, "Relative", relative_path))
-                            else:
-                                results.append((material, "Absolute", file_path))
-                        else:
-                            results.append((material, "Relative", file_path))
+                    try:
+                        file_path = file_node.attr(attr).get()
+                        if not file_path:
+                            continue
 
-        return results
+                        # Strip the drive letter and filename
+                        stripped_file_path = strip_drive_and_filename(file_path)
+
+                        # Determine if the path is relative or absolute
+                        if stripped_file_path.startswith(stripped_project_path):
+                            path_type = "Relative"
+                            relative_path = os.path.relpath(
+                                file_path, project_sourceimages
+                            )
+                        else:
+                            path_type = "Absolute"
+                            relative_path = file_path
+
+                        entry = (relative_path,)
+                        if include_material:
+                            entry = (material,) + entry
+                        if include_path_type:
+                            entry = entry[:1] + (path_type,) + entry[1:]
+                        material_paths.append(entry)
+                    except pm.MayaAttributeError:
+                        continue
+
+        return material_paths
 
     @staticmethod
-    def get_material_properties(material: str) -> Dict[str, Any]:
-        """Get the properties of a given material including shader type, attributes, and texture paths.
+    def is_duplicate_material(material1: str, material2: str) -> bool:
+        """Check if two materials are duplicates based on their textures.
 
         Parameters:
-            material (str): The name of the material.
+            material1 (str): Name of the first material.
+            material2 (str): Name of the second material.
 
         Returns:
-            Dict[str, Any]: Dictionary containing the shader type, attributes, and texture paths.
+            bool: True if materials are duplicates, False otherwise.
         """
-        properties = {"shader_type": pm.nodeType(material), "attributes": {}}
-        common_attrs = [
-            "color",
-            "transparency",
-            "ambientColor",
-            "incandescence",
-            "specularColor",
-        ]
-        for attr in common_attrs:
-            if pm.attributeQuery(attr, node=material, exists=True):
-                properties["attributes"][attr] = pm.getAttr(f"{material}.{attr}")
-
-        file_textures = pm.listConnections(material, type="file")
-        texture_paths = [
-            pm.getAttr(f"{file}.fileTextureName") for file in file_textures
-        ]
-        properties["textures"] = sorted(texture_paths)
-
-        return properties
+        textures1 = set(pm.listConnections(pm.listHistory(material1), type="file"))
+        textures2 = set(pm.listConnections(pm.listHistory(material2), type="file"))
+        return textures1 == textures2
 
     @classmethod
-    def find_duplicate_materials(cls, materials=None) -> List[str]:
-        """Find duplicate materials based on their properties.
+    def find_materials_with_duplicate_textures(
+        cls, materials: Optional[List[object]] = None
+    ) -> Dict[object, List[object]]:
+        """Find duplicate materials based on their texture file paths.
 
         Parameters:
-            materials (List[str]): List of material names.
+            materials (Optional[List[pm.nodetypes.ShadingNode]]): List of material nodes.
 
         Returns:
-            List[str]: List of duplicate material names.
+            Dict[pm.nodetypes.ShadingNode, List[pm.nodetypes.ShadingNode]]: Dictionary mapping original material nodes to lists of duplicate material nodes.
         """
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
-        material_properties = [
-            cls.get_material_properties(material) for material in materials
-        ]
-        duplicates = []
-        for i, mat_props in enumerate(material_properties):
-            for j in range(i + 1, len(material_properties)):
-                if mat_props == material_properties[j]:
-                    duplicates.append(materials[j])
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        material_paths = cls.collect_material_paths(
+            materials, include_material=True, include_path_type=True
+        )
+
+        # Create a dictionary to track unique texture sets
+        material_textures: Dict[object, set] = {}
+        duplicates: Dict[object, List[object]] = {}
+
+        for material, _, file_name in material_paths:
+            if material not in material_textures:
+                material_textures[material] = set()
+            material_textures[material].add(file_name)
+
+        # Find duplicates using the is_duplicate method
+        texture_sets = {}
+        for material, textures in material_textures.items():
+            textures_tuple = tuple(sorted(textures))  # Sort to ensure consistency
+            if textures_tuple in texture_sets:
+                texture_sets[textures_tuple].append(material)
+            else:
+                texture_sets[textures_tuple] = [material]
+
+        for textures, materials in texture_sets.items():
+            if len(materials) > 1:
+                # Sort by name length first, then alphabetically
+                materials.sort(key=lambda x: (len(x.name()), x.name()))
+                original = materials[0]
+                duplicates[original] = materials[1:]  # All others are duplicates
 
         return duplicates
 
@@ -363,34 +398,25 @@ class MatUtils(ptk.HelpMixin):
         Parameters:
             materials (List[str]): List of material names.
         """
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
-        duplicates = cls.find_duplicate_materials(materials)
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        duplicate_to_original = cls.find_materials_with_duplicate_textures(materials)
 
-        # Create a mapping from duplicate to original
-        duplicate_to_original = {}
-        for duplicate in duplicates:
-            for material in materials:
-                if material != duplicate and cls.get_material_properties(
-                    material
-                ) == cls.get_material_properties(duplicate):
-                    duplicate_to_original[duplicate] = material
-                    break
+        for original, duplicates in duplicate_to_original.items():
+            for duplicate in duplicates:
+                # Find all objects assigned the duplicate material and reassign to the original material
+                shading_engines = pm.listConnections(duplicate, type="shadingEngine")
+                for shading_engine in shading_engines:
+                    connected_objects = pm.sets(shading_engine, query=True)
+                    if connected_objects:
+                        pm.hyperShade(objects=duplicate)
+                        pm.hyperShade(assign=original)
+                        print(
+                            f"Reassigned {len(connected_objects)} objects from {duplicate} to {original}"
+                        )
 
-        for duplicate, original in duplicate_to_original.items():
-            # Find all objects assigned the duplicate material and reassign to the original material
-            shading_engines = pm.listConnections(duplicate, type="shadingEngine")
-            for shading_engine in shading_engines:
-                connected_objects = pm.sets(shading_engine, query=True)
-                if connected_objects:
-                    pm.hyperShade(objects=duplicate)
-                    pm.hyperShade(assign=original)
-                    print(
-                        f"Reassigned {len(connected_objects)} objects from {duplicate} to {original}"
-                    )
-
-            # Remove the duplicate material
-            pm.delete(duplicate)
-            print(f"Deleted duplicate material: {duplicate}")
+                # Remove the duplicate material
+                pm.delete(duplicate)
+                print(f"Deleted duplicate material: {duplicate}")
 
     @staticmethod
     def filter_materials_by_objects(objects: List[str]) -> List[str]:
@@ -416,29 +442,20 @@ class MatUtils(ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undo
     def convert_to_relative_paths(
-        materials=None,
-        copy_missing_files: bool = False,
-        use_workspace_drive: bool = False,
+        items: Optional[List[str]] = None,
     ) -> None:
         """Convert absolute file paths to relative paths for file texture nodes.
 
         This function processes file texture nodes to convert their
         absolute file paths to relative paths based on the current workspace's 'sourceimages' directory.
-        If the file does not exist in the 'sourceimages' directory, it can optionally copy the file from
-        the absolute path and use the drive letter of the current workspace.
 
         Parameters:
-            materials (List[str], optional): List of material names to filter. If None, all materials are processed.
-            copy_missing_files (bool): If True, attempts to copy missing files to the 'sourceimages' directory if they do not exist.
-            use_workspace_drive (bool): If True, substitutes the drive letter of the absolute path with the drive letter of the current workspace.
+            items (List[str], optional): List of material or file node names to filter. If None, all items are processed.
 
         Raises:
             FileNotFoundError: If the 'sourceimages' directory does not exist.
         """
-        import shutil
-
-        workspace_path = pm.workspace.path
-        sourceimages_path = os.path.join(workspace_path, "sourceimages")
+        sourceimages_path = CoreUtils.get_maya_info("sourceimages")
 
         if not os.path.exists(sourceimages_path):
             raise FileNotFoundError(
@@ -447,56 +464,40 @@ class MatUtils(ptk.HelpMixin):
 
         absolute_paths_found = False
 
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
+        # Get all materials and file nodes if items are not provided
+        if not items:
+            items = pm.ls(type="file")
 
-        for material in materials:
-            file_nodes = pm.listConnections(material, type="file")
+        file_nodes = []
+        for item in items:
+            if pm.nodeType(item) == "file":
+                file_nodes.append(item)
+            else:  # Assume it's a material and find connected file nodes
+                file_nodes.extend(pm.listConnections(item, type="file"))
 
-            for file_node in file_nodes:
-                file_path = file_node.fileTextureName.get()
+        # Remove duplicates
+        file_nodes = list(set(file_nodes))
+        for file_node in file_nodes:
+            file_path = file_node.fileTextureName.get()
 
-                file_name = os.path.basename(file_path)
-                relative_path = os.path.join("sourceimages", file_name)
-                expected_relative_path = os.path.join(sourceimages_path, file_name)
+            file_name = os.path.basename(file_path)
+            relative_path = os.path.join("sourceimages", file_name)
+            expected_relative_path = os.path.join(sourceimages_path, file_name)
 
-                # Check if the file path is already relative by comparing with the expected relative path
-                if os.path.abspath(file_path) == os.path.abspath(
-                    expected_relative_path
-                ):
-                    # Silently set the relative path just to be safe.
-                    file_node.fileTextureName.set(relative_path)
-                    continue
+            # Check if the file path is already relative by comparing with the expected relative path
+            if os.path.abspath(file_path) == os.path.abspath(expected_relative_path):
+                # Silently set the relative path just to be safe.
+                file_node.fileTextureName.set(relative_path)
+                continue
 
-                absolute_paths_found = True
+            absolute_paths_found = True
 
-                # Convert to relative path
-                if os.path.isabs(file_path):
-                    if os.path.exists(os.path.join(sourceimages_path, file_name)):
-                        file_node.fileTextureName.set(relative_path)
-                        print(
-                            f"Set relative path for node {file_node}: {relative_path}"
-                        )
-                    else:
-                        if copy_missing_files and os.path.exists(file_path):
-                            shutil.copy(file_path, sourceimages_path)
-                            file_node.fileTextureName.set(relative_path)
-                            print(
-                                f"Copied and set relative path for node {file_node}: {relative_path}"
-                            )
-                        elif copy_missing_files:
-                            print(f"File not found to copy: {file_path}")
-
-                        if use_workspace_drive:
-                            workspace_drive_letter = workspace_path[0]
-                            absolute_drive_letter = file_path[0]
-                            new_file_path = file_path.replace(
-                                absolute_drive_letter, workspace_drive_letter, 1
-                            )  # Check if path needs to be updated
-                            if file_path != new_file_path:
-                                file_node.fileTextureName.set(new_file_path)
-                                print(
-                                    f"Set new file path for node {file_node} using workspace drive: {new_file_path}"
-                                )
+            # Convert to relative path
+            if os.path.isabs(file_path) and os.path.exists(
+                os.path.join(sourceimages_path, file_name)
+            ):
+                file_node.fileTextureName.set(relative_path)
+                print(f"Set relative path for node {file_node}: {relative_path}")
 
         if not absolute_paths_found:
             print("No absolute paths found.")
@@ -520,7 +521,7 @@ class MatUtils(ptk.HelpMixin):
             refresh_viewport (bool): Whether to refresh the viewport.
             refresh_hypershade (bool): Whether to refresh the Hypershade panel.
         """
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
 
         texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
         file_nodes = []
