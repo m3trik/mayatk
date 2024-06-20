@@ -10,8 +10,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import node_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 
 
 class DisplayUtils(ptk.HelpMixin):
@@ -35,7 +35,7 @@ class DisplayUtils(ptk.HelpMixin):
         def wrapped(*args, **kwargs) -> Any:
             result = func(*args, **kwargs)
             if result:
-                transforms = node_utils.NodeUtils.get_transform_node(result)
+                transforms = NodeUtils.get_transform_node(result)
                 DisplayUtils.add_to_isolation_set(transforms)
             return result
 
@@ -57,7 +57,7 @@ class DisplayUtils(ptk.HelpMixin):
             return False
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def set_visibility(
         cls,
         elements: Union[str, object, List],
@@ -122,27 +122,29 @@ class DisplayUtils(ptk.HelpMixin):
 
     @classmethod
     def get_visible_geometry(
-        cls, transforms: bool = True, include_templated: bool = False
+        cls, shapes: bool = False, include_templated: bool = False
     ) -> List[object]:
         """Get a list of visible geometry.
 
         Parameters:
-            transforms (bool): Return transform nodes instead of shapes. Default is True.
+            shapes (bool): Return shape nodes instead of transforms. Default is False.
             include_templated (bool): Include templated geometry in the result.
 
         Returns:
             List[pm.PyNode]: A list of visible nodes of the specified type.
         """
-        # Get visible geometries (shape nodes)
-        result = pm.ls(geometry=True, visible=True)
-
-        if transforms:  # Get transform nodes of the visible shapes
-            result = pm.listRelatives(
-                result, parent=True, type="transform", fullPath=True
-            )
+        if shapes:
+            result = pm.ls(geometry=True, visible=True)
+        else:  # Transforms
+            result = [
+                n
+                for n in pm.ls(type="transform")
+                if n.visibility.get() and n.getShapes()
+            ]
 
         if not include_templated:
             result = [node for node in result if not cls.is_templated(node)]
+
         return result
 
     @staticmethod

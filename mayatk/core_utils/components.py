@@ -1234,37 +1234,36 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return dct
 
     @classmethod
-    def get_normal_angle(cls, edge):
-        """Get the angle between the normals of the two faces connected by an edge.
+    def get_normal_angle(
+        cls, edges: Union[object, List[object]]
+    ) -> Union[float, List[float]]:
+        """Get the angle between the normals of the faces connected by one or more edges.
 
         Parameters:
-            edge (MeshEdge): The edge to get the normal angle of.
+            edges (str/obj/list): The edge or edges to get the normal angles of.
 
         Returns:
-            float: The angle between the normals of the two faces connected by the edge, in degrees.
-
-        Raises:
-            TypeError: If the input edge is not a MeshEdge.
+            float or List[float]: The angle(s) between the normals of the faces connected by the edge(s), in degrees.
+            Returns a list when a list is given.
         """
         import math
 
-        if not isinstance(edge, pm.general.MeshEdge):
-            raise TypeError(f"Input must be a MeshEdge, got {type(edge)}.")
+        def calculate_angle(edge: pm.general.MeshEdge) -> float:
+            connected_faces = list(edge.connectedFaces())
+            if len(connected_faces) != 2:
+                return 0
 
-        # Get the faces connected by the edge
-        connected_faces = list(edge.connectedFaces())
-        if len(connected_faces) != 2:
-            return 0
+            normal1 = cls.get_normal(connected_faces[0])
+            normal2 = cls.get_normal(connected_faces[1])
+            angle = normal1.angle(normal2)
+            return math.degrees(angle)
 
-        # Get the normals of the faces
-        normal1 = cls.get_normal(connected_faces[0])
-        normal2 = cls.get_normal(connected_faces[1])
-        # Calculate the angle between the normals
-        angle = normal1.angle(normal2)
-        # Convert the angle from radians to degrees
-        angle = math.degrees(angle)
-
-        return angle
+        result = [
+            calculate_angle(e)
+            for e in pm.ls(edges)
+            if isinstance(e, pm.general.MeshEdge)
+        ]
+        return ptk.format_return(result, edges)
 
     @classmethod
     def get_edges_by_normal_angle(
@@ -1283,32 +1282,29 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         Returns:
             A list of polygon edges that have normals within the specified angle range.
         """
-        if not isinstance(objects, list):
-            objects = [objects]  # Ensure objects is a list for consistent processing
-
         edges = []
-        for obj in objects:
-            if isinstance(obj, str):  # Handle string input
-                obj = pm.ls(obj)[0]
-
-            if isinstance(obj, pm.general.MeshEdge):  # Directly add if it's an edge
+        for obj in pm.ls(objects):
+            if isinstance(obj, pm.general.MeshEdge):
                 edges.append(obj)
-            elif isinstance(
-                obj, (pm.nt.Transform, pm.nt.Mesh)
-            ):  # Extract edges from mesh or transform
-                if isinstance(obj, pm.nt.Transform):
-                    obj = obj.getShape()
-                if obj:  # Check if the shape is valid
-                    for edge in obj.edges:
-                        angle = cls.get_normal_angle(edge)
-                        if low_angle <= angle <= high_angle:
-                            edges.append(edge)
+            elif isinstance(obj, pm.nt.Transform):
+                obj = obj.getShape()
+                if obj and isinstance(obj, pm.nt.Mesh):
+                    edges.extend(obj.edges)
+            elif isinstance(obj, pm.nt.Mesh):
+                edges.extend(obj.edges)
             else:
                 raise TypeError(
-                    f"Unsupported type {type(obj)}. Expected string, Transform, Mesh, or MeshEdge."
+                    f"Unsupported type {type(obj)}. Expected Transform, Mesh, or MeshEdge."
                 )
 
-        return edges
+        # Filter edges by normal angle
+        filtered_edges = [
+            edge
+            for edge in edges
+            if low_angle <= cls.get_normal_angle(edge) <= high_angle
+        ]
+
+        return filtered_edges
 
     @classmethod
     @core_utils.CoreUtils.undo

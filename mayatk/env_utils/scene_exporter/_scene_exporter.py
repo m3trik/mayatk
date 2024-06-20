@@ -27,7 +27,6 @@ class SceneExporterMixin:
     def check_all_paths_relative(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering check_all_paths_relative")
             all_relative = True
             if self.check_absolute_paths:
                 for mat, typ, pth in self.material_paths:
@@ -50,7 +49,6 @@ class SceneExporterMixin:
     def check_for_duplicate_materials(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering check_for_duplicate_materials")
             if self.check_duplicate_materials:
                 duplicate_mapping = MatUtils.find_materials_with_duplicate_textures(
                     self.materials
@@ -72,7 +70,6 @@ class SceneExporterMixin:
     def check_for_referenced_objects(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering check_for_referenced_objects")
             if self.check_referenced_objects:
                 referenced_objects = pm.ls(self.objects, references=True)
                 if referenced_objects:
@@ -86,10 +83,31 @@ class SceneExporterMixin:
         return wrapper
 
     @staticmethod
+    def check_hidden_geometry_with_keys(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if self.check_hidden_geometry_with_keys:
+                hidden_geometry = [
+                    node
+                    for node in AnimUtils.filter_objects_with_keys(keys="visibility")
+                    if not node.visibility.get()
+                ]
+                if hidden_geometry:
+                    self.logger.error(
+                        "Hidden geometry with visibility keys set to False found:"
+                    )
+                    for geom in hidden_geometry:
+                        self.logger.error(f"\t{geom}")
+                    return
+                self.logger.debug("check_hidden_geometry_with_keys passed")
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    @staticmethod
     def temporary_workspace(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering temporary_workspace")
             original_workspace = pm.workspace(query=True, rootDirectory=True)
             new_workspace = EnvUtils.find_workspace_using_path()
             if (
@@ -113,7 +131,6 @@ class SceneExporterMixin:
     def temporary_scene_units(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering temporary_scene_units")
             original_linear_unit = pm.currentUnit(query=True, linear=True)
             if self.temp_linear_unit:
                 self.logger.info(
@@ -132,7 +149,6 @@ class SceneExporterMixin:
     def temporary_framerate(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering temporary_framerate")
             original_time_unit = pm.currentUnit(query=True, time=True)
             if self.temp_time_unit:
                 self.logger.info(
@@ -155,7 +171,6 @@ class SceneExporterMixin:
     def apply_preset(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.logger.debug("Entering apply_preset")
             if self.preset:
                 self.logger.debug(f"Applying preset: {self.preset}")
                 self.load_fbx_export_preset(self.preset)
@@ -178,7 +193,6 @@ class SceneExporterMixin:
     def batch_export(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, batch: Optional[List[str]] = None, *args, **kwargs):
-            self.logger.debug("Entering batch_export")
             if batch:
                 for scene_path in batch:
                     if os.path.exists(scene_path):
@@ -223,7 +237,8 @@ class SceneExporter(SceneExporterMixin):
         exclude_materials: List[str] = [],
         check_absolute_paths: bool = False,
         check_duplicate_materials: bool = False,
-        remove_duplicate_materials: bool = False,
+        reassign_duplicate_materials: bool = False,
+        check_hidden_geometry_with_keys: bool = False,
         check_referenced_objects: bool = False,
         log_level: int = logging.INFO,
         log_handler: Optional[logging.Handler] = None,
@@ -239,7 +254,8 @@ class SceneExporter(SceneExporterMixin):
         self.create_log_file = create_log_file
         self.check_absolute_paths = check_absolute_paths
         self.check_duplicate_materials = check_duplicate_materials
-        self.remove_duplicate_materials = remove_duplicate_materials
+        self.reassign_duplicate_materials = reassign_duplicate_materials
+        self.check_hidden_geometry_with_keys = check_hidden_geometry_with_keys
         self.check_referenced_objects = check_referenced_objects
         self.convert_to_relative_paths = convert_to_relative_paths
         self.delete_unused_materials = delete_unused_materials
@@ -275,9 +291,9 @@ class SceneExporter(SceneExporterMixin):
             nested_as_unit=True,
         )
 
-        if self.remove_duplicate_materials:
+        if self.reassign_duplicate_materials:
             self.logger.debug("Reassigning duplicate materials")
-            MatUtils.remove_and_reassign_duplicates(self.materials)
+            MatUtils.reassign_duplicates(self.materials)
 
         if self.delete_unused_materials:
             self.logger.debug("Deleting unused materials")
@@ -360,6 +376,7 @@ class SceneExporter(SceneExporterMixin):
     @SceneExporterMixin.temporary_framerate
     @SceneExporterMixin.check_all_paths_relative
     @SceneExporterMixin.check_for_duplicate_materials
+    @SceneExporterMixin.check_hidden_geometry_with_keys
     @SceneExporterMixin.check_for_referenced_objects
     @SceneExporterMixin.apply_preset
     def export(self, **kwargs) -> None:
@@ -461,6 +478,8 @@ class SceneExporterSlots(SceneExporter):
         )
         self.setup_logging_redirect(self.ui.txt003)
 
+        self.ui.set_persistent_value("PRESET_DIR", owner=self, default=self.PRESET_DIR)
+
     def setup_logging_redirect(self, widget: object) -> None:
         handler = TextEditHandler(widget)
         handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
@@ -541,42 +560,10 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    def b000(self) -> None:
-        """Export"""
-        self.ui.txt003.clear()
-        self.logger.info("Starting export process ..")
-
-        self.export(
-            objects=pm.selected() or DisplayUtils.get_visible_geometry,
-            export_dir=self.ui.txt000.text(),
-            preset=self.ui.cmb000.currentData(),
-            output_name=self.ui.txt001.text(),
-            name_regex=self.ui.txt002.text(),
-            timestamp=self.ui.chk004.isChecked(),
-            temp_linear_unit=self.ui.cmb001.currentData(),
-            temp_time_unit=self.ui.cmb002.currentData(),
-            temp_workspace=self.ui.chk006.isChecked(),
-            create_log_file=self.ui.chk005.isChecked(),
-            convert_to_relative_paths=self.ui.chk007.isChecked(),
-            delete_unused_materials=self.ui.chk008.isChecked(),
-            check_absolute_paths=self.ui.chk003.isChecked(),
-            check_duplicate_materials=self.ui.chk001.isChecked(),
-            remove_duplicate_materials=self.ui.chk009.isChecked(),
-            check_referenced_objects=self.ui.chk002.isChecked(),
-            exclude_materials=["*.dds", "ibl_brdf_lut.png"],
-            log_level=logging.DEBUG,
-        )
-
-    def b001_init(self, widget) -> None:
+    def b000_init(self, widget) -> None:
         """Export Settings"""
         widget.menu.setTitle("Export Settings")
         widget.menu.mode = "popup"
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Delete unassigned material nodes before export.",
-            setText="Delete Unused Materials",
-            setObjectName="chk008",
-        )
         widget.menu.add(
             "QCheckBox",
             setToolTip="Check for duplicate materials.",
@@ -585,9 +572,21 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QCheckBox",
-            setToolTip="Delete and reassign any duplicate materials.",
+            setToolTip="Reassign any duplicate materials to a single material.",
             setText="Reassign Duplicate Materials",
             setObjectName="chk009",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setToolTip="Delete unassigned material nodes.",
+            setText="Delete Unused Materials",
+            setObjectName="chk008",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setToolTip="Check for hidden geometry with visibility keys set to False.",
+            setText="Check for Hidden Keyed Geometry",
+            setObjectName="chk010",
         )
         widget.menu.add(
             "QCheckBox",
@@ -619,6 +618,7 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="cmb001",
         )
         items = ptk.insert_into_dict(EnvUtils.SCENE_UNIT_VALUES, "OFF", None)
+        items = {f"Override Linear Unit: {key}": value for key, value in items.items()}
         widget.menu.cmb001.add(items)
         widget.menu.add(
             self.sb.ComboBox,
@@ -629,12 +629,52 @@ class SceneExporterSlots(SceneExporter):
             f"{value} fps": key for key, value in AnimUtils.FRAME_RATE_VALUES.items()
         }
         items = ptk.insert_into_dict(inverted_values, "OFF", None)
+        items = {f"Override Time Unit: {key}": value for key, value in items.items()}
         widget.menu.cmb002.add(items)
         widget.menu.add(
             "QCheckBox",
             setToolTip="Export a log file along with the fbx.",
             setText="Create Log File",
             setObjectName="chk005",
+        )
+        widget.menu.add(
+            self.sb.ComboBox,
+            setToolTip="Set the log level.",
+            setObjectName="cmb003",
+        )
+        items = {
+            "Log Level: DEBUG": logging.DEBUG,
+            "Log Level: INFO": logging.INFO,
+            "Log Level: WARNING": logging.WARNING,
+            "Log Level: ERROR": logging.ERROR,
+        }
+        widget.menu.cmb003.add(items)
+
+    def b001(self) -> None:
+        """Export"""
+        self.ui.txt003.clear()
+        self.logger.info("Starting export process ..")
+
+        self.export(
+            objects=pm.selected() or DisplayUtils.get_visible_geometry,
+            export_dir=self.ui.txt000.text(),
+            preset=self.ui.cmb000.currentData(),
+            output_name=self.ui.txt001.text(),
+            name_regex=self.ui.txt002.text(),
+            timestamp=self.ui.chk004.isChecked(),
+            temp_linear_unit=self.ui.cmb001.currentData(),
+            temp_time_unit=self.ui.cmb002.currentData(),
+            temp_workspace=self.ui.chk006.isChecked(),
+            create_log_file=self.ui.chk005.isChecked(),
+            convert_to_relative_paths=self.ui.chk007.isChecked(),
+            delete_unused_materials=self.ui.chk008.isChecked(),
+            check_absolute_paths=self.ui.chk003.isChecked(),
+            check_duplicate_materials=self.ui.chk001.isChecked(),
+            reassign_duplicate_materials=self.ui.chk009.isChecked(),
+            check_hidden_geometry_with_keys=self.ui.chk010.isChecked(),
+            check_referenced_objects=self.ui.chk002.isChecked(),
+            exclude_materials=["*.dds", "ibl_brdf_lut.png"],
+            log_level=self.ui.cmb003.currentData(),
         )
 
     def b002(self) -> None:
@@ -671,7 +711,8 @@ class SceneExporterSlots(SceneExporter):
     def b005(self) -> None:
         """Set Preset Directory"""
         preset_dir = self.sb.dir_dialog(
-            title="Select the preset directory:", start_dir=self.PRESET_DIR
+            title="Select a directory containing export presets:",
+            start_dir=self.PRESET_DIR,
         )
         if preset_dir:
             self.PRESET_DIR = preset_dir

@@ -201,7 +201,9 @@ class MatUtils(ptk.HelpMixin):
             pm.sets(shading_group, forceElement=obj)
 
     @classmethod
-    def find_by_mat_id(cls, material, objects=None, shell=False):
+    def find_by_mat_id(
+        cls, material: str, objects: List[str] = None, shell: bool = False
+    ) -> List[str]:
         """Find objects or faces by the material ID in a 3D scene.
 
         This function takes as input a material and a set of objects (or entire scene by default) and
@@ -217,7 +219,7 @@ class MatUtils(ptk.HelpMixin):
             cls: The class object. This argument is implicitly passed and doesn't need to be provided by the user.
             material (str): The material (e.g. 'lambert1') used to find the associated objects/faces.
             objects (list, optional): List of objects (e.g. ['pCube1', 'pCube2']) to be considered.
-                                      If not provided, all objects in the scene will be considered.
+                                    If not provided, all objects in the scene will be considered.
             shell (bool, optional): Determines whether to return complete objects (True) or individual faces (False).
                                     Default is False.
 
@@ -226,15 +228,21 @@ class MatUtils(ptk.HelpMixin):
 
         Returns:
             list: A list of objects or faces (depending on 'shell' parameter) that are associated with the input material.
-
         """
         if pm.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
             )
+
+        if not pm.objExists(material):
+            print(f"Material '{material}' does not exist.")
+            return []
+
         # If objects are not specified, consider all objects in the scene
+        objects = pm.ls(objects) or pm.ls(geometry=True)  # Get all mesh objects
         if not objects:
-            objects = pm.ls(geometry=True)  # Get all mesh objects
+            print("No objects found in the scene.")
+            return []
 
         # Convert mesh shapes to transform nodes
         objects = NodeUtils.get_transform_node(objects)
@@ -242,25 +250,28 @@ class MatUtils(ptk.HelpMixin):
         # Find the shading groups associated with the material
         shading_groups = pm.listConnections(material, type="shadingEngine")
 
+        if not shading_groups:
+            print(f"No shading groups found for material '{material}'.")
+            return []
+
         objs_with_material = []
         for sg in shading_groups:
             connected_objs = pm.sets(sg, query=True, noIntermediate=True)
-            flattened = pm.ls(connected_objs, flatten=True)
-            # Only add objects to the list if they are in the specified objects list
-            for obj in flattened:
-                transform_node = NodeUtils.get_transform_node(obj)
-                if transform_node in objects:
-                    # Check if the object is a face. If not, convert to faces
-                    if not isinstance(obj, pm.MeshFace):
-                        shape_node = pm.listRelatives(transform_node, shapes=True)[0]
-                        face_count = pm.polyEvaluate(shape_node, f=True)
-                        faces = [f"{shape_node}.f[{i}]" for i in range(face_count)]
-                        objs_with_material.extend(faces)
-                    else:
-                        objs_with_material.append(obj)
+            if connected_objs:
+                for obj in connected_objs:
+                    if pm.nodeType(obj) == "transform":
+                        shape_nodes = pm.listRelatives(obj, shapes=True)
+                        for shape in shape_nodes:
+                            faces = pm.sets(sg, query=True, noIntermediate=True)
+                            if faces:
+                                objs_with_material.extend(faces)
+                    elif pm.nodeType(obj) == "mesh":
+                        faces = pm.sets(sg, query=True, noIntermediate=True)
+                        if faces:
+                            objs_with_material.extend(faces)
 
         if shell:
-            objs_with_material = set(pm.ls(objs_with_material, objectsOnly=True))
+            objs_with_material = list(set(pm.ls(objs_with_material, objectsOnly=True)))
 
         return objs_with_material
 
@@ -392,31 +403,42 @@ class MatUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undo
-    def remove_and_reassign_duplicates(cls, materials: List[str] = None) -> None:
+    def reassign_duplicates(
+        cls, materials: List[str] = None, delete: bool = False
+    ) -> None:
         """Find duplicate materials, remove duplicates, and reassign them to the original material.
 
         Parameters:
             materials (List[str]): List of material names.
+            delete (bool): Whether to delete the duplicate materials after reassignment.
         """
         materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
         duplicate_to_original = cls.find_materials_with_duplicate_textures(materials)
+        duplicates_to_delete = []
 
         for original, duplicates in duplicate_to_original.items():
             for duplicate in duplicates:
-                # Find all objects assigned the duplicate material and reassign to the original material
-                shading_engines = pm.listConnections(duplicate, type="shadingEngine")
-                for shading_engine in shading_engines:
-                    connected_objects = pm.sets(shading_engine, query=True)
-                    if connected_objects:
-                        pm.hyperShade(objects=duplicate)
-                        pm.hyperShade(assign=original)
+                try:  # Find all faces assigned the duplicate material and reassign to the original material
+                    faces_with_duplicate = cls.find_by_mat_id(duplicate, shell=False)
+                    print("faces_with_duplicate:", faces_with_duplicate)
+                    if faces_with_duplicate:
+                        pm.hyperShade(assign=original, objects=faces_with_duplicate)
                         print(
-                            f"Reassigned {len(connected_objects)} objects from {duplicate} to {original}"
+                            f"Reassigned material from {duplicate} to {original} on faces: {faces_with_duplicate}"
                         )
+                        # Add the duplicate material to the deletion list
+                        duplicates_to_delete.append(duplicate)
+                except pm.MayaAttributeError as e:
+                    print(f"Error processing material {duplicate}: {e}")
+                    continue
 
-                # Remove the duplicate material
-                pm.delete(duplicate)
-                print(f"Deleted duplicate material: {duplicate}")
+        if delete:  # Delete all duplicate materials after reassignments
+            for duplicate in duplicates_to_delete:
+                try:
+                    pm.delete(duplicate)
+                    print(f"Deleted duplicate material: {duplicate}")
+                except pm.MayaAttributeError as e:
+                    print(f"Error deleting material {duplicate}: {e}")
 
     @staticmethod
     def filter_materials_by_objects(objects: List[str]) -> List[str]:
@@ -563,6 +585,40 @@ class MatUtils(ptk.HelpMixin):
             pm.mel.eval(
                 'hypershadePanelMenuCommand("hyperShadePanel1", "refreshAllSwatches");'
             )
+
+    @staticmethod
+    def move_unused_textures(source_dir: str = None, output_dir: str = None) -> None:
+        """Move unused textures to a specified directory.
+
+        Parameters:
+            source_dir (str): The directory to search for textures. Default is Maya's sourceimages directory.
+            output_dir (str): The directory to move unused textures to. Default is a subfolder 'unused' in sourceimages.
+        """
+        import shutil
+
+        project_sourceimages = source_dir or CoreUtils.get_maya_info("sourceimages")
+        unused_folder = output_dir or os.path.join(project_sourceimages, "unused")
+
+        if not os.path.exists(unused_folder):
+            os.makedirs(unused_folder)
+
+        all_textures = {
+            file
+            for file in os.listdir(project_sourceimages)
+            if os.path.isfile(os.path.join(project_sourceimages, file))
+        }
+        used_textures = {
+            os.path.basename(path[0]) for path in MatUtils.collect_material_paths()
+        }
+
+        unused_textures = all_textures - used_textures
+
+        print(f"Moving {len(unused_textures)} to: {output_dir} ..")
+        for texture in unused_textures:
+            src_path = os.path.join(project_sourceimages, texture)
+            dest_path = os.path.join(unused_folder, texture)
+            shutil.move(src_path, dest_path)
+            print(f"Moved {texture} to {unused_folder}")
 
     @staticmethod
     def get_mat_swatch_icon(

@@ -127,7 +127,7 @@
           </widget>
          </item>
          <item>
-          <widget class="PushButton" name="b001">
+          <widget class="PushButton" name="b000">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -140,7 +140,7 @@
           </widget>
          </item>
          <item>
-          <widget class="QPushButton" name="b000">
+          <widget class="QPushButton" name="b001">
            <property name="minimumSize">
             <size>
              <width>0</width>

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Dict, ClassVar, Optional
+from typing import List, Dict, ClassVar, Optional, Union
 
 try:
     import pymel.core as pm
@@ -82,6 +82,39 @@ class AnimUtils(ptk.HelpMixin):
                 attr_full_name = f"{obj}.{attr}"
                 for time in target_times:
                     pm.setKeyframe(attr_full_name, time=time, value=value)
+
+    @staticmethod
+    def filter_objects_with_keys(
+        objects: Optional[Union[str, List[str]]] = None,
+        keys: Optional[List[str]] = None,
+    ) -> List[pm.nt.Transform]:
+        """Filter the given objects for those with specific keys set. If no objects are given, use all scene objects. If no specific keys are given, check all keys.
+
+        Parameters:
+            objects: The objects (or their names) to filter. Can be a single object or a list of objects. If None, all scene objects are used.
+            keys: Specific keys to check for. If none are provided, all keys are checked.
+
+        Returns:
+            List of transforms with the specified keys set.
+        """
+        if objects is None:
+            objects = pm.ls(type="transform")
+        else:
+            objects = pm.ls(objects, type="transform")
+
+        if keys is None:
+            keys = pm.listAttr(objects, keyable=True)
+
+        filtered_objects = []
+        for obj in objects:
+            for key in ptk.make_iterable(keys):
+                if obj.hasAttr(key):
+                    attr = obj.attr(key)
+                    if pm.keyframe(attr, query=True, name=True):
+                        filtered_objects.append(obj)
+                        break  # No need to check other keys if one is found
+
+        return filtered_objects
 
     @staticmethod
     @core_utils.CoreUtils.undo
