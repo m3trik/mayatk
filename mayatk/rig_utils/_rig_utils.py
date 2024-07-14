@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union
+from typing import List, Tuple, Union
 
 try:
     import pymel.core as pm
@@ -11,29 +11,42 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.xform_utils import XformUtils
 
 
 class RigUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    def create_locator(name=None, pos=(), scale=1):
+    def create_locator(*, scale: float = 1, **kwargs) -> object:
         """Create a locator with the given scale.
 
         Parameters:
-            name (str): Name the locator.
-            pos (tuple): The desired location in world space.
-            scale (float) = The desired scale of the locator.
+            scale (float): The desired scale of the locator.
+            **kwargs: Additional keyword arguments for the spaceLocator command, including 'name' and 'position'.
+
+        Special Handling:
+            If 'position' is provided in kwargs and it is not a tuple or list, it is assumed to be an object.
+            The method attempts to get the world space position of this object to use as the locator's position.
+            If the position cannot be resolved, it is removed from kwargs.
 
         Returns:
-            (obj) locator
+            pm.nt.Transform: The created locator transform node.
         """
-        loc = pm.spaceLocator()
+        pos = kwargs.get("position")
 
-        if name:
-            pm.rename(loc, name)
-        if pos:
-            pm.move(pos[0], pos[1], pos[2], loc)
+        if pos is not None:
+            if not isinstance(pos, (tuple, list)):
+                transform_node = NodeUtils.get_transform_node(pos)
+                if transform_node:
+                    kwargs["position"] = pm.xform(
+                        transform_node[0], q=True, ws=True, t=True
+                    )
+                else:
+                    kwargs.pop("position", None)
+
+        loc = pm.spaceLocator(**{k: v for k, v in kwargs.items() if v is not None})
+
         if scale != 1:
             pm.scale(loc, scale, scale, scale)  # scale the locator
 
@@ -87,109 +100,6 @@ class RigUtils(ptk.HelpMixin):
 
             # remove locator
             pm.delete(obj)
-
-    @staticmethod
-    def reset_pivot_transforms(objects):
-        """Reset Pivot Transforms"""
-        objs = pm.ls(type=("transform", "geometryShape"), sl=1)
-
-        if len(objs) > 0:
-            pm.xform(cp=1)
-
-        pm.manipPivot(ro=1, rp=1)
-
-    @staticmethod
-    @CoreUtils.undo
-    def bake_pivot(
-        objects: list[str],
-        position: bool = False,
-        orientation: bool = False,
-        delete_history: bool = True,
-    ) -> None:
-        """Bakes the pivot of the given objects.
-
-        Parameters:
-            objects (list[str]): List of objects to bake the pivot for.
-            position (bool): Whether to bake the pivot position.
-            orientation (bool): Whether to bake the pivot orientation.
-            delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
-        """
-        if delete_history:
-            pm.bakePartialHistory(objects, prePostDeformers=True)
-
-        transforms = pm.ls(objects, objectsOnly=True, transforms=True, flatten=True)
-        shapes = NodeUtils.get_shape_node(transforms)
-        objects = transforms + pm.listRelatives(
-            shapes, path=True, parent=True, type="transform"
-        )
-
-        ctx = pm.currentCtx()
-        pivotModeActive = False
-        customModeActive = False
-        customOri = []
-
-        if ctx in ("RotateSuperContext", "manipRotateContext"):
-            customOri = pm.manipRotateContext("Rotate", q=True, orientAxes=True)
-            pivotModeActive = pm.manipRotateContext(
-                "Rotate", q=True, editPivotMode=True
-            )
-            customModeActive = pm.manipRotateContext("Rotate", q=True, mode=True) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):
-            customOri = pm.manipScaleContext("Scale", q=True, orientAxes=True)
-            pivotModeActive = pm.manipScaleContext("Scale", q=True, editPivotMode=True)
-            customModeActive = pm.manipScaleContext("Scale", q=True, mode=True) == 6
-        else:
-            customOri = pm.manipMoveContext("Move", q=True, orientAxes=True)
-            pivotModeActive = pm.manipMoveContext("Move", q=True, editPivotMode=True)
-            customModeActive = pm.manipMoveContext("Move", q=True, mode=True) == 6
-
-        if orientation and customModeActive:
-            if not position:
-                pm.mel.error(
-                    pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError")
-                )
-                return
-
-            from math import degrees
-
-            customOri = [degrees(ori) for ori in customOri]
-            pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
-
-        if position:
-            for obj in objects:
-                m = pm.xform(obj, q=True, m=True)
-                p = pm.xform(obj, q=True, os=True, sp=True)
-                oldPivot = [
-                    p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
-                    p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
-                    p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
-                ]
-
-                pm.xform(obj, zeroTransformPivots=True)
-                newPivot = pm.getAttr(f"{obj.name()}.translate")
-                pm.move(
-                    obj,
-                    oldPivot[0] - newPivot[0],
-                    oldPivot[1] - newPivot[1],
-                    oldPivot[2] - newPivot[2],
-                    pcp=True,
-                    pgp=True,
-                    ls=True,
-                    r=True,
-                )
-
-        if pivotModeActive:
-            pm.ctxEditMode()
-
-        if orientation and customModeActive:
-            if ctx in ("RotateSuperContext", "manipRotateContext"):
-                pm.manipPivot(rotateToolOri=0)
-            elif ctx in ("scaleSuperContext", "manipScaleContext"):
-                pm.manipPivot(scaleToolOri=0)
-            else:
-                pm.manipPivot(moveToolOri=0)
-                if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=True)
 
     @classmethod
     @CoreUtils.undo
@@ -274,9 +184,9 @@ class RigUtils(ptk.HelpMixin):
         pm.parent(grp, world=True)
         return grp
 
-    @classmethod
+    @staticmethod
     @CoreUtils.undo
-    def create_group_with_first_obj_lra(cls, objects, name="", freeze_transforms=True):
+    def create_group_with_first_obj_lra(objects, name="", freeze_transforms=True):
         """Creates a group using the first object to define the local rotation axis.
 
         Parameters:
@@ -293,7 +203,7 @@ class RigUtils(ptk.HelpMixin):
             return None
 
         # Bake the pivot on the object that will define the LRA.
-        cls.bake_pivot(obj, position=True, orientation=True)
+        XformUtils.bake_pivot(obj, position=True, orientation=True)
 
         grp = pm.group(empty=True)
         pm.parent(grp, obj)
@@ -366,17 +276,15 @@ class RigUtils(ptk.HelpMixin):
         Example:
             createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
         """
-        getSuffix = (
-            lambda o: loc_suffix
+        getSuffix = lambda o: (
+            loc_suffix
             if NodeUtils.is_locator(o)
-            else grp_suffix
-            if NodeUtils.is_group(o)
-            else obj_suffix
+            else grp_suffix if NodeUtils.is_group(o) else obj_suffix
         )  # match the correct suffix to the object type.
 
         for obj in pm.ls(objects, long=True, type="transform"):
             if bake_child_pivot:
-                cls.bake_pivot(obj, position=1, orientation=1)
+                XformUtils.bake_pivot(obj, position=1, orientation=1)
 
             vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
             if vertices:
@@ -458,6 +366,67 @@ class RigUtils(ptk.HelpMixin):
             except Exception as error:
                 pm.delete(loc)
                 raise (error)
+
+    @staticmethod
+    def constrain(
+        target, objects_to_constrain, constraint_type: str = "point", **kwargs
+    ) -> None:
+        """Constrain all selected objects to the specified target object in Maya.
+
+        Parameters:
+            target (str or PyNode): The target object to which the constraints will be applied.
+            objects_to_constrain (list): List of objects to be constrained to the target.
+            constraint_type (str): The type of constraint to apply. Options are 'point', 'orient', 'parent',
+                                   'scale', 'aim', or 'poleVector'. Default is 'point'.
+            **kwargs: Additional keyword arguments to be passed to the constraint functions.
+                      The 'maintainOffset' argument defaults to False if not provided.
+
+        Example:
+            # Point constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point')
+
+            # Point constraint with maintaining offset
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point', maintainOffset=True)
+
+            # Orient constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='orient')
+
+            # Parent constraint with maintaining offset and additional options
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='parent', maintainOffset=True, skip=['rotateX', 'rotateY'])
+
+            # Scale constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='scale')
+
+            # Aim constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='aim', aimVector=[1, 0, 0], upVector=[0, 1, 0], worldUpType='scene')
+
+            # Pole vector constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='poleVector')
+        """
+        if constraint_type in ["point", "orient", "parent", "scale"]:
+            kwargs.setdefault("maintainOffset", False)
+
+        for obj in objects_to_constrain:
+            if constraint_type == "point":
+                pm.pointConstraint(target, obj, **kwargs)
+            elif constraint_type == "orient":
+                pm.orientConstraint(target, obj, **kwargs)
+            elif constraint_type == "parent":
+                pm.parentConstraint(target, obj, **kwargs)
+            elif constraint_type == "scale":
+                pm.scaleConstraint(target, obj, **kwargs)
+            elif constraint_type == "aim":
+                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
+                pm.aimConstraint(target, obj, **kwargs)
+            elif constraint_type == "poleVector":
+                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
+                pm.poleVectorConstraint(target, obj, **kwargs)
+            else:
+                pm.warning(f"Unsupported constraint type: {constraint_type}")
+
+        print(
+            f"Applied {constraint_type} constraint from '{target}' to {len(objects_to_constrain)} objects."
+        )
 
     @classmethod
     @CoreUtils.undo

@@ -1441,39 +1441,59 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
     @staticmethod
     @core_utils.CoreUtils.undo
-    def transfer_normals(source, target):
-        """Transfer normal information from one object to another.
+    def transfer_normals(objects: list[str], space: str = "world"):
+        """Transfer vertex normals from source mesh to target meshes.
 
         Parameters:
-            source (str/obj/list): The transform node to copy normals from.
-            target (str/obj/list): The transform node(s) to copy normals to.
+            objects (list): List of mesh names, with the first being the source and the rest being the targets.
+            space (str): The space in which to transfer the normals ('world' or 'local').
         """
-        s, *other = pm.ls(source)
-        # store source transforms
-        sourcePos = pm.xform(s, q=1, t=1, ws=1)
-        sourceRot = pm.xform(s, q=1, ro=1, ws=1)
-        sourceScale = pm.xform(s, q=1, s=1, ws=1)
+        # Ensure the list has at least one source and one target
+        if len(objects) < 2:
+            raise ValueError("At least one source and one target mesh must be provided.")
 
-        for t in pm.ls(target):
-            # store target transforms
-            targetPos = pm.xform(t, q=1, t=1, ws=1)
-            targetRot = pm.xform(t, q=1, ro=1, ws=1)
-            targetScale = pm.xform(t, q=1, s=1, ws=1)
+        # Map space string to the corresponding integer value
+        space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
 
-            # move target to source position
-            pm.xform(t, t=sourcePos, ws=1)
-            pm.xform(t, ro=sourceRot, ws=1)
-            pm.xform(t, s=sourceScale, ws=1)
+        if space not in space_map:
+            raise ValueError(
+                "space parameter must be 'world', 'local', 'component', or 'topology'"
+            )
 
-            # copy normals
-            pm.polyNormalPerVertex(t, ufn=0)
-            pm.transferAttributes(s, t, pos=0, nml=1, uvs=0, col=0, spa=0, sm=3, clb=1)
-            pm.delete(t, ch=1)
+        sample_space_value = space_map[space]
 
-            # restore t position
-            pm.xform(t, t=targetPos, ws=1)
-            pm.xform(t, ro=targetRot, ws=1)
-            pm.xform(t, s=targetScale, ws=1)
+        # Convert and unpack the list of objects
+        source_mesh, *target_meshes = pm.ls(objects, flatten=True)
+
+        # Ensure we are working with shape nodes
+        if isinstance(source_mesh, pm.nt.Transform):
+            source_mesh = source_mesh.getShape()
+
+        for target_mesh in target_meshes:
+            if isinstance(target_mesh, pm.nt.Transform):
+                target_mesh = target_mesh.getShape()
+
+            # Ensure the meshes have the same topology
+            source_vertices = source_mesh.numVertices()
+            target_vertices = target_mesh.numVertices()
+            if source_vertices != target_vertices:
+                raise ValueError("Source and target meshes do not have the same topology")
+
+            # Select the source and target meshes in the correct order
+            pm.select(source_mesh)
+            pm.select(target_mesh, add=True)
+
+            # Transfer vertex normals
+            pm.transferAttributes(
+                transferNormals=1,
+                sampleSpace=sample_space_value,
+                searchMethod=3,  # closest to point
+                colorBorders=1,
+            )
+
+            # Ensure the normals are updated
+            pm.polyNormalPerVertex(target_mesh, unFreezeNormal=True)
+            pm.polySoftEdge(target_mesh, angle=180)
 
     @classmethod
     def filter_components_by_connection_count(

@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List, Union, Optional
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -7,7 +9,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 
 
 class XformUtils(ptk.HelpMixin):
@@ -112,7 +115,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -194,7 +197,7 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -216,7 +219,7 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def freeze_transforms(cls, objects, center_pivot=False, **kwargs):
         for obj in pm.ls(objects, type="transform"):
             if center_pivot:
@@ -228,7 +231,7 @@ class XformUtils(ptk.HelpMixin):
             pm.makeIdentity(obj, apply=True, **kwargs)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Check if the transform attributes are at their default values
@@ -260,7 +263,7 @@ class XformUtils(ptk.HelpMixin):
             pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -288,7 +291,7 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -338,7 +341,186 @@ class XformUtils(ptk.HelpMixin):
             pm.delete(plane)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    def reset_pivot_transforms(
+        objects: Optional[List[Union[str, object]]] = None
+    ) -> None:
+        """Reset Pivot Transforms for the specified objects or selected objects.
+
+        Parameters:
+            objects (str/obj/list): List of objects to reset pivots. If None, the currently selected objects are used.
+        """
+        if objects is None:
+            objs = pm.ls(sl=True, type="transform", flatten=True)
+        else:
+            objs = pm.ls(objects, type="transform", flatten=True)
+
+        if not objs:
+            pm.warning("No valid transform objects given for reset pivot transforms.")
+            return
+
+        for obj in objs:
+            pm.xform(obj, centerPivots=True)
+            pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
+
+    @staticmethod
+    @CoreUtils.undo
+    def bake_pivot(
+        objects: list[str],
+        position: bool = False,
+        orientation: bool = False,
+        delete_history: bool = True,
+    ) -> None:
+        """Bakes the pivot of the given objects.
+
+        Parameters:
+            objects (list[str]): List of objects to bake the pivot for.
+            position (bool): Whether to bake the pivot position.
+            orientation (bool): Whether to bake the pivot orientation.
+            delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
+        """
+        if delete_history:
+            pm.bakePartialHistory(objects, prePostDeformers=True)
+
+        transforms = pm.ls(objects, objectsOnly=True, transforms=True, flatten=True)
+        shapes = NodeUtils.get_shape_node(transforms)
+        objects = transforms + pm.listRelatives(
+            shapes, path=True, parent=True, type="transform"
+        )
+
+        ctx = pm.currentCtx()
+        pivotModeActive = False
+        customModeActive = False
+        customOri = []
+
+        if ctx in ("RotateSuperContext", "manipRotateContext"):
+            customOri = pm.manipRotateContext("Rotate", q=True, orientAxes=True)
+            pivotModeActive = pm.manipRotateContext(
+                "Rotate", q=True, editPivotMode=True
+            )
+            customModeActive = pm.manipRotateContext("Rotate", q=True, mode=True) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):
+            customOri = pm.manipScaleContext("Scale", q=True, orientAxes=True)
+            pivotModeActive = pm.manipScaleContext("Scale", q=True, editPivotMode=True)
+            customModeActive = pm.manipScaleContext("Scale", q=True, mode=True) == 6
+        else:
+            customOri = pm.manipMoveContext("Move", q=True, orientAxes=True)
+            pivotModeActive = pm.manipMoveContext("Move", q=True, editPivotMode=True)
+            customModeActive = pm.manipMoveContext("Move", q=True, mode=True) == 6
+
+        if orientation and customModeActive:
+            if not position:
+                pm.mel.error(
+                    pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError")
+                )
+                return
+
+            from math import degrees
+
+            customOri = [degrees(ori) for ori in customOri]
+            pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
+
+        if position:
+            for obj in objects:
+                m = pm.xform(obj, q=True, m=True)
+                p = pm.xform(obj, q=True, os=True, sp=True)
+                oldPivot = [
+                    p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
+                    p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
+                    p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
+                ]
+
+                pm.xform(obj, zeroTransformPivots=True)
+                newPivot = pm.getAttr(f"{obj.name()}.translate")
+                pm.move(
+                    obj,
+                    oldPivot[0] - newPivot[0],
+                    oldPivot[1] - newPivot[1],
+                    oldPivot[2] - newPivot[2],
+                    pcp=True,
+                    pgp=True,
+                    ls=True,
+                    r=True,
+                )
+
+        if pivotModeActive:
+            pm.ctxEditMode()
+
+        if orientation and customModeActive:
+            if ctx in ("RotateSuperContext", "manipRotateContext"):
+                pm.manipPivot(rotateToolOri=0)
+            elif ctx in ("scaleSuperContext", "manipScaleContext"):
+                pm.manipPivot(scaleToolOri=0)
+            else:
+                pm.manipPivot(moveToolOri=0)
+                if ctx not in ("moveSuperContext", "manipMoveContext"):
+                    pm.manipPivot(ro=True)
+
+    @staticmethod
+    @CoreUtils.undo
+    def transfer_pivot(
+        objects: List[Union[str, object]],
+        translate: bool = False,
+        rotate: bool = False,
+        scale: bool = False,
+        bake: bool = False,
+        world_space: bool = True,
+    ):
+        """Transfer the pivot orientation from the first given object to the remaining given objects.
+
+        Parameters:
+            objects (List[Union[str, object]]): List of objects. The first object is the source, and the rest are targets.
+            translate (bool): Whether to transfer the translation pivot.
+            rotate (bool): Whether to transfer the rotation pivot and orientation.
+            scale (bool): Whether to transfer the scale pivot.
+            bake (bool): Whether to bake the pivot orientation into the transform node.
+            world_space (bool): Whether to use world space for transformations.
+        """
+        objects = pm.ls(objects, type="transform")
+        if not objects or len(objects) < 2:
+            pm.warning("At least two objects are required to transfer pivot.")
+            return
+
+        source = objects[0]
+
+        for target in objects[1:]:
+            if translate:
+                source_translate_pivot = pm.xform(
+                    source, q=True, ws=world_space, rp=True
+                )
+                pm.xform(target, ws=world_space, rp=source_translate_pivot)
+
+            if rotate:
+                locator = None
+                try:
+                    # Create a locator at the source pivot
+                    locator = pm.spaceLocator()
+                    pm.delete(pm.pointConstraint(source, locator))
+                    pm.delete(pm.orientConstraint(source, locator))
+
+                    # Get the original target rotation
+                    original_rotation = pm.xform(target, q=True, ws=True, ro=True)
+                    # Orient the target to the locator's orientation
+                    pm.orientConstraint(locator, target, mo=False)
+                    pm.delete(pm.orientConstraint(locator, target))
+                    # Restore the original target rotation
+                    pm.xform(target, ws=True, ro=original_rotation)
+                except Exception as e:
+                    print(f"Error processing target {target}: {e}")
+                finally:
+                    if locator:
+                        pm.delete(locator)
+
+            if scale:
+                source_scale_pivot = pm.xform(source, q=True, ws=world_space, sp=True)
+                pm.xform(target, ws=world_space, sp=source_scale_pivot)
+
+            if bake:  # Bake pivot if required
+                pm.makeIdentity(
+                    target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
+                )
+
+    @staticmethod
+    @CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -365,7 +547,7 @@ class XformUtils(ptk.HelpMixin):
         pm.delete(const, target)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -646,7 +828,7 @@ class XformUtils(ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mesh in CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -742,7 +924,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 

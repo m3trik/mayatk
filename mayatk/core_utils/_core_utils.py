@@ -355,6 +355,28 @@ class CoreUtils(ptk.HelpMixin):
         return control
 
     @staticmethod
+    def confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]:
+        """Confirms the existence of each object in the provided list in Maya.
+
+        Parameters:
+            objects (List[str]): List of object names to confirm existence.
+
+        Returns:
+            Tuple[List[str], List[str]]: A tuple containing two lists - the first list
+            contains names of existing objects, and the second list contains names of non-existing objects.
+        """
+        existing = []
+        non_existing = []
+
+        for obj in objects:
+            if pm.objExists(obj):
+                existing.append(obj)
+            else:
+                non_existing.append(obj)
+
+        return existing, non_existing
+
+    @staticmethod
     def mfn_mesh_generator(objects):
         """Generate mfn mesh from the given list of objects.
 
@@ -400,9 +422,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int"
-            if isinstance(o, int)
-            else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod
