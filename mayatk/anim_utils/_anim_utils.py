@@ -113,7 +113,7 @@ class AnimUtils(ptk.HelpMixin):
     def filter_objects_with_keys(
         objects: Optional[Union[str, List[str]]] = None,
         keys: Optional[List[str]] = None,
-    ) -> List[pm.nt.Transform]:
+    ) -> List[object]:
         """Filter the given objects for those with specific keys set. If no objects are given, use all scene objects. If no specific keys are given, check all keys.
 
         Parameters:

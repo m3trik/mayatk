@@ -7,7 +7,7 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = "0.9.21"
+__version__ = "0.9.22"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
