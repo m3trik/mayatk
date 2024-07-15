@@ -5,32 +5,9 @@
 # except ImportError as error:
 #     print(__file__, error)
 # from this package:
-from mayatk import core_utils
-from mayatk.edit_utils import EditUtils
+from mayatk.core_utils import CoreUtils
 from mayatk.core_utils import preview
-
-
-class Mirror:
-    @staticmethod
-    @core_utils.CoreUtils.undo
-    def perform_mirror(*args, **kwargs):
-        """Mirror geometry across a given axis.
-
-        Parameters:
-            objects (obj): The objects to mirror.
-            axis (string): The axis in which to perform the mirror along. case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-            mirrorAxis (int): The pivot on which to mirror on. valid: 0) Bounding Box, 1) Object, 2) World.
-            mergeMode (int): 0) Do not merge border edges. 1) Border edges merged. 2) Border edges extruded and connected.
-            mergeThreshold (float): Merge vertex distance.
-            cut_mesh (bool): Perform a delete along specified axis before mirror.
-            delete_original (bool): Delete the original objects after mirroring.
-            delete_history (bool): Delete non-deformer history on the object(s) before performing the operation.
-            uninstance (bool): Un-instance the object(s) before performing the operation.
-
-        Returns:
-            (list) A list of transform nodes.
-        """
-        return EditUtils.mirror(*args, **kwargs)
+from mayatk.edit_utils import EditUtils
 
 
 class MirrorSlots:
@@ -58,7 +35,7 @@ class MirrorSlots:
             "delete_history": self.ui.chk006.isChecked(),
             "uninstance": self.ui.chk007.isChecked(),
         }
-        Mirror.perform_mirror(objects, **kwargs)
+        EditUtils.mirror(objects, **kwargs)
         # ex. # polyMirrorFace  -cutMesh 1 -axis 0 -axisDirection 1 -mergeMode 1 -mergeThresholdType 0 -mergeThreshold 0.001 -mirrorAxis 0 -mirrorPosition 0 -smoothingAngle 30 -flipUVs 0 -ch 1 S102_BOOST_PUMP_CANISTER_B;
 
 
@@ -68,7 +45,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "mirror.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=MirrorSlots)
 

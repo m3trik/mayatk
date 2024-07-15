@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List
+import os
+from typing import List, Tuple, Union, Dict, Any, Optional
 
 try:
     import pymel.core as pm
@@ -9,7 +10,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import node_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 
 
 class MatUtils(ptk.HelpMixin):
@@ -59,24 +61,32 @@ class MatUtils(ptk.HelpMixin):
         return mats
 
     @staticmethod
-    def get_scene_mats(inc=[], exc=[]):
-        """Retrieves all materials from the current scene, optionally including or excluding certain objects.
+    def get_scene_mats(
+        inc: Union[str, int, list] = [],
+        exc: Union[str, int, list] = [],
+        sort: bool = False,
+        as_dict: bool = False,
+    ) -> Union[List[str], Dict[str, str]]:
+        """Retrieves all materials from the current scene, optionally including or excluding certain materials by name.
 
         Parameters:
             inc (str/int/obj/list, optional): The objects to include in the search. Supports using the '*' operator for pattern matching. Defaults to [].
             exc (str/int/obj/list, optional): The objects to exclude from the search. Supports using the '*' operator for pattern matching. Defaults to [].
+            sort (bool, optional): Whether to return the materials in alphabetical order. Defaults to False.
+            as_dict (bool, optional): Whether to return the materials as a dictionary. Defaults to False.
 
         Returns:
-            list: A list of materials in the scene.
+            list or dict: A list or dictionary of materials in the scene.
         """
-        matList = pm.ls(mat=1, flatten=1)
+        matList = pm.ls(mat=True, flatten=True)
+        d = {m.name(): m for m in matList}
+        filtered = ptk.filter_dict(d, keys=True, map_func=pm.nodeType, inc=inc, exc=exc)
 
-        # convert to dictionary to filter material names and types.
-        d = {m.name(): pm.nodeType(m) for m in matList}
-        filtered = ptk.filter_dict(d, inc, exc, keys=True, values=True)
+        if as_dict:
+            return dict(sorted(filtered.items())) if sort else filtered
 
-        # use the filtered results to reconstruct a filtered list of actual materials.
-        return [m for m in matList if m.name() in filtered]
+        filtered_mats = list(filtered.values())
+        return sorted(filtered_mats, key=lambda x: x.name()) if sort else filtered_mats
 
     @staticmethod
     def get_fav_mats():
@@ -126,6 +136,7 @@ class MatUtils(ptk.HelpMixin):
         return False
 
     @staticmethod
+    @CoreUtils.undo
     def create_mat(mat_type, prefix="", name=""):
         """Creates a material based on the provided type or a random Lambert material if 'mat_type' is 'random'.
 
@@ -156,6 +167,7 @@ class MatUtils(ptk.HelpMixin):
         return mat
 
     @staticmethod
+    @CoreUtils.undo
     def assign_mat(objects, mat_name):
         """Assigns a material to a list of objects or components.
 
@@ -189,7 +201,9 @@ class MatUtils(ptk.HelpMixin):
             pm.sets(shading_group, forceElement=obj)
 
     @classmethod
-    def find_by_mat_id(cls, material, objects=None, shell=False):
+    def find_by_mat_id(
+        cls, material: str, objects: List[str] = None, shell: bool = False
+    ) -> List[str]:
         """Find objects or faces by the material ID in a 3D scene.
 
         This function takes as input a material and a set of objects (or entire scene by default) and
@@ -201,11 +215,11 @@ class MatUtils(ptk.HelpMixin):
 
         Note: If the material is a multi-material (such as VRayMultiSubTex), an error will be raised.
 
-        Args:
+        Parameters:
             cls: The class object. This argument is implicitly passed and doesn't need to be provided by the user.
             material (str): The material (e.g. 'lambert1') used to find the associated objects/faces.
             objects (list, optional): List of objects (e.g. ['pCube1', 'pCube2']) to be considered.
-                                      If not provided, all objects in the scene will be considered.
+                                    If not provided, all objects in the scene will be considered.
             shell (bool, optional): Determines whether to return complete objects (True) or individual faces (False).
                                     Default is False.
 
@@ -214,59 +228,329 @@ class MatUtils(ptk.HelpMixin):
 
         Returns:
             list: A list of objects or faces (depending on 'shell' parameter) that are associated with the input material.
-
         """
         if pm.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
             )
+
+        if not pm.objExists(material):
+            print(f"Material '{material}' does not exist.")
+            return []
+
         # If objects are not specified, consider all objects in the scene
+        objects = pm.ls(objects) or pm.ls(geometry=True)  # Get all mesh objects
         if not objects:
-            objects = pm.ls(geometry=True)  # Get all mesh objects
+            print("No objects found in the scene.")
+            return []
 
         # Convert mesh shapes to transform nodes
-        objects = node_utils.NodeUtils.get_transform_node(objects)
+        objects = NodeUtils.get_transform_node(objects)
 
         # Find the shading groups associated with the material
         shading_groups = pm.listConnections(material, type="shadingEngine")
 
+        if not shading_groups:
+            print(f"No shading groups found for material '{material}'.")
+            return []
+
         objs_with_material = []
         for sg in shading_groups:
             connected_objs = pm.sets(sg, query=True, noIntermediate=True)
-            flattened = pm.ls(connected_objs, flatten=True)
-            # Only add objects to the list if they are in the specified objects list
-            for obj in flattened:
-                transform_node = node_utils.NodeUtils.get_transform_node(obj)
-                if transform_node in objects:
-                    # Check if the object is a face. If not, convert to faces
-                    if not isinstance(obj, pm.MeshFace):
-                        shape_node = pm.listRelatives(transform_node, shapes=True)[0]
-                        face_count = pm.polyEvaluate(shape_node, f=True)
-                        faces = [f"{shape_node}.f[{i}]" for i in range(face_count)]
-                        objs_with_material.extend(faces)
-                    else:
-                        objs_with_material.append(obj)
+            if connected_objs:
+                for obj in connected_objs:
+                    if pm.nodeType(obj) == "transform":
+                        shape_nodes = pm.listRelatives(obj, shapes=True)
+                        for shape in shape_nodes:
+                            faces = pm.sets(sg, query=True, noIntermediate=True)
+                            if faces:
+                                objs_with_material.extend(faces)
+                    elif pm.nodeType(obj) == "mesh":
+                        faces = pm.sets(sg, query=True, noIntermediate=True)
+                        if faces:
+                            objs_with_material.extend(faces)
 
         if shell:
-            objs_with_material = set(pm.ls(objs_with_material, objectsOnly=True))
+            objs_with_material = list(set(pm.ls(objs_with_material, objectsOnly=True)))
 
         return objs_with_material
 
     @staticmethod
-    def reload_textures(materials=None, inc=None, exc=None):
+    @ptk.filter_results
+    def collect_material_paths(
+        materials: Optional[List[str]] = None,
+        attributes: Optional[List[str]] = None,
+        include_material: bool = False,
+        include_path_type: bool = False,
+    ) -> Union[List[str], List[Tuple[str, ...]]]:
+        """Collects specified attributes file paths for given materials.
+
+        Parameters:
+            materials (Optional[List[str]]): List of material names.
+            attributes (Optional[List[str]]): List of attributes to collect file paths from. Defaults to texture files.
+            include_material (bool): If True, include material name in the result.
+            include_path_type (bool): If True, include path type (Relative/Absolute) in the result.
+
+        Returns:
+            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
+        """
+
+        def strip_drive_and_filename(path: str) -> str:
+            """Strip the drive letter and filename from a given path."""
+            drive, path_without_drive = os.path.splitdrive(path)
+            directory = os.path.dirname(path_without_drive)
+            return directory.replace("\\", "/").lower()  # Normalize for comparison
+
+        materials = pm.ls(materials, mat=True) or pm.ls(mat=True)
+        attributes = attributes or ["fileTextureName"]
+
+        material_paths = []
+        project_sourceimages = CoreUtils.get_maya_info("sourceimages")
+
+        stripped_project_path = strip_drive_and_filename(project_sourceimages)
+
+        for material in materials:
+            for attr in attributes:
+                file_nodes = pm.listConnections(material, type="file")
+                for file_node in file_nodes:
+                    try:
+                        file_path = file_node.attr(attr).get()
+                        if not file_path:
+                            continue
+
+                        # Strip the drive letter and filename
+                        stripped_file_path = strip_drive_and_filename(file_path)
+
+                        # Determine if the path is relative or absolute
+                        if stripped_file_path.startswith(stripped_project_path):
+                            path_type = "Relative"
+                            relative_path = os.path.relpath(
+                                file_path, project_sourceimages
+                            )
+                        else:
+                            path_type = "Absolute"
+                            relative_path = file_path
+
+                        entry = (relative_path,)
+                        if include_material:
+                            entry = (material,) + entry
+                        if include_path_type:
+                            entry = entry[:1] + (path_type,) + entry[1:]
+                        material_paths.append(entry)
+                    except pm.MayaAttributeError:
+                        continue
+
+        return material_paths
+
+    @staticmethod
+    def is_duplicate_material(material1: str, material2: str) -> bool:
+        """Check if two materials are duplicates based on their textures.
+
+        Parameters:
+            material1 (str): Name of the first material.
+            material2 (str): Name of the second material.
+
+        Returns:
+            bool: True if materials are duplicates, False otherwise.
+        """
+        textures1 = set(pm.listConnections(pm.listHistory(material1), type="file"))
+        textures2 = set(pm.listConnections(pm.listHistory(material2), type="file"))
+        return textures1 == textures2
+
+    @classmethod
+    def find_materials_with_duplicate_textures(
+        cls, materials: Optional[List[object]] = None
+    ) -> Dict[object, List[object]]:
+        """Find duplicate materials based on their texture file paths.
+
+        Parameters:
+            materials (Optional[List[pm.nodetypes.ShadingNode]]): List of material nodes.
+
+        Returns:
+            Dict[pm.nodetypes.ShadingNode, List[pm.nodetypes.ShadingNode]]: Dictionary mapping original material nodes to lists of duplicate material nodes.
+        """
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        material_paths = cls.collect_material_paths(
+            materials, include_material=True, include_path_type=True
+        )
+
+        # Create a dictionary to track unique texture sets
+        material_textures: Dict[object, set] = {}
+        duplicates: Dict[object, List[object]] = {}
+
+        for material, _, file_name in material_paths:
+            if material not in material_textures:
+                material_textures[material] = set()
+            material_textures[material].add(file_name)
+
+        # Find duplicates using the is_duplicate method
+        texture_sets = {}
+        for material, textures in material_textures.items():
+            textures_tuple = tuple(sorted(textures))  # Sort to ensure consistency
+            if textures_tuple in texture_sets:
+                texture_sets[textures_tuple].append(material)
+            else:
+                texture_sets[textures_tuple] = [material]
+
+        for textures, materials in texture_sets.items():
+            if len(materials) > 1:
+                # Sort by name length first, then alphabetically
+                materials.sort(key=lambda x: (len(x.name()), x.name()))
+                original = materials[0]
+                duplicates[original] = materials[1:]  # All others are duplicates
+
+        return duplicates
+
+    @classmethod
+    @CoreUtils.undo
+    def reassign_duplicates(
+        cls, materials: List[str] = None, delete: bool = False
+    ) -> None:
+        """Find duplicate materials, remove duplicates, and reassign them to the original material.
+
+        Parameters:
+            materials (List[str]): List of material names.
+            delete (bool): Whether to delete the duplicate materials after reassignment.
+        """
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        duplicate_to_original = cls.find_materials_with_duplicate_textures(materials)
+        duplicates_to_delete = []
+
+        for original, duplicates in duplicate_to_original.items():
+            for duplicate in duplicates:
+                try:  # Find all faces assigned the duplicate material and reassign to the original material
+                    faces_with_duplicate = cls.find_by_mat_id(duplicate, shell=False)
+                    print("faces_with_duplicate:", faces_with_duplicate)
+                    if faces_with_duplicate:
+                        pm.hyperShade(assign=original, objects=faces_with_duplicate)
+                        print(
+                            f"Reassigned material from {duplicate} to {original} on faces: {faces_with_duplicate}"
+                        )
+                        # Add the duplicate material to the deletion list
+                        duplicates_to_delete.append(duplicate)
+                except pm.MayaAttributeError as e:
+                    print(f"Error processing material {duplicate}: {e}")
+                    continue
+
+        if delete:  # Delete all duplicate materials after reassignments
+            for duplicate in duplicates_to_delete:
+                try:
+                    pm.delete(duplicate)
+                    print(f"Deleted duplicate material: {duplicate}")
+                except pm.MayaAttributeError as e:
+                    print(f"Error deleting material {duplicate}: {e}")
+
+    @staticmethod
+    def filter_materials_by_objects(objects: List[str]) -> List[str]:
+        """Filter materials assigned to the given objects.
+
+        Parameters:
+            objects (List[str]): List of object names.
+
+        Returns:
+            List[str]: List of material names assigned to the given objects.
+        """
+        assigned_materials = set()
+        for obj in objects:
+            # Get shape nodes if the object is a transform
+            shapes = pm.listRelatives(obj, shapes=True, fullPath=True) or [obj]
+            for shape in shapes:
+                shading_groups = pm.listConnections(shape, type="shadingEngine")
+                for sg in shading_groups:
+                    materials = pm.listConnections(f"{sg}.surfaceShader")
+                    assigned_materials.update(materials)
+        return list(assigned_materials)
+
+    @staticmethod
+    @CoreUtils.undo
+    def convert_to_relative_paths(
+        items: Optional[List[str]] = None,
+    ) -> None:
+        """Convert absolute file paths to relative paths for file texture nodes.
+
+        This function processes file texture nodes to convert their
+        absolute file paths to relative paths based on the current workspace's 'sourceimages' directory.
+
+        Parameters:
+            items (List[str], optional): List of material or file node names to filter. If None, all items are processed.
+
+        Raises:
+            FileNotFoundError: If the 'sourceimages' directory does not exist.
+        """
+        sourceimages_path = CoreUtils.get_maya_info("sourceimages")
+
+        if not os.path.exists(sourceimages_path):
+            raise FileNotFoundError(
+                f"The 'sourceimages' directory does not exist: {sourceimages_path}"
+            )
+
+        absolute_paths_found = False
+
+        # Get all materials and file nodes if items are not provided
+        if not items:
+            items = pm.ls(type="file")
+
+        file_nodes = []
+        for item in items:
+            if pm.nodeType(item) == "file":
+                file_nodes.append(item)
+            else:  # Assume it's a material and find connected file nodes
+                file_nodes.extend(pm.listConnections(item, type="file"))
+
+        # Remove duplicates
+        file_nodes = list(set(file_nodes))
+        for file_node in file_nodes:
+            file_path = file_node.fileTextureName.get()
+
+            file_name = os.path.basename(file_path)
+            relative_path = os.path.join("sourceimages", file_name)
+            expected_relative_path = os.path.join(sourceimages_path, file_name)
+
+            # Check if the file path is already relative by comparing with the expected relative path
+            if os.path.abspath(file_path) == os.path.abspath(expected_relative_path):
+                # Silently set the relative path just to be safe.
+                file_node.fileTextureName.set(relative_path)
+                continue
+
+            absolute_paths_found = True
+
+            # Convert to relative path
+            if os.path.isabs(file_path) and os.path.exists(
+                os.path.join(sourceimages_path, file_name)
+            ):
+                file_node.fileTextureName.set(relative_path)
+                print(f"Set relative path for node {file_node}: {relative_path}")
+
+        if not absolute_paths_found:
+            print("No absolute paths found.")
+
+    @staticmethod
+    def reload_textures(
+        materials=None,
+        inc=None,
+        exc=None,
+        log=False,
+        refresh_viewport=False,
+        refresh_hypershade=False,
+    ):
         """Reloads textures connected to specified materials with inclusion/exclusion filters.
 
         Parameters:
             materials (str/obj/list): Material or list of materials to process. Defaults to all materials in the scene.
             inc (str/list): Inclusion patterns for filtering textures.
             exc (str/list): Exclusion patterns for filtering textures.
+            log (bool): Whether to log the textures being reloaded.
+            refresh_viewport (bool): Whether to refresh the viewport.
+            refresh_hypershade (bool): Whether to refresh the Hypershade panel.
         """
-        materials = pm.ls(materials) if materials else pm.ls(mat=True)
+        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
 
+        texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
         file_nodes = []
+
         for material in materials:
-            # Traverse the connections to find file nodes
-            file_nodes.extend(pm.listConnections(material, type="file"))
+            for tex_type in texture_types:
+                file_nodes.extend(pm.listConnections(material, type=tex_type))
 
         # Remove duplicates
         file_nodes = list(set(file_nodes))
@@ -281,46 +565,108 @@ class MatUtils(ptk.HelpMixin):
             )
 
         for fn in file_nodes:
-            # Reload the texture by resetting the file path
-            file_path = fn.fileTextureName.get()
-            fn.fileTextureName.set(file_path)
+            try:
+                # Reload the texture by resetting the file path
+                file_path = fn.fileTextureName.get()
+                fn.fileTextureName.set(file_path)
+                if log:
+                    print(f"Reloaded texture: {file_path}")
+            except AttributeError:
+                if log:
+                    print(f"Skipped non-file node: {fn}")
+
+        # Refresh viewport if requested
+        if refresh_viewport:
+            pm.refresh(force=True)
+
+        # Refresh Hypershade if requested
+        if refresh_hypershade:
+            pm.refreshEditorTemplates()
+            pm.mel.eval(
+                'hypershadePanelMenuCommand("hyperShadePanel1", "refreshAllSwatches");'
+            )
 
     @staticmethod
-    def get_mat_swatch_icon(mat, size=[20, 20]):
-        """Get an icon with a color fill matching the given materials RBG value.
+    def move_unused_textures(source_dir: str = None, output_dir: str = None) -> None:
+        """Move unused textures to a specified directory.
+
+        Parameters:
+            source_dir (str): The directory to search for textures. Default is Maya's sourceimages directory.
+            output_dir (str): The directory to move unused textures to. Default is a subfolder 'unused' in sourceimages.
+        """
+        import shutil
+
+        project_sourceimages = source_dir or CoreUtils.get_maya_info("sourceimages")
+        unused_folder = output_dir or os.path.join(project_sourceimages, "unused")
+
+        if not os.path.exists(unused_folder):
+            os.makedirs(unused_folder)
+
+        all_textures = {
+            file
+            for file in os.listdir(project_sourceimages)
+            if os.path.isfile(os.path.join(project_sourceimages, file))
+        }
+        used_textures = {
+            os.path.basename(path[0]) for path in MatUtils.collect_material_paths()
+        }
+
+        unused_textures = all_textures - used_textures
+
+        print(f"Moving {len(unused_textures)} to: {output_dir} ..")
+        for texture in unused_textures:
+            src_path = os.path.join(project_sourceimages, texture)
+            dest_path = os.path.join(unused_folder, texture)
+            shutil.move(src_path, dest_path)
+            print(f"Moved {texture} to {unused_folder}")
+
+    @staticmethod
+    def get_mat_swatch_icon(
+        mat: Union[str, object],
+        size: List[int] = [20, 20],
+        fallback_to_blank: bool = True,
+    ) -> object:
+        """Get an icon with a color fill matching the given material's RGB value.
 
         Parameters:
             mat (obj)(str): The material or the material's name.
             size (list): Desired icon size.
+            fallback_to_blank (bool): Whether to generate a blank swatch if fetching the material color fails.
 
         Returns:
-            (obj) pixmap icon.
+            (obj) QIcon: The pixmap icon.
         """
         from PySide2.QtGui import QPixmap, QColor, QIcon
 
         try:
             # get the string name if a mat object is given.
-            matName = mat.name() if not isinstance(mat, (str)) else mat
+            matName = mat.name() if not isinstance(mat, str) else mat
             # convert from 0-1 to 0-255 value and then to an integer
-            r = int(pm.getAttr(matName + ".colorR") * 255)
-            g = int(pm.getAttr(matName + ".colorG") * 255)
-            b = int(pm.getAttr(matName + ".colorB") * 255)
+            r = int(pm.getAttr(f"{matName}.colorR") * 255)
+            g = int(pm.getAttr(f"{matName}.colorG") * 255)
+            b = int(pm.getAttr(f"{matName}.colorB") * 255)
             pixmap = QPixmap(size[0], size[1])
             pixmap.fill(QColor.fromRgb(r, g, b))
-
-            return QIcon(pixmap)
-
         except Exception:
-            pass
+            if fallback_to_blank:
+                pixmap = QPixmap(size[0], size[1])
+                pixmap.fill(QColor(255, 255, 255, 0))  # Transparent blank swatch
+            else:
+                raise
+
+        return QIcon(pixmap)
 
     @staticmethod
-    def calculate_uv_padding(map_size, normalize=False):
+    def calculate_uv_padding(
+        map_size: int, normalize: bool = False, factor: int = 128
+    ) -> float:
         """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
         Optionally return the padding as a normalized value relative to the map size.
 
         Parameters:
         map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
         normalize (bool): If True, returns the padding as a normalized value. Default is False.
+        factor (int): The factor by which to divide the map size to calculate the padding. Default is 128.
 
         Returns:
         float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
@@ -335,7 +681,7 @@ class MatUtils(ptk.HelpMixin):
         >>> calculate_uv_padding(4096, normalize=True)
         0.0078125
         """
-        padding = map_size / 128
+        padding = map_size / factor
         if normalize:
             return padding / map_size
         return padding

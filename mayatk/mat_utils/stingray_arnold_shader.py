@@ -65,7 +65,7 @@ class StingrayArnoldShader:
         for texture in textures:
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.get_image_type_from_filename(texture)
+            texture_type = ptk.get_map_type_from_filename(texture)
 
             if texture_type is None:
                 callback(
@@ -437,7 +437,12 @@ class StingrayArnoldShader:
                 if converted_map:
                     return other_textures + [converted_map]
 
-        # If no normal map conversion was possible, return the list without any normal maps
+        # If no normal map conversion was possible, check for a generic normal map
+        generic_normal_map = [nm for nm in normal_maps if "Normal_" not in nm]
+        if generic_normal_map:
+            return other_textures + generic_normal_map
+
+        # If no normal maps are found, return the list unchanged
         return other_textures
 
     def filter_for_correct_metallic_map(
@@ -477,7 +482,7 @@ class StingrayArnoldShader:
                 invert_alpha = bool(
                     roughness_map
                 )  # Invert alpha if the source is roughness
-                combined_map = self.pack_smoothness_into_metallic(
+                combined_map = ptk.pack_smoothness_into_metallic(
                     metallic_map[0], alpha_map, invert_alpha=invert_alpha
                 )
                 return [
@@ -494,33 +499,6 @@ class StingrayArnoldShader:
 
         # Return the textures list unchanged if no conditions are met
         return textures
-
-    def pack_smoothness_into_metallic(
-        self, metallic_map_path: str, alpha_map_path: str, invert_alpha: bool = False
-    ) -> str:
-        """Packs the alpha channel (smoothness or inverted roughness) into the metallic map.
-
-        Parameters:
-            metallic_map_path (str): File path of the metallic texture.
-            alpha_map_path (str): File path of the smoothness or roughness texture to be packed into the alpha channel.
-            invert_alpha (bool): If True, inverts the alpha channel. Useful for converting roughness to smoothness.
-
-        Returns:
-            str: File path of the resulting metallic smoothness map.
-        """
-        # Determine the base name for the output path without the "_Metallic" suffix
-        base_name = os.path.splitext(metallic_map_path)[0].replace("_Metallic", "")
-        output_path = f"{base_name}_MetallicSmoothness.png"
-
-        # Pack the alpha channel into the metallic map
-        success = ptk.pack_channel_into_alpha(
-            metallic_map_path, alpha_map_path, output_path, invert_alpha=invert_alpha
-        )
-
-        if success:
-            return output_path
-        else:
-            raise Exception("Failed to pack smoothness into metallic map.")
 
     def filter_for_correct_base_color_map(
         self, textures: List[str], use_albedo_transparency: bool
@@ -552,7 +530,7 @@ class StingrayArnoldShader:
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
-                combined_map = self.pack_transparency_into_albedo(
+                combined_map = ptk.pack_transparency_into_albedo(
                     base_color_map[0], transparency_map[0]
                 )
                 return [
@@ -566,38 +544,6 @@ class StingrayArnoldShader:
 
         # Return the textures list unchanged if no conditions are met
         return textures
-
-    @staticmethod
-    def pack_transparency_into_albedo(
-        albedo_map_path: str, alpha_map_path: str, invert_alpha: bool = False
-    ) -> str:
-        """Packs the transparency channel into the albedo map.
-
-        Parameters:
-            albedo_map_path (str): File path of the albedo texture.
-            alpha_map_path (str): File path of the transparency texture to be packed into the alpha channel.
-            invert_alpha (bool): If True, inverts the alpha channel before packing.
-
-        Returns:
-            str: File path of the resulting AlbedoTransparency map.
-        """
-        # Determine the output path without the "_BaseColor" or "_Albedo" suffix
-        base_name = (
-            os.path.splitext(albedo_map_path)[0]
-            .replace("_BaseColor", "")
-            .replace("_Albedo", "")
-        )
-        output_path = f"{base_name}_AlbedoTransparency.png"
-
-        # Pack the transparency channel into the albedo map
-        success = ptk.pack_channel_into_alpha(
-            albedo_map_path, alpha_map_path, output_path, invert_alpha=invert_alpha
-        )
-
-        if success:
-            return output_path
-        else:
-            raise Exception("Failed to pack transparency into albedo map.")
 
 
 class StingrayArnoldShaderSlots(StingrayArnoldShader):
@@ -705,7 +651,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         image_files = self.sb.file_dialog(
             file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
             title="Select one or more image files to open.",
-            directory=self.source_images_dir,
+            start_dir=self.source_images_dir,
         )
 
         if image_files:
@@ -765,3 +711,50 @@ if __name__ == "__main__":
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------
+
+
+# deprecated:
+
+# def filter_for_correct_normal_map(
+#     self, textures: List[str], desired_normal_type: str
+# ) -> List[str]:
+#     """Filters and ensures only the desired type of normal map is in the textures list.
+#     If the desired normal map doesn't exist, attempts to create it by converting from the other type.
+
+#     Parameters:
+#         textures (List[str]): The list of texture file paths.
+#         desired_normal_type (str): The desired normal map type, either 'OpenGL' or 'DirectX'.
+
+#     Returns:
+#         List[str]: The modified list of texture file paths with the correct normal map type.
+#     """
+
+#     # Normalize desired_normal_type to match naming convention in textures
+#     desired_normal_type = "Normal_" + desired_normal_type
+
+#     # Separate normal maps from other textures
+#     normal_maps = [tex for tex in textures if "Normal_" in tex]
+#     other_textures = [tex for tex in textures if "Normal_" not in tex]
+
+#     # Filter normal maps for the desired type
+#     desired_normal_maps = [nm for nm in normal_maps if desired_normal_type in nm]
+
+#     # If the desired normal map is already present, return it with the other textures
+#     if desired_normal_maps:
+#         return other_textures + desired_normal_maps
+
+#     # Attempt to create the desired normal map by converting from the available one
+#     for nm in normal_maps:
+#         if "OpenGL" in desired_normal_type and "DirectX" in nm:
+#             # Convert DirectX to OpenGL
+#             converted_map = ptk.create_gl_from_dx(nm)
+#             if converted_map:
+#                 return other_textures + [converted_map]
+#         elif "DirectX" in desired_normal_type and "OpenGL" in nm:
+#             # Convert OpenGL to DirectX
+#             converted_map = ptk.create_dx_from_gl(nm)
+#             if converted_map:
+#                 return other_textures + [converted_map]
+
+#     # If no normal map conversion was possible, return the list without any normal maps
+#     return other_textures

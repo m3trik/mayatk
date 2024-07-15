@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+from typing import Dict, ClassVar, Optional
 
 try:
     import pymel.core as pm
@@ -8,20 +9,23 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
+# From this package:
+from mayatk.core_utils import CoreUtils
 
-class Project(ptk.HelpMixin):
+
+class EnvUtils(ptk.HelpMixin):
     """ """
 
-    SCENE_UNIT_VALUES = [
-        "millimeter",
-        "centimeter",
-        "meter",
-        "kilometer",
-        "inch",
-        "foot",
-        "yard",
-        "mile",
-    ]
+    SCENE_UNIT_VALUES: ClassVar[Dict[str, str]] = {
+        "millimeter": "mm",
+        "centimeter": "cm",
+        "meter": "m",
+        "kilometer": "km",
+        "inch": "in",
+        "foot": "ft",
+        "yard": "yd",
+        "mile": "mi",
+    }
 
     @staticmethod
     def get_recent_files(index=None):
@@ -227,6 +231,30 @@ class Project(ptk.HelpMixin):
             result = [f.split("\\")[-1] for f in result]
 
         return result
+
+    @staticmethod
+    def find_workspace_using_path(scene_path: Optional[str] = None) -> Optional[str]:
+        """Determine the workspace directory for a given scene by moving up directory levels until a workspace.mel file is found.
+
+        Parameters:
+            scene_path (Optional[str]): The path to the scene file. If None, the current scene path is used.
+
+        Returns:
+            Optional[str]: The directory containing the workspace.mel file, or None if not found.
+        """
+        if scene_path is None:
+            scene_path = CoreUtils.get_maya_info("scene_path")
+
+        dir_path = os.path.dirname(scene_path)
+        while dir_path:
+            potential_workspace = os.path.join(dir_path, "workspace.mel")
+            if os.path.exists(potential_workspace):
+                return dir_path
+            new_dir_path = os.path.dirname(dir_path)
+            if new_dir_path == dir_path:  # Root directory reached
+                break
+            dir_path = new_dir_path
+        return None
 
     @staticmethod
     def reference_scene(file_path):

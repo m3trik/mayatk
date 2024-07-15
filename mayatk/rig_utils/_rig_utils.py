@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import List, Tuple, Union
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -7,52 +9,65 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import node_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
+from mayatk.xform_utils import XformUtils
 
 
 class RigUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    def create_locator(name=None, pos=(), scale=1):
+    def create_locator(*, scale: float = 1, **kwargs) -> object:
         """Create a locator with the given scale.
 
         Parameters:
-            name (str): Name the locator.
-            pos (tuple): The desired location in world space.
-            scale (float) = The desired scale of the locator.
+            scale (float): The desired scale of the locator.
+            **kwargs: Additional keyword arguments for the spaceLocator command, including 'name' and 'position'.
+
+        Special Handling:
+            If 'position' is provided in kwargs and it is not a tuple or list, it is assumed to be an object.
+            The method attempts to get the world space position of this object to use as the locator's position.
+            If the position cannot be resolved, it is removed from kwargs.
 
         Returns:
-            (obj) locator
+            pm.nt.Transform: The created locator transform node.
         """
-        loc = pm.spaceLocator()
+        pos = kwargs.get("position")
 
-        if name:
-            pm.rename(loc, name)
-        if pos:
-            pm.move(pos[0], pos[1], pos[2], loc)
+        if pos is not None:
+            if not isinstance(pos, (tuple, list)):
+                transform_node = NodeUtils.get_transform_node(pos)
+                if transform_node:
+                    kwargs["position"] = pm.xform(
+                        transform_node[0], q=True, ws=True, t=True
+                    )
+                else:
+                    kwargs.pop("position", None)
+
+        loc = pm.spaceLocator(**{k: v for k, v in kwargs.items() if v is not None})
+
         if scale != 1:
             pm.scale(loc, scale, scale, scale)  # scale the locator
 
         return loc
 
     @classmethod
+    @CoreUtils.undo
     def remove_locator(cls, objects):
         """Remove a parented locator from the child object.
 
         Parameters:
             obj (str/obj/list): The child object or the locator itself.
         """
-        pm.undoInfo(openChunk=1)
-
         for obj in pm.ls(objects, long=True, objectsOnly=True):
             if not pm.objExists(obj):
                 continue
 
             elif (
-                node_utils.NodeUtils.is_locator(obj)
-                and not node_utils.NodeUtils.get_type(obj)
-                and not node_utils.NodeUtils.get_children(obj)
+                NodeUtils.is_locator(obj)
+                and not NodeUtils.get_type(obj)
+                and not NodeUtils.get_children(obj)
             ):
                 pm.delete(obj)
                 continue
@@ -60,10 +75,10 @@ class RigUtils(ptk.HelpMixin):
             # unlock attributes
             cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
 
-            if not node_utils.NodeUtils.is_locator(obj):
+            if not NodeUtils.is_locator(obj):
                 try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = node_utils.NodeUtils.get_parent(obj)
-                    if not node_utils.NodeUtils.is_locator(obj):
+                    obj = NodeUtils.get_parent(obj)
+                    if not NodeUtils.is_locator(obj):
                         pm.inViewMessage(
                             status_message="Error: Unable to remove locator for the given object.",
                             pos="topCenter",
@@ -79,107 +94,15 @@ class RigUtils(ptk.HelpMixin):
                     continue
 
             # unparent child object
-            children = node_utils.NodeUtils.get_children(obj)
+            children = NodeUtils.get_children(obj)
             for child in children:
                 pm.parent(child, world=True)
 
             # remove locator
             pm.delete(obj)
 
-        pm.undoInfo(closeChunk=1)
-
-    @staticmethod
-    def reset_pivot_transforms(objects):
-        """Reset Pivot Transforms"""
-        objs = pm.ls(type=("transform", "geometryShape"), sl=1)
-
-        if len(objs) > 0:
-            pm.xform(cp=1)
-
-        pm.manipPivot(ro=1, rp=1)
-
-    @staticmethod
-    def bake_pivot(objects, position=False, orientation=False):
-        """ """
-        transforms = pm.ls(objects, transforms=1)
-        shapes = pm.ls(objects, shapes=1)
-        objects = transforms + pm.listRelatives(
-            shapes, path=1, parent=1, type="transform"
-        )
-
-        ctx = pm.currentCtx()
-        pivotModeActive = 0
-        customModeActive = 0
-        if ctx in ("RotateSuperContext", "manipRotateContext"):  # Rotate tool
-            customOri = pm.manipRotateContext("Rotate", q=1, orientAxes=1)
-            pivotModeActive = pm.manipRotateContext("Rotate", q=1, editPivotMode=1)
-            customModeActive = pm.manipRotateContext("Rotate", q=1, mode=1) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):  # Scale tool
-            customOri = pm.manipScaleContext("Scale", q=1, orientAxes=1)
-            pivotModeActive = pm.manipScaleContext("Scale", q=1, editPivotMode=1)
-            customModeActive = pm.manipScaleContext("Scale", q=1, mode=1) == 6
-        else:  # use the move tool orientation
-            customOri = pm.manipMoveContext(
-                "Move", q=1, orientAxes=1
-            )  # get custom orientation
-            pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
-            customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
-
-        if orientation and customModeActive:
-            if not position:
-                pm.mel.error(
-                    (pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))
-                )
-                return
-
-            from math import degrees
-
-            cX, cY, cZ = customOri = [
-                degrees(customOri[0]),
-                degrees(customOri[1]),
-                degrees(customOri[2]),
-            ]
-
-            pm.rotate(
-                objects, cX, cY, cZ, a=1, pcp=1, pgp=1, ws=1, fo=1
-            )  # Set object(s) rotation to the custom one (preserving child transform positions and geometry positions)
-
-        if position:
-            for obj in objects:
-                # Get pivot in parent space
-                m = pm.xform(obj, q=1, m=1)
-                p = pm.xform(obj, q=1, os=1, sp=1)
-                oldX, oldY, oldZ = [
-                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
-                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
-                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
-                ]
-
-                pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
-
-                # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
-                newX, newY, newZ = pm.getAttr(
-                    obj.name() + ".translate"
-                )  # obj.translate
-                pm.move(
-                    obj, oldX - newX, oldY - newY, oldZ - newZ, pcp=1, pgp=1, ls=1, r=1
-                )
-
-        if pivotModeActive:
-            pm.ctxEditMode()  # exit pivot mode
-
-        # Set the axis orientation mode back to obj
-        if orientation and customModeActive:
-            if ctx in ("RotateSuperContext", "manipRotateContext"):
-                pm.manipPivot(rotateToolOri=0)
-            elif ctx in ("scaleSuperContext", "manipScaleContext"):
-                pm.manipPivot(scaleToolOri=0)
-            else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
-                pm.manipPivot(moveToolOri=0)
-                if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=1)
-
     @classmethod
+    @CoreUtils.undo
     def set_attr_lock_state(
         cls, objects, translate=None, rotate=None, scale=None, **kwargs
     ):
@@ -192,7 +115,7 @@ class RigUtils(ptk.HelpMixin):
             rotate (bool): Lock/Unlock all rotate x,y,z values at once.
             scale (bool): Lock/Unlock all scale x,y,z values at once.
         """
-        objects = pm.ls(objects, transforms=1, long=True)
+        objects = pm.ls(objects, transforms=True, long=True)
 
         attrs_and_state = {
             (
@@ -208,7 +131,7 @@ class RigUtils(ptk.HelpMixin):
 
         for obj in objects:
             try:
-                if node_utils.NodeUtils.is_locator(obj):
+                if NodeUtils.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
             except IndexError:
                 return
@@ -220,6 +143,7 @@ class RigUtils(ptk.HelpMixin):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod
+    @CoreUtils.undo
     def create_group(
         objects=[],
         name="",
@@ -260,8 +184,9 @@ class RigUtils(ptk.HelpMixin):
         pm.parent(grp, world=True)
         return grp
 
-    @classmethod
-    def create_group_with_first_obj_lra(cls, objects, name="", freeze_transforms=True):
+    @staticmethod
+    @CoreUtils.undo
+    def create_group_with_first_obj_lra(objects, name="", freeze_transforms=True):
         """Creates a group using the first object to define the local rotation axis.
 
         Parameters:
@@ -277,10 +202,8 @@ class RigUtils(ptk.HelpMixin):
             )
             return None
 
-        pm.undoInfo(openChunk=1)
-        cls.bake_pivot(
-            obj, position=True, orientation=True
-        )  # pm.mel.BakeCustomPivot(obj) #bake the pivot on the object that will define the LRA.
+        # Bake the pivot on the object that will define the LRA.
+        XformUtils.bake_pivot(obj, position=True, orientation=True)
 
         grp = pm.group(empty=True)
         pm.parent(grp, obj)
@@ -310,11 +233,11 @@ class RigUtils(ptk.HelpMixin):
             pm.rename(grp, obj.name())
         else:
             pm.rename(grp, name)
-        pm.undoInfo(closeChunk=1)
 
         return grp
 
     @classmethod
+    @CoreUtils.undo
     def create_locator_at_object(
         cls,
         objects,
@@ -353,19 +276,15 @@ class RigUtils(ptk.HelpMixin):
         Example:
             createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
         """
-        getSuffix = (
-            lambda o: loc_suffix
-            if node_utils.NodeUtils.is_locator(o)
-            else grp_suffix
-            if node_utils.NodeUtils.is_group(o)
-            else obj_suffix
+        getSuffix = lambda o: (
+            loc_suffix
+            if NodeUtils.is_locator(o)
+            else grp_suffix if NodeUtils.is_group(o) else obj_suffix
         )  # match the correct suffix to the object type.
-
-        pm.undoInfo(openChunk=1)
 
         for obj in pm.ls(objects, long=True, type="transform"):
             if bake_child_pivot:
-                cls.bake_pivot(obj, position=1, orientation=1)
+                XformUtils.bake_pivot(obj, position=1, orientation=1)
 
             vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
             if vertices:
@@ -375,7 +294,7 @@ class RigUtils(ptk.HelpMixin):
                 loc = cls.create_locator(scale=scale)
 
                 xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
-                x, y, z = pos = (
+                x, y, z = (
                     (xmin + xmax) / 2,
                     (ymin + ymax) / 2,
                     (zmin + zmax) / 2,
@@ -448,7 +367,191 @@ class RigUtils(ptk.HelpMixin):
                 pm.delete(loc)
                 raise (error)
 
-        pm.undoInfo(closeChunk=1)
+    @staticmethod
+    def constrain(
+        target, objects_to_constrain, constraint_type: str = "point", **kwargs
+    ) -> None:
+        """Constrain all selected objects to the specified target object in Maya.
+
+        Parameters:
+            target (str or PyNode): The target object to which the constraints will be applied.
+            objects_to_constrain (list): List of objects to be constrained to the target.
+            constraint_type (str): The type of constraint to apply. Options are 'point', 'orient', 'parent',
+                                   'scale', 'aim', or 'poleVector'. Default is 'point'.
+            **kwargs: Additional keyword arguments to be passed to the constraint functions.
+                      The 'maintainOffset' argument defaults to False if not provided.
+
+        Example:
+            # Point constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point')
+
+            # Point constraint with maintaining offset
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point', maintainOffset=True)
+
+            # Orient constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='orient')
+
+            # Parent constraint with maintaining offset and additional options
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='parent', maintainOffset=True, skip=['rotateX', 'rotateY'])
+
+            # Scale constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='scale')
+
+            # Aim constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='aim', aimVector=[1, 0, 0], upVector=[0, 1, 0], worldUpType='scene')
+
+            # Pole vector constraint without maintaining offset (default behavior)
+            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='poleVector')
+        """
+        if constraint_type in ["point", "orient", "parent", "scale"]:
+            kwargs.setdefault("maintainOffset", False)
+
+        for obj in objects_to_constrain:
+            if constraint_type == "point":
+                pm.pointConstraint(target, obj, **kwargs)
+            elif constraint_type == "orient":
+                pm.orientConstraint(target, obj, **kwargs)
+            elif constraint_type == "parent":
+                pm.parentConstraint(target, obj, **kwargs)
+            elif constraint_type == "scale":
+                pm.scaleConstraint(target, obj, **kwargs)
+            elif constraint_type == "aim":
+                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
+                pm.aimConstraint(target, obj, **kwargs)
+            elif constraint_type == "poleVector":
+                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
+                pm.poleVectorConstraint(target, obj, **kwargs)
+            else:
+                pm.warning(f"Unsupported constraint type: {constraint_type}")
+
+        print(
+            f"Applied {constraint_type} constraint from '{target}' to {len(objects_to_constrain)} objects."
+        )
+
+    @classmethod
+    @CoreUtils.undo
+    def setup_telescope_rig(
+        cls,
+        base_locator: Union[str, List[str]],
+        end_locator: Union[str, List[str]],
+        segments: List[str],
+        collapsed_distance: float = 1.0,
+    ):
+        """Sets up constraints and driven keys to make a series of segments telescope between two locators.
+
+        Parameters:
+            base_locator (str/object/list): The base locator.
+            end_locator (str/object/list): The end locator.
+            segments (List[str]): Ordered list of segment names. Must contain at least two segments.
+            collapsed_distance (float): The distance at which the segments are in the collapsed state.
+
+        Raises:
+            ValueError: If less than two segments are provided.
+        """
+        base_locators = pm.ls(base_locator, flatten=True)
+        if not base_locators:
+            raise ValueError("At least one valid base locator must be provided.")
+        base_locator = base_locators[0]
+
+        end_locators = pm.ls(end_locator, flatten=True)
+        if not end_locators:
+            raise ValueError("At least one valid end locator must be provided.")
+        end_locator = end_locators[0]
+
+        segments = pm.ls(segments, flatten=True)
+        if len(segments) < 2:
+            raise ValueError("At least two segments must be provided.")
+
+        def create_distance_node():
+            distance_node = pm.shadingNode(
+                "distanceBetween", asUtility=True, name="strut_distance"
+            )
+            pm.connectAttr(base_locator.translate, distance_node.point1)
+            pm.connectAttr(end_locator.translate, distance_node.point2)
+            return distance_node
+
+        def create_and_constrain_midpoint_locator(start_locator, end_locator, index):
+            midpoint_locator_name = f"segment_locator_{index}"
+            midpoint_locator = pm.spaceLocator(name=midpoint_locator_name)
+            midpoint_pos = (
+                pm.datatypes.Vector(start_locator.getTranslation(space="world"))
+                + pm.datatypes.Vector(end_locator.getTranslation(space="world"))
+            ) / 2
+            midpoint_locator.setTranslation(midpoint_pos, space="world")
+            pm.pointConstraint(start_locator, end_locator, midpoint_locator)
+            pm.aimConstraint(
+                end_locator,
+                midpoint_locator,
+                aimVector=(0, 1, 0),
+                upVector=(0, 1, 0),
+                worldUpType="scene",
+            )
+            return midpoint_locator
+
+        def constrain_segments():
+            pm.parentConstraint(base_locator, segments[0], mo=True)
+            pm.parentConstraint(end_locator, segments[-1], mo=True)
+            if len(segments) > 2:
+                for i, segment in enumerate(segments[1:-1], start=1):
+                    midpoint_locator = create_and_constrain_midpoint_locator(
+                        segments[i - 1], segments[i + 1], i
+                    )
+                    pm.parent(segment, midpoint_locator)
+                    pm.aimConstraint(
+                        end_locator,
+                        segment,
+                        aimVector=(0, 1, 0),
+                        upVector=(0, 1, 0),
+                        worldUpType="scene",
+                    )
+
+        def set_driven_keys(distance_node, initial_distance):
+            for segment in segments[1:-1]:
+                pm.setDrivenKeyframe(
+                    segment + ".scaleY",
+                    currentDriver=distance_node.distance,
+                    driverValue=initial_distance,
+                    value=1,
+                )
+                pm.setDrivenKeyframe(
+                    segment + ".scaleY",
+                    currentDriver=distance_node.distance,
+                    driverValue=collapsed_distance,
+                    value=collapsed_distance / initial_distance,
+                )
+
+        def lock_segment_attributes():
+            for segment in segments:
+                pm.setAttr(segment + ".translateX", lock=True)
+                pm.setAttr(segment + ".translateZ", lock=True)
+                pm.setAttr(segment + ".rotateX", lock=True)
+                pm.setAttr(segment + ".rotateZ", lock=True)
+                pm.setAttr(segment + ".scaleX", lock=True)
+                pm.setAttr(segment + ".scaleZ", lock=True)
+
+        def constrain_locators():
+            pm.aimConstraint(
+                end_locator,
+                base_locator,
+                aimVector=(0, 1, 0),
+                upVector=(0, 1, 0),
+                worldUpType="scene",
+            )
+            pm.aimConstraint(
+                base_locator,
+                end_locator,
+                aimVector=(0, -1, 0),
+                upVector=(0, 1, 0),
+                worldUpType="scene",
+            )
+
+        distance_node = create_distance_node()
+        constrain_locators()
+        constrain_segments()
+
+        initial_distance = pm.getAttr(distance_node.distance)
+        set_driven_keys(distance_node, initial_distance)
+        lock_segment_attributes()
 
 
 # -----------------------------------------------------------------------------

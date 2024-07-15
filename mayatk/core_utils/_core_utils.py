@@ -23,11 +23,22 @@ class CoreUtils(ptk.HelpMixin):
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            if not args or args[0] is None:
-                selection = pm.selected()
-                if not selection:
-                    return []
-                args = (selection,) + args[1:]
+            # Check if it's a method (class or regular) by looking at the first argument
+            if args and (hasattr(args[0], "__class__") or isinstance(args[0], type)):
+                if (
+                    len(args) < 2 or args[1] is None
+                ):  # Skip the 'cls' or 'self' parameter for class/regular methods
+                    selection = pm.selected()
+                    if not selection:
+                        return []
+                    args = (args[0], selection) + args[2:]
+            else:
+                if not args or args[0] is None:
+                    selection = pm.selected()
+                    if not selection:
+                        return []
+                    args = (selection,) + args[1:]
+
             return func(*args, **kwargs)
 
         return wrapped
@@ -171,6 +182,9 @@ class CoreUtils(ptk.HelpMixin):
             ),
             "workspace_path": lambda: ptk.format_path(
                 pm.workspace(q=True, rd=True), "path"
+            ),
+            "sourceimages": lambda: os.path.join(
+                pm.workspace(q=True, rd=True), "sourceimages"
             ),
             "scene": lambda: pm.sceneName(),
             "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),
@@ -341,6 +355,28 @@ class CoreUtils(ptk.HelpMixin):
         return control
 
     @staticmethod
+    def confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]:
+        """Confirms the existence of each object in the provided list in Maya.
+
+        Parameters:
+            objects (List[str]): List of object names to confirm existence.
+
+        Returns:
+            Tuple[List[str], List[str]]: A tuple containing two lists - the first list
+            contains names of existing objects, and the second list contains names of non-existing objects.
+        """
+        existing = []
+        non_existing = []
+
+        for obj in objects:
+            if pm.objExists(obj):
+                existing.append(obj)
+            else:
+                non_existing.append(obj)
+
+        return existing, non_existing
+
+    @staticmethod
     def mfn_mesh_generator(objects):
         """Generate mfn mesh from the given list of objects.
 
@@ -386,9 +422,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int"
-            if isinstance(o, int)
-            else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod

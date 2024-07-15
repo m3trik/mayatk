@@ -70,7 +70,7 @@ class GraphCollector:
         # Adding metadata for file nodes regarding their map type
         if node_type == "file":
             image_name = pm.getAttr(f"{node}.fileTextureName", "")
-            map_type = ptk.get_image_type_from_filename(image_name)
+            map_type = ptk.get_map_type_from_filename(image_name)
             graph_info[placeholder_name]["metadata"]["map_type"] = map_type
 
     def _is_connected_to_shading_engine(self, node):
@@ -170,7 +170,7 @@ class GraphRestorer:
 
         # Dictionary to hold available map types and their paths
         available_map_types = {
-            ptk.get_image_type_from_filename(path): path for path in self.texture_paths
+            ptk.get_map_type_from_filename(path): path for path in self.texture_paths
         }
 
         for placeholder, node_info in self.graph_config.items():
@@ -431,7 +431,7 @@ class ShaderTemplatesSlots:
         image_files = self.sb.file_dialog(
             file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
             title="Select one or more image files to open.",
-            directory=self.source_images_dir,
+            start_dir=self.source_images_dir,
         )
 
         if image_files:

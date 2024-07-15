@@ -9,17 +9,17 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import display_utils
-from mayatk import node_utils
-from mayatk import xform_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.display_utils import DisplayUtils
+from mayatk.node_utils import NodeUtils
+from mayatk.xform_utils import XformUtils
 
 
 class EditUtils(ptk.HelpMixin):
     """ """
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -106,7 +106,7 @@ class EditUtils(ptk.HelpMixin):
             )
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def strip_chars(
         objects: Union[str, object, List[Union[str, object]]],
         num_chars: int = 1,
@@ -139,7 +139,7 @@ class EditUtils(ptk.HelpMixin):
                 continue
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def set_case(objects=[], case="caplitalize"):
         """Rename objects following the given case.
 
@@ -161,7 +161,7 @@ class EditUtils(ptk.HelpMixin):
                     print(name + ": ", error)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def append_location_based_suffix(
         objects,
         first_obj_as_ref=False,
@@ -200,7 +200,7 @@ class EditUtils(ptk.HelpMixin):
         else:
             suffix = [str(n).zfill(len(str(length))) for n in range(length)]
 
-        ordered_objs = xform_utils.XformUtils.order_by_distance(
+        ordered_objs = XformUtils.order_by_distance(
             objects, reference_point=reference_point, reverse=reverse
         )
 
@@ -243,7 +243,7 @@ class EditUtils(ptk.HelpMixin):
             pm.rename(obj, newNames[obj])
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -362,7 +362,7 @@ class EditUtils(ptk.HelpMixin):
             if pm.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]
             for face in pm.ls(shape.faces, fl=True)
             if compare(
-                xform_utils.XformUtils.get_bounding_box(
+                XformUtils.get_bounding_box(
                     face, value=bbox_value, world_space=world_space
                 )
             )
@@ -371,7 +371,7 @@ class EditUtils(ptk.HelpMixin):
         return relevant_faces
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def cut_along_axis(
         cls, obj, axis="x", invert=False, ortho=False, amount=1, offset=0, delete=False
     ):
@@ -390,7 +390,7 @@ class EditUtils(ptk.HelpMixin):
         Example:
             cut_along_axis('pCube1', axis='y', delete=True, amount=2, offset=0.1)
         """
-        axis = xform_utils.XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
+        axis = XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
 
         def calculate_cut_position(bounding_box, axis, amount, offset, cut_index):
             axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
@@ -405,7 +405,7 @@ class EditUtils(ptk.HelpMixin):
 
             return tuple(cut_position)
 
-        bounding_box = xform_utils.XformUtils.get_bounding_box(
+        bounding_box = XformUtils.get_bounding_box(
             obj, "xmin|ymin|zmin|xmax|ymax|zmax", True
         )
 
@@ -429,7 +429,7 @@ class EditUtils(ptk.HelpMixin):
                 cls.delete_along_axis(obj, axis)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def delete_along_axis(
         cls, objects, axis="-x", invert=False, world_space=False, delete_history=True
     ):
@@ -442,11 +442,11 @@ class EditUtils(ptk.HelpMixin):
             world_space (bool): Specify world or local space.
             delete_history (bool): Specify whether to delete construction history.
         """
-        axis = xform_utils.XformUtils.convert_axis(axis, invert=invert)
+        axis = XformUtils.convert_axis(axis, invert=invert)
 
         # Process each object individually
         for node in pm.ls(objects, type="transform", flatten=True):
-            if node_utils.NodeUtils.is_group(node):
+            if NodeUtils.is_group(node):
                 continue  # Skip group nodes
 
             if delete_history:
@@ -460,7 +460,8 @@ class EditUtils(ptk.HelpMixin):
                 pm.delete(faces)  # Delete only faces on the specified axis
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
+    @DisplayUtils.add_to_isolation
     def mirror(
         cls,
         objects,
@@ -499,7 +500,7 @@ class EditUtils(ptk.HelpMixin):
         result = []
         for obj in original_objects:
             if uninstance:
-                node_utils.NodeUtils.uninstance(obj)
+                NodeUtils.uninstance(obj)
 
             if delete_history and not obj.isReferenced():
                 pm.delete(obj, constructionHistory=True)
@@ -526,7 +527,6 @@ class EditUtils(ptk.HelpMixin):
 
             result.append(polyMirrorFaceNode)
 
-        display_utils.DisplayUtils.add_to_isolation_set(result)
         return ptk.format_return(result, objects)
 
     @classmethod
@@ -624,7 +624,7 @@ class EditUtils(ptk.HelpMixin):
         scene_objs = {
             i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
             for i in scene_objs
-            if not node_utils.NodeUtils.is_group(i)
+            if not NodeUtils.is_group(i)
         }
         selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
 
@@ -835,7 +835,7 @@ class EditUtils(ptk.HelpMixin):
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mfnMesh in CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 
@@ -931,9 +931,7 @@ class EditUtils(ptk.HelpMixin):
         lst = lambda x: (
             list(x)
             if isinstance(x, (list, tuple, set))
-            else list(x.values())
-            if isinstance(x, dict)
-            else [x]
+            else list(x.values()) if isinstance(x, dict) else [x]
         )  # assure the returned result from polyEvaluate is a list of values.
 
         obj, *other = pm.ls(obj, long=True, transforms=True)
@@ -1023,6 +1021,119 @@ class EditUtils(ptk.HelpMixin):
                         pm.polyDelVertex(selected_components)
                 else:
                     pm.delete(obj)  # Delete entire object if no components selected
+
+    @classmethod
+    @CoreUtils.undo
+    @DisplayUtils.add_to_isolation
+    def create_default_primitive(
+        cls, baseType, subType, scale=False, translate=False, axis=None
+    ):
+        """ """
+        baseType = baseType.lower()
+        subType = subType.lower()
+
+        selection = pm.selected()
+
+        primitives = {
+            "polygon": {
+                "cube": "pm.polyCube(axis=axis, width=5, height=5, depth=5, subdivisionsX=1, subdivisionsY=1, subdivisionsZ=1)",
+                "sphere": "pm.polySphere(axis=axis, radius=5, subdivisionsX=12, subdivisionsY=12)",
+                "cylinder": "pm.polyCylinder(axis=axis, radius=5, height=10, subdivisionsX=12, subdivisionsY=1, subdivisionsZ=1)",
+                "plane": "pm.polyPlane(axis=axis, width=5, height=5, subdivisionsX=1, subdivisionsY=1)",
+                "circle": "cls.createCircle(axis=axis, numPoints=12, radius=5, mode=0)",
+                "cone": "pm.polyCone(axis=axis, radius=5, height=5, subdivisionsX=1, subdivisionsY=1, subdivisionsZ=1)",
+                "pyramid": "pm.polyPyramid(axis=axis, sideLength=5, numberOfSides=5, subdivisionsHeight=1, subdivisionsCaps=1)",
+                "torus": "pm.polyTorus(axis=axis, radius=10, sectionRadius=5, twist=0, subdivisionsX=5, subdivisionsY=5)",
+                "pipe": "pm.polyPipe(axis=axis, radius=5, height=5, thickness=2, subdivisionsHeight=1, subdivisionsCaps=1)",
+                "geosphere": "pm.polyPrimitive(axis=axis, radius=5, sideLength=5, polyType=0)",
+                "platonic solids": 'pm.mel.eval("performPolyPrimitive PlatonicSolid 0;")',
+            },
+            "nurbs": {
+                "cube": "pm.nurbsCube(ch=1, d=3, hr=1, p=(0, 0, 0), lr=1, w=1, v=1, ax=(0, 1, 0), u=1)",
+                "sphere": "pm.sphere(esw=360, ch=1, d=3, ut=0, ssw=0, p=(0, 0, 0), s=8, r=1, tolerance=0.01, nsp=4, ax=(0, 1, 0))",
+                "cylinder": "pm.cylinder(esw=360, ch=1, d=3, hr=2, ut=0, ssw=0, p=(0, 0, 0), s=8, r=1, tolerance=0.01, nsp=1, ax=(0, 1, 0))",
+                "cone": "pm.cone(esw=360, ch=1, d=3, hr=2, ut=0, ssw=0, p=(0, 0, 0), s=8, r=1, tolerance=0.01, nsp=1, ax=(0, 1, 0))",
+                "plane": "pm.nurbsPlane(ch=1, d=3, v=1, p=(0, 0, 0), u=1, w=1, ax=(0, 1, 0), lr=1)",
+                "torus": "pm.torus(esw=360, ch=1, d=3, msw=360, ut=0, ssw=0, hr=0.5, p=(0, 0, 0), s=8, r=1, tolerance=0.01, nsp=4, ax=(0, 1, 0))",
+                "circle": "pm.circle(c=(0, 0, 0), ch=1, d=3, ut=0, sw=360, s=8, r=1, tolerance=0.01, nr=(0, 1, 0))",
+                "square": "pm.nurbsSquare(c=(0, 0, 0), ch=1, d=3, sps=1, sl1=1, sl2=1, nr=(0, 1, 0))",
+            },
+            "light": {
+                "ambient": "pm.ambientLight()",  # defaults: 1, 0.45, 1,1,1, "0", 0,0,0, "1"
+                "directional": "pm.directionalLight()",  # 1, 1,1,1, "0", 0,0,0, 0
+                "point": "pm.pointLight()",  # 1, 1,1,1, 0, 0, 0,0,0, 1
+                "spot": "pm.spotLight()",  # 1, 1,1,1, 0, 40, 0, 0, 0, 0,0,0, 1, 0
+                "area": 'pm.shadingNode("areaLight", asLight=True)',  # 1, 1,1,1, 0, 0, 0,0,0, 1, 0
+                "volume": 'pm.shadingNode("volumeLight", asLight=True)',  # 1, 1,1,1, 0, 0, 0,0,0, 1
+            },
+        }
+        axis = axis or [0, 90, 0]
+
+        node = eval(primitives[baseType][subType])
+        # if originally there was a selected object, move the object to that objects's bounding box center.
+        if selection:
+            if translate:
+                XformUtils.move_to(node, selection)
+                # center_pos = mtk.get_center_point(selection)
+                # pm.xform(node, translation=center_pos, worldSpace=1, absolute=1)
+            if scale:
+                XformUtils.match_scale(node[0], selection, average=True)
+
+        return NodeUtils.get_history_node(node[0])
+
+    @staticmethod
+    @CoreUtils.undo
+    def create_circle(
+        axis="y", numPoints=5, radius=5, center=[0, 0, 0], mode=0, name="pCircle"
+    ):
+        """Create a circular polygon plane.
+
+        Parameters:
+            axis (str): 'x','y','z'
+            numPoints(int): number of outer points
+            radius=int
+            center=[float3 list] - point location of circle center
+            mode(int): 0 -no subdivisions, 1 -subdivide tris, 2 -subdivide quads
+
+        Returns:
+            (list) [transform node, history node] ex. [nt.Transform('polySurface1'), nt.PolyCreateFace('polyCreateFace1')]
+
+        Example: create_circle(axis='x', numPoints=20, radius=8, mode='tri')
+        """
+        import math
+
+        degree = 360 / float(numPoints)
+        radian = math.radians(degree)  # or math.pi*degree/180 (pi * degrees / 180)
+
+        vertexPoints = []
+        for _ in range(numPoints):
+            # print("deg:", degree,"\n", "cos:",math.cos(radian),"\n", "sin:",math.sin(radian),"\n", "rad:",radian)
+            if axis == "x":  # x axis
+                y = center[2] + (math.cos(radian) * radius)
+                z = center[1] + (math.sin(radian) * radius)
+                vertexPoints.append([0, y, z])
+            if axis == "y":  # y axis
+                x = center[2] + (math.cos(radian) * radius)
+                z = center[0] + (math.sin(radian) * radius)
+                vertexPoints.append([x, 0, z])
+            else:  # z axis
+                x = center[0] + (math.cos(radian) * radius)
+                y = center[1] + (math.sin(radian) * radius)
+                vertexPoints.append([x, y, 0])  # not working.
+
+            # increment by original radian value that was converted from degrees
+            radian = radian + math.radians(degree)
+            # print(x,y,"\n")
+
+        node = pm.ls(pm.polyCreateFacet(point=vertexPoints, name=name))
+        # returns: ['Object name', 'node name']. pymel 'ls' converts those to objects.
+        pm.polyNormal(node, normalMode=4)  # 4=reverse and propagate
+        if mode == 1:
+            pm.polySubdivideFacet(divisions=1, mode=1)
+        if mode == 2:
+            pm.polySubdivideFacet(divisions=1, mode=0)
+
+        return node
 
 
 # -----------------------------------------------------------------------------

@@ -5,16 +5,14 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk import core_utils
-from mayatk.core_utils import preview
-from mayatk.core_utils import components
+from mayatk.core_utils import CoreUtils, preview, components
 
 
 class Bevel:
     @staticmethod
     def bevel(
         edges,
-        width=5,
+        width=0.5,
         segments=1,
         autoFit=True,
         depth=1,
@@ -34,21 +32,21 @@ class Bevel:
         offering fine-grained control over the bevel operation.
 
         Parameters:
-        - edges: List of edges to bevel
-        - width: Bevel width as a fraction between 0 and 1
-        - segments: Number of segments for the bevel
-        - autoFit: Whether to compute a smooth roundness for new facets
-        - depth: Depth of the bevel
-        - mitering: Controls the topology at corners
-        - miterAlong: Direction to offset new vertices
-        - chamfer: Whether to smooth out the surface at bevels
-        - worldSpace: Whether to use world space or object space for geometrical values
-        - smoothingAngle: Angle for creating new hard edges
-        - fillNgons: Whether to subdivide new faces with more than 4 edges
-        - mergeVertices: Whether to merge vertices within a tolerance
-        - mergeVertexTolerance: Tolerance within which to merge vertices
-        - miteringAngle: Miter faces that have angles less than this value
-        - angleTolerance: Angular tolerance for creation of extra triangles
+            edges (str/obj/list): List of edges to bevel
+            width (float): Bevel width as a fraction between 0 and 1
+            segments (int): Number of segments for the bevel
+            autoFit (bool): Whether to compute a smooth roundness for new facets
+            depth (): Depth of the bevel
+            mitering (): Controls the topology at corners
+            miterAlong (): Direction to offset new vertices
+            chamfer (bool): Whether to smooth out the surface at bevels
+            worldSpace (bool): Whether to use world space or object space for geometrical values
+            smoothingAngle (): Angle for creating new hard edges
+            fillNgons (bool): Whether to subdivide new faces with more than 4 edges
+            mergeVertices (bool): Whether to merge vertices within a tolerance
+            mergeVertexTolerance (float): Tolerance within which to merge vertices
+            miteringAngle (): Miter faces that have angles less than this value
+            angleTolerance (): Angular tolerance for creation of extra triangles
         """
 
         mapped_edges = components.Components.map_components_to_objects(edges)
@@ -97,7 +95,7 @@ if __name__ == "__main__":
     import os
     from uitk import Switchboard
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "bevel.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=BevelSlots)
 

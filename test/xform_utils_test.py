@@ -81,6 +81,21 @@ class XformUtilsTest(unittest.TestCase):
             mtk.match_scale(self.cube1, self.cube2, scale=False), [1.0, 1.0, 1.0]
         )
 
+    def test_bake_custom_pivot(self):
+        with self.subTest(msg="No arguments"):
+            result = mtk.bake_pivot("sph")
+            self.assertEqual(result, None)
+        with self.subTest(msg="Position argument"):
+            result = mtk.bake_pivot("sph", position=True)
+            self.assertEqual(result, None)
+        with self.subTest(msg="Orientation argument"):
+            result = mtk.bake_pivot("sph", orientation=True)
+            self.assertEqual(result, None)
+
+    def test_reset_pivot_transforms(self):
+        result = mtk.reset_pivot_transforms("sph")
+        self.assertEqual(result, None)
+
     def test_align_using_three_points(self):
         pass
         # self.assertEqual(mtk.align_using_three_points(), None)
