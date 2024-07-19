@@ -14,9 +14,6 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 
-# from mayatk import xform_utils
-# from mayatk import node_utils
-
 
 class MapConverterSlots(ptk.ImgUtils):
     texture_file_types = [
@@ -71,7 +68,7 @@ class MapConverterSlots(ptk.ImgUtils):
         """Pack Transparency into Albedo"""
         paths = self.sb.file_dialog(
             file_types=self.texture_file_types,
-            title="Select an albedo and transparency map:",
+            title="Select an albedo map and transparency map:",
             start_dir=self.sourceimages,
             allow_multiple=True,
         )
@@ -110,7 +107,7 @@ class MapConverterSlots(ptk.ImgUtils):
         """Pack Smoothness or Roughness into Metallic"""
         paths = self.sb.file_dialog(
             file_types=self.texture_file_types,
-            title="Select a metallic and smoothness or roughness map:",
+            title="Select a metallic map and a smoothness or roughness map:",
             start_dir=self.sourceimages,
             allow_multiple=True,
         )
@@ -151,30 +148,45 @@ class MapConverterSlots(ptk.ImgUtils):
             print(f"// Result: {metallic_smoothness_map_path}")
 
     def b004(self):
-        """Convert Specular to Metallic"""
-        spec_map_path = self.sb.file_dialog(
+        """Convert Specular map(s) to Metallic"""
+        spec_map_paths = self.sb.file_dialog(
             file_types=self.texture_file_types,
             title="Select a specular map to convert:",
             start_dir=self.sourceimages,
-            allow_multiple=False,
+            allow_multiple=True,
         )
-        if spec_map_path:
+        for spec_map_path in spec_map_paths:
             print(f"Converting: {spec_map_path} ..")
             metallic_map_path = self.create_metallic_from_spec(spec_map_path)
             print(f"// Result: {metallic_map_path}")
 
     def b005(self):
-        """Convert Specular to Roughness"""
-        spec_map_path = self.sb.file_dialog(
+        """Convert Specular map(s) to Roughness"""
+        spec_map_paths = self.sb.file_dialog(
             file_types=self.texture_file_types,
             title="Select a specular map to convert:",
             start_dir=self.sourceimages,
-            allow_multiple=False,
+            allow_multiple=True,
         )
-        if spec_map_path:
+        for spec_map_path in spec_map_paths:
             print(f"Converting: {spec_map_path} ..")
             roughness_map_path = self.create_roughness_from_spec(spec_map_path)
             print(f"// Result: {roughness_map_path}")
+
+    def b006(self):
+        """Optimize a texture map(s)"""
+        texture_paths = self.sb.file_dialog(
+            file_types=self.texture_file_types,
+            title="Select texture map(s) to optimize:",
+            start_dir=self.sourceimages,
+            allow_multiple=True,
+        )
+        for texture_path in texture_paths:
+            print(f"Optimizing: {texture_path} ..")
+            optimized_map_path = self.optimize_texture(
+                texture_path, max_size=4096, suffix="_opt"
+            )
+            print(f"// Result: {optimized_map_path}")
 
 
 # -----------------------------------------------------------------------------

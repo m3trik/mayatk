@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import re
+import ctypes
 import shutil
 import logging
 from datetime import datetime
@@ -231,7 +232,6 @@ class SceneExporter(SceneExporterMixin):
         temp_linear_unit: Optional[str] = None,
         temp_time_unit: Optional[str] = None,
         temp_workspace: Optional[bool] = None,
-        create_log_file: Optional[bool] = None,
         convert_to_relative_paths: bool = False,
         delete_unused_materials: bool = False,
         exclude_materials: List[str] = [],
@@ -241,6 +241,8 @@ class SceneExporter(SceneExporterMixin):
         check_hidden_geometry_with_keys: bool = False,
         check_referenced_objects: bool = False,
         log_level: int = logging.INFO,
+        create_log_file: Optional[bool] = None,
+        hide_log_file: Optional[bool] = None,
         log_handler: Optional[logging.Handler] = None,
     ):
         self._export_dir = export_dir
@@ -251,7 +253,6 @@ class SceneExporter(SceneExporterMixin):
         self.temp_linear_unit = temp_linear_unit
         self.temp_time_unit = temp_time_unit
         self.temp_workspace = temp_workspace
-        self.create_log_file = create_log_file
         self.check_absolute_paths = check_absolute_paths
         self.check_duplicate_materials = check_duplicate_materials
         self.reassign_duplicate_materials = reassign_duplicate_materials
@@ -260,6 +261,9 @@ class SceneExporter(SceneExporterMixin):
         self.convert_to_relative_paths = convert_to_relative_paths
         self.delete_unused_materials = delete_unused_materials
         self.exclude_materials = exclude_materials
+
+        self.create_log_file = create_log_file
+        self.hide_log_file = hide_log_file
 
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(log_level)
@@ -396,12 +400,19 @@ class SceneExporter(SceneExporterMixin):
             pm.warning("No geometry selected to export.")
             self.logger.warning("No geometry selected to export.")
             return
+
         try:
             pm.exportSelected(export_path, type=file_format, force=True)
             self.logger.info(f"File exported: {export_path}")
         except Exception as e:
             self.logger.error(f"Failed to export geometry: {e}")
             raise RuntimeError(f"Failed to export geometry: {e}")
+        finally:
+            if self.create_log_file:
+                root_logger = logging.getLogger()
+                root_logger.removeHandler(self.file_handler)
+                self.file_handler.close()
+                self.logger.debug(f"Log file handler closed: {log_file_path}")
 
     def load_fbx_export_preset(self, preset_path: str):
         preset_path_escaped = preset_path.replace("\\", "/")
@@ -437,9 +448,13 @@ class SceneExporter(SceneExporterMixin):
         file_handler.setFormatter(
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         )
+        self.file_handler = file_handler
         root_logger = logging.getLogger()
-        root_logger.addHandler(file_handler)
+        root_logger.addHandler(self.file_handler)
         self.logger.debug(f"File logging setup complete. Log file: {log_file_path}")
+
+        if self.hide_log_file and os.name == "nt":
+            ctypes.windll.kernel32.SetFileAttributesW(log_file_path, 2)
 
 
 class TextEditHandler(logging.Handler):

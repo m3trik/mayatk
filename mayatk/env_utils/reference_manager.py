@@ -100,9 +100,9 @@ class ReferenceManager(ptk.HelpMixin):
     def add_reference(self, namespace: str, file_path: str) -> bool:
         # Ensure the file exists before proceeding
         if not os.path.exists(file_path):
-            pm.displayError(
-                f"Could not open file: {file_path} (File does not exist or is not accessible)"
-            )
+            file_not_found_error_msg = f"File not found: {file_path}"
+            self.logger.error(file_not_found_error_msg)
+            pm.displayError(file_not_found_error_msg)
             return False
 
         # Check if the file is fully accessible (not virtual)
@@ -173,6 +173,11 @@ class ReferenceManager(ptk.HelpMixin):
 
         for ref in all_references:
             ref.importContents()
+
+    def update_references(self):
+        """Update all references to reflect the latest changes from the original files."""
+        for ref in self.current_references:
+            ref.load()
 
     def remove_references(self, namespaces=None):
         """Remove references based on their namespaces.
@@ -326,6 +331,8 @@ class ReferenceManagerSlots(ReferenceManager):
 
         for item in items_to_select:
             item.setSelected(True)
+
+        self.update_references()  # Update references to reflect the latest changes
 
         # Unblock signals after updating the list
         self.ui.list000.blockSignals(False)

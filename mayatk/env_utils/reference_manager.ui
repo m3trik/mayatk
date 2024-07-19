@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>350</width>
-    <height>300</height>
+    <height>377</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -130,7 +130,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Refresh the list of references based on the current workspace and filter settings.</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Refresh the list of references based on the current workspace and filter settings.&lt;/p&gt;&lt;p&gt;Also updates any references in the scene to their latest versions.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="text">
             <string>Refresh</string>

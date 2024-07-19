@@ -186,7 +186,7 @@ class StingrayArnoldShader:
         Returns:
             bool: True if the connection is successful, False otherwise.
         """
-        if texture_type == "Base_Color":
+        if texture_type in ["Base_Color", "Diffuse"]:
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
@@ -226,7 +226,7 @@ class StingrayArnoldShader:
             sr_node.use_metallic_map.set(1)
             sr_node.use_roughness_map.set(1)
 
-        elif texture_type in ["Normal_OpenGL", "Normal_DirectX"]:
+        elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
@@ -279,7 +279,7 @@ class StingrayArnoldShader:
         Returns:
             bool: True if the connection is successful, False otherwise.
         """
-        if texture_type == "Base_Color":
+        if texture_type in ["Base_Color", "Diffuse"]:
             texture_node = NodeUtils.create_render_node(
                 "file",
                 "as2DTexture",
@@ -409,38 +409,33 @@ class StingrayArnoldShader:
         Returns:
             List[str]: The modified list of texture file paths with the correct normal map type.
         """
+        other_textures = [tex for tex in textures if not ptk.is_normal_map(tex)]
 
-        # Normalize desired_normal_type to match naming convention in textures
-        desired_normal_type = "Normal_" + desired_normal_type
+        # Filter normal maps by type
+        opengl_maps = ptk.filter_images_by_type(textures, ["Normal_OpenGL"])
+        directx_maps = ptk.filter_images_by_type(textures, ["Normal_DirectX"])
+        generic_normal_maps = ptk.filter_images_by_type(textures, ["Normal"])
 
-        # Separate normal maps from other textures
-        normal_maps = [tex for tex in textures if "Normal_" in tex]
-        other_textures = [tex for tex in textures if "Normal_" not in tex]
+        if desired_normal_type == "OpenGL":
+            if opengl_maps:
+                return other_textures + opengl_maps
+            elif directx_maps:
+                for nm in directx_maps:
+                    converted_map = ptk.create_gl_from_dx(nm)
+                    if converted_map:
+                        return other_textures + [converted_map]
+        elif desired_normal_type == "DirectX":
+            if directx_maps:
+                return other_textures + directx_maps
+            elif opengl_maps:
+                for nm in opengl_maps:
+                    converted_map = ptk.create_dx_from_gl(nm)
+                    if converted_map:
+                        return other_textures + [converted_map]
 
-        # Filter normal maps for the desired type
-        desired_normal_maps = [nm for nm in normal_maps if desired_normal_type in nm]
-
-        # If the desired normal map is already present, return it with the other textures
-        if desired_normal_maps:
-            return other_textures + desired_normal_maps
-
-        # Attempt to create the desired normal map by converting from the available one
-        for nm in normal_maps:
-            if "OpenGL" in desired_normal_type and "DirectX" in nm:
-                # Convert DirectX to OpenGL
-                converted_map = ptk.create_gl_from_dx(nm)
-                if converted_map:
-                    return other_textures + [converted_map]
-            elif "DirectX" in desired_normal_type and "OpenGL" in nm:
-                # Convert OpenGL to DirectX
-                converted_map = ptk.create_dx_from_gl(nm)
-                if converted_map:
-                    return other_textures + [converted_map]
-
-        # If no normal map conversion was possible, check for a generic normal map
-        generic_normal_map = [nm for nm in normal_maps if "Normal_" not in nm]
-        if generic_normal_map:
-            return other_textures + generic_normal_map
+        # If no normal map conversion was possible, use generic normal maps if available
+        if generic_normal_maps:
+            return other_textures + generic_normal_maps
 
         # If no normal maps are found, return the list unchanged
         return other_textures
@@ -506,6 +501,7 @@ class StingrayArnoldShader:
         """Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency parameter.
         Prioritizes an albedo transparency map over separate albedo and transparency maps when use_albedo_transparency is True.
         If use_albedo_transparency is False, filters out any albedo transparency maps from the textures.
+        Falls back to diffuse map if no base color map is found.
 
         Parameters:
             textures (List[str]): List of texture file paths.
@@ -518,6 +514,7 @@ class StingrayArnoldShader:
             textures, "Albedo_Transparency"
         )
         base_color_map = ptk.filter_images_by_type(textures, "Base_Color")
+        diffuse_map = ptk.filter_images_by_type(textures, "Diffuse")
         transparency_map = ptk.filter_images_by_type(textures, "Opacity")
 
         if use_albedo_transparency:
@@ -526,7 +523,7 @@ class StingrayArnoldShader:
                 return [
                     tex
                     for tex in textures
-                    if tex not in base_color_map + transparency_map
+                    if tex not in base_color_map + transparency_map + diffuse_map
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
@@ -538,11 +535,25 @@ class StingrayArnoldShader:
                     for tex in textures
                     if tex not in base_color_map + transparency_map
                 ] + [combined_map]
+            elif diffuse_map and transparency_map:
+                # Create an albedo transparency map from diffuse and transparency maps, then update the list
+                combined_map = ptk.pack_transparency_into_albedo(
+                    diffuse_map[0], transparency_map[0]
+                )
+                return [
+                    tex
+                    for tex in textures
+                    if tex not in base_color_map + transparency_map + diffuse_map
+                ] + [combined_map]
         else:
-            # If use_albedo_transparency is False, filter out any albedo transparency maps
-            return [tex for tex in textures if tex not in albedo_transparency_map]
+            if base_color_map:
+                return textures
+            elif diffuse_map:
+                return [
+                    tex for tex in textures if tex not in base_color_map
+                ] + diffuse_map
 
-        # Return the textures list unchanged if no conditions are met
+        # If no base color or diffuse map is found, return the list unchanged
         return textures
 
 

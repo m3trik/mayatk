@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Dict, ClassVar, Optional, Union, Any
+from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any
 
 try:
     import pymel.core as pm
@@ -479,6 +479,68 @@ class AnimUtils(ptk.HelpMixin):
                     pm.cutKey(obj, time=time_range, clear=True)
                 else:
                     pm.cutKey(obj, clear=True)
+
+    @staticmethod
+    def get_frame_ranges(
+        objects: List[str],
+        precision: Optional[int] = None,
+        gap: Optional[int] = None,
+    ) -> Dict[str, List[Tuple[int, int]]]:
+        """Calculate frame ranges for a list of objects based on their keyframes.
+
+        This method analyzes the keyframes of given objects and determines continuous
+        frame ranges. It supports optional rounding of frame numbers to a specified precision
+        and allows for specifying a gap threshold to split ranges.
+
+        Parameters:
+            objects (List[str]): List of object names to analyze.
+            precision (Optional[int]): Precision for rounding frame numbers. If provided,
+                                    frame numbers will be rounded to the nearest multiple
+                                    of this value.
+            gap (Optional[int]): Maximum allowed gap between consecutive keyframes in a
+                                range. If the gap between two consecutive keyframes exceeds
+                                this value, a new range will be started.
+        Returns:
+            Dict[str, List[Tuple[int, int]]]: Dictionary mapping object names to lists of
+                                            frame ranges. Each frame range is represented
+                                            as a tuple (start_frame, end_frame). If an
+                                            object has no keyframes, the range will be
+                                            [(None, None)].
+        """
+
+        def round_to_nearest(value: float, base: int) -> int:
+            return int(base * round(value / base))
+
+        frame_ranges = {}
+        for obj in objects:
+            keyframes = pm.keyframe(obj, query=True)
+            if keyframes:
+                keyframes = sorted(set(keyframes))  # Ensure unique, sorted keyframes
+                ranges = []
+                start_frame = keyframes[0]
+                last_frame = keyframes[0]
+
+                for kf in keyframes[1:]:
+                    if gap is not None and kf - last_frame > gap:
+                        end_frame = last_frame
+                        if precision:
+                            start_frame = round_to_nearest(start_frame, precision)
+                            end_frame = round_to_nearest(end_frame, precision)
+                        ranges.append((start_frame, end_frame))
+                        start_frame = kf
+                    last_frame = kf
+
+                end_frame = last_frame
+                if precision is not None:
+                    start_frame = round_to_nearest(start_frame, precision)
+                    end_frame = round_to_nearest(end_frame, precision)
+                ranges.append((start_frame, end_frame))
+
+                frame_ranges[obj] = ranges
+            else:
+                frame_ranges[obj] = [(None, None)]  # No keyframes, no range
+
+        return frame_ranges
 
 
 # -----------------------------------------------------------------------------

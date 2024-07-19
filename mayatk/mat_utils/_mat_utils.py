@@ -202,32 +202,26 @@ class MatUtils(ptk.HelpMixin):
 
     @classmethod
     def find_by_mat_id(
-        cls, material: str, objects: List[str] = None, shell: bool = False
+        cls, material: str, objects: Optional[List[str]] = None, shell: bool = False
     ) -> List[str]:
-        """Find objects or faces by the material ID in a 3D scene.
+        """Find objects or faces by the material ID.
 
-        This function takes as input a material and a set of objects (or entire scene by default) and
-        returns a list of objects or faces that are associated with the input material.
-
-        If the 'shell' parameter is set to True, this function returns the complete objects that have
-        the input material. If 'shell' is set to False, the function returns the individual faces that
-        have the input material.
-
-        Note: If the material is a multi-material (such as VRayMultiSubTex), an error will be raised.
+        This method searches for objects or faces that are assigned a specific material.
+        It supports filtering by specific objects and can operate in two modes: shell mode
+        where it only returns the transform nodes, or full mode where it returns individual faces.
 
         Parameters:
-            cls: The class object. This argument is implicitly passed and doesn't need to be provided by the user.
-            material (str): The material (e.g. 'lambert1') used to find the associated objects/faces.
-            objects (list, optional): List of objects (e.g. ['pCube1', 'pCube2']) to be considered.
-                                    If not provided, all objects in the scene will be considered.
-            shell (bool, optional): Determines whether to return complete objects (True) or individual faces (False).
-                                    Default is False.
-
-        Raises:
-            TypeError: If material is a multimaterial.
-
+            material (str): The name of the material to search for.
+            objects (Optional[List[str]], optional): A list of objects to filter the search.
+                                                     Only objects in this list will be considered.
+                                                     Defaults to None.
+            shell (bool, optional): If True, only the transform nodes of the objects will be returned.
+                                    If False, individual faces assigned the material will be returned.
+                                    Defaults to False.
         Returns:
-            list: A list of objects or faces (depending on 'shell' parameter) that are associated with the input material.
+            List[str]: A list of objects or faces that are assigned the given material. The list
+                       contains transform nodes if `shell` is True, otherwise it contains individual
+                       faces.
         """
         if pm.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
@@ -238,40 +232,27 @@ class MatUtils(ptk.HelpMixin):
             print(f"Material '{material}' does not exist.")
             return []
 
-        # If objects are not specified, consider all objects in the scene
-        objects = pm.ls(objects) or pm.ls(geometry=True)  # Get all mesh objects
-        if not objects:
-            print("No objects found in the scene.")
-            return []
-
-        # Convert mesh shapes to transform nodes
-        objects = NodeUtils.get_transform_node(objects)
-
-        # Find the shading groups associated with the material
         shading_groups = pm.listConnections(material, type="shadingEngine")
-
         if not shading_groups:
             print(f"No shading groups found for material '{material}'.")
             return []
 
         objs_with_material = []
+        transform_nodes = NodeUtils.get_transform_node(objects)
         for sg in shading_groups:
-            connected_objs = pm.sets(sg, query=True, noIntermediate=True)
-            if connected_objs:
-                for obj in connected_objs:
-                    if pm.nodeType(obj) == "transform":
-                        shape_nodes = pm.listRelatives(obj, shapes=True)
-                        for shape in shape_nodes:
-                            faces = pm.sets(sg, query=True, noIntermediate=True)
-                            if faces:
-                                objs_with_material.extend(faces)
-                    elif pm.nodeType(obj) == "mesh":
-                        faces = pm.sets(sg, query=True, noIntermediate=True)
-                        if faces:
-                            objs_with_material.extend(faces)
-
-        if shell:
-            objs_with_material = list(set(pm.ls(objs_with_material, objectsOnly=True)))
+            members = pm.sets(sg, query=True, noIntermediate=True)
+            for member in members:
+                transform_node = NodeUtils.get_transform_node(member)
+                if objects and transform_node not in transform_nodes:
+                    continue
+                if shell:
+                    if transform_node not in objs_with_material:
+                        objs_with_material.append(transform_node)
+                else:
+                    faces = transform_node.faces
+                    for face in faces:
+                        if sg in pm.listSets(object=face, type=1):
+                            objs_with_material.append(face)
 
         return objs_with_material
 
