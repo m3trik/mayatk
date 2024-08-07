@@ -444,9 +444,7 @@ class MatUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undo
-    def convert_to_relative_paths(
-        items: Optional[List[str]] = None,
-    ) -> None:
+    def convert_to_relative_paths(items: Optional[List[str]] = None) -> None:
         """Convert absolute file paths to relative paths for file texture nodes.
 
         This function processes file texture nodes to convert their
@@ -458,16 +456,8 @@ class MatUtils(ptk.HelpMixin):
         Raises:
             FileNotFoundError: If the 'sourceimages' directory does not exist.
         """
-        sourceimages_path = CoreUtils.get_maya_info("sourceimages")
+        base_dir = CoreUtils.get_maya_info("sourceimages")
 
-        if not os.path.exists(sourceimages_path):
-            raise FileNotFoundError(
-                f"The 'sourceimages' directory does not exist: {sourceimages_path}"
-            )
-
-        absolute_paths_found = False
-
-        # Get all materials and file nodes if items are not provided
         if not items:
             items = pm.ls(type="file")
 
@@ -475,35 +465,15 @@ class MatUtils(ptk.HelpMixin):
         for item in items:
             if pm.nodeType(item) == "file":
                 file_nodes.append(item)
-            else:  # Assume it's a material and find connected file nodes
+            else:
                 file_nodes.extend(pm.listConnections(item, type="file"))
 
-        # Remove duplicates
         file_nodes = list(set(file_nodes))
         for file_node in file_nodes:
             file_path = file_node.fileTextureName.get()
-
-            file_name = os.path.basename(file_path)
-            relative_path = os.path.join("sourceimages", file_name)
-            expected_relative_path = os.path.join(sourceimages_path, file_name)
-
-            # Check if the file path is already relative by comparing with the expected relative path
-            if os.path.abspath(file_path) == os.path.abspath(expected_relative_path):
-                # Silently set the relative path just to be safe.
-                file_node.fileTextureName.set(relative_path)
-                continue
-
-            absolute_paths_found = True
-
-            # Convert to relative path
-            if os.path.isabs(file_path) and os.path.exists(
-                os.path.join(sourceimages_path, file_name)
-            ):
-                file_node.fileTextureName.set(relative_path)
-                print(f"Set relative path for node {file_node}: {relative_path}")
-
-        if not absolute_paths_found:
-            print("No absolute paths found.")
+            relative_path = ptk.convert_to_relative_path(file_path, base_dir)
+            file_node.fileTextureName.set(relative_path)
+            print(f"Converted {file_path} to relative path: {relative_path}")
 
     @staticmethod
     def reload_textures(

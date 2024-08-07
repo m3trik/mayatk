@@ -10,11 +10,108 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
-from mayatk import core_utils
+
+class AssemblyManager:
+    @classmethod
+    def current_references(cls):
+        """Get the current scene references.
+
+        Returns:
+            list: A list of FileReference objects representing the current scene references.
+        """
+        return pm.system.listReferences()
+
+    @classmethod
+    def create_assembly_definition(cls, namespace: str, file_path: str) -> str:
+        """Create an assembly definition for the given file path.
+
+        Parameters:
+            namespace (str): The namespace to be used for the assembly.
+            file_path (str): The file path of the scene to create the assembly from.
+
+        Returns:
+            str: The name of the created representation, or None if the creation failed.
+        """
+        try:
+            # Validate file path
+            if not pm.util.path(file_path).exists():
+                print(f"File does not exist: {file_path}")
+                pm.displayError(f"File does not exist: {file_path}")
+                return None
+
+            # Create assembly definition
+            assembly_name = f"{namespace}_assembly"
+            assembly_node = pm.assembly(name=assembly_name, type="assemblyDefinition")
+            print(f"Created assembly definition: {assembly_node}")
+
+            # Create representation
+            rep_name = pm.assembly(
+                assembly_node, edit=True, createRepresentation="Scene", input=file_path
+            )
+            representations = pm.assembly(
+                assembly_node, query=True, listRepresentations=True
+            )
+            print(
+                f"Created representation for assembly: {assembly_node} from file: {file_path}"
+            )
+            print(f"Available representations for {assembly_node}: {representations}")
+            return representations[0] if representations else None
+        except Exception as e:
+            print(f"Failed to create assembly definition for {file_path}: {str(e)}")
+            pm.displayError(f"Failed to create assembly definition for {file_path}")
+            return None
+
+    @classmethod
+    def set_active_representation(
+        cls, assembly_node: str, representation_name: str
+    ) -> bool:
+        """Set the active representation for an assembly.
+
+        Parameters:
+            assembly_node (str): The name of the assembly node.
+            representation_name (str): The name of the representation to set as active.
+
+        Returns:
+            bool: True if the representation was successfully set as active, False otherwise.
+        """
+        try:
+            pm.assembly(assembly_node, edit=True, active=representation_name)
+            print(
+                f"Set active representation {representation_name} for {assembly_node}"
+            )
+            return True
+        except Exception as e:
+            print(f"Failed to set active representation for {assembly_node}: {str(e)}")
+            pm.displayError(f"Failed to set active representation for {assembly_node}")
+            return False
+
+    @classmethod
+    def convert_references_to_assemblies(cls):
+        """Convert all current references to assembly definitions and references.
+
+        Iterates through all current references, creates an assembly definition for each,
+        sets the active representation, and optionally removes the original reference after conversion.
+        """
+        for ref in cls.current_references():
+            namespace = ref.namespace
+            file_path = ref.path
+
+            rep_name = cls.create_assembly_definition(namespace, file_path)
+            if rep_name:
+                assembly_name = f"{namespace}_assembly"
+                if cls.set_active_representation(assembly_name, rep_name):
+                    print(
+                        f"Successfully created and set active representation for {assembly_name}"
+                    )
+                    # Optionally remove the original reference after conversion
+                    ref.remove()
+                else:
+                    print(f"Failed to set active representation for {assembly_name}")
+            else:
+                print(f"Failed to create assembly definition for {file_path}")
 
 
-class ReferenceManager(ptk.HelpMixin):
+class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
     def __init__(self):
         self._filter_text = ""
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
@@ -155,11 +252,12 @@ class ReferenceManager(ptk.HelpMixin):
                 raise
             return False
 
-    def import_references(self, namespaces=None):
+    def import_references(self, namespaces=None, remove_namespace=False):
         """Imports the referenced objects into the scene.
 
         Parameters:
             namespaces (str, list of str, or None): A list of namespaces to import. If not provided, all references will be imported.
+            remove_namespace (bool): Whether to remove the namespace when importing the references. Default is False.
         """
         all_references = self.current_references
 
@@ -172,7 +270,7 @@ class ReferenceManager(ptk.HelpMixin):
             ]
 
         for ref in all_references:
-            ref.importContents()
+            ref.importContents(removeNamespace=remove_namespace)
 
     def update_references(self):
         """Update all references to reflect the latest changes from the original files."""
@@ -220,6 +318,7 @@ class ReferenceManagerSlots(ReferenceManager):
         )
         self.ui.b002.clicked.connect(self.unreference_all)
         self.ui.b003.clicked.connect(self.unlink_all)
+        self.ui.b005.clicked.connect(self.convert_to_assembly)
         self.ui.b004.clicked.connect(lambda: self.refresh_file_list(invalidate=True))
 
         # Connect scene change event to refresh_file_list method
@@ -376,26 +475,43 @@ class ReferenceManagerSlots(ReferenceManager):
         """Slot to handle the unlink all button click."""
         # Display a warning message box to the user
         user_choice = self.sb.message_box(
-            "<b>Warning:</b> The unlink operation is not undoable. Do you want to proceed?",
+            "<b>Warning:</b> The unlink operation is not undoable.<br>Do you want to proceed?",
             "Yes",
             "No",
         )
-
         # Proceed with the operation only if the user confirms
         if user_choice == "Yes":
-            self.import_references()  # Import references, effectively unlinking them
-            self.refresh_file_list()  # Update the filtered list to reflect the changes
+            # Import references, effectively unlinking them
+            self.import_references(remove_namespace=True)
+            # Update the filtered list to reflect the changes
+            self.refresh_file_list()
         else:
             # Optionally, display a message indicating the operation was canceled
             self.sb.message_box("<b>Unlink operation cancelled.</b>")
+
+    def convert_to_assembly(self):
+        """Slot to handle the unlink all button click."""
+        # Display a warning message box to the user
+        user_choice = self.sb.message_box(
+            "<b>Warning:</b> The convert to assembly operation is not undoable.<br>Do you want to proceed?",
+            "Yes",
+            "No",
+        )
+        # Proceed with the operation only if the user confirms
+        if user_choice == "Yes":
+            AssemblyManager.convert_references_to_assemblies()
+        else:
+            # Optionally, display a message indicating the operation was canceled
+            self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
 
 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     from uitk import Switchboard
+    from mayatk.core_utils import CoreUtils
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=ReferenceManagerSlots)
 

@@ -220,15 +220,53 @@ class XformUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undo
-    def freeze_transforms(cls, objects, center_pivot=False, **kwargs):
+    def freeze_transforms(cls, objects, center_pivot=False, force=False, **kwargs):
+        """Freezes the transformations of the specified objects.
+
+        Parameters:
+            objects (list): List of objects to freeze transformations on.
+            center_pivot (bool, optional): If True, centers the pivot of the objects. Default is False.
+            force (bool, optional): If True, unlocks any locked transform attributes and relocks them after the operation. Default is False.
+            **kwargs: Additional arguments passed to pm.makeIdentity.
+
+        Returns:
+            None
+        """
         for obj in pm.ls(objects, type="transform"):
             if center_pivot:
                 pm.xform(objects, centerPivots=True)
+
             if not pm.hasAttr(obj, "original_worldMatrix"):
                 cls.store_transforms(obj)
 
+            if force:
+                transform_attrs = [
+                    "translateX",
+                    "translateY",
+                    "translateZ",
+                    "rotateX",
+                    "rotateY",
+                    "rotateZ",
+                    "scaleX",
+                    "scaleY",
+                    "scaleZ",
+                ]
+
+                locked_attrs = {
+                    attr: pm.getAttr(f"{obj}.{attr}", lock=True)
+                    for attr in transform_attrs
+                    if pm.getAttr(f"{obj}.{attr}", lock=True)
+                }
+                if locked_attrs:
+                    pm.setAttr(
+                        [f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=False
+                    )
+
             # Freeze transformations to reset them
             pm.makeIdentity(obj, apply=True, **kwargs)
+
+            if force and locked_attrs:
+                pm.setAttr([f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=True)
 
     @staticmethod
     @CoreUtils.undo

@@ -4,7 +4,6 @@ import os
 import re
 import ctypes
 import shutil
-import logging
 from datetime import datetime
 from functools import wraps
 from typing import List, Dict, Optional, Callable, Union, Any
@@ -216,7 +215,7 @@ class SceneExporterMixin:
         return wrapper
 
 
-class SceneExporter(SceneExporterMixin):
+class SceneExporter(SceneExporterMixin, ptk.LoggingMixin):
     def __init__(self, **kwargs):
         self.initialize(**kwargs)
         self.logger.debug("SceneExporter initialization complete.")
@@ -240,10 +239,10 @@ class SceneExporter(SceneExporterMixin):
         reassign_duplicate_materials: bool = False,
         check_hidden_geometry_with_keys: bool = False,
         check_referenced_objects: bool = False,
-        log_level: int = logging.INFO,
+        log_level: str = "WARNING",
         create_log_file: Optional[bool] = None,
         hide_log_file: Optional[bool] = None,
-        log_handler: Optional[logging.Handler] = None,
+        log_handler: Optional[object] = None,
     ):
         self._export_dir = export_dir
         self._preset = preset
@@ -265,7 +264,6 @@ class SceneExporter(SceneExporterMixin):
         self.create_log_file = create_log_file
         self.hide_log_file = hide_log_file
 
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(log_level)
         self.logger.propagate = True
         if log_handler:
@@ -409,10 +407,7 @@ class SceneExporter(SceneExporterMixin):
             raise RuntimeError(f"Failed to export geometry: {e}")
         finally:
             if self.create_log_file:
-                root_logger = logging.getLogger()
-                root_logger.removeHandler(self.file_handler)
-                self.file_handler.close()
-                self.logger.debug(f"Log file handler closed: {log_file_path}")
+                self.close_file_handlers()
 
     def load_fbx_export_preset(self, preset_path: str):
         preset_path_escaped = preset_path.replace("\\", "/")
@@ -444,39 +439,26 @@ class SceneExporter(SceneExporterMixin):
         return os.path.join(self.export_dir, f"{base_name}.log")
 
     def setup_file_logging(self, log_file_path: str):
-        file_handler = logging.FileHandler(log_file_path)
+        file_handler = self.logging.FileHandler(log_file_path)
         file_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            self.logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         )
         self.file_handler = file_handler
-        root_logger = logging.getLogger()
+        root_logger = self.logging.getLogger(self.__class__.__name__)
         root_logger.addHandler(self.file_handler)
         self.logger.debug(f"File logging setup complete. Log file: {log_file_path}")
 
         if self.hide_log_file and os.name == "nt":
             ctypes.windll.kernel32.SetFileAttributesW(log_file_path, 2)
 
-
-class TextEditHandler(logging.Handler):
-    def __init__(self, widget: object):
-        super().__init__()
-        self.widget = widget
-
-    def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        color = self.get_color(record.levelname)
-        formatted_msg = f'<span style="color:{color}">{msg}</span>'
-        self.widget.append(formatted_msg)
-
-    def get_color(self, level: str) -> str:
-        colors = {
-            "DEBUG": "gray",
-            "INFO": "white",
-            "WARNING": "#FFFF99",
-            "ERROR": "#FF9999",
-            "CRITICAL": "#CC6666",
-        }
-        return colors.get(level, "white")
+    def close_file_handlers(self):
+        root_logger = self.logging.getLogger(self.__class__.__name__)
+        handlers = root_logger.handlers[:]
+        for handler in handlers:
+            if isinstance(handler, self.logging.FileHandler):
+                handler.close()
+                root_logger.removeHandler(handler)
+                self.logger.debug("File handler closed and removed.")
 
 
 class SceneExporterSlots(SceneExporter):
@@ -491,16 +473,9 @@ class SceneExporterSlots(SceneExporter):
         self.ui.txt003.setText(
             "Any selected objects will be exported. If there is no selection, all visible objects in the scene will be exported."
         )
-        self.setup_logging_redirect(self.ui.txt003)
+        self.logging.setup_logging_redirect(self.ui.txt003)
 
         self.ui.set_persistent_value("PRESET_DIR", owner=self, default=self.PRESET_DIR)
-
-    def setup_logging_redirect(self, widget: object) -> None:
-        handler = TextEditHandler(widget)
-        handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-        root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
 
     @property
     def workspace(self) -> Optional[str]:
@@ -658,10 +633,10 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="cmb003",
         )
         items = {
-            "Log Level: DEBUG": logging.DEBUG,
-            "Log Level: INFO": logging.INFO,
-            "Log Level: WARNING": logging.WARNING,
-            "Log Level: ERROR": logging.ERROR,
+            "Log Level: DEBUG": 10,  # DEBUG
+            "Log Level: INFO": 20,  # INFO
+            "Log Level: WARNING": 30,  # WARNING
+            "Log Level: ERROR": 40,  # ERROR
         }
         widget.menu.cmb003.add(items)
 

@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 
 
@@ -25,7 +25,7 @@ class StingrayArnoldShader:
     color_warning = "rgb(200, 200, 100)"
     color_error = "rgb(255, 100, 100)"
 
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def create_network(
         self,
         textures: List[str],
@@ -62,10 +62,13 @@ class StingrayArnoldShader:
         # Process each texture
         length = len(textures)
         progress = 0
-        for texture in textures:
+        base_dir = CoreUtils.get_maya_info("sourceimages")
+        for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.get_map_type_from_filename(texture)
+            texture_type = ptk.get_map_type_from_filename(
+                texture,
+            )
 
             if texture_type is None:
                 callback(
@@ -108,13 +111,13 @@ class StingrayArnoldShader:
         Returns:
             pm.nt.StingrayPBS: The created StingrayPBS shader node.
         """
-        core_utils.CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
         # Create StingrayPBS node
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = core_utils.CoreUtils.get_maya_info("install_path")
+            maya_install_path = CoreUtils.get_maya_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -148,7 +151,7 @@ class StingrayArnoldShader:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
-        core_utils.CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
 
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
@@ -573,7 +576,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
-        self.workspace_dir = core_utils.CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = CoreUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -705,7 +708,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
     sb = Switchboard(
         parent, ui_location=ui_file, slot_location=StingrayArnoldShaderSlots
