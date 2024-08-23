@@ -28,7 +28,6 @@ class HdrManager:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
-        # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
         node = self.hdr_env
         if not node:
             node = NodeUtils.create_render_node(

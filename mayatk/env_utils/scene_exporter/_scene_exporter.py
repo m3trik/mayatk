@@ -57,9 +57,7 @@ class SceneExporterMixin:
                     self.logger.error("Duplicate material(s) found:")
                     for original, duplicates in duplicate_mapping.items():
                         for duplicate in duplicates:
-                            self.logger.error(
-                                f"\tDuplicate: {duplicate} -> Original: {original}"
-                            )
+                            self.logger.error(f"\tDuplicate: {duplicate} -> {original}")
                     return
             self.logger.debug("check_for_duplicate_materials passed")
             return func(self, *args, **kwargs)

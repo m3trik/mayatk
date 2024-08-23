@@ -67,6 +67,8 @@ class CoreUtils(ptk.HelpMixin):
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
+            instance, node_args = ptk.parse_method_args(args)
+
             if not args or not args[0] or len(args[0]) < 2:
                 raise ValueError(
                     "Insufficient arguments provided. At least two Maya nodes are required."
@@ -86,9 +88,11 @@ class CoreUtils(ptk.HelpMixin):
             parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
 
             try:
-                result_node = func(*args, **kwargs)
-            except Exception as e:
-                # Handle exception and perform necessary cleanup
+                if instance:
+                    result_node = func(instance, *node_args, **kwargs)
+                else:
+                    result_node = func(*node_args, **kwargs)
+            except Exception as e:  # Handle exception and perform necessary cleanup
                 CoreUtils.finalize_reparent(None, parent, temp_null)
                 raise e
 

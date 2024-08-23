@@ -197,8 +197,7 @@ class MatUtils(ptk.HelpMixin):
 
         # Filter for valid objects and assign the material
         valid_objects = pm.ls(objects, type="transform", flatten=True)
-        for obj in valid_objects:
-            pm.sets(shading_group, forceElement=obj)
+        pm.sets(shading_group, forceElement=valid_objects)
 
     @classmethod
     def find_by_mat_id(
@@ -239,20 +238,31 @@ class MatUtils(ptk.HelpMixin):
 
         objs_with_material = []
         transform_nodes = NodeUtils.get_transform_node(objects)
+
         for sg in shading_groups:
             members = pm.sets(sg, query=True, noIntermediate=True)
             for member in members:
-                transform_node = NodeUtils.get_transform_node(member)
-                if objects and transform_node not in transform_nodes:
-                    continue
-                if shell:
-                    if transform_node not in objs_with_material:
-                        objs_with_material.append(transform_node)
+                # Check if the member is a face component directly
+                if isinstance(member, pm.MeshFace):
+                    if not shell:
+                        objs_with_material.append(member)
+                    else:
+                        transform_node = member.node().getParent()
+                        if transform_node not in objs_with_material:
+                            objs_with_material.append(transform_node)
                 else:
-                    faces = transform_node.faces
-                    for face in faces:
-                        if sg in pm.listSets(object=face, type=1):
-                            objs_with_material.append(face)
+                    # Handle other types (like full mesh objects)
+                    transform_node = NodeUtils.get_transform_node(member)
+                    if objects and transform_node not in transform_nodes:
+                        continue
+                    if shell:
+                        if transform_node not in objs_with_material:
+                            objs_with_material.append(transform_node)
+                    else:
+                        faces = transform_node.faces
+                        for face in faces:
+                            if sg in pm.listSets(object=face, type=1):
+                                objs_with_material.append(face)
 
         return objs_with_material
 

@@ -288,8 +288,7 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         """
         all_references = self.current_references
 
-        if namespaces is None:
-            # Unreference all
+        if namespaces is None:  # Unreference all
             for ref in all_references:
                 ref.remove()
         else:

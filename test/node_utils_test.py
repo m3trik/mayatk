@@ -141,9 +141,6 @@ class NodeUtilsTest(unittest.TestCase):
     def test_connect_multi_attr(self):
         pass  # self.assertEqual(mtk.connect_multi_attr(), None)
 
-    def test_node_exists(self):
-        pass  # self.assertEqual(mtk.node_exists(), None)
-
     def test_create_assembly(self):
         pass  # self.assertEqual(mtk.create_assembly(), None)
 

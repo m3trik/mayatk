@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils import CoreUtils, components
 from mayatk.display_utils import DisplayUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils
@@ -253,8 +253,8 @@ class EditUtils(ptk.HelpMixin):
             tolerance (float) = Maximum search distance.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = core_utils.Components.get_components(obj1, "vertices")
-        closestVerts = core_utils.Components.get_closest_vertex(
+        vertices = components.Components.get_components(obj1, "vertices")
+        closestVerts = components.Components.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -676,7 +676,7 @@ class EditUtils(ptk.HelpMixin):
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = core_utils.Components.get_components(objects, "vertices")
+        vertices = components.Components.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1
@@ -926,26 +926,31 @@ class EditUtils(ptk.HelpMixin):
             (list) Similar objects.
 
         Example:
-            get_similar_mesh(selection, vertex=1, area=1)
+            get_similar_mesh(selection, vertex=True, area=True)
         """
-        lst = lambda x: (
-            list(x)
-            if isinstance(x, (list, tuple, set))
-            else list(x.values()) if isinstance(x, dict) else [x]
-        )  # assure the returned result from polyEvaluate is a list of values.
-
         obj, *other = pm.ls(obj, long=True, transforms=True)
-        objProps = lst(pm.polyEvaluate(obj, **kwargs))
+
+        # Ensure the evaluation results are consistently processed
+        objProps = []
+        for key in kwargs:
+            result = pm.polyEvaluate(obj, **{key: kwargs[key]})
+            objProps.append(ptk.make_iterable(result))
 
         otherSceneMeshes = set(
             pm.filterExpand(pm.ls(long=True, typ="transform"), selectionMask=12)
         )  # polygon selection mask.
+
         similar = pm.ls(
             [
                 m
                 for m in otherSceneMeshes
                 if ptk.are_similar(
-                    objProps, lst(pm.polyEvaluate(m, **kwargs)), tolerance=tolerance
+                    objProps,
+                    [
+                        ptk.make_iterable(pm.polyEvaluate(m, **{key: kwargs[key]}))
+                        for key in kwargs
+                    ],
+                    tolerance=tolerance,
                 )
                 and m != obj
             ]
