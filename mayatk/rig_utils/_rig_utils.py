@@ -121,10 +121,11 @@ class RigUtils(ptk.HelpMixin):
             base_name = obj.nodeName()  # Use the original object name as the base name
             vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
 
-            # Store the current pivot position
-            matrix = XformUtils.get_manip_pivot_matrix(obj)
-            pm.makeIdentity(obj, apply=True)
-            XformUtils.set_manip_pivot_matrix(obj, matrix)
+            if freeze_transforms:
+                # Store the current pivot position
+                matrix = XformUtils.get_manip_pivot_matrix(obj)
+                pm.makeIdentity(obj, apply=True)
+                XformUtils.set_manip_pivot_matrix(obj, matrix)
 
             if bake_child_pivot:
                 XformUtils.bake_pivot(
@@ -160,7 +161,7 @@ class RigUtils(ptk.HelpMixin):
                     pm.parent(loc, grp)
                     pm.parent(grp, origParent)
 
-                if freeze_transforms:  # freeze transforms before baking pivot.
+                if freeze_transforms:  # freeze transforms one last time.
                     cls.set_attr_lock_state(
                         obj, translate=False, rotate=False, scale=False
                     )  # assure attributes are unlocked.

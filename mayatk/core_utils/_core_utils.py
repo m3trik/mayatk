@@ -426,7 +426,9 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
+            else "int"
+            if isinstance(o, int)
+            else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod
