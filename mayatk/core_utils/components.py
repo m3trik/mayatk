@@ -952,6 +952,51 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return (inside, outside)
 
     @staticmethod
+    def adjusted_distance_between_vertices(
+        p1, p2, adjust: float = 0.0, as_percentage: bool = False
+    ):
+        """Calculate Adjusted Distance Between Vertices
+
+        This function calculates the distance between two points or vertices, adjusts it by a
+        specified absolute value or percentage, and optionally selects the parent object.
+        The method supports inputs in the form of MeshVertex objects, Points, or strings
+        referencing vertices.
+
+        Parameters:
+            p1 (str/pm.MeshVertex/pm.datatypes.Point): The first vertex or point.
+                Can be a MeshVertex, Point, or a string that references a vertex.
+            p2 (str/pm.MeshVertex/pm.datatypes.Point): The second vertex or point.
+                Can be a MeshVertex, Point, or a string that references a vertex.
+            adjust (float): The absolute or percentage value to adjust the calculated distance.
+                Default is 0.0, meaning no adjustment. Positive values increase the distance,
+                and negative values decrease it. If as_percentage is True, then this value is
+                interpreted as a percentage.
+            as_percentage (bool): If True, the adjust value is treated as a percentage of the
+                original distance. If False, the adjust value is treated as an absolute value
+                to add or subtract from the distance. Default is False.
+
+        Returns:
+            float: The adjusted distance between the two points or vertices.
+        """
+        # Convert MeshVertex to points if necessary
+        if isinstance(p1, pm.MeshVertex):
+            p1 = pm.pointPosition(p1, world=True)
+        if isinstance(p2, pm.MeshVertex):
+            p2 = pm.pointPosition(p2, world=True)
+
+        # Calculate the distance between the two vertices or points
+        dist = ptk.distance_between_points(p1, p2)
+
+        if as_percentage:
+            # Adjust by percentage
+            dist *= 1 + adjust / 100
+        else:
+            # Adjust by absolute value
+            dist += adjust
+
+        return dist
+
+    @staticmethod
     @core_utils.CoreUtils.undo
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging

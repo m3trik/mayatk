@@ -4,6 +4,7 @@ import os
 import re
 import ctypes
 import shutil
+import contextlib
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
@@ -21,7 +22,7 @@ from mayatk.mat_utils import MatUtils
 from mayatk.display_utils import DisplayUtils
 
 
-class SceneExporterChecks:
+class SceneExporterChecksFactory:
     def __init__(self, logger):
         self.logger = logger
 
@@ -42,31 +43,25 @@ class SceneExporterChecks:
             check_method = getattr(self, check_name, None)
 
             if check_method:
-                self.logger.debug(f"Running check: {check_name} with value: {value}")
+                self.logger.debug(f"Running check: '{check_name}' with value: {value}")
 
-                try:
-                    # Try calling the check method without arguments
+                try:  # Try calling the check method without arguments
                     if not check_method():
-                        self.logger.error(
-                            f"Check {check_name} failed without arguments."
-                        )
+                        self.logger.error(f"Check '{check_name}' failed.")
                         return False
 
                 except TypeError:
-                    # If TypeError occurs, call the method with the provided value
-                    self.logger.debug(
-                        f"Retrying check {check_name} with argument {value}."
-                    )
                     if not check_method(value):
                         self.logger.error(
-                            f"Check {check_name} failed with value: {value}"
+                            f"Check '{check_name}' failed with value: {value}"
                         )
                         return False
-
-            else:
-                self.logger.warning(f"No check method found for {check_name}")
-
         return True
+
+
+class SceneExporterChecks(SceneExporterChecksFactory):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def check_absolute_paths(self) -> bool:
         all_relative = True
@@ -105,7 +100,7 @@ class SceneExporterChecks:
         self.logger.debug("check_referenced_objects passed")
         return True
 
-    def check_hidden_geometry_with_keys(self) -> bool:
+    def check_hidden_objects_with_keys(self) -> bool:
         hidden_geometry = [
             node
             for node in AnimUtils.filter_objects_with_keys(keys="visibility")
@@ -118,7 +113,7 @@ class SceneExporterChecks:
             for geom in hidden_geometry:
                 self.logger.error(f"\t{geom}")
             return False
-        self.logger.debug("check_hidden_geometry_with_keys passed")
+        self.logger.debug("check_hidden_objects_with_keys passed")
         return True
 
     def check_framerate(self, target_framerate: Optional[str]) -> bool:
@@ -132,40 +127,128 @@ class SceneExporterChecks:
             )
         return True
 
+    def check_objects_below_floor(self, threshold: float = 0) -> bool:
+        """Check if any object's bounding box is below the Y-axis by the given threshold."""
+        objects_below_threshold = []
+        for obj in self.objects:
+            # Get the min Y value
+            bbox_min = pm.xform(obj, query=True, boundingBox=True)[1]
+            if bbox_min < threshold:
+                objects_below_threshold.append((obj, bbox_min))
 
-class SceneExporterTasks:
+        if objects_below_threshold:
+            self.logger.error(
+                "Objects with bounding box below the floor threshold found:"
+            )
+            for obj, bbox_min in objects_below_threshold:
+                self.logger.error(f"\tObject: {obj} - Min Y: {bbox_min}")
+            self.logger.debug("check_objects_below_floor failed")
+            return False
+
+        self.logger.debug("check_objects_below_floor passed")
+        return True
+
+    def check_and_delete_visibility_keys(self) -> bool:
+        """Check for objects with visibility keys, show them if hidden, and delete the visibility keys."""
+        modified_objects = []
+        visibility_keys_found = False
+
+        for obj in AnimUtils.filter_objects_with_keys(keys="visibility"):
+            visibility_keys_found = True
+            # Check if the object is currently hidden
+            if not obj.visibility.get():
+                obj.visibility.set(True)  # Show the object
+                modified_objects.append(obj)
+
+            # Delete visibility keys
+            pm.cutKey(obj, attribute="visibility")
+            self.logger.info(f"Visibility keys deleted for object: {obj}")
+
+        if modified_objects:
+            self.logger.info("Hidden objects with visibility keys found and shown:")
+            for obj in modified_objects:
+                self.logger.info(f"\tObject: {obj} was hidden and is now shown")
+            self.logger.debug(
+                "check_and_delete_visibility_keys found hidden objects and made them visible."
+            )
+            return False
+
+        if visibility_keys_found:
+            self.logger.debug(
+                "check_and_delete_visibility_keys passed - visibility keys deleted."
+            )
+            return True
+
+        self.logger.debug(
+            "check_and_delete_visibility_keys passed - no visibility keys found."
+        )
+        return True
+
+
+class SceneExporterTasksFactory:
     def __init__(self, logger, objects, materials):
         self.logger = logger
         self.objects = objects
-        self.materials = materials  # Store the filtered materials
+        self.materials = materials
         self.checks_manager = SceneExporterChecks(logger)
 
-    def run_tasks(self, **tasks) -> bool:
-        """Run tasks based on the provided task names in **tasks.
-        Tasks are run in the order they are specified in the tasks.
-        """
-        check_kwargs = {}
+    @contextlib.contextmanager
+    def manage_context(self, **tasks):
+        original_states = {}
 
+        # Discover and set temporary states, storing original values
         for task_name, value in tasks.items():
-            task_method = getattr(self, task_name, None)
+            set_method_name = f"set_temp_{task_name}"
+            revert_method_name = f"revert_{task_name}"
+            set_method = getattr(self, set_method_name, None)
+            revert_method = getattr(self, revert_method_name, None)
 
-            if task_method:
-                self.logger.debug(f"Running task: {task_name} with value: {value}")
-
+            if set_method and revert_method:
                 try:
-                    # Try calling the task method without arguments
-                    task_method()
-                except TypeError:
-                    # If TypeError occurs, call the method with the provided value
-                    self.logger.debug(
-                        f"Retrying task {task_name} with argument {value}."
+                    original_states[task_name] = set_method(value)
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to set {task_name} with value {value}: {e}"
                     )
-                    task_method(value)
+                    raise
+        try:
+            yield
+        finally:  # Revert to original states
+            for task_name, original_value in original_states.items():
+                revert_method_name = f"revert_{task_name}"
+                revert_method = getattr(self, revert_method_name, None)
+                if revert_method:
+                    try:
+                        revert_method(original_value)
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to revert {task_name} to original value {original_value}: {e}"
+                        )
+                        raise
 
-            else:
-                check_kwargs[task_name] = value
+    def run_tasks(self, **tasks) -> bool:
+        try:
+            with self.manage_context(**tasks):
+                for task_name, value in tasks.items():
+                    task_method = getattr(self, task_name, None)
+                    if task_method:
+                        self.logger.debug(
+                            f"Running task: {task_name} with value: {value}"
+                        )
+                        try:
+                            task_method(value)
+                        except TypeError:
+                            task_method()
+        except Exception as e:
+            self.logger.error(f"Error during task execution: {e}")
+            return False
 
-        # After running tasks, pass remaining kwargs to run_checks using checks_manager
+        # Run checks after tasks
+        check_kwargs = {
+            task_name: value
+            for task_name, value in tasks.items()
+            if not hasattr(self, task_name)
+        }
         if not self.checks_manager.run_checks(
             self.objects, self.materials, **check_kwargs
         ):
@@ -173,6 +256,34 @@ class SceneExporterTasks:
             return False
 
         return True
+
+
+class SceneExporterTasks(SceneExporterTasksFactory):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def set_temp_workspace(self):
+        """Manage temporary workspace change."""
+        original_workspace = pm.workspace(query=True, rootDirectory=True)
+        new_workspace = EnvUtils.find_workspace_using_path()
+        if new_workspace and not new_workspace == original_workspace:
+            pm.workspace(new_workspace, openWorkspace=True)
+        return original_workspace
+
+    def revert_workspace(self, original_workspace):
+        """Revert to the original workspace."""
+        pm.workspace(original_workspace, openWorkspace=True)
+
+    def set_temp_linear_unit(self, linear_unit):
+        """Manage temporary linear unit change."""
+        original_linear_unit = pm.currentUnit(query=True, linear=True)
+        if linear_unit:
+            pm.currentUnit(linear=linear_unit)
+        return original_linear_unit
+
+    def revert_linear_unit(self, original_linear_unit):
+        """Revert to the original linear unit."""
+        pm.currentUnit(linear=original_linear_unit)
 
     def convert_to_relative_paths(self):
         """Convert absolute material paths to relative paths."""
@@ -191,29 +302,6 @@ class SceneExporterTasks:
         self.logger.debug("Deleting unused materials")
         pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
         self.logger.debug("Unused materials deleted.")
-
-    def set_temp_workspace(self):
-        """Manage temporary workspace changes."""
-        original_workspace = pm.workspace(query=True, rootDirectory=True)
-        new_workspace = EnvUtils.find_workspace_using_path()
-        if new_workspace and not new_workspace == original_workspace:
-            pm.workspace(new_workspace, openWorkspace=True)
-        self.logger.info(
-            f"Setting workspace to: {pm.workspace(query=True, rootDirectory=True)}"
-        )
-        self.logger.debug(f"Reverting workspace to {original_workspace}")
-        pm.workspace(original_workspace, openWorkspace=True)
-
-    def set_temp_linear_unit(self, temp_linear_unit=None):
-        """Manage temporary changes to scene units."""
-        original_linear_unit = pm.currentUnit(query=True, linear=True)
-        if temp_linear_unit:
-            self.logger.info(
-                f"Setting linear unit from {original_linear_unit} to {temp_linear_unit}"
-            )
-            pm.currentUnit(linear=temp_linear_unit)
-        self.logger.debug(f"Reverting linear unit to {original_linear_unit}")
-        pm.currentUnit(linear=original_linear_unit)
 
     def apply_preset(self, preset=None):
         """Apply a preset for export."""
@@ -283,7 +371,7 @@ class SceneExporter(ptk.LoggingMixin):
         hide_log_file: Optional[bool] = None,
         log_handler: Optional[object] = None,
         **kwargs: Dict[str, Any],
-    ):
+    ) -> bool:
         self._export_dir = export_dir
         self._preset = preset
         self.output_name = output_name
@@ -292,34 +380,41 @@ class SceneExporter(ptk.LoggingMixin):
         self.create_log_file = create_log_file
         self.hide_log_file = hide_log_file
 
-        self.logger.setLevel(log_level)
-        self.logger.propagate = True
-        if log_handler:
-            self.logger.addHandler(log_handler)
-
+        self._setup_logging(log_level, log_handler)
         self.export_path = self.generate_export_path()
         self.logger.info(f"Generated export path: {self.export_path}")
 
         if self.create_log_file:
-            log_file_path = self.generate_log_file_path(self.export_path)
-            self.logger.info(f"Generating log file path: {log_file_path}")
-            self.setup_file_logging(log_file_path)
+            self._setup_file_logging()
 
-        # Initialize objects and materials before setting up the task manager
-        self.objects = self.initialize_objects(objects)
+        self.objects = self._initialize_objects(objects)
         self.materials = MatUtils.filter_materials_by_objects(self.objects)
 
         self.logger.debug("Initializing tasks manager in SceneExporter.")
         self.tasks_manager = SceneExporterTasks(
             self.logger, self.objects, self.materials
         )
+
         if not self.tasks_manager.run_tasks(**kwargs):
-            self.logger.error("Export aborted due to failed tasks or checks.")
-            return
+            return False
+        return True
 
-        self.logger.debug("SceneExporter initialized with new parameters.")
+    def _setup_logging(self, log_level: str, log_handler: Optional[object]) -> None:
+        """Setup logging configuration."""
+        self.logger.setLevel(log_level)
+        self.logger.propagate = True
+        if log_handler:
+            self.logger.addHandler(log_handler)
 
-    def initialize_objects(self, objects):
+    def _setup_file_logging(self) -> None:
+        """Setup file logging."""
+        log_file_path = self.generate_log_file_path(self.export_path)
+        self.logger.info(f"Generating log file path: {log_file_path}")
+        self.setup_file_logging(log_file_path)
+
+    def _initialize_objects(
+        self, objects: Optional[Union[List[str], Callable]]
+    ) -> List:
         """Initialize objects for the scene."""
         if objects is None:
             self.logger.debug("No objects specified; defaulting to all scene objects.")
@@ -336,15 +431,18 @@ class SceneExporter(ptk.LoggingMixin):
 
     def export(self, **kwargs) -> None:
         """Perform the export operation after running tasks and checks."""
-        self.initialize(**kwargs)
-        self.logger.debug("Starting export process.")
+        self.logger.info("Starting export process ..")
+
+        if not self.initialize(**kwargs):
+            self.logger.error("Aborting export.")
+            return
 
         pm.select(self.tasks_manager.objects, replace=True)
         self.logger.debug(f"Selected objects for export: {self.tasks_manager.objects}")
 
         if not pm.selected():
-            pm.warning("No geometry selected to export.")
-            self.logger.warning("No geometry selected to export.")
+            pm.warning("No objects to export.")
+            self.logger.warning("No objects to export.")
             return
 
         try:
@@ -352,8 +450,8 @@ class SceneExporter(ptk.LoggingMixin):
             pm.exportSelected(self.export_path, type=file_format, force=True)
             self.logger.info(f"File exported: {self.export_path}")
         except Exception as e:
-            self.logger.error(f"Failed to export geometry: {e}")
-            raise RuntimeError(f"Failed to export geometry: {e}")
+            self.logger.error(f"Failed to export objects: {e}")
+            raise RuntimeError(f"Failed to export objects: {e}")
         finally:
             if self.create_log_file:
                 self.close_file_handlers()
@@ -535,12 +633,18 @@ class SceneExporterSlots(SceneExporter):
 
     def b000_init(self, widget) -> None:
         """Export Settings"""
-        widget.menu.setTitle("Export Settings")
+        widget.menu.setTitle("EXPORT SETTINGS:")
         widget.menu.mode = "popup"
         widget.menu.add(
             "QCheckBox",
+            setToolTip="Export all visible objects regardless of the current selection.\nIf unchecked, only the selected objects will be exported.",
+            setText="Export All Visible Objects",
+            setObjectName="chk012",
+        )
+        widget.menu.add(
+            "QCheckBox",
             setToolTip="Check for duplicate materials.",
-            setText="Check for duplicate materials.",
+            setText="Check For Duplicate Materials.",
             setObjectName="chk001",
         )
         widget.menu.add(
@@ -557,26 +661,38 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QCheckBox",
+            setToolTip="Delete visibility keys from the exported objects.\nIf the object is hidden, it will be set to visible.",
+            setText="Delete Visibility Keys",
+            setObjectName="chk013",
+        )
+        widget.menu.add(
+            "QCheckBox",
             setToolTip="Check for hidden geometry with visibility keys set to False.",
-            setText="Check for Hidden Keyed Geometry",
+            setText="Check For Hidden Keyed Geometry",
             setObjectName="chk010",
         )
         widget.menu.add(
             "QCheckBox",
             setToolTip="Check for referenced objects.",
-            setText="Check for referenced objects.",
+            setText="Check For Referenced Objects.",
             setObjectName="chk002",
         )
         widget.menu.add(
             "QCheckBox",
+            setToolTip="Check for Objects with a bounding box having a negative Y value.",
+            setText="Check For Objects Below Floor.",
+            setObjectName="chk011",
+        )
+        widget.menu.add(
+            "QCheckBox",
             setToolTip="Check for absolute paths.",
-            setText="Check for absolute paths.",
+            setText="Check For Absolute Paths.",
             setObjectName="chk003",
         )
         widget.menu.add(
             "QCheckBox",
             setToolTip="Convert absolute paths to relative paths.",
-            setText="Convert to Relative Paths",
+            setText="Convert To Relative Paths",
             setObjectName="chk007",
         )
         widget.menu.add(
@@ -626,8 +742,6 @@ class SceneExporterSlots(SceneExporter):
     def b001(self) -> None:
         """Export"""
         self.ui.txt003.clear()
-        self.logger.info("Starting export process ..")
-
         # Prepare task and check parameters
         task_params = {
             "set_temp_linear_unit": self.ui.cmb001.currentData(),
@@ -641,14 +755,23 @@ class SceneExporterSlots(SceneExporter):
             "check_absolute_paths": self.ui.chk003.isChecked(),
             "check_duplicate_materials": self.ui.chk001.isChecked(),
             "check_referenced_objects": self.ui.chk002.isChecked(),
-            "check_hidden_geometry_with_keys": self.ui.chk010.isChecked(),
+            "check_and_delete_visibility_keys": self.ui.chk013.isChecked(),
+            "check_hidden_objects_with_keys": self.ui.chk010.isChecked(),
+            "check_objects_below_floor": self.ui.chk011.isChecked(),
         }
+
+        objects_to_export = (
+            DisplayUtils.get_visible_geometry
+            if self.ui.chk012.isChecked()
+            else pm.selected()
+        )
 
         # Call export with parameters and tasks/checks
         self.export(
-            objects=pm.selected() or DisplayUtils.get_visible_geometry,
+            objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset=self.ui.cmb000.currentData(),
+            export_visible=self.ui.chk012.isChecked(),
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),

@@ -316,6 +316,46 @@ class EditUtils(ptk.HelpMixin):
                 pm.select(objects)
 
     @staticmethod
+    @CoreUtils.undo
+    def merge_vertex_pairs(vertices):
+        """Merge vertices in pairs by moving them to their center and merging.
+
+        Parameters:
+            vertices (list): A list of vertices to merge in pairs.
+        """
+        if not vertices:
+            pm.warning("No vertices provided for merging.")
+            return
+
+        # Flatten the list to ensure all vertices are individual PyNodes
+        vertices = pm.ls(vertices, flatten=True)
+        if len(vertices) % 2 != 0:
+            pm.warning(
+                "An odd number of vertices was provided; the last vertex will be ignored."
+            )
+
+        vertex_pairs = [
+            (vertices[i], vertices[i + 1]) for i in range(0, len(vertices) - 1, 2)
+        ]
+
+        for vtx1, vtx2 in vertex_pairs:
+            try:  # Get the world-space positions of the vertices
+                pos1 = vtx1.getPosition(space="world")
+                pos2 = vtx2.getPosition(space="world")
+
+                # Calculate the midpoint
+                center_point = (pos1 + pos2) / 2
+
+                # Move both vertices to the center point
+                vtx1.setPosition(center_point, space="world")
+                vtx2.setPosition(center_point, space="world")
+
+            except Exception as e:
+                pm.warning(f"Failed to move vertices {vtx1} and {vtx2}: {e}")
+
+        pm.polyMergeVertex(vertices, d=0.001)  # Merge the vertices
+
+    @staticmethod
     def get_all_faces_on_axis(obj, axis="x", world_space=False):
         """Get all faces on a specified axis using local or world space bounding box comparisons.
 

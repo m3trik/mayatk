@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import CoreUtils, components
 from mayatk.node_utils import NodeUtils
 
 
@@ -115,7 +115,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -197,7 +197,68 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.selected
+    @CoreUtils.undo
+    def scale_connected_edges(objects, scale_factor=1.1) -> None:
+        """Scales each set of connected edges separately, either uniformly or non-uniformly.
+
+        This function scales each set of connected edges around their center point. If a single float or int is provided
+        as the scale factor, uniform scaling is applied. If a tuple or list of three numbers is provided, non-uniform
+        scaling is applied to the x, y, and z axes respectively.
+
+        Parameters:
+            objects (list): A list of selected edge components to be scaled.
+            scale_factor (float, int, tuple, list): The factor by which to scale the edges.
+                - float/int: Apply uniform scaling.
+                - tuple/list of three floats: Apply non-uniform scaling to x, y, and z axes.
+
+        Examples:
+            # Uniform scaling: Scale all connected edges by a factor of 1.5
+            scale_connected_edges(pm.ls(selection=True), 1.5)
+
+            # Non-uniform scaling: Scale connected edges by 1.5 in x, 1.0 in y, and 0.5 in z
+            scale_connected_edges(pm.ls(selection=True), (1.5, 1.0, 0.5))
+        """
+        # Get the selected edges
+        if not objects:
+            pm.warning("No edges selected.")
+            return
+
+        # Group edges by connected sets using the existing method
+        connected_edges_sets = components.Components.get_contigious_edges(objects)
+
+        for edge_set in connected_edges_sets:
+            # Get the vertices of the edge set
+            vertices = pm.polyListComponentConversion(
+                edge_set, fromEdge=True, toVertex=True
+            )
+            vertices = pm.ls(vertices, flatten=True)
+
+            # Calculate the center point of the vertices
+            center_point = pm.dt.Vector(0, 0, 0)
+            for vertex in vertices:
+                center_point += vertex.getPosition(space="world")
+            center_point /= len(vertices)
+
+            # Determine if scale_factor is a float/int (uniform scaling) or tuple/list (non-uniform scaling)
+            if isinstance(scale_factor, (tuple, list)):
+                scale_x, scale_y, scale_z = scale_factor
+            else:
+                scale_x = scale_y = scale_z = scale_factor
+
+            # Scale each vertex around the center point
+            for vertex in vertices:
+                pos = vertex.getPosition(space="world")
+                direction = pos - center_point
+                new_pos = pm.dt.Vector(
+                    center_point.x + direction.x * scale_x,
+                    center_point.y + direction.y * scale_y,
+                    center_point.z + direction.z * scale_z,
+                )
+                vertex.setPosition(new_pos, space="world")
+
+    @staticmethod
+    @CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -219,7 +280,7 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def freeze_transforms(cls, objects, center_pivot=False, force=False, **kwargs):
         """Freezes the transformations of the specified objects.
 
@@ -269,7 +330,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.setAttr([f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Check if the transform attributes are at their default values
@@ -301,7 +362,7 @@ class XformUtils(ptk.HelpMixin):
             pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -370,7 +431,7 @@ class XformUtils(ptk.HelpMixin):
         pm.manipPivot(p=pos, o=ori_degrees)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -442,7 +503,7 @@ class XformUtils(ptk.HelpMixin):
             pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def bake_pivot(
         objects: list[str],
         position: bool = False,
@@ -550,7 +611,7 @@ class XformUtils(ptk.HelpMixin):
 
                 # Transfer normals from temp objects back to original objects
                 for original, temp in zip(objects, temp_objects):
-                    core_utils.components.Components.transfer_normals(
+                    components.Components.transfer_normals(
                         [temp.name(), original.name()]
                     )
             except RuntimeError as e:
@@ -559,7 +620,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.delete(temp_objects)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def transfer_pivot(
         objects: List[Union[str, object]],
         translate: bool = False,
@@ -623,7 +684,7 @@ class XformUtils(ptk.HelpMixin):
                 )
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -650,7 +711,7 @@ class XformUtils(ptk.HelpMixin):
         pm.delete(const, target)
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -909,7 +970,7 @@ class XformUtils(ptk.HelpMixin):
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = core_utils.components.Components.get_closest_verts(
+        closestVerts = components.Components.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 
@@ -931,7 +992,7 @@ class XformUtils(ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in core_utils.CoreUtils.mfn_mesh_generator(objects):
+        for mesh in CoreUtils.mfn_mesh_generator(objects):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 
@@ -1027,7 +1088,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 

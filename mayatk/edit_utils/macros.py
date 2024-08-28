@@ -282,6 +282,36 @@ class DisplayMacros:
 
     @staticmethod
     @core_utils.CoreUtils.selected
+    def m_toggle_uv_border_edges(objects):
+        """Toggle the display of UV border edges for the given objects."""
+        if not objects:
+            pm.inViewMessage(
+                statusMessage="Operation requires at least one selected object.",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        for obj in pm.ls(objects, flatten=True):
+            # Use MEL command to toggle UV border edges visibility
+            state = pm.polyOptions(obj, query=True, displayMapBorder=True)[0]
+            if state:  # Turn it off
+                pm.polyOptions(obj, displayMapBorder=False)
+                pm.inViewMessage(
+                    statusMessage="UV Border Edges <hl>Hidden</hl>.",
+                    pos="topCenter",
+                    fade=True,
+                )
+            else:  # If not displaying UV borders, turn it on
+                pm.polyOptions(sel, displayMapBorder=True)
+                pm.inViewMessage(
+                    statusMessage=f"UV Border Edges <hl>Shown</hl>.",
+                    pos="topCenter",
+                    fade=True,
+                )
+
+    @staticmethod
+    @core_utils.CoreUtils.selected
     def m_back_face_culling(objects) -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
         objects = objects or pm.ls(type="mesh")
@@ -368,6 +398,28 @@ class DisplayMacros:
             pos="topCenter",
             fade=True,
         )
+
+    @staticmethod
+    @core_utils.CoreUtils.selected
+    def m_wireframe_toggle(objects) -> None:
+        """Toggle Wireframe Display on selected objects, or on all objects if none are selected."""
+        objects = objects or pm.ls(type="mesh")
+        if objects:
+            # Check the current state of the first object in the list
+            current_state: bool = pm.getAttr(objects[0].overrideShading) == 1
+            # Toggle the overrideDisplayType attribute for all objects
+            for obj in objects:
+                pm.setAttr(f"{obj}.overrideEnabled", 1)
+                new_state = 0 if current_state else 1  # 0: Normal, 1: Wireframe
+                pm.setAttr(f"{obj}.overrideShading", new_state)
+
+            # Provide feedback message
+            message = "Wireframe" if not current_state else "Shaded"
+            pm.inViewMessage(
+                statusMessage=f"Display mode is now <hl>{message}</hl>.",
+                pos="topCenter",
+                fade=True,
+            )
 
     @staticmethod
     def m_grid_and_image_planes() -> None:
@@ -708,27 +760,30 @@ class EditMacros:
             )
             return
 
-        # Convert selected objects' faces to vertices
-        vertices = pm.polyListComponentConversion(objects, fromFace=True, toVertex=True)
-        vertices = pm.ls(vertices, flatten=True)  # Flatten the list of vertices
-        if not vertices:
-            pm.inViewMessage(
-                statusMessage="No vertices found in the selection.",
-                pos="topCenter",
-                fade=True,
-            )
+        # Check if the current selection mode is object mode
+        is_object_mode = pm.selectMode(q=True, object=True)
+
+        if is_object_mode:  # Use the .vtx[:] notation directly
+            objs = [f"{obj}.vtx[:]" for obj in objects]
+        else:  # Convert selected components to vertices if in component mode
+            objs = pm.polyListComponentConversion(objects, toVertex=True)
+
+        if not objs:
+            print("No valid objects or components given.")
             return
 
-        # Determine the current normal state by querying one vertex
-        current_state = all(pm.polyNormalPerVertex(vertices, q=True, freezeNormal=True))
+        # Determine the current normal state by querying the first vertex
+        current_state = all(pm.polyNormalPerVertex(objs, q=True, freezeNormal=True))
+
         if current_state:
             # If normals are currently locked, unlock them
-            pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
+            pm.polyNormalPerVertex(objs, unFreezeNormal=True)
             pm.inViewMessage(
                 statusMessage="Normals <hl>UnLocked</hl>.", pos="topCenter", fade=True
             )
-        else:  # If normals are currently unlocked, lock them
-            pm.polyNormalPerVertex(vertices, freezeNormal=True)
+        else:
+            # If normals are currently unlocked, lock them
+            pm.polyNormalPerVertex(objs, freezeNormal=True)
             pm.inViewMessage(
                 statusMessage="Normals <hl>Locked</hl>.", pos="topCenter", fade=True
             )
@@ -879,6 +934,43 @@ class SelectionMacros:
         """Set face selection mask."""
         pm.selectMode(component=True)
         pm.selectType(facet=True)
+
+    @staticmethod
+    @core_utils.CoreUtils.selected
+    def m_toggle_selectability(objects):
+        """Toggle selectability of the given objects."""
+        if not objects:
+            pm.inViewMessage(
+                statusMessage="Operation requires at least one selected object.",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        for obj in pm.ls(objects, flatten=True):
+            # Check the current selectability state using PyNode attributes
+            override_enabled = obj.overrideEnabled.get()
+            current_state = obj.overrideDisplayType.get()
+
+            if override_enabled and current_state == 2:
+                # Object is currently non-selectable, make it selectable
+                obj.overrideDisplayType.set(0)  # Normal mode
+                obj.useOutlinerColor.set(0)  # Disable custom outliner color
+                pm.inViewMessage(
+                    statusMessage=f"{obj} <hl>Selectable</hl>.",
+                    pos="topCenter",
+                    fade=True,
+                )
+            else:  # Object is currently selectable, make it non-selectable
+                obj.overrideEnabled.set(1)
+                obj.overrideDisplayType.set(2)  # Reference mode
+                obj.useOutlinerColor.set(1)  # Enable custom outliner color
+                obj.outlinerColor.set(0.3, 0.6, 0.6)  # Set color to desaturated teal
+                pm.inViewMessage(
+                    statusMessage=f"{obj} <hl>Non-selectable</hl>.",
+                    pos="topCenter",
+                    fade=True,
+                )
 
     @staticmethod
     def m_toggle_UV_select_type() -> None:
