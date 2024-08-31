@@ -228,16 +228,23 @@ class SceneExporterTasksFactory:
 
     def run_tasks(self, **tasks) -> bool:
         try:
-            with self.manage_context(**tasks):
-                for task_name, value in tasks.items():
+            # Filter out tasks explicitly set to False or not provided
+            tasks_to_run = {
+                task_name: value for task_name, value in tasks.items() if value
+            }
+
+            with self.manage_context(**tasks_to_run):
+                for task_name, value in tasks_to_run.items():
                     task_method = getattr(self, task_name, None)
                     if task_method:
                         self.logger.debug(
                             f"Running task: {task_name} with value: {value}"
                         )
                         try:
+                            # Run the task with its value if it expects arguments
                             task_method(value)
                         except TypeError:
+                            # Run the task without arguments if it doesn't expect any
                             task_method()
         except Exception as e:
             self.logger.error(f"Error during task execution: {e}")
@@ -303,58 +310,38 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
         self.logger.debug("Unused materials deleted.")
 
-    def apply_preset(self, preset=None):
-        """Apply a preset for export."""
-        if preset:
-            self.logger.debug(f"Applying preset: {preset}")
-            self.load_fbx_export_preset(preset)
-            self.verify_fbx_preset()
-        self.logger.debug("apply_preset passed")
+    def set_bake_animation_range(self):
+        """Set the animation export range to the first and last keyframes of the specified objects if baking is enabled."""
+        # Check if baking animation is enabled
+        if not pm.mel.eval("FBXExportBakeComplexAnimation -q"):
+            self.logger.info(
+                "Baking complex animation is disabled. Skipping frame range setting."
+            )
+            return
 
-    def load_fbx_export_preset(self, preset_path: str):
-        preset_path_escaped = preset_path.replace("\\", "/")
-        self.logger.debug(f"Loading FBX export preset from {preset_path_escaped}")
-        try:
-            pm.mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
-            self.logger.info(f"Loaded FBX export preset from {preset_path_escaped}.")
-        except RuntimeError as e:
-            self.logger.error(f"Failed to load FBX export preset: {e}")
-            raise RuntimeError(f"Failed to load FBX export preset: {e}")
-
-    def verify_fbx_preset(self):
-        settings = [
-            "FBXExportBakeComplexAnimation",
-            "FBXExportBakeComplexStart",
-            "FBXExportBakeComplexEnd",
-            "FBXExportBakeComplexStep",
-            "FBXExportSmoothingGroups",
-            "FBXExportHardEdges",
-            "FBXExportTangents",
-            "FBXExportSmoothMesh",
-            "FBXExportInstances",
-            "FBXExportReferencedAssetsContent",
-            "FBXExportAnimationOnly",
-            "FBXExportSkins",
-            "FBXExportShapes",
-            "FBXExportConstraints",
-            "FBXExportCameras",
-            "FBXExportLights",
-            "FBXExportEmbeddedTextures",
-            "FBXExportInputConnections",
-            "FBXExportTriangulate",
-            "FBXExportUseSceneName",
-            "FBXExportBakeResampleAnimation",
-            "FBXExportFileVersion",
+        # Gather all key times from the specified objects
+        all_key_times = [
+            time
+            for obj in pm.ls(self.objects)
+            for time in pm.keyframe(obj, query=True, timeChange=True) or []
         ]
-        results = {}
-        try:
-            for setting in settings:
-                value = pm.mel.eval(f"{setting} -q")
-                results[setting] = value
-                self.logger.info(f"{setting} is set to: {value}")
-        except RuntimeError as e:
-            self.logger.info(f"Error querying FBX settings: {e}")
-        return results
+
+        if not all_key_times:
+            self.logger.warning(
+                "No keyframes found in specified objects. Skipping frame range setting."
+            )
+            return
+
+        # Determine the first and last keyframes
+        first_key, last_key = min(all_key_times), max(all_key_times)
+
+        # Set the start and end frames for baking complex animation
+        pm.mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
+        pm.mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
+
+        self.logger.info(
+            f"Set animation range to start: {int(first_key)}, end: {int(last_key)}"
+        )
 
 
 class SceneExporter(ptk.LoggingMixin):
@@ -373,7 +360,7 @@ class SceneExporter(ptk.LoggingMixin):
         **kwargs: Dict[str, Any],
     ) -> bool:
         self._export_dir = export_dir
-        self._preset = preset
+        self.preset = preset  # Ensure the setter is called
         self.output_name = output_name
         self.name_regex = name_regex
         self.timestamp = timestamp
@@ -394,6 +381,9 @@ class SceneExporter(ptk.LoggingMixin):
         self.tasks_manager = SceneExporterTasks(
             self.logger, self.objects, self.materials
         )
+
+        if self.preset:  # Apply the preset before running tasks
+            self.apply_preset(self.preset)
 
         if not self.tasks_manager.run_tasks(**kwargs):
             return False
@@ -502,6 +492,59 @@ class SceneExporter(ptk.LoggingMixin):
                 root_logger.removeHandler(handler)
                 self.logger.debug("File handler closed and removed.")
 
+    def apply_preset(self, preset=None):
+        """Apply a preset for export."""
+        if preset:
+            self.logger.debug(f"Applying preset: {preset}")
+            self.load_fbx_export_preset(preset)
+            self.verify_fbx_preset()
+        self.logger.debug("apply_preset passed")
+
+    def load_fbx_export_preset(self, preset_path: str):
+        preset_path_escaped = preset_path.replace("\\", "/")
+        self.logger.debug(f"Loading FBX export preset from {preset_path_escaped}")
+        try:
+            pm.mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
+            self.logger.info(f"Loaded FBX export preset from {preset_path_escaped}.")
+        except RuntimeError as e:
+            self.logger.error(f"Failed to load FBX export preset: {e}")
+            raise RuntimeError(f"Failed to load FBX export preset: {e}")
+
+    def verify_fbx_preset(self):
+        settings = [
+            "FBXExportBakeComplexAnimation",
+            "FBXExportBakeComplexStart",
+            "FBXExportBakeComplexEnd",
+            "FBXExportBakeComplexStep",
+            "FBXExportSmoothingGroups",
+            "FBXExportHardEdges",
+            "FBXExportTangents",
+            "FBXExportSmoothMesh",
+            "FBXExportInstances",
+            "FBXExportReferencedAssetsContent",
+            "FBXExportAnimationOnly",
+            "FBXExportSkins",
+            "FBXExportShapes",
+            "FBXExportConstraints",
+            "FBXExportCameras",
+            "FBXExportLights",
+            "FBXExportEmbeddedTextures",
+            "FBXExportInputConnections",
+            "FBXExportTriangulate",
+            "FBXExportUseSceneName",
+            "FBXExportBakeResampleAnimation",
+            "FBXExportFileVersion",
+        ]
+        results = {}
+        try:
+            for setting in settings:
+                value = pm.mel.eval(f"{setting} -q")
+                results[setting] = value
+                self.logger.info(f"{setting} is set to: {value}")
+        except RuntimeError as e:
+            self.logger.info(f"Error querying FBX settings: {e}")
+        return results
+
     @property
     def preset(self) -> str:
         """Get the preset path."""
@@ -600,6 +643,12 @@ class SceneExporterSlots(SceneExporter):
                 setText="Delete Current Preset",
                 setObjectName="b004",
             )
+            widget.menu.add(
+                "QPushButton",
+                setToolTip="Open the FBX export preset editor.",
+                setText="Edit Preset",
+                setObjectName="b008",
+            )
         widget.add(self.presets, clear=True)
 
     def txt000_init(self, widget) -> None:
@@ -679,7 +728,7 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QCheckBox",
-            setToolTip="Check for Objects with a bounding box having a negative Y value.",
+            setToolTip="Check for objects with a bounding box having a negative Y value.",
             setText="Check For Objects Below Floor.",
             setObjectName="chk011",
         )
@@ -700,6 +749,12 @@ class SceneExporterSlots(SceneExporter):
             setToolTip="Determine the workspace directory from the scene path.",
             setText="Auto Set Workspace",
             setObjectName="chk006",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setToolTip="Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
+            setText="Auto Set Bake Animation Range",
+            setObjectName="chk014",
         )
         widget.menu.add(
             self.sb.ComboBox,
@@ -746,10 +801,10 @@ class SceneExporterSlots(SceneExporter):
         task_params = {
             "set_temp_linear_unit": self.ui.cmb001.currentData(),
             "set_temp_workspace": self.ui.chk006.isChecked(),
+            "set_bake_animation_range": self.ui.chk014.isChecked(),
             "convert_to_relative_paths": self.ui.chk007.isChecked(),
             "delete_unused_materials": self.ui.chk008.isChecked(),
         }
-
         check_params = {
             "check_framerate": self.ui.cmb002.currentData(),
             "check_absolute_paths": self.ui.chk003.isChecked(),
@@ -833,6 +888,10 @@ class SceneExporterSlots(SceneExporter):
         preset_dir = self.PRESET_DIR
         if os.path.exists(preset_dir):
             os.startfile(preset_dir)
+
+    def b008(self) -> None:
+        """Edit Preset"""
+        pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
 
 
 # -----------------------------------------------------------------------------

@@ -446,53 +446,45 @@ class DisplayMacros:
     @staticmethod
     @core_utils.CoreUtils.selected
     def m_frame(objects) -> None:
-        """Frame selected by a set amount."""
+        """Frame selected by a set amount with three toggle states."""
         pm.melGlobals.initVar("int", "toggleFrame_")
         mode = pm.selectMode(q=True, component=True)
         maskVertex = pm.selectType(q=True, vertex=True)
         maskEdge = pm.selectType(q=True, edge=True)
         maskFacet = pm.selectType(q=True, facet=True)
 
-        def frame_element(toggleFrameVal, fitFactorVal, elementType):
+        # Define toggle states and fit factors
+        toggle_states = {
+            "vertices": [(0.10, 1), (0.65, 2), (0.01, 0)],
+            "vertex": [(0.01, 1), (0.15, 2), (0.01, 0)],
+            "edge": [(0.9, 1), (0.3, 2), (0.1, 0)],
+            "facet": [(0.45, 1), (0.9, 2), (0.2, 0)],
+            "object": [(0.75, 1), (0.99, 2), (0.5, 0)],
+        }
+
+        def frame_element(element_type):
+            current_toggle = pm.melGlobals["toggleFrame_"]
+            fitFactorVal, next_toggle = toggle_states[element_type][current_toggle]
             pm.viewFit(fitFactor=fitFactorVal)
-            pm.melGlobals["toggleFrame_"] = toggleFrameVal
-            print("frame {} {}".format(elementType, str(pm.melGlobals["toggleFrame_"])))
+            pm.melGlobals["toggleFrame_"] = next_toggle
+            print(f"frame {element_type} {pm.melGlobals['toggleFrame_']}")
 
         if len(objects) == 0:
             pm.viewFit(allObjects=1)
         else:
             if mode == 1:
                 if maskVertex == 1:
-                    if len(objects) > 1:
-                        frame_element(
-                            1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
-                            0.65 if pm.melGlobals["toggleFrame_"] != 1 else 0.10,
-                            "vertices",
-                        )
-                    else:
-                        frame_element(
-                            1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
-                            0.15 if pm.melGlobals["toggleFrame_"] != 1 else 0.01,
-                            "vertex",
-                        )
+                    element_type = "vertices" if len(objects) > 1 else "vertex"
                 elif maskEdge == 1:
-                    frame_element(
-                        1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
-                        0.3 if pm.melGlobals["toggleFrame_"] != 1 else 0.9,
-                        "edge",
-                    )
+                    element_type = "edge"
                 elif maskFacet == 1:
-                    frame_element(
-                        1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
-                        0.9 if pm.melGlobals["toggleFrame_"] != 1 else 0.45,
-                        "facet",
-                    )
+                    element_type = "facet"
+                else:
+                    element_type = "object"
             else:
-                frame_element(
-                    1 if pm.melGlobals["toggleFrame_"] != 1 else 0,
-                    0.99 if pm.melGlobals["toggleFrame_"] != 1 else 0.65,
-                    "object",
-                )
+                element_type = "object"
+
+            frame_element(element_type)
 
     @classmethod
     @core_utils.CoreUtils.selected

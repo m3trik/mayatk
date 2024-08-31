@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import Dict, ClassVar, Optional
+from typing import Dict, ClassVar, Optional, Any
 
 try:
     import pymel.core as pm
@@ -316,6 +316,75 @@ class EnvUtils(ptk.HelpMixin):
             (list): A list of all references in the current Maya scene.
         """
         return [ref.filePath() for ref in pm.system.listReferences()]
+
+    @staticmethod
+    def export_scene_as_fbx(file_path: str = None, **fbx_options: Any) -> None:
+        """Export the entire Maya scene as an FBX file with flexible MEL command options.
+
+        Parameters:
+            file_path (str): The path where the FBX file will be saved. If None, uses the current scene name.
+            **fbx_options: Additional FBX export options as MEL commands (e.g., FBXExportIncludeChildren=True).
+        """
+        # Set comprehensive default FBX export options
+        default_options = {
+            "FBXExportCameras": False,  # Export cameras
+            "FBXExportLights": False,  # Export lights
+            "FBXExportSkins": False,  # Export skinning data
+            "FBXExportShapes": False,  # Export shape deformers
+            "FBXExportSmoothingGroups": True,  # Export smoothing groups
+            "FBXExportSmoothMesh": True,  # Export smooth mesh
+            "FBXExportHardEdges": True,  # Export hard edges
+            "FBXExportTangents": True,  # Export tangent information
+            "FBXExportInstances": True,  # Export instance information
+            "FBXExportReferencedAssetsContent": False,  # Export referenced assets
+            "FBXExportInputConnections": True,  # Export input connections
+            "FBXExportUseSceneName": True,  # Use scene name for export
+            "FBXExportUpAxis": "y",  # Set up axis
+            "FBXExportScaleFactor": 1.0,  # Scale factor for export
+            "FBXExportConvertUnitString": "cm",  # Convert units to centimeters
+            "FBXExportTriangulate": False,  # Triangulate meshes
+            "FBXExportEmbeddedTextures": True,  # Embed textures in the FBX file
+            "FBXExportConstraints": False,  # Export constraints
+            "FBXExportAnimationOnly": False,  # Export animation only
+            "FBXExportApplyConstantKeyReducer": False,  # Apply constant key reducer
+            "FBXExportBakeComplexAnimation": False,  # Bake complex animations
+            "FBXExportBakeComplexStart": int(
+                pm.playbackOptions(q=True, min=True)
+            ),  # Start frame for baking
+            "FBXExportBakeComplexEnd": int(
+                pm.playbackOptions(q=True, max=True)
+            ),  # End frame for baking
+        }
+
+        # Update default options with user-specified options
+        default_options.update(fbx_options)
+
+        # Apply the FBX export options with the correct syntax
+        for option, value in default_options.items():
+            if isinstance(value, bool) or isinstance(value, int):
+                # Use the -v flag for boolean and integer values
+                value_str = (
+                    "true" if value is True else "false" if value is False else value
+                )
+                pm.mel.eval(f"{option} -v {value_str}")
+            else:
+                pm.mel.eval(f"{option} {value}")
+
+        # Determine the file path if not provided
+        if not file_path:
+            scene_name = pm.sceneName()
+            if not scene_name:
+                raise ValueError(
+                    "Scene has not been saved yet.\nPlease save the scene first, or specify a file path."
+                )
+            file_path = scene_name.replace(".mb", ".fbx").replace(".ma", ".fbx")
+
+        try:
+            # Export the entire scene using FBXExportAll
+            pm.mel.eval(f'FBXExport -f "{file_path}"')
+            print(f"Scene successfully exported as FBX to {file_path}")
+        except Exception as e:
+            print(f"Failed to export scene as FBX: {str(e)}")
 
 
 # -----------------------------------------------------------------------------
