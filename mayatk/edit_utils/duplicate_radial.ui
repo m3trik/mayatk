@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>463</height>
+    <height>448</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -197,10 +197,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -237,10 +237,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -277,10 +277,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -317,10 +317,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -357,10 +357,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -397,10 +397,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>0.100000000000000</double>
@@ -437,10 +437,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>1.000000000000000</double>
@@ -477,10 +477,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>0.100000000000000</double>
@@ -520,13 +520,13 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
-            <double>1.000000000000000</double>
+            <double>0.100000000000000</double>
            </property>
            <property name="value">
             <double>0.000000000000000</double>
@@ -560,13 +560,13 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
-            <double>1.000000000000000</double>
+            <double>0.100000000000000</double>
            </property>
            <property name="value">
             <double>0.000000000000000</double>
@@ -600,13 +600,13 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-9999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>9999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
-            <double>1.000000000000000</double>
+            <double>0.100000000000000</double>
            </property>
            <property name="value">
             <double>0.000000000000000</double>
@@ -786,10 +786,10 @@
             <number>4</number>
            </property>
            <property name="minimum">
-            <double>-999999999.000000000000000</double>
+            <double>-9999999.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>999999999.000000000000000</double>
+            <double>9999999.000000000000000</double>
            </property>
            <property name="singleStep">
             <double>0.100000000000000</double>
@@ -930,7 +930,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the progression of transformations across the duplicates. &lt;/p&gt;&lt;p&gt;A value of 0.5 results in a linear progression. &lt;/p&gt;&lt;p&gt;Values less than 0.5 make transformations faster at the start and &lt;/p&gt;&lt;p&gt;slower at the end, while values greater than 0.5 do the opposite.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the direction of the bias:&lt;/p&gt;&lt;ul style=&quot;margin-top: 0px; margin-bottom: 0px; margin-left: 0px; margin-right: 0px; -qt-list-indent: 1;&quot;&gt;&lt;li style=&quot; margin-top:12px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0&lt;/span&gt; would mean the bias is completely towards the start.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0.5&lt;/span&gt; indicates no bias, providing a linear distribution.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;1&lt;/span&gt; would mean the bias is completely towards the end.&lt;/li&gt;&lt;/ul&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -970,7 +970,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias. Higher values result in a stronger bias effect,&lt;/p&gt;&lt;p&gt;while lower values result in a weaker bias effect. A value of 1 results in no bias effect.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias:&lt;/p&gt;&lt;ul style=&quot;margin-top: 0px; margin-bottom: 0px; margin-left: 0px; margin-right: 0px; -qt-list-indent: 1;&quot;&gt;&lt;li style=&quot; margin-top:12px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0&lt;/span&gt; indicates no curvature, resulting in a linear effect.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value close to &lt;span style=&quot; font-family:'Courier New';&quot;&gt;1&lt;/span&gt; indicates a strong curvature, producing a noticeable bias effect.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;The default of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0.5&lt;/span&gt; provides moderate curvature.&lt;/li&gt;&lt;/ul&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -982,16 +982,16 @@
             <number>2</number>
            </property>
            <property name="minimum">
-            <double>1.000000000000000</double>
+            <double>0.000000000000000</double>
            </property>
            <property name="maximum">
-            <double>100.000000000000000</double>
-           </property>
-           <property name="singleStep">
             <double>1.000000000000000</double>
            </property>
+           <property name="singleStep">
+            <double>0.010000000000000</double>
+           </property>
            <property name="value">
-            <double>10.000000000000000</double>
+            <double>0.500000000000000</double>
            </property>
           </widget>
          </item>
