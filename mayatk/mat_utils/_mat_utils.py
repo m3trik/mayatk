@@ -350,45 +350,83 @@ class MatUtils(ptk.HelpMixin):
 
     @classmethod
     def find_materials_with_duplicate_textures(
-        cls, materials: Optional[List[object]] = None
+        cls,
+        materials: Optional[List[object]] = None,
+        check_attributes: bool = True,  # Flag to toggle attribute checking
+        inc: Optional[List[str]] = None,  # Attributes to include
+        exc: Optional[List[str]] = None,  # Attributes to exclude
+        exc_defaults: bool = False,  # Exclude attributes at default values
     ) -> Dict[object, List[object]]:
-        """Find duplicate materials based on their texture file paths.
+        """Find duplicate materials based on their texture file paths and optionally all attribute values.
 
         Parameters:
             materials (Optional[List[pm.nodetypes.ShadingNode]]): List of material nodes.
+            check_attributes (bool): Whether to include attribute values in the comparison.
 
         Returns:
             Dict[pm.nodetypes.ShadingNode, List[pm.nodetypes.ShadingNode]]: Dictionary mapping original material nodes to lists of duplicate material nodes.
         """
         materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
-        material_paths = cls.collect_material_paths(
-            materials, include_material=True, include_path_type=True
-        )
 
-        # Create a dictionary to track unique texture sets
-        material_textures: Dict[object, set] = {}
-        duplicates: Dict[object, List[object]] = {}
+        # Dictionary to store relevant material data (hashed values)
+        material_data = {}
 
-        for material, _, file_name in material_paths:
-            if material not in material_textures:
-                material_textures[material] = set()
-            material_textures[material].add(file_name)
+        for material in materials:
+            # Collect file nodes connected to the material or its shading engine
+            file_nodes = pm.listConnections(
+                material, source=True, destination=False, type="file"
+            )
+            # Check shading engine connections if no direct file nodes
+            if not file_nodes:
+                shading_engines = pm.listConnections(material, type="shadingEngine")
+                file_nodes = [
+                    file
+                    for engine in shading_engines
+                    for file in pm.listConnections(
+                        engine, source=True, destination=False, type="file"
+                    )
+                ]
 
-        # Find duplicates using the is_duplicate method
-        texture_sets = {}
-        for material, textures in material_textures.items():
-            textures_tuple = tuple(sorted(textures))  # Sort to ensure consistency
-            if textures_tuple in texture_sets:
-                texture_sets[textures_tuple].append(material)
+            if not file_nodes:  # Skip materials without file nodes
+                print(f"Skipping material {material} - no file nodes connected.")
+                continue
+
+            # Collect and hash file node paths by converting them to strings
+            file_paths = [
+                str(pm.getAttr(f"{file_node}.fileTextureName"))
+                for file_node in file_nodes
+            ]
+            file_paths_hash = hash(frozenset(file_paths))
+
+            # Collect and hash all attributes dynamically only if `check_attributes` is enabled
+            if check_attributes:
+                attributes = cls.get_node_attributes(
+                    material, inc=inc or [], exc=exc or [], exc_defaults=exc_defaults
+                )
+                attributes_hash = hash(frozenset(attributes.items()))
             else:
-                texture_sets[textures_tuple] = [material]
+                attributes_hash = 0  # No attribute checking, default hash
 
-        for textures, materials in texture_sets.items():
+            # Store the combined hash of file paths and attributes as the key
+            combined_hash = hash((file_paths_hash, attributes_hash))
+            material_data[material] = combined_hash
+
+        # Identify duplicates
+        duplicates = {}
+        seen_materials = {}
+
+        for material, combined_hash in material_data.items():
+            if combined_hash in seen_materials:
+                seen_materials[combined_hash].append(material)
+            else:
+                seen_materials[combined_hash] = [material]
+
+        # Process duplicates
+        for materials in seen_materials.values():
             if len(materials) > 1:
-                # Sort by name length first, then alphabetically
                 materials.sort(key=lambda x: (len(x.name()), x.name()))
                 original = materials[0]
-                duplicates[original] = materials[1:]  # All others are duplicates
+                duplicates[original] = materials[1:]
 
         return duplicates
 
