@@ -12,6 +12,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.env_utils import EnvUtils
 
 
 class StingrayArnoldShader:
@@ -62,7 +63,7 @@ class StingrayArnoldShader:
         # Process each texture
         length = len(textures)
         progress = 0
-        base_dir = CoreUtils.get_maya_info("sourceimages")
+        base_dir = EnvUtils.get_maya_info("sourceimages")
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
@@ -111,13 +112,13 @@ class StingrayArnoldShader:
         Returns:
             pm.nt.StingrayPBS: The created StingrayPBS shader node.
         """
-        CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
         # Create StingrayPBS node
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = CoreUtils.get_maya_info("install_path")
+            maya_install_path = EnvUtils.get_maya_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -151,7 +152,7 @@ class StingrayArnoldShader:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
-        CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
 
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
@@ -612,7 +613,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
-        self.workspace_dir = CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 

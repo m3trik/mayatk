@@ -12,6 +12,7 @@ import pythontk as ptk
 from mayatk import core_utils
 from mayatk import node_utils
 from mayatk import edit_utils
+from mayatk import ui_utils
 from mayatk import display_utils
 
 
@@ -339,7 +340,7 @@ class DisplayMacros:
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=1)
+        currentPanel = ui_utils.UiUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
             pm.isolateSelect(currentPanel, state=0)
@@ -532,7 +533,7 @@ class DisplayMacros:
         """Toggles the wireframe display state.
         Possible states include: none, shaded, full
         """
-        focused_panel = core_utils.CoreUtils.get_panel(withFocus=True)
+        focused_panel = ui_utils.UiUtils.get_panel(withFocus=True)
         # Check if focused_panel is a modelPanel to avoid errors when it's not
         if not focused_panel or not pm.modelEditor(
             focused_panel, query=True, exists=True
@@ -594,7 +595,7 @@ class DisplayMacros:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = ui_utils.UiUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, q=True, displayAppearance=True)
         displayTextures = pm.modelEditor(currentPanel, q=True, displayTextures=True)
 
@@ -641,7 +642,7 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = core_utils.CoreUtils.get_panel(withFocus=True)
+        currentPanel = ui_utils.UiUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
         if pm.modelEditor(currentPanel, exists=1):
@@ -1033,7 +1034,7 @@ class UiMacros:
     def m_toggle_panels() -> None:
         """Toggle UI toolbars."""
         # toggle panel menus
-        panels = core_utils.CoreUtils.get_panel(allPanels=1)
+        panels = ui_utils.UiUtils.get_panel(allPanels=1)
         state = int(pm.panel(panels[0], menuBarVisible=1, query=1))
         for panel in panels:
             pm.panel(panel, edit=1, menuBarVisible=(not state))

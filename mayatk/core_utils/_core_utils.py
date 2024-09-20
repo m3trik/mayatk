@@ -141,190 +141,6 @@ class CoreUtils(ptk.HelpMixin):
                 pm.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
-    def get_main_window():
-        """Get maya's main window object.
-
-        Returns:
-            (QWidget)
-        """
-        from PySide2.QtWidgets import QApplication
-
-        app = QApplication.instance()
-        if not app:
-            return print(
-                f"# Warning: {__file__} in get_main_window\n#\tCould not find QApplication instance."
-            )
-
-        main_window = next(
-            iter(w for w in app.topLevelWidgets() if w.objectName() == "MayaWindow"),
-            None,
-        )
-        if not main_window:
-            return print(
-                f"# Warning: {__file__} in get_main_window\n#\tCould not find main window instance."
-            )
-
-        return main_window
-
-    @staticmethod
-    def get_maya_info(key):
-        """Fetch specific information about the current Maya environment based on the provided key.
-
-        Parameters:
-            key (str): The key corresponding to the specific Maya information to fetch.
-
-        Returns:
-            The corresponding information based on the key, or an error message if the key is invalid.
-        """
-        available_keys = {
-            "install_path": lambda: os.environ.get("MAYA_LOCATION"),
-            "version": lambda: pm.about(version=True),
-            "renderer": lambda: pm.getAttr("defaultRenderGlobals.currentRenderer"),
-            "workspace": lambda: pm.workspace(q=True, rd=True),
-            "workspace_dir": lambda: ptk.format_path(
-                pm.workspace(q=True, rd=True), "dir"
-            ),
-            "workspace_path": lambda: ptk.format_path(
-                pm.workspace(q=True, rd=True), "path"
-            ),
-            "sourceimages": lambda: os.path.join(
-                pm.workspace(q=True, rd=True), "sourceimages"
-            ),
-            "scene": lambda: pm.sceneName(),
-            "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),
-            "scene_path": lambda: ptk.format_path(pm.sceneName(), "path"),
-            "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
-            "ui_language": lambda: pm.about(uiLanguage=True),
-            "os_type": lambda: pm.about(os=True),
-            "linear_units": lambda: pm.currentUnit(q=True, fullName=True),
-            "time_units": lambda: pm.currentUnit(q=True, t=True),
-            "loaded_plugins": lambda: pm.pluginInfo(q=True, listPlugins=True),
-            "api_version": lambda: pm.about(api=True),
-            "host_name": lambda: pm.about(hostName=True),
-            "current_frame": lambda: pm.currentTime(q=True),
-            "frame_range": lambda: (
-                pm.playbackOptions(q=True, min=True),
-                pm.playbackOptions(q=True, max=True),
-            ),
-            "viewport_renderer": lambda: pm.modelEditor(
-                "modelPanel4", q=True, rendererName=True
-            ),
-            "current_camera": lambda: pm.modelEditor(
-                "modelPanel4", q=True, camera=True
-            ),
-            "available_cameras": lambda: pm.listCameras(),
-            "active_layers": lambda: [
-                layer.name()
-                for layer in pm.ls(type="displayLayer")
-                if not layer.attr("visibility").isLocked()
-            ],
-            "current_tool": lambda: pm.currentCtx(),
-            "up_axis": lambda: pm.upAxis(q=True, axis=True),
-            "maya_uptime": lambda: pm.timerX(),
-            "total_polys": lambda: pm.polyEvaluate(scene=True, triangle=True),
-            "total_nodes": lambda: len(pm.ls(dag=True)),
-        }
-
-        if key not in available_keys:
-            raise KeyError(
-                "Invalid key. Available keys are: {}".format(
-                    ", ".join(available_keys.keys())
-                )
-            )
-
-        value = available_keys[key]()
-        if value is None:
-            raise ValueError(f"The value for {key} could not be found.")
-
-        return value
-
-    @staticmethod
-    def load_plugin(plugin_name):
-        """Loads a specified plugin.
-        This method checks if the plugin is already loaded before attempting to load it.
-
-        Parameters:
-            plugin_name (str): The name of the plugin to load.
-
-        Examples:
-            >>> load_plugin('nearestPointOnMesh')
-
-        Raises:
-            ValueError: If the plugin is not found or fails to load.
-        """
-        if not pm.pluginInfo(plugin_name, query=True, loaded=True):
-            try:
-                pm.loadPlugin(plugin_name, quiet=True)
-            except RuntimeError as e:
-                raise ValueError(f"Failed to load plugin {plugin_name}: {e}")
-
-    @staticmethod
-    def append_maya_paths(maya_version=None):
-        """Appends various Maya-related paths to the system's Python environment and sys.path.
-        This function sets environment variables and extends sys.path to include paths
-        for Maya's Python API, libraries, and related functionalities. It aims to
-        facilitate the integration of Maya with external Python scripts.
-
-        Parameters:
-        maya_version (int, str, optional): The version of Maya to add the paths for.
-                                          If None, the function will query the version
-                                          using PyMel. Defaults to None.
-        Raises:
-        EnvironmentError: If the MAYA_LOCATION environment variable is not set.
-
-        Example:
-        >>> append_maya_paths()
-        This will set paths for the current Maya version in use.
-
-        >>> append_maya_paths(2023)
-        This will set paths explicitly for Maya version 2023.
-
-        Returns:
-        None
-        """
-        # Query Maya version if not provided
-        if maya_version is None:
-            maya_version = pm.about(version=True)
-
-        maya_install_path = os.environ.get("MAYA_LOCATION")
-        if not maya_install_path:
-            raise EnvironmentError("MAYA_LOCATION environment variable not set.")
-
-        # Setting Environment Variables
-        os.environ["PYTHONHOME"] = os.path.join(maya_install_path, "Python")
-        os.environ["PATH"] = (
-            os.path.join(maya_install_path, "bin") + ";" + os.environ["PATH"]
-        )
-
-        # List of paths to append
-        paths_to_add = [
-            os.path.join(maya_install_path, "bin"),
-            os.path.join(maya_install_path, "Python"),
-            os.path.join(maya_install_path, "Python", str(maya_version), "DLLs"),
-            os.path.join(maya_install_path, "Python", str(maya_version), "lib"),
-            os.path.join(
-                maya_install_path, "Python", str(maya_version), "lib", "lib-tk"
-            ),
-            os.path.join(
-                maya_install_path, "Python", str(maya_version), "lib", "plat-win"
-            ),
-            os.path.join(
-                maya_install_path, "Python", str(maya_version), "lib", "site-packages"
-            ),
-            os.path.join(
-                maya_install_path, "devkit", "other", "pymel", "extras", "modules"
-            ),
-            os.path.join(
-                maya_install_path, "devkit", "other", "pymel", "extras", "completion"
-            ),
-        ]
-
-        # Append paths only if they are not already in sys.path
-        for path in paths_to_add:
-            if path not in sys.path:
-                sys.path.append(path)
-
-    @staticmethod
     def wrap_control(control_name, container):
         """Embed a Maya Native UI Object.
 
@@ -426,9 +242,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int"
-            if isinstance(o, int)
-            else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
         )
 
     @staticmethod
@@ -639,104 +453,6 @@ class CoreUtils(ptk.HelpMixin):
         return attrs
 
     @staticmethod
-    def get_panel(*args, **kwargs):
-        """Returns panel and panel configuration information.
-        A fix for the broken pymel command `getPanel`.
-
-        Parameters:
-            [allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
-
-        Returns:
-            (str) An array of panel names.
-        """
-        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022,23
-
-        result = getPanel(*args, **kwargs)
-
-        return result
-
-    @staticmethod
-    def main_progress_bar(size, name="progressBar#", step_amount=1):
-        """# add esc key pressed return False
-
-        Parameters:
-            size (int): total amount
-            name (str): name of progress bar created
-            step_amount(int): increment amount
-
-        Example:
-            main_progress_bar (len(edges), progressCount)
-            pm.progressBar ("progressBar_", edit=1, step=1)
-            if pm.progressBar ("progressBar_", q=True, isCancelled=1):
-                break
-            pm.progressBar ("progressBar_", edit=1, endProgress=1)
-
-            to use main progressBar: name=string $gMainProgressBar
-        """
-        status = "processing: {} items ..".format(size)
-
-        edit = False
-        if pm.progressBar(name, exists=1):
-            edit = True
-
-        pm.progressBar(
-            name,
-            edit=edit,
-            beginProgress=1,
-            isInterruptable=True,
-            status=status,
-            maxValue=size,
-            step=step_amount,
-        )
-
-    @staticmethod
-    def get_mel_globals(keyword=None, ignore_case=True):
-        """Get global MEL variables."""
-        variables = [
-            v
-            for v in sorted(pm.mel.eval("env"))
-            if not keyword
-            or (
-                v.count(keyword)
-                if not ignore_case
-                else v.lower().count(keyword.lower())
-            )
-        ]
-        return variables
-
-    @staticmethod
-    def list_ui_objects():
-        """List all UI objects."""
-        ui_objects = {
-            "windows": pm.lsUI(windows=True),
-            "panels": pm.lsUI(panels=True),
-            "editors": pm.lsUI(editors=True),
-            "menus": pm.lsUI(menus=True),
-            "menuItems": pm.lsUI(menuItems=True),
-            "controls": pm.lsUI(controls=True),
-            "controlLayouts": pm.lsUI(controlLayouts=True),
-            "contexts": pm.lsUI(contexts=True),
-        }
-        for category, objects in ui_objects.items():
-            print(f"{category}:\n{objects}\n")
-
-    @staticmethod
-    def clear_scroll_field_reporters():
-        """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
-
-        This function is useful for cleaning up the script output display in Maya's UI,
-        particularly before executing scripts or operations that generate a lot of output.
-        It iterates over all cmdScrollFieldReporter objects and clears them, ensuring a clean
-        slate for viewing new script or command output.
-        """
-        # Get a list of all UI objects of type "cmdScrollFieldReporter"
-        reporters = pm.lsUI(type="cmdScrollFieldReporter")
-
-        # If any reporters are found, clear them
-        for reporter in reporters:
-            pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
-
-    @staticmethod
     def get_channel_box_attributes(
         objects,
         *args,
@@ -784,6 +500,37 @@ class CoreUtils(ptk.HelpMixin):
                 attributes_dict[attr_name] = value
 
         return attributes_dict
+
+    @staticmethod
+    def clear_scroll_field_reporters():
+        """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
+
+        This function is useful for cleaning up the script output display in Maya's UI,
+        particularly before executing scripts or operations that generate a lot of output.
+        It iterates over all cmdScrollFieldReporter objects and clears them, ensuring a clean
+        slate for viewing new script or command output.
+        """
+        # Get a list of all UI objects of type "cmdScrollFieldReporter"
+        reporters = pm.lsUI(type="cmdScrollFieldReporter")
+
+        # If any reporters are found, clear them
+        for reporter in reporters:
+            pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
+
+    @staticmethod
+    def get_mel_globals(keyword=None, ignore_case=True):
+        """Get global MEL variables."""
+        variables = [
+            v
+            for v in sorted(pm.mel.eval("env"))
+            if not keyword
+            or (
+                v.count(keyword)
+                if not ignore_case
+                else v.lower().count(keyword.lower())
+            )
+        ]
+        return variables
 
 
 # --------------------------------------------------------------------------------------------

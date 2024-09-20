@@ -12,11 +12,10 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.env_utils import EnvUtils
 
 
 class MatUtils(ptk.HelpMixin):
-    """ """
-
     @staticmethod
     def get_mats(objs):
         """Returns the set of materials assigned to a given list of objects or components.
@@ -296,7 +295,7 @@ class MatUtils(ptk.HelpMixin):
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
-        project_sourceimages = CoreUtils.get_maya_info("sourceimages")
+        project_sourceimages = EnvUtils.get_maya_info("sourceimages")
 
         stripped_project_path = strip_drive_and_filename(project_sourceimages)
 
@@ -400,7 +399,7 @@ class MatUtils(ptk.HelpMixin):
 
             # Collect and hash all attributes dynamically only if `check_attributes` is enabled
             if check_attributes:
-                attributes = cls.get_node_attributes(
+                attributes = NodeUtils.get_node_attributes(
                     material, inc=inc or [], exc=exc or [], exc_defaults=exc_defaults
                 )
                 attributes_hash = hash(frozenset(attributes.items()))
@@ -504,7 +503,7 @@ class MatUtils(ptk.HelpMixin):
         Raises:
             FileNotFoundError: If the 'sourceimages' directory does not exist.
         """
-        base_dir = CoreUtils.get_maya_info("sourceimages")
+        base_dir = EnvUtils.get_maya_info("sourceimages")
 
         if not items:
             items = pm.ls(type="file")
@@ -595,7 +594,7 @@ class MatUtils(ptk.HelpMixin):
         """
         import shutil
 
-        project_sourceimages = source_dir or CoreUtils.get_maya_info("sourceimages")
+        project_sourceimages = source_dir or EnvUtils.get_maya_info("sourceimages")
         unused_folder = output_dir or os.path.join(project_sourceimages, "unused")
 
         if not os.path.exists(unused_folder):

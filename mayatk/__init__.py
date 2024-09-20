@@ -132,6 +132,7 @@ included_modules = [
     "_node_utils",
     "_rig_utils",
     "_xform_utils",
+    "_ui_utils",
 ]
 build_dictionaries(included_modules=included_modules)
 

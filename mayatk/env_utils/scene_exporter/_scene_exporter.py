@@ -604,7 +604,7 @@ class SceneExporterSlots(SceneExporter):
 
     @property
     def workspace(self) -> Optional[str]:
-        workspace_path = CoreUtils.get_maya_info("workspace")
+        workspace_path = EnvUtils.get_maya_info("workspace")
         if not workspace_path:
             self.logger.error("Workspace directory not found.")
         return workspace_path
