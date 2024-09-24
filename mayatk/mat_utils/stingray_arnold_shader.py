@@ -639,7 +639,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     #     ui.set_attributes(WA_TranslucentBackground=True)
     #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    #     ui.header.configureButtons(hide_button=True)
+    #     ui.header.configure_buttons(hide_button=True)
 
     #     # Connect button click to show HDR Manager
     #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
@@ -754,7 +754,7 @@ if __name__ == "__main__":
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(
+    sb.current_ui.header.configure_buttons(
         menu_button=True, minimize_button=True, hide_button=True
     )
     sb.current_ui.show(pos="screen", app_exec=True)

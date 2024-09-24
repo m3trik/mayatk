@@ -10,6 +10,28 @@ import pythontk as ptk
 from mayatk.ui_utils import UiUtils
 
 
+class EmbeddedMenuWidget(QtWidgets.QWidget):
+    def __init__(self, menu, parent=None):
+        super(EmbeddedMenuWidget, self).__init__(parent)
+        self.menu = menu
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Create a QWidgetAction to host the menu
+        menu_action = QtWidgets.QWidgetAction(self)
+        menu_action.setDefaultWidget(self.menu)
+
+        # Create a toolbar to hold the menu action
+        toolbar = QtWidgets.QToolBar()
+        toolbar.addAction(menu_action)
+
+        layout.addWidget(toolbar)
+
+
 class MayaMenuHandler(ptk.LoggingMixin):
     menu_init = {
         "file": ("File", "buildFileMenu()"),
@@ -39,10 +61,11 @@ class MayaMenuHandler(ptk.LoggingMixin):
         "texturing": ("Texturing", "RenTexturingMenu MayaWindow|mainRenTexturingMenu"),
         "uv": ("UV", "ModelingUVMenu MayaWindow|mainUVMenu"),
         "key": ("Key", "AniKeyMenu MayaWindow|mainKeysMenu"),
-        "constraint": (
-            "Constraint",
+        "constrain": (
+            "Constrain",
             "AniConstraintsMenu MayaWindow|mainRigConstraintsMenu",
         ),
+        "control": ("Control", "ChaControlsMenu MayaWindow|mainRigControlMenu"),
         "skeleton": ("Skeleton", "ChaSkeletonsMenu MayaWindow|mainRigSkeletonsMenu"),
         "skin": ("Skin", "ChaSkinningMenu MayaWindow|mainRigSkinningMenu"),
         "lighting_shading": (
@@ -76,6 +99,10 @@ class MayaMenuHandler(ptk.LoggingMixin):
         super().__init__()
         self.menus = {}
 
+    def __getattr__(self, menu_key: str) -> Optional["QtWidgets.QMenu"]:
+        """Dynamically retrieve and return a Maya menu by its python-friendly name."""
+        return self.get_menu(menu_key)
+
     def initialize_menu(self, menu_key: str):
         """Initializes a Maya menu using the mapped name and initialization command."""
         menu_key = menu_key.lower()
@@ -93,23 +120,21 @@ class MayaMenuHandler(ptk.LoggingMixin):
                 f"No initialization command found for menu '{menu_key}'"
             )
 
-    def get_menu(self, menu_key: str) -> Optional["QtWidgets.QMenu"]:
-        """Retrieves and duplicates a Maya menu by copying its actions.
-        Uses the lowercase menu_key for explicit mapping.
-        """
+    def get_menu(self, menu_key: str) -> Optional["EmbeddedMenuWidget"]:
+        """Retrieves, duplicates, and wraps a Maya menu into an EmbeddedMenuWidget."""
         menu_key = menu_key.lower()
         # Check if the menu_key exists in the map
         if menu_key not in self.menu_init:
             self.logger.error(f"Menu '{menu_key}' not found in the mapping.")
             return None
 
+        # Check if the menu has already been wrapped and stored
+        if menu_key in self.menus:
+            self.logger.info(f"Returning stored embedded menu widget for '{menu_key}'.")
+            return self.menus[menu_key]
+
         # Extract the actual Maya menu name
         maya_menu_name, _ = self.menu_init[menu_key]
-
-        # Check if the menu has already been duplicated and stored
-        if menu_key in self.menus:
-            self.logger.info(f"Returning stored duplicated menu for '{menu_key}'.")
-            return self.menus[menu_key]
 
         # Initialize the Maya menu if necessary
         self.initialize_menu(menu_key)
@@ -127,48 +152,25 @@ class MayaMenuHandler(ptk.LoggingMixin):
         if target_menu:
             # Duplicate the menu
             duplicate_menu = QtWidgets.QMenu(maya_menu_name, main_window)
-            duplicate_menu.setObjectName(menu_key)
+            duplicate_menu.setObjectName(maya_menu_name)
 
             # Copy actions from the original menu to the new menu
             for action in target_menu.actions():
                 duplicate_menu.addAction(action)
 
-            # Store the duplicated menu to prevent garbage collection
-            self.menus[menu_key] = duplicate_menu
-            self.logger.info(f"Duplicated menu '{menu_key}' and stored it.")
-            return duplicate_menu
+            # Wrap the duplicate menu in an EmbeddedMenuWidget
+            embedded_menu_widget = EmbeddedMenuWidget(duplicate_menu)
+            embedded_menu_widget.setObjectName(menu_key)
+
+            # Store the embedded menu widget to prevent garbage collection
+            self.menus[menu_key] = embedded_menu_widget
+            self.logger.info(
+                f"Duplicated menu '{menu_key}', wrapped it in EmbeddedMenuWidget, and stored it."
+            )
+            return embedded_menu_widget
         else:
             self.logger.error(f"Failed to find menu '{menu_key}'.")
             return None
-
-    def __getattr__(self, menu_key: str) -> Optional["QtWidgets.QMenu"]:
-        """Dynamically retrieve and return a Maya menu by its python-friendly name."""
-        return self.get_menu(menu_key)
-
-    def create_tool_menu(self, menu_name: str) -> Optional["QtWidgets.QMainWindow"]:
-        """Converts a duplicated Maya menu into a floating tool menu."""
-        # Retrieve the duplicated menu
-        menu = self.get_menu(menu_name)
-        if not menu:
-            self.logger.error(f"Failed to retrieve the menu '{menu_name}'.")
-            return None
-
-        self.logger.info(f"Converting menu '{menu_name}' to a floating tool menu.")
-
-        # Create a new QMainWindow or QWidget as the parent for the floating menu
-        main_window = UiUtils.get_main_window()
-        tool_window = QtWidgets.QMainWindow(main_window)
-        tool_window.setWindowTitle(menu_name)
-        tool_window.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
-
-        # Set the duplicated menu as the menu of the tool window
-        tool_window.setMenuWidget(menu)
-        tool_window.resize(menu.sizeHint().width(), menu.sizeHint().height())
-
-        # Store the tool window to prevent garbage collection
-        self.menus[menu_name] = tool_window
-
-        return tool_window
 
 
 # --------------------------------------------------------------------------------------------

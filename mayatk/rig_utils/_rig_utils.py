@@ -504,6 +504,67 @@ class RigUtils(ptk.HelpMixin):
         set_driven_keys(distance_node, initial_distance)
         lock_segment_attributes()
 
+    @staticmethod
+    def reverse_joint_chain(root_joint, keep_original=False):
+        """Create a new joint chain with the same positions as the original, but with reversed hierarchy.
+        Parameters:
+            root_joint (str): The root joint of the original joint chain.
+            keep_original (bool): Whether to keep the original joint chain. Default is False.
+        Returns:
+            list: The new joint chain with reversed hierarchy.
+        """
+        # Get the original joint chain starting from the root
+        original_joints = pm.listRelatives(
+            root_joint, allDescendents=True, type="joint"
+        )
+        original_joints.append(root_joint)
+        original_joints.reverse()  # Now from end joint to root joint
+
+        # Collect positions and radii of the original joints
+        joint_positions = [
+            joint.getTranslation(space="world") for joint in original_joints
+        ]
+        joint_radii = [joint.radius.get() for joint in original_joints]
+
+        if not keep_original:
+            pm.delete(original_joints)
+
+        # Create a new joint chain along the same positions
+        pm.select(clear=True)
+        new_joints = []
+        for i, pos in enumerate(joint_positions):
+            new_joint = pm.joint(position=pos)
+            new_joints.append(new_joint)
+            # Set the joint radius to match the original
+            new_joint.radius.set(joint_radii[i])
+
+        # Unparent all new joints
+        for joint in new_joints:
+            pm.parent(joint, world=True)
+
+        # Reverse the new joints list to set up reversed hierarchy
+        new_joints.reverse()
+
+        # Re-parent joints in reverse order to create reversed hierarchy
+        for i in range(len(new_joints) - 1):
+            pm.parent(new_joints[i + 1], new_joints[i])
+
+        # Zero out joint orientations before reorienting
+        for joint in new_joints:
+            joint.jointOrient.set([0, 0, 0])
+
+        # Reorient the joints to point towards their children
+        pm.select(new_joints[0], hierarchy=True)
+        pm.joint(
+            edit=True,
+            orientJoint="xyz",
+            secondaryAxisOrient="yup",
+            zeroScaleOrient=True,
+            children=True,
+        )
+
+        return new_joints
+
 
 # -----------------------------------------------------------------------------
 

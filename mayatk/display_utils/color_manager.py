@@ -367,7 +367,7 @@ if __name__ == "__main__":
         Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
     )
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
+    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
 
     sb.current_ui.show(pos="screen", app_exec=True)
 
