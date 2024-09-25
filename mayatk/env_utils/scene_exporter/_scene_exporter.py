@@ -19,6 +19,7 @@ from mayatk.core_utils import CoreUtils
 from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
+from mayatk.xform_utils import XformUtils
 from mayatk.display_utils import DisplayUtils
 
 
@@ -276,21 +277,26 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         return True
 
     def check_objects_below_floor(self) -> bool:
-        """Check if any object's bounding box is below the Y-axis by the given threshold."""
-        threshold = float(0)
-        objects_below_threshold = []
-        for obj in self.objects:
-            # Get the min Y value
-            bbox_min = pm.xform(obj, query=True, boundingBox=True)[1]
-            if bbox_min < threshold:
-                objects_below_threshold.append((obj, bbox_min))
+        """Check if any object's geometry is below the floor plane (Y=0)."""
+        # Use the general method to check objects against this plane with boolean return type
+        objects_below_threshold = XformUtils.check_objects_against_plane(
+            self.objects,
+            plane_point=(0, 0, 0),
+            plane_normal=(0, 1, 0),
+            return_type="bool",
+        )
+        # Log results
+        has_objects_below = False
+        for obj, is_below in objects_below_threshold:
+            if is_below:
+                if not has_objects_below:
+                    self.logger.error(
+                        "Objects with geometry below the floor threshold found:"
+                    )
+                    has_objects_below = True
+                self.logger.error(f"\tObject: {obj} - Below Floor: {is_below}")
 
-        if objects_below_threshold:
-            self.logger.error(
-                "Objects with bounding box below the floor threshold found:"
-            )
-            for obj, bbox_min in objects_below_threshold:
-                self.logger.error(f"\tObject: {obj} - Min Y: {bbox_min}")
+        if has_objects_below:
             return False
 
         self.logger.debug("check_objects_below_floor passed")

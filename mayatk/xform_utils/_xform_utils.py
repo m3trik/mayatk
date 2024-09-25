@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union, Optional
+from typing import List, Tuple, Union, Optional
 
 try:
     import pymel.core as pm
@@ -975,6 +975,109 @@ class XformUtils(ptk.HelpMixin):
         )
 
         return True if vert_setA and len(closestVerts) == len(vert_setA) else False
+
+    @staticmethod
+    def check_objects_against_plane(
+        objects: List["pm.nodetypes.Transform"],
+        plane_point: Tuple[float, float, float],
+        plane_normal: Tuple[float, float, float],
+        return_type: str = "bool",
+    ) -> Union[
+        List[Tuple["pm.nodetypes.Transform", bool]],
+        List[Tuple["pm.nodetypes.Transform", "om.MPoint"]],
+        List[Tuple["pm.nodetypes.Transform", "pm.datatypes.Vector"]],
+        List[Tuple["pm.nodetypes.Transform", "pm.MeshVertex"]],
+    ]:
+        """General method to check if any object's geometry is below a defined plane.
+
+        Parameters:
+            objects: List of objects to check.
+            plane_point: A point on the plane as a tuple (x, y, z).
+            plane_normal: The normal vector of the plane as a tuple (x, y, z).
+            return_type: Type of return value ("bool", "mpoint", "vector", "vertex").
+
+        Return:
+            List of objects with their status relative to the plane.
+        """
+        from maya.api import OpenMaya as om
+
+        # Convert plane_point and plane_normal from tuples to MPoint and MVector
+        plane_point = om.MPoint(*plane_point)
+        plane_normal = om.MVector(*plane_normal).normalize()
+
+        objects_below_threshold = []
+
+        for obj in objects:
+            # Validate if object is the correct type
+            if not isinstance(obj, pm.nodetypes.Transform):
+                print(f"Invalid object type: {obj}. Expected Transform node.")
+                continue
+
+            # Get the MDagPath of the object
+            try:
+                sel_list = om.MSelectionList()
+                sel_list.add(obj.name())
+                dag_path = sel_list.getDagPath(0)
+            except Exception as e:
+                print(f"Error getting dag path for {obj}: {e}")
+                continue
+
+            # Ensure the object has a mesh shape
+            dag_path_shape = dag_path.extendToShape()
+            if dag_path_shape.apiType() != om.MFn.kMesh:
+                print(f"Skipping non-mesh object: {obj}")
+                continue
+
+            # Get the world transformation matrix of the object
+            world_matrix = dag_path.inclusiveMatrix()
+
+            # Use MFnMesh to access the mesh vertices
+            mesh_fn = om.MFnMesh(dag_path_shape)
+            points = mesh_fn.getPoints(
+                om.MSpace.kObject
+            )  # Get vertices in object space
+
+            # Prepare to collect vertices that fall behind the plane
+            falling_vertices = []
+
+            # Transform vertices to world space and check their distance to the plane
+            for point in points:
+                # Transform the point to world space
+                transformed_point = point * world_matrix
+
+                # Calculate the distance from the point to the plane
+                distance = (transformed_point - plane_point) * plane_normal
+
+                # Check if the point is below the plane
+                if distance < 0:
+                    if return_type == "bool":
+                        objects_below_threshold.append((obj, True))
+                        break
+                    elif return_type == "mpoint":
+                        falling_vertices.append(transformed_point)
+                    elif return_type == "vector":
+                        falling_vertices.append(
+                            pm.datatypes.Vector(
+                                transformed_point.x,
+                                transformed_point.y,
+                                transformed_point.z,
+                            )
+                        )
+                    elif return_type == "vertex":
+                        falling_vertices.append(obj.vtx[points.index(point)])
+                    else:
+                        print(
+                            f"Invalid return_type: {return_type}. Expected 'bool', 'mpoint', 'vector', or 'vertex'."
+                        )
+                        return []
+
+            if falling_vertices and return_type != "bool":
+                objects_below_threshold.append((obj, falling_vertices))
+
+            if return_type == "bool" and not objects_below_threshold:
+                objects_below_threshold.append((obj, False))
+
+        return objects_below_threshold
 
     @staticmethod
     def get_vertex_positions(objects, worldSpace=True):
