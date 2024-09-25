@@ -618,6 +618,7 @@ class SceneExporterSlots(SceneExporter):
         }
 
     def cmb000_init(self, widget) -> None:
+        """Init Preset"""
         widget.refresh = True
         if not widget.is_initialized:
             widget.menu.add(
@@ -653,16 +654,7 @@ class SceneExporterSlots(SceneExporter):
         widget.add(self.presets, clear=True)
 
     def txt000_init(self, widget) -> None:
-        # Add the ComboBox for recent output directories
-        widget.menu.add(
-            self.sb.ComboBox,
-            setToolTip="Select from the last 10 output directories.",
-            setObjectName="cmb004",
-        )
-        # Load previously saved output directories
-        prev_output_dirs = self.get_recent_output_dirs()
-        # Add directories to ComboBox with a unified method
-        self.ui.txt000.menu.cmb004.add(prev_output_dirs, header="Recent Output Dirs:")
+        """Init Output Directory"""
         widget.menu.add(
             "QPushButton",
             setToolTip="Set the output directory.",
@@ -675,8 +667,19 @@ class SceneExporterSlots(SceneExporter):
             setText="Open Output Directory",
             setObjectName="b006",
         )
+        # Add the ComboBox for recent output directories
+        widget.menu.add(
+            self.sb.ComboBox,
+            setToolTip="Select from the last 10 output directories.",
+            setObjectName="cmb004",
+        )
+        # Load previously saved output directories
+        prev_output_dirs = self.get_recent_output_dirs()
+        # Add directories to ComboBox with a unified method
+        self.ui.txt000.menu.cmb004.add(prev_output_dirs, header="Recent Output Dirs:")
 
     def txt001_init(self, widget) -> None:
+        """Init Output Name"""
         widget.menu.add(
             "QCheckBox",
             setToolTip="Add a timestamp suffix to the output filename.",
@@ -692,7 +695,7 @@ class SceneExporterSlots(SceneExporter):
         )
 
     def b000_init(self, widget) -> None:
-        """Export Settings"""
+        """Init Export Settings"""
         widget.menu.setTitle("EXPORT SETTINGS:")
         widget.menu.mode = "popup"
         widget.menu.add(
@@ -824,8 +827,10 @@ class SceneExporterSlots(SceneExporter):
             "check_hidden_objects_with_keys": self.ui.chk010.isChecked(),
             "check_objects_below_floor": self.ui.chk011.isChecked(),
         }
-        objects_to_export = (
-            DisplayUtils.get_visible_geometry
+        objects_to_export = lambda: (
+            DisplayUtils.get_visible_geometry(
+                consider_templated_visible=True, inherit_parent_visibility=True
+            )
             if self.ui.chk012.isChecked()
             else pm.selected()
         )

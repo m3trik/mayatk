@@ -122,28 +122,51 @@ class DisplayUtils(ptk.HelpMixin):
 
     @classmethod
     def get_visible_geometry(
-        cls, shapes: bool = False, include_templated: bool = False
+        cls,
+        shapes: bool = False,
+        consider_templated_visible: bool = False,
+        inherit_parent_visibility: bool = False,
     ) -> List[object]:
         """Get a list of visible geometry.
 
         Parameters:
             shapes (bool): Return shape nodes instead of transforms. Default is False.
-            include_templated (bool): Include templated geometry in the result.
+            consider_templated_visible (bool): Treat templated geometry as visible.
+            inherit_parent_visibility (bool): Check visibility of parent objects.
 
         Returns:
             List[pm.PyNode]: A list of visible nodes of the specified type.
         """
-        if shapes:
-            result = pm.ls(geometry=True, visible=True)
-        else:  # Transforms
-            result = [
-                n
-                for n in pm.ls(type="transform")
-                if n.visibility.get() and n.getShapes()
-            ]
 
-        if not include_templated:
-            result = [node for node in result if not cls.is_templated(node)]
+        def is_node_visible(node: pm.PyNode) -> bool:
+            """Check visibility of node and its parents, ignoring templated status unless it is not included."""
+            while node:
+                # Check if node is visible
+                if not node.visibility.get():
+                    return False
+                # Check if node is templated and should be excluded
+                if not consider_templated_visible and cls.is_templated(node):
+                    return False
+                node = node.getParent()
+            return True
+
+        result = []
+
+        # Iterate through nodes, considering if they are shapes or transforms
+        for node in pm.ls(type="transform" if not shapes else "geometry"):
+            # Skip nodes if templated and not included
+            if not consider_templated_visible and cls.is_templated(node):
+                continue
+
+            # Check if parent visibility check is enabled and node visibility is validated
+            if inherit_parent_visibility and not is_node_visible(node):
+                continue
+
+            # Append nodes based on whether shapes or transforms are requested
+            if shapes and node.nodeType() == "geometry":
+                result.append(node)
+            elif not shapes and node.getShapes():
+                result.append(node)
 
         return result
 
