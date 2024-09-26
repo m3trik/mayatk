@@ -176,7 +176,7 @@ class SceneExporterTasks(SceneExporterTasksFactory):
     def reassign_duplicate_materials(self):
         """Reassign duplicate materials in the scene."""
         self.logger.debug("Reassigning duplicate materials")
-        MatUtils.reassign_duplicates(self.materials)
+        MatUtils.reassign_duplicate_materials(self.materials)
         self.logger.debug("Reassignment completed.")
 
     def delete_unused_materials(self):
@@ -184,6 +184,38 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         self.logger.debug("Deleting unused materials")
         pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
         self.logger.debug("Unused materials deleted.")
+
+    def delete_environment_nodes(self) -> None:
+        """Removes all environment file nodes from the Maya scene, targeting
+        file nodes used in environment or reflection maps by checking the image name.
+        Environment nodes are defined as: "diffuse_cube", "specular_cube", "ibl_brdf_lut"
+        """
+        # Define common keywords in image file names related to environment textures
+        env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
+        # Get all file nodes in the scene
+        file_nodes = pm.ls(type="file")
+
+        # Filter file nodes that match environment texture patterns in their file paths
+        env_file_nodes = [
+            node
+            for node in file_nodes
+            if node.hasAttr("fileTextureName")
+            and any(
+                keyword in node.fileTextureName.get().lower()
+                for keyword in env_keywords
+            )
+        ]
+        # Log and delete the filtered nodes
+        if env_file_nodes:
+            for node in env_file_nodes:
+                file_path = node.fileTextureName.get()
+                self.logger.debug(
+                    f"Deleting environment texture file node: {node.name()}, File: {file_path}"
+                )
+            pm.delete(env_file_nodes)
+            self.logger.info(f"Removed {len(env_file_nodes)} environment file nodes.")
+        else:
+            self.logger.info("No environment file nodes found.")
 
     def set_bake_animation_range(self):
         """Set the animation export range to the first and last keyframes of the specified objects if baking is enabled."""
@@ -730,6 +762,12 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QCheckBox",
+            setToolTip="Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",
+            setText="Delete Environment Nodes",
+            setObjectName="chk015",
+        )
+        widget.menu.add(
+            "QCheckBox",
             setToolTip="Delete visibility keys from the exported objects.\nIf the object is hidden, it will be set to visible.",
             setText="Delete Visibility Keys",
             setObjectName="chk013",
@@ -825,8 +863,10 @@ class SceneExporterSlots(SceneExporter):
             "set_bake_animation_range": self.ui.chk014.isChecked(),
             "convert_to_relative_paths": self.ui.chk007.isChecked(),
             "delete_unused_materials": self.ui.chk008.isChecked(),
+            "delete_environment_nodes": self.ui.chk015.isChecked(),
             "check_framerate": self.ui.cmb002.currentData(),
             "check_absolute_paths": self.ui.chk003.isChecked(),
+            "reassign_duplicate_materials": self.ui.chk009.isChecked(),
             "check_duplicate_materials": self.ui.chk001.isChecked(),
             "check_referenced_objects": self.ui.chk002.isChecked(),
             "check_and_delete_visibility_keys": self.ui.chk013.isChecked(),

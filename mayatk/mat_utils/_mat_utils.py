@@ -350,26 +350,28 @@ class MatUtils(ptk.HelpMixin):
     @classmethod
     def find_materials_with_duplicate_textures(
         cls,
-        materials: Optional[List[object]] = None,
-        check_attributes: bool = True,  # Flag to toggle attribute checking
-        inc: Optional[List[str]] = None,  # Attributes to include
-        exc: Optional[List[str]] = None,  # Attributes to exclude
-        exc_defaults: bool = False,  # Exclude attributes at default values
-    ) -> Dict[object, List[object]]:
-        """Find duplicate materials based on their texture file paths and optionally all attribute values.
+        materials: Optional[List[pm.nt.DependNode]] = None,
+        strict: bool = False,
+    ) -> Dict[pm.nt.DependNode, List[pm.nt.DependNode]]:
+        """Find duplicate materials based on their texture file names or full paths.
 
         Parameters:
-            materials (Optional[List[pm.nodetypes.ShadingNode]]): List of material nodes.
-            check_attributes (bool): Whether to include attribute values in the comparison.
+            materials (Optional[List[pm.nt.DependNode]]): List of material nodes.
+            strict (bool): Whether to compare using full paths (True) or just file names (False).
 
         Returns:
-            Dict[pm.nodetypes.ShadingNode, List[pm.nodetypes.ShadingNode]]: Dictionary mapping original material nodes to lists of duplicate material nodes.
+            Dict[pm.nt.DependNode, List[pm.nt.DependNode]]:
+                Each key is the original material, and each value is a list of duplicate materials.
         """
+
+        def get_texture_name(path: str) -> str:
+            """Extracts the core file name without the path or extension."""
+            filename = os.path.basename(path).lower()
+            return os.path.splitext(filename)[0]
+
         materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
-
-        # Dictionary to store relevant material data (hashed values)
+        # Dictionary to store relevant material data (texture names or paths)
         material_data = {}
-
         for material in materials:
             # Collect file nodes connected to the material or its shading engine
             file_nodes = pm.listConnections(
@@ -387,86 +389,114 @@ class MatUtils(ptk.HelpMixin):
                 ]
 
             if not file_nodes:  # Skip materials without file nodes
-                print(f"Skipping material {material} - no file nodes connected.")
                 continue
 
-            # Collect and hash file node paths by converting them to strings
-            file_paths = [
-                str(pm.getAttr(f"{file_node}.fileTextureName"))
-                for file_node in file_nodes
-            ]
-            file_paths_hash = hash(frozenset(file_paths))
+            # Collect texture paths or names based on 'strict' flag
+            if strict:  # Use full paths for comparison when strict is True
+                texture_names = [
+                    pm.getAttr(f"{file_node}.fileTextureName").lower()
+                    for file_node in file_nodes
+                    if pm.objExists(f"{file_node}.fileTextureName")
+                ]
+            else:  # Use only the texture names without paths or extensions
+                texture_names = [
+                    get_texture_name(pm.getAttr(f"{file_node}.fileTextureName"))
+                    for file_node in file_nodes
+                    if pm.objExists(f"{file_node}.fileTextureName")
+                ]
+            if not texture_names:
+                continue
 
-            # Collect and hash all attributes dynamically only if `check_attributes` is enabled
-            if check_attributes:
-                attributes = NodeUtils.get_node_attributes(
-                    material, inc=inc or [], exc=exc or [], exc_defaults=exc_defaults
-                )
-                attributes_hash = hash(frozenset(attributes.items()))
-            else:
-                attributes_hash = 0  # No attribute checking, default hash
+            # Store the texture names or paths for duplicate checking
+            texture_set = frozenset(texture_names)
+            material_data[material] = texture_set
 
-            # Store the combined hash of file paths and attributes as the key
-            combined_hash = hash((file_paths_hash, attributes_hash))
-            material_data[material] = combined_hash
-
-        # Identify duplicates
+        # Identify duplicates by comparing texture sets
         duplicates = {}
         seen_materials = {}
-
-        for material, combined_hash in material_data.items():
-            if combined_hash in seen_materials:
-                seen_materials[combined_hash].append(material)
-            else:
-                seen_materials[combined_hash] = [material]
+        for material, texture_set in material_data.items():
+            match_found = False
+            for seen_texture_set, seen_material_list in seen_materials.items():
+                if texture_set == seen_texture_set:
+                    seen_material_list.append(material)
+                    match_found = True
+                    break
+            if not match_found:
+                seen_materials[texture_set] = [material]
 
         # Process duplicates
-        for materials in seen_materials.values():
-            if len(materials) > 1:
-                materials.sort(key=lambda x: (len(x.name()), x.name()))
-                original = materials[0]
-                duplicates[original] = materials[1:]
+        for materials_list in seen_materials.values():
+            if len(materials_list) > 1:
+                materials_list.sort(key=lambda x: (len(x.name()), x.name()))
+                original = materials_list[0]
+                duplicates[original] = materials_list[1:]  # Always exclude the original
 
+        print(f"{len(duplicates)} Duplicate material groups found:")
+        for original, dup_list in duplicates.items():
+            print(f"Original: {original}, Duplicates: {dup_list}")
         return duplicates
 
     @classmethod
     @CoreUtils.undo
-    def reassign_duplicates(
-        cls, materials: List[str] = None, delete: bool = False
+    def reassign_duplicate_materials(
+        cls,
+        materials: Optional[List[str]] = None,
+        delete: bool = False,
+        strict: bool = False,
     ) -> None:
         """Find duplicate materials, remove duplicates, and reassign them to the original material.
 
         Parameters:
-            materials (List[str]): List of material names.
+            materials (Optional[List[str]]): List of material names.
             delete (bool): Whether to delete the duplicate materials after reassignment.
+            strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
-        duplicate_to_original = cls.find_materials_with_duplicate_textures(materials)
+        # Collect materials directly in the method
+        collected_materials = (
+            pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        )
+        # Find duplicates using the updated format
+        duplicate_to_original = cls.find_materials_with_duplicate_textures(
+            collected_materials, strict=strict
+        )
         duplicates_to_delete = []
-
         for original, duplicates in duplicate_to_original.items():
+            # Get the shading group of the original material
+            original_sgs = original.shadingGroups()
+            if not original_sgs:
+                continue
+            original_sg = original_sgs[0]
+
+            # Reassign all duplicates to the original material
             for duplicate in duplicates:
-                try:  # Find all faces assigned the duplicate material and reassign to the original material
-                    faces_with_duplicate = cls.find_by_mat_id(duplicate, shell=False)
-                    print("faces_with_duplicate:", faces_with_duplicate)
-                    if faces_with_duplicate:
-                        pm.hyperShade(assign=original, objects=faces_with_duplicate)
-                        print(
-                            f"Reassigned material from {duplicate} to {original} on faces: {faces_with_duplicate}"
-                        )
-                        # Add the duplicate material to the deletion list
-                        duplicates_to_delete.append(duplicate)
+                try:  # Get the shading groups of the duplicate material
+                    duplicate_sgs = duplicate.shadingGroups()
+                    for dup_sg in duplicate_sgs:
+                        # Get the members (faces or objects) of the duplicate shading group
+                        members = pm.sets(dup_sg, q=True)
+                        if members:
+                            # Reassign the faces or objects to the original shading group
+                            pm.sets(original_sg, forceElement=members)
+                            print(
+                                f"Reassigned material from {duplicate} to {original} on members: {members}"
+                            )
+                    # Add the duplicate material to the deletion list
+                    duplicates_to_delete.append(duplicate)
                 except pm.MayaAttributeError as e:
                     print(f"Error processing material {duplicate}: {e}")
                     continue
-
-        if delete:  # Delete all duplicate materials after reassignments
+                except pm.MayaNodeError as e:
+                    print(f"Error with shading group nodes for {duplicate}: {e}")
+                    continue
+        if delete:  # Delete all duplicate materials after successful reassignment
             for duplicate in duplicates_to_delete:
                 try:
                     pm.delete(duplicate)
                     print(f"Deleted duplicate material: {duplicate}")
                 except pm.MayaAttributeError as e:
                     print(f"Error deleting material {duplicate}: {e}")
+                except pm.MayaNodeError as e:
+                    print(f"Error deleting node for material {duplicate}: {e}")
 
     @staticmethod
     def filter_materials_by_objects(objects: List[str]) -> List[str]:
@@ -479,8 +509,7 @@ class MatUtils(ptk.HelpMixin):
             List[str]: List of material names assigned to the given objects.
         """
         assigned_materials = set()
-        for obj in objects:
-            # Get shape nodes if the object is a transform
+        for obj in objects:  # Get shape nodes if the object is a transform
             shapes = pm.listRelatives(obj, shapes=True, fullPath=True) or [obj]
             for shape in shapes:
                 shading_groups = pm.listConnections(shape, type="shadingEngine")
