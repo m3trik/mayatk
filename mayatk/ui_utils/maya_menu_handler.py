@@ -110,7 +110,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
         if maya_menu_name and init_command:
             try:
                 pm.mel.eval(init_command)
-                self.logger.info(
+                self.logger.debug(
                     f"Initialized menu '{menu_key}' with command: {init_command}"
                 )
             except Exception as e:
@@ -130,7 +130,9 @@ class MayaMenuHandler(ptk.LoggingMixin):
 
         # Check if the menu has already been wrapped and stored
         if menu_key in self.menus:
-            self.logger.info(f"Returning stored embedded menu widget for '{menu_key}'.")
+            self.logger.debug(
+                f"Returning stored embedded menu widget for '{menu_key}'."
+            )
             return self.menus[menu_key]
 
         # Extract the actual Maya menu name
@@ -164,7 +166,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
 
             # Store the embedded menu widget to prevent garbage collection
             self.menus[menu_key] = embedded_menu_widget
-            self.logger.info(
+            self.logger.debug(
                 f"Duplicated menu '{menu_key}', wrapped it in EmbeddedMenuWidget, and stored it."
             )
             return embedded_menu_widget

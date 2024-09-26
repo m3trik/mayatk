@@ -162,13 +162,13 @@ class RigUtils(ptk.HelpMixin):
                     pm.parent(grp, origParent)
 
                 if freeze_transforms:  # freeze transforms one last time.
+                    # Assure attributes are unlocked.
                     cls.set_attr_lock_state(
                         obj, translate=False, rotate=False, scale=False
-                    )  # assure attributes are unlocked.
+                    )
                     pm.makeIdentity(obj, apply=True, normal=1)
-                    pm.makeIdentity(
-                        loc, apply=True, normal=1
-                    )  # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
+                    pm.makeIdentity(loc, apply=True, normal=1)
+                    # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
 
                 pm.rename(loc, format_name_with_suffix(base_name, loc))
                 pm.rename(obj, format_name_with_suffix(base_name, obj))
@@ -507,9 +507,11 @@ class RigUtils(ptk.HelpMixin):
     @staticmethod
     def reverse_joint_chain(root_joint, keep_original=False):
         """Create a new joint chain with the same positions as the original, but with reversed hierarchy.
+
         Parameters:
             root_joint (str): The root joint of the original joint chain.
             keep_original (bool): Whether to keep the original joint chain. Default is False.
+
         Returns:
             list: The new joint chain with reversed hierarchy.
         """
