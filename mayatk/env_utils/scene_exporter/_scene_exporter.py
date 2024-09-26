@@ -46,7 +46,10 @@ class SceneExporterTasksFactory:
         task_results = {}
         self.logger.info("Starting task execution")
 
-        for task_name, value in tasks.items():
+        for index, (task_name, value) in enumerate(tasks.items(), start=1):
+            self.logger.debug(
+                f"Executing Task #{index} of {len(tasks)}: {task_name} with value: {value}"
+            )
             method = getattr(self, task_name, None)
             if method:
                 revert_method_name = (
@@ -57,13 +60,7 @@ class SceneExporterTasksFactory:
                     if revert_method_name
                     else None
                 )
-
                 try:
-                    # Log task start centrally
-                    self.logger.debug(
-                        f"Executing task: {task_name} with value: {value}"
-                    )
-
                     # Set the state using the task method and store the result
                     original_value = self._execute_task_method(method, task_name, value)
                     task_results[task_name] = original_value
@@ -74,7 +71,6 @@ class SceneExporterTasksFactory:
                         self.logger.debug(
                             f"Revert method available: {revert_method_name}"
                         )
-
                 except Exception as e:
                     self.logger.error(f"Error executing {task_name}: {e}")
                     raise
@@ -82,7 +78,6 @@ class SceneExporterTasksFactory:
                 self.logger.warning(
                     f"Task method not found for: {task_name}. Skipping task."
                 )
-
         try:
             yield task_results
         finally:
@@ -133,13 +128,6 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         super().__init__(logger)
 
         self.objects = objects
-        self.materials = MatUtils.filter_materials_by_objects(self.objects)
-        self.material_paths = MatUtils.collect_material_paths(
-            self.materials,
-            include_material=True,
-            include_path_type=True,
-            nested_as_unit=True,
-        )
         self.logger = logger
 
     def set_workspace(self):
@@ -170,13 +158,15 @@ class SceneExporterTasks(SceneExporterTasksFactory):
     def convert_to_relative_paths(self):
         """Convert absolute material paths to relative paths."""
         self.logger.debug("Converting absolute paths to relative")
-        MatUtils.convert_to_relative_paths(self.materials)
+        materials = MatUtils.filter_materials_by_objects(self.objects)
+        MatUtils.convert_to_relative_paths(materials)
         self.logger.debug("Path conversion completed.")
 
     def reassign_duplicate_materials(self):
         """Reassign duplicate materials in the scene."""
         self.logger.debug("Reassigning duplicate materials")
-        MatUtils.reassign_duplicate_materials(self.materials)
+        materials = MatUtils.filter_materials_by_objects(self.objects)
+        MatUtils.reassign_duplicate_materials(materials)
         self.logger.debug("Reassignment completed.")
 
     def delete_unused_materials(self):
@@ -241,7 +231,6 @@ class SceneExporterTasks(SceneExporterTasksFactory):
 
         # Determine the first and last keyframes
         first_key, last_key = min(all_key_times), max(all_key_times)
-
         # Set the start and end frames for baking complex animation
         pm.mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
         pm.mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
@@ -251,8 +240,16 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         )
 
     def check_absolute_paths(self) -> bool:
+        """Check if any absolute material paths are present in the scene."""
         all_relative = True
-        for mat, typ, pth in self.material_paths:
+        materials = MatUtils.filter_materials_by_objects(self.objects)
+        material_paths = MatUtils.collect_material_paths(
+            materials,
+            include_material=True,
+            include_path_type=True,
+            nested_as_unit=True,
+        )
+        for mat, typ, pth in material_paths:
             if typ == "Absolute":
                 if all_relative:
                     all_relative = False
@@ -263,9 +260,9 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         return True
 
     def check_duplicate_materials(self) -> bool:
-        duplicate_mapping = MatUtils.find_materials_with_duplicate_textures(
-            self.materials
-        )
+        """Check if any duplicate materials are present in the scene."""
+        materials = MatUtils.filter_materials_by_objects(self.objects)
+        duplicate_mapping = MatUtils.find_materials_with_duplicate_textures(materials)
         if duplicate_mapping:
             for original, duplicates in duplicate_mapping.items():
                 for duplicate in duplicates:
@@ -274,6 +271,7 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         return True
 
     def check_referenced_objects(self) -> bool:
+        """Check if any referenced objects are present in the scene."""
         referenced_objects = pm.ls(self.objects, references=True)
         if referenced_objects:
             for ref in referenced_objects:
@@ -282,6 +280,7 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         return True
 
     def check_hidden_objects_with_keys(self) -> bool:
+        """Check if any hidden objects with visibility keys set to False are present in the scene."""
         hidden_geometry = [
             node
             for node in AnimUtils.filter_objects_with_keys(keys="visibility")
@@ -858,13 +857,13 @@ class SceneExporterSlots(SceneExporter):
 
         # Prepare task and check parameters
         task_params = {
-            "set_linear_unit": self.ui.cmb001.currentData(),
             "set_workspace": self.ui.chk006.isChecked(),
-            "set_bake_animation_range": self.ui.chk014.isChecked(),
-            "convert_to_relative_paths": self.ui.chk007.isChecked(),
-            "delete_unused_materials": self.ui.chk008.isChecked(),
-            "delete_environment_nodes": self.ui.chk015.isChecked(),
+            "set_linear_unit": self.ui.cmb001.currentData(),
             "check_framerate": self.ui.cmb002.currentData(),
+            "set_bake_animation_range": self.ui.chk014.isChecked(),
+            "delete_environment_nodes": self.ui.chk015.isChecked(),
+            "delete_unused_materials": self.ui.chk008.isChecked(),
+            "convert_to_relative_paths": self.ui.chk007.isChecked(),
             "check_absolute_paths": self.ui.chk003.isChecked(),
             "reassign_duplicate_materials": self.ui.chk009.isChecked(),
             "check_duplicate_materials": self.ui.chk001.isChecked(),
@@ -875,7 +874,7 @@ class SceneExporterSlots(SceneExporter):
         }
         objects_to_export = lambda: (
             DisplayUtils.get_visible_geometry(
-                consider_templated_visible=True, inherit_parent_visibility=True
+                consider_templated_visible=False, inherit_parent_visibility=True
             )
             if self.ui.chk012.isChecked()
             else pm.selected()

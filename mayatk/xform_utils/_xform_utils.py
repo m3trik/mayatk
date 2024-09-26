@@ -1007,8 +1007,7 @@ class XformUtils(ptk.HelpMixin):
 
         objects_below_threshold = []
 
-        for obj in objects:
-            # Validate if object is the correct type
+        for obj in objects:  # Validate if object is the correct type
             if not isinstance(obj, pm.nodetypes.Transform):
                 print(f"Invalid object type: {obj}. Expected Transform node.")
                 continue
@@ -1025,7 +1024,6 @@ class XformUtils(ptk.HelpMixin):
             # Ensure the object has a mesh shape
             dag_path_shape = dag_path.extendToShape()
             if dag_path_shape.apiType() != om.MFn.kMesh:
-                print(f"Skipping non-mesh object: {obj}")
                 continue
 
             # Get the world transformation matrix of the object
