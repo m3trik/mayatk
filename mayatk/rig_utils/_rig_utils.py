@@ -127,7 +127,7 @@ class RigUtils(ptk.HelpMixin):
                 pm.makeIdentity(obj, apply=True)
                 XformUtils.set_manip_pivot_matrix(obj, matrix)
 
-            if bake_child_pivot:
+            if bake_child_pivot and not NodeUtils.is_group(obj):
                 XformUtils.bake_pivot(
                     obj, position=True, orientation=True, preserve_normals=True
                 )
@@ -179,7 +179,6 @@ class RigUtils(ptk.HelpMixin):
                     rotate=lock_rotation,
                     scale=lock_scale,
                 )
-
             except Exception as error:
                 pm.delete(loc)
                 raise (error)

@@ -105,22 +105,32 @@ class SceneExporterTasksFactory:
                 return None
             return method()
 
-    def run(self, tasks: Dict[str, Any]) -> bool:
-        """Run tasks and checks using results from context manager."""
+    def run_tasks(self, tasks: Dict[str, Any]) -> bool:
+        """Run tasks and checks, returning True if all pass, False if any checks fail."""
         if not tasks:
             self.logger.warning("No tasks provided to run.")
-            return False
+            return True
 
         self.logger.info(f"Running {len(tasks)} tasks")
 
+        all_checks_passed = True  # Keep track of whether all checks pass
+
         with self._manage_context(tasks) as task_results:
             for task_name, result in task_results.items():
-                if task_name.startswith("check_") and result is False:
-                    self.logger.error(f"Check {task_name} failed. Aborting export.")
-                    return False
+                if task_name.startswith("check_"):
+                    if result is False:
+                        self.logger.error(f"Check {task_name} failed.")
+                        all_checks_passed = False  # Set to False if any check fails
+                    else:
+                        self.logger.info(f"Check {task_name} passed.")
 
-        self.logger.info("All tasks completed successfully.")
-        return True
+        # Log completion message based on the result
+        if all_checks_passed:
+            self.logger.info("All checks completed successfully.")
+        else:
+            self.logger.info("Some checks failed during the process.")
+
+        return all_checks_passed
 
 
 class SceneExporterTasks(SceneExporterTasksFactory):
@@ -401,13 +411,13 @@ class SceneExporter(ptk.LoggingMixin):
         self.logger.debug(f"Objects initialized: {initialized_objects}")
         return initialized_objects
 
-    def export(
+    def perform_export(
         self,
         export_dir: str,
         objects: Optional[Union[List[str], Callable]] = None,
         preset: Optional[str] = None,
         output_name: Optional[str] = None,
-        export_visible: bool = True,  # Explicit non-task parameter
+        export_visible: bool = True,
         file_format: Optional[str] = "FBX export",
         create_log_file: bool = False,
         timestamp: bool = False,
@@ -416,7 +426,7 @@ class SceneExporter(ptk.LoggingMixin):
         hide_log_file: Optional[bool] = None,
         log_handler: Optional[object] = None,
         tasks: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[Dict[str, bool]]:
         """Perform the export operation, including initialization and task management."""
         self.logger.info("Starting export process ...")
 
@@ -450,16 +460,12 @@ class SceneExporter(ptk.LoggingMixin):
         if self.preset:
             self.apply_preset(self.preset)
 
-        # Enhanced debug before running tasks
-        self.logger.debug(f"Running tasks: {tasks}")
-
         # Run tasks and checks
         if tasks:
-            task_success = self.tasks_manager.run(tasks)  # Explicit task dictionary
-            self.logger.debug(f"Task success: {task_success}")
-            if not task_success:
+            tasks_successful = self.tasks_manager.run_tasks(tasks)
+            if not tasks_successful:  # If any tasks failed, return them
                 self.logger.error("Aborting export due to task or check failure.")
-                return
+                return False
 
         # Select objects to export, depending on `export_visible`
         if export_visible:
@@ -471,7 +477,7 @@ class SceneExporter(ptk.LoggingMixin):
         if not pm.selected():
             pm.warning("No objects to export.")
             self.logger.warning("No objects to export.")
-            return
+            return False
 
         # Perform the actual export
         try:
@@ -483,6 +489,8 @@ class SceneExporter(ptk.LoggingMixin):
         finally:
             if self.create_log_file:
                 self.close_file_handlers()
+
+        return True  # Indicate that all tasks passed and export completed
 
     def generate_export_path(self) -> str:
         """Generate the full export file path."""
@@ -632,12 +640,17 @@ class SceneExporterSlots(SceneExporter):
         self.sb = self.switchboard()
         self.ui = self.sb.scene_exporter
 
-        self.ui.txt003.setText(
-            "Any selected objects will be exported. If there is no selection, all visible objects in the scene will be exported."
-        )
         self.logging.setup_logging_redirect(self.ui.txt003)
-
         self.ui.set_persistent_value("PRESET_DIR", owner=self, default=self.PRESET_DIR)
+
+        self.ui.txt003.setText(
+            "Any selected objects will be exported. Unless 'Export All Visible Objects' is checked. Hidded children will be exported if their parent is visible. Templated objects are defined as not visible."
+        )
+
+        # Initialize the export override button
+        self.ui.b009.setEnabled(False)
+        self.ui.b009.setChecked(False)
+        self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
 
     @property
     def workspace(self) -> Optional[str]:
@@ -872,6 +885,13 @@ class SceneExporterSlots(SceneExporter):
             "check_hidden_objects_with_keys": self.ui.chk010.isChecked(),
             "check_objects_below_floor": self.ui.chk011.isChecked(),
         }
+
+        if self.ui.b009.isChecked():  # Override checks
+            task_params = {
+                k: v for k, v in task_params.items() if not k.startswith("check_")
+            }
+        self.logger.debug(f"Task parameters: {task_params}")
+
         objects_to_export = lambda: (
             DisplayUtils.get_visible_geometry(
                 consider_templated_visible=False, inherit_parent_visibility=True
@@ -881,7 +901,7 @@ class SceneExporterSlots(SceneExporter):
         )
 
         # Call export with parameters and tasks/checks
-        self.export(
+        export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset=self.ui.cmb000.currentData(),
@@ -893,6 +913,8 @@ class SceneExporterSlots(SceneExporter):
             log_level=self.ui.cmb003.currentData(),
             tasks=task_params,  # Task-related parameters
         )
+        self.ui.b009.setEnabled(not export_successful)
+
         # Get the current output directory from the UI
         output_dir = self.ui.txt000.text()
         # Save the output directory

@@ -34,65 +34,164 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
 
 class MayaMenuHandler(ptk.LoggingMixin):
     menu_init = {
-        "file": ("File", "buildFileMenu()"),
-        "edit": ("Edit", "buildEditMenu MayaWindow|mainEditMenu"),
-        "create": ("Create", "editMenuUpdate MayaWindow|mainCreateMenu"),
-        "select": ("Select", "buildSelectMenu MayaWindow|mainSelectMenu"),
-        "modify": ("Modify", "ModObjectsMenu MayaWindow|mainModifyMenu"),
-        "display": ("Display", "buildDisplayMenu MayaWindow|mainDisplayMenu"),
-        "windows": ("Windows", "buildViewMenu MayaWindow|mainWindowMenu"),
-        "mesh": ("Mesh", "PolygonsMeshMenu MayaWindow|mainMeshMenu"),
-        "edit_mesh": ("Edit Mesh", "PolygonsBuildMenu MayaWindow|mainEditMeshMenu"),
-        "generate": ("Generate", "ModelingGenerateMenu MayaWindow|mainGenerateMenu"),
-        "mesh_tools": (
-            "Mesh Tools",
-            "PolygonsBuildToolsMenu MayaWindow|mainMeshToolsMenu",
+        "animation": (
+            "Animation",
+            "buildAnimationMenu MayaWindow|mainAnimationMenu; setMenuMode animationMenuSet",
+        ),
+        "arnold": ("Arnold", ""),  # This might require specific Arnold initialization
+        "cache": (
+            "Cache",
+            "NucleusCacheMenu MayaWindow|mainCacheMenu; setMenuMode dynamicsMenuSet",
+        ),
+        "constrain": (
+            "Constrain",
+            "AniConstraintsMenu MayaWindow|mainRigConstraintsMenu; setMenuMode riggingMenuSet",
+        ),
+        "control": (
+            "Control",
+            "ChaControlsMenu MayaWindow|mainRigControlMenu; setMenuMode riggingMenuSet",
+        ),
+        "create": (
+            "Create",
+            "editMenuUpdate MayaWindow|mainCreateMenu; setMenuMode commonMenuSet",
+        ),
+        "curves": (
+            "Curves",
+            "ModelingCurvesMenu MayaWindow|mainCurvesMenu; setMenuMode modelingMenuSet",
+        ),
+        "deform": (
+            "Deform",
+            "ChaDeformationsMenu MayaWindow|mainRigDeformationsMenu; setMenuMode riggingMenuSet",
+        ),
+        "display": (
+            "Display",
+            "buildDisplayMenu MayaWindow|mainDisplayMenu; setMenuMode commonMenuSet",
+        ),
+        "edit": (
+            "Edit",
+            "buildEditMenu MayaWindow|mainEditMenu; setMenuMode commonMenuSet",
+        ),
+        "edit_mesh": (
+            "Edit Mesh",
+            "PolygonsBuildMenu MayaWindow|mainEditMeshMenu; setMenuMode modelingMenuSet",
+        ),
+        "effects": (
+            "Effects",
+            "DynEffectsMenu MayaWindow|mainDynEffectsMenu; setMenuMode dynamicsMenuSet",
+        ),
+        "fields_solvers": (
+            "Fields/Solvers",
+            "DynFieldsSolverMenu MayaWindow|mainFieldsSolverMenu; setMenuMode dynamicsMenuSet",
+        ),
+        "file": (
+            "File",
+            "buildFileMenu MayaWindow|mainFileMenu; setMenuMode commonMenuSet",
+        ),
+        "fluids": (
+            "Fluids",
+            "DynFluidsMenu MayaWindow|mainFluidsMenu; setMenuMode dynamicsMenuSet",
+        ),
+        "generate": (
+            "Generate",
+            "ModelingGenerateMenu MayaWindow|mainGenerateMenu; setMenuMode modelingMenuSet",
+        ),
+        "help": (
+            "Help",
+            "buildHelpMenu MayaWindow|mainHelpMenu; setMenuMode commonMenuSet",
+        ),
+        "key": (
+            "Key",
+            "AniKeyMenu MayaWindow|mainKeysMenu; setMenuMode animationMenuSet",
+        ),
+        "lighting_shading": (
+            "Lighting/Shading",
+            "RenShadersMenu MayaWindow|mainShadingMenu; setMenuMode renderingMenuSet",
+        ),
+        "mash": ("MASH", ""),  # Specific initialization might be needed
+        "mesh": (
+            "Mesh",
+            "PolygonsMeshMenu MayaWindow|mainMeshMenu; setMenuMode modelingMenuSet",
         ),
         "mesh_display": (
             "Mesh Display",
-            "ModelingMeshDisplayMenu MayaWindow|mainMeshDisplayMenu",
+            "ModelingMeshDisplayMenu MayaWindow|mainMeshDisplayMenu; setMenuMode modelingMenuSet",
         ),
-        "curves": ("Curves", "ModelingCurvesMenu MayaWindow|mainCurvesMenu"),
-        "surfaces": ("Surfaces", "ModelingSurfacesMenu MayaWindow|mainSurfacesMenu"),
-        "deform": ("Deform", "ChaDeformationsMenu MayaWindow|mainDeformMenu"),
-        "animation": ("Animation", "buildAnimationMenu MayaWindow|mainAnimationMenu"),
-        "rigging": ("Rigging", "buildRiggingMenu MayaWindow|mainRiggingMenu"),
-        "rendering": ("Rendering", "RenRenderMenu MayaWindow|mainRenderMenu"),
-        "texturing": ("Texturing", "RenTexturingMenu MayaWindow|mainRenTexturingMenu"),
-        "uv": ("UV", "ModelingUVMenu MayaWindow|mainUVMenu"),
-        "key": ("Key", "AniKeyMenu MayaWindow|mainKeysMenu"),
-        "constrain": (
-            "Constrain",
-            "AniConstraintsMenu MayaWindow|mainRigConstraintsMenu",
+        "mesh_tools": (
+            "Mesh Tools",
+            "PolygonsBuildToolsMenu MayaWindow|mainMeshToolsMenu; setMenuMode modelingMenuSet",
         ),
-        "control": ("Control", "ChaControlsMenu MayaWindow|mainRigControlMenu"),
-        "skeleton": ("Skeleton", "ChaSkeletonsMenu MayaWindow|mainRigSkeletonsMenu"),
-        "skin": ("Skin", "ChaSkinningMenu MayaWindow|mainRigSkinningMenu"),
-        "lighting_shading": (
-            "Lighting/Shading",
-            "RenShadersMenu MayaWindow|mainShadingMenu",
+        "modify": (
+            "Modify",
+            "ModObjectsMenu MayaWindow|mainModifyMenu; setMenuMode commonMenuSet",
         ),
-        "ncloth": ("nCloth", "DynClothMenu MayaWindow|mainNClothMenu"),
-        "nhair": ("nHair", "DynCreateHairMenu MayaWindow|mainHairMenu"),
-        "nparticles": ("nParticles", "DynParticlesMenu MayaWindow|mainParticlesMenu"),
+        "ncloth": (
+            "nCloth",
+            "DynClothMenu MayaWindow|mainNClothMenu; setMenuMode dynamicsMenuSet",
+        ),
         "nconstraint": (
             "nConstraint",
-            "NucleusConstraintMenu MayaWindow|mainNConstraintMenu",
+            "NucleusConstraintMenu MayaWindow|mainNConstraintMenu; setMenuMode dynamicsMenuSet",
         ),
-        "fluids": ("Fluids", "DynFluidsMenu MayaWindow|mainFluidsMenu"),
-        "fields_solvers": (
-            "Fields/Solvers",
-            "DynFieldsSolverMenu MayaWindow|mainFieldsSolverMenu",
+        "nhair": (
+            "nHair",
+            "DynCreateHairMenu MayaWindow|mainHairMenu; setMenuMode dynamicsMenuSet",
         ),
-        "effects": ("Effects", "DynEffectsMenu MayaWindow|mainDynEffectsMenu"),
-        "toon": ("Toon", "buildToonMenu MayaWindow|mainToonMenu"),
-        "playback": ("Playback", "AniPlaybackMenu MayaWindow|mainPlaybackMenu"),
-        "visualize": ("Visualize", "AniVisualizeMenu MayaWindow|mainVisualizeMenu"),
-        "stereo": ("Stereo", "RenStereoMenu MayaWindow|mainStereoMenu"),
-        "help": ("Help", "buildHelpMenu MayaWindow|mainHelpMenu"),
-        "mash": ("MASH", ""),
-        "arnold": ("Arnold", ""),
-        "cache": ("Cache", ""),
+        "nparticles": (
+            "nParticles",
+            "DynParticlesMenu MayaWindow|mainParticlesMenu; setMenuMode dynamicsMenuSet",
+        ),
+        "playback": (
+            "Playback",
+            "AniPlaybackMenu MayaWindow|mainPlaybackMenu; setMenuMode animationMenuSet",
+        ),
+        "rendering": (
+            "Rendering",
+            "RenRenderMenu MayaWindow|mainRenderMenu; setMenuMode renderingMenuSet",
+        ),
+        "rigging": (
+            "Rigging",
+            "buildRiggingMenu MayaWindow|mainRiggingMenu; setMenuMode riggingMenuSet",
+        ),
+        "select": (
+            "Select",
+            "buildSelectMenu MayaWindow|mainSelectMenu; setMenuMode commonMenuSet",
+        ),
+        "skeleton": (
+            "Skeleton",
+            "ChaSkeletonsMenu MayaWindow|mainRigSkeletonsMenu; setMenuMode riggingMenuSet",
+        ),
+        "skin": (
+            "Skin",
+            "ChaSkinningMenu MayaWindow|mainRigSkinningMenu; setMenuMode riggingMenuSet",
+        ),
+        "stereo": (
+            "Stereo",
+            "RenStereoMenu MayaWindow|mainStereoMenu; setMenuMode renderingMenuSet",
+        ),
+        "surfaces": (
+            "Surfaces",
+            "ModelingSurfacesMenu MayaWindow|mainSurfacesMenu; setMenuMode modelingMenuSet",
+        ),
+        "texturing": (
+            "Texturing",
+            "RenTexturingMenu MayaWindow|mainRenTexturingMenu; setMenuMode renderingMenuSet",
+        ),
+        "toon": (
+            "Toon",
+            "buildToonMenu MayaWindow|mainToonMenu; setMenuMode renderingMenuSet",
+        ),
+        "uv": (
+            "UV",
+            "ModelingUVMenu MayaWindow|mainUVMenu; setMenuMode modelingMenuSet",
+        ),
+        "visualize": (
+            "Visualize",
+            "AniVisualizeMenu MayaWindow|mainVisualizeMenu; setMenuMode animationMenuSet",
+        ),
+        "windows": (
+            "Windows",
+            "buildViewMenu MayaWindow|mainWindowMenu; setMenuMode commonMenuSet",
+        ),
     }
 
     def __init__(self):
