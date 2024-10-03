@@ -913,6 +913,7 @@ class SceneExporterSlots(SceneExporter):
             log_level=self.ui.cmb003.currentData(),
             tasks=task_params,  # Task-related parameters
         )
+        self.ui.b009.setChecked(False)
         self.ui.b009.setEnabled(not export_successful)
 
         # Get the current output directory from the UI

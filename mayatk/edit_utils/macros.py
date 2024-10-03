@@ -9,11 +9,11 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
-from mayatk import node_utils
-from mayatk import edit_utils
-from mayatk import ui_utils
-from mayatk import display_utils
+from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
+from mayatk.edit_utils import EditUtils
+from mayatk.display_utils import DisplayUtils
+from mayatk.ui_utils import UiUtils
 
 
 class MacroManager(ptk.HelpMixin):
@@ -282,7 +282,7 @@ class DisplayMacros:
         pm.mel.ToggleVisibilityAndKeepSelection()
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_toggle_uv_border_edges(objects):
         """Toggle the display of UV border edges for the given objects."""
         if not objects:
@@ -312,7 +312,7 @@ class DisplayMacros:
                 )
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_back_face_culling(objects) -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
         objects = objects or pm.ls(type="mesh")
@@ -340,7 +340,7 @@ class DisplayMacros:
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        currentPanel = ui_utils.UiUtils.get_panel(withFocus=1)
+        currentPanel = UiUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
             pm.isolateSelect(currentPanel, state=0)
@@ -350,10 +350,10 @@ class DisplayMacros:
             pm.isolateSelect(currentPanel, addSelected=1)
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_cycle_display_state(objects) -> None:
         """Cycle the display state of all selected objects based on the first object's state."""
-        sel = node_utils.NodeUtils.get_unique_children(objects)
+        sel = NodeUtils.get_unique_children(objects)
 
         try:  # Determine the state of the first object
             first_obj = sel[0]
@@ -401,7 +401,7 @@ class DisplayMacros:
         )
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_wireframe_toggle(objects) -> None:
         """Toggle Wireframe Display on selected objects, or on all objects if none are selected."""
         objects = objects or pm.ls(type="mesh")
@@ -445,7 +445,7 @@ class DisplayMacros:
                 )
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_frame(objects) -> None:
         """Frame selected by a set amount with three toggle states."""
         pm.melGlobals.initVar("int", "toggleFrame_")
@@ -488,10 +488,10 @@ class DisplayMacros:
             frame_element(element_type)
 
     @classmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_smooth_preview(cls, objects) -> None:
         """Toggle smooth mesh preview."""
-        objs = node_utils.NodeUtils.get_unique_children(objects)
+        objs = NodeUtils.get_unique_children(objects)
         for obj in objs:
             if pm.getAttr(obj.displaySmoothMesh) != 2:
                 pm.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
@@ -533,7 +533,7 @@ class DisplayMacros:
         """Toggles the wireframe display state.
         Possible states include: none, shaded, full
         """
-        focused_panel = ui_utils.UiUtils.get_panel(withFocus=True)
+        focused_panel = UiUtils.get_panel(withFocus=True)
         # Check if focused_panel is a modelPanel to avoid errors when it's not
         if not focused_panel or not pm.modelEditor(
             focused_panel, query=True, exists=True
@@ -595,7 +595,7 @@ class DisplayMacros:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = ui_utils.UiUtils.get_panel(withFocus=True)
+        currentPanel = UiUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, q=True, displayAppearance=True)
         displayTextures = pm.modelEditor(currentPanel, q=True, displayTextures=True)
 
@@ -642,7 +642,7 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = ui_utils.UiUtils.get_panel(withFocus=True)
+        currentPanel = UiUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
         if pm.modelEditor(currentPanel, exists=1):
@@ -680,10 +680,10 @@ class EditMacros:
     """ """
 
     @staticmethod
-    @core_utils.CoreUtils.undo
-    @core_utils.CoreUtils.selected
-    @core_utils.CoreUtils.reparent
-    @display_utils.DisplayUtils.add_to_isolation
+    @CoreUtils.undo
+    @CoreUtils.selected
+    @CoreUtils.reparent
+    @DisplayUtils.add_to_isolation
     def m_combine(objects):
         """Combine multiple meshes"""
         if not objects or len(objects) < 2:
@@ -700,10 +700,10 @@ class EditMacros:
         return combined_mesh
 
     @staticmethod
-    @core_utils.CoreUtils.undo
-    @core_utils.CoreUtils.selected
-    @core_utils.CoreUtils.reparent
-    @display_utils.DisplayUtils.add_to_isolation
+    @CoreUtils.undo
+    @CoreUtils.selected
+    @CoreUtils.reparent
+    @DisplayUtils.add_to_isolation
     def m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs):
         """Perform a boolean operation on two meshes using PyMel, managing shorthand and full parameter names dynamically."""
         a, *b = objects
@@ -722,7 +722,7 @@ class EditMacros:
             b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
 
         if repair_mesh:  # Clean any n-gons
-            edit_utils.EditUtils.clean_geometry(
+            EditUtils.clean_geometry(
                 a, repair=True, nonmanifold=True, nsided=True, bakePartialHistory=True
             )
 
@@ -742,7 +742,7 @@ class EditMacros:
         return result
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_lock_vertex_normals(objects):
         """Toggle lock/unlock vertex normals."""
         if not objects:
@@ -846,7 +846,7 @@ class EditMacros:
         )
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_merge_vertices(objects, tolerance=0.001) -> None:
         """Merge Vertices."""
         objects = pm.ls(objects, objectsOnly=True)
@@ -888,7 +888,7 @@ class EditMacros:
                         pm.select(obj, add=True)
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_group(objects) -> None:
         """Group selected object(s)."""
         if objects:
@@ -929,7 +929,7 @@ class SelectionMacros:
         pm.selectType(facet=True)
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_toggle_selectability(objects):
         """Toggle selectability of the given objects."""
         if not objects:
@@ -1031,38 +1031,58 @@ class UiMacros:
         tcl_maya.show(key_show="Key_F12")
 
     @staticmethod
-    def m_toggle_panels() -> None:
-        """Toggle UI toolbars."""
-        # toggle panel menus
-        panels = ui_utils.UiUtils.get_panel(allPanels=1)
-        state = int(pm.panel(panels[0], menuBarVisible=1, query=1))
-        for panel in panels:
-            pm.panel(panel, edit=1, menuBarVisible=(not state))
+    def m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None:
+        """Toggle UI toolbars and menu bar in sync.
 
-        pm.mel.toggleMainMenubar(not state)
-        pm.mel.ToggleModelEditorBars(not state)
+        Parameters:
+            toggle_menu (bool): If True, toggles the visibility of the main menu bar.
+            toggle_panels (bool): If True, toggles the visibility of panel toolbars.
+        """
+        # Get the main Maya window and its menu bar
+        main_window = UiUtils.get_main_window()
+        menu_bar = main_window.menuBar() if main_window else None
+
+        # Use the visibility of the menu bar as the source state
+        if menu_bar:
+            current_state = menu_bar.isVisible()
+        else:
+            current_state = True  # Default to True if menu bar is not found
+
+        # Determine the new state based on the current state of the menu bar
+        new_state = not current_state
+
+        # Toggle the main menu bar
+        if toggle_menu and menu_bar:
+            menu_bar.setVisible(new_state)
+
+        # Toggle the panels based on the new state
+        if toggle_panels:
+            panels = pm.getPanel(allPanels=True)
+            for panel in panels:
+                pm.panel(panel, edit=True, menuBarVisible=new_state)
+            pm.mel.ToggleModelEditorBars(new_state)
 
 
 class AnimationMacros:
     """ """
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_set_selected_keys(objects) -> None:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
                 # cutKey -cl -t ":" -f ":" -at "tx" -at "ty" -at "tz" pSphere1; #remove keys
 
     @staticmethod
-    @core_utils.CoreUtils.selected
+    @CoreUtils.selected
     def m_unset_selected_keys(objects) -> None:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = core_utils.CoreUtils.get_selected_channels()
+            attrs = CoreUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
