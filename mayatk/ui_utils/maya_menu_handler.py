@@ -199,9 +199,10 @@ class MayaMenuHandler(ptk.LoggingMixin):
         ),
     }
 
-    def __init__(self):
+    def __init__(self, log_level: str = "WARNING"):
         super().__init__()
         self.menus = {}
+        self.logger.setLevel(log_level)
 
         # Get the current menu set before iterating
         original_menu_set = pm.mel.menuSet(q=True, label=True)
