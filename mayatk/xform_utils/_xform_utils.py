@@ -628,6 +628,7 @@ class XformUtils(ptk.HelpMixin):
         scale: bool = False,
         bake: bool = False,
         world_space: bool = True,
+        select_targets_after_transfer: bool = False,
     ):
         """Transfer the pivot orientation from the first given object to the remaining given objects.
 
@@ -638,6 +639,7 @@ class XformUtils(ptk.HelpMixin):
             scale (bool): Whether to transfer the scale pivot.
             bake (bool): Whether to bake the pivot orientation into the transform node.
             world_space (bool): Whether to use world space for transformations.
+            select_targets_after_transfer (bool): Whether to select the target objects after the transfer.
         """
         objects = pm.ls(objects, type="transform")
         if not objects or len(objects) < 2:
@@ -645,8 +647,9 @@ class XformUtils(ptk.HelpMixin):
             return
 
         source = objects[0]
+        targets = objects[1:]
 
-        for target in objects[1:]:
+        for target in targets:
             if translate:
                 source_translate_pivot = pm.xform(
                     source, q=True, ws=world_space, rp=True
@@ -682,6 +685,8 @@ class XformUtils(ptk.HelpMixin):
                 pm.makeIdentity(
                     target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
                 )
+            if select_targets_after_transfer:
+                pm.select(targets, replace=True)
 
     @staticmethod
     @CoreUtils.undo

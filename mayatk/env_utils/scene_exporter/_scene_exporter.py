@@ -16,6 +16,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
@@ -44,14 +45,14 @@ class SceneExporterTasksFactory:
         """Manage task states by setting them once and reverting after, returning task results."""
         original_states = {}
         task_results = {}
-        self.logger.info("Starting task execution")
+        self.logger.info(f"Running {len(tasks)} tasks")
 
         for index, (task_name, value) in enumerate(tasks.items(), start=1):
-            self.logger.debug(
-                f"Executing Task #{index} of {len(tasks)}: {task_name} with value: {value}"
-            )
             method = getattr(self, task_name, None)
             if method:
+                self.logger.debug(f"Executing Task #{index}/{len(tasks)}: {task_name}")
+
+                # Handle state changes and reversions
                 revert_method_name = (
                     f"revert_{task_name[4:]}" if task_name.startswith("set_") else None
                 )
@@ -60,39 +61,35 @@ class SceneExporterTasksFactory:
                     if revert_method_name
                     else None
                 )
+
                 try:
-                    # Set the state using the task method and store the result
+                    # Execute the task and log results centrally
                     original_value = self._execute_task_method(method, task_name, value)
                     task_results[task_name] = original_value
 
-                    # Log revert method availability centrally
+                    # Store revert info if applicable
                     if revert_method:
                         original_states[revert_method_name] = original_value
-                        self.logger.debug(
-                            f"Revert method available: {revert_method_name}"
-                        )
+
                 except Exception as e:
-                    self.logger.error(f"Error executing {task_name}: {e}")
+                    self.logger.error(f"Error during task {task_name}: {e}")
                     raise
             else:
-                self.logger.warning(
-                    f"Task method not found for: {task_name}. Skipping task."
-                )
-        try:
-            yield task_results
-        finally:
-            for revert_method_name, original_value in reversed(original_states.items()):
-                revert_method = getattr(self, revert_method_name, None)
-                if revert_method:
-                    try:
-                        revert_method(original_value)
-                        self.logger.debug(
-                            f"Reverted {revert_method_name} to {original_value}"
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Error reverting {revert_method_name}: {e}")
-                        raise
-            self.logger.info("Task execution completed, states reverted.")
+                self.logger.warning(f"Task {task_name} not found. Skipping.")
+
+        yield task_results
+
+        # Revert any changes made during tasks
+        for revert_method_name, original_value in reversed(original_states.items()):
+            revert_method = getattr(self, revert_method_name, None)
+            if revert_method:
+                try:
+                    revert_method(original_value)
+                    self.logger.debug(f"Reverted {revert_method_name}")
+                except Exception as e:
+                    self.logger.error(f"Error reverting {revert_method_name}: {e}")
+
+        self.logger.info("Task execution completed, states reverted.")
 
     def _execute_task_method(self, method, task_name: str, value: Any):
         """Execute the task method, handling logging centrally."""
@@ -111,24 +108,24 @@ class SceneExporterTasksFactory:
             self.logger.warning("No tasks provided to run.")
             return True
 
-        self.logger.info(f"Running {len(tasks)} tasks")
-
-        all_checks_passed = True  # Keep track of whether all checks pass
+        all_checks_passed = True
 
         with self._manage_context(tasks) as task_results:
             for task_name, result in task_results.items():
                 if task_name.startswith("check_"):
                     if result is False:
                         self.logger.error(f"Check {task_name} failed.")
-                        all_checks_passed = False  # Set to False if any check fails
+                        all_checks_passed = False
                     else:
                         self.logger.info(f"Check {task_name} passed.")
+                else:
+                    self.logger.info(f"Task {task_name} completed.")
 
-        # Log completion message based on the result
+        # Final summary log
         if all_checks_passed:
-            self.logger.info("All checks completed successfully.")
+            self.logger.info("All tasks and checks completed successfully.")
         else:
-            self.logger.info("Some checks failed during the process.")
+            self.logger.info("Some checks failed.")
 
         return all_checks_passed
 
@@ -186,16 +183,10 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         self.logger.debug("Unused materials deleted.")
 
     def delete_environment_nodes(self) -> None:
-        """Removes all environment file nodes from the Maya scene, targeting
-        file nodes used in environment or reflection maps by checking the image name.
-        Environment nodes are defined as: "diffuse_cube", "specular_cube", "ibl_brdf_lut"
-        """
-        # Define common keywords in image file names related to environment textures
+        """Delete all environment file nodes from the scene."""
         env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
-        # Get all file nodes in the scene
         file_nodes = pm.ls(type="file")
 
-        # Filter file nodes that match environment texture patterns in their file paths
         env_file_nodes = [
             node
             for node in file_nodes
@@ -205,15 +196,12 @@ class SceneExporterTasks(SceneExporterTasksFactory):
                 for keyword in env_keywords
             )
         ]
-        # Log and delete the filtered nodes
+
         if env_file_nodes:
-            for node in env_file_nodes:
-                file_path = node.fileTextureName.get()
-                self.logger.debug(
-                    f"Deleting environment texture file node: {node.name()}, File: {file_path}"
-                )
             pm.delete(env_file_nodes)
-            self.logger.info(f"Removed {len(env_file_nodes)} environment file nodes.")
+            self.logger.info(
+                f"Deleted {len(env_file_nodes)} environment texture nodes."
+            )
         else:
             self.logger.info("No environment file nodes found.")
 
@@ -248,6 +236,39 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         self.logger.info(
             f"Set animation range to start: {int(first_key)}, end: {int(last_key)}"
         )
+
+    def check_root_default_transforms(self) -> bool:
+        """Check if all root group nodes have default transforms (translate, rotate, and scale)."""
+        root_nodes = pm.ls(self.objects, assemblies=True)
+        has_non_default_transforms = False
+        tolerance = 1e-5  # Small tolerance for floating-point comparisons
+
+        for node in root_nodes:
+            # Check if translate, rotate, and scale attributes are at their default values
+            translate = node.translate.get()
+            rotate = node.rotate.get()
+            scale = node.scale.get()
+
+            # Assuming the expected defaults: translate and rotate should be (0, 0, 0), scale should be (1, 1, 1)
+            if (
+                not all(abs(val) < tolerance for val in translate)
+                or not all(abs(val) < tolerance for val in rotate)
+                or not all(abs(val - 1) < tolerance for val in scale)
+            ):
+
+                if not has_non_default_transforms:
+                    self.logger.error("Non-default root group nodes found:")
+                    has_non_default_transforms = True
+
+                self.logger.error(
+                    f"\tNode: {node}, Translate: {translate}, Rotate: {rotate}, Scale: {scale}"
+                )
+
+        if has_non_default_transforms:
+            return False
+
+        self.logger.debug("check_root_default_transforms passed")
+        return True
 
     def check_absolute_paths(self) -> bool:
         """Check if any absolute material paths are present in the scene."""
@@ -379,6 +400,44 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         )
         return True
 
+    def check_untied_keyframes(self) -> bool:
+        """Check if there are any untied keyframes on the specified objects."""
+        untied_keyframes_found = False
+
+        for obj in self.objects:
+            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+            if keyed_attrs:
+                all_keyframes = pm.keyframe(obj, query=True, timeChange=True)
+                if not all_keyframes:
+                    continue
+
+                start_frame, end_frame = min(all_keyframes), max(all_keyframes)
+
+                for attr in keyed_attrs:
+                    # Check if keyframes are tied at start and end
+                    start_key = pm.keyframe(
+                        attr, time=(start_frame,), query=True, timeChange=True
+                    )
+                    end_key = pm.keyframe(
+                        attr, time=(end_frame,), query=True, timeChange=True
+                    )
+
+                    if not start_key or not end_key:
+                        if not untied_keyframes_found:
+                            untied_keyframes_found = True
+                            self.logger.error("Untied keyframes found on attributes:")
+                        self.logger.error(f"\t{attr} on {obj}")
+
+        if not untied_keyframes_found:
+            self.logger.debug("All keyframes are tied.")
+        return not untied_keyframes_found
+
+    def tie_all_keyframes(self):
+        """Use AnimUtils to tie all keyframes for the specified objects."""
+        self.logger.info("Tying keyframes for all objects.")
+        AnimUtils.tie_keyframes(self.objects, absolute=True)
+        self.logger.info("Keyframes have been tied.")
+
 
 class SceneExporter(ptk.LoggingMixin):
     def _setup_logging(self, log_level: str, log_handler: Optional[object]) -> None:
@@ -408,14 +467,17 @@ class SceneExporter(ptk.LoggingMixin):
             self.logger.debug("Initializing objects using provided list or query.")
 
         initialized_objects = pm.ls(objects)
-        self.logger.debug(f"Objects initialized: {initialized_objects}")
+
+        # Log only the total count of initialized objects
+        self.logger.info(f"Initialized {len(initialized_objects)} objects for export.")
+
         return initialized_objects
 
     def perform_export(
         self,
         export_dir: str,
         objects: Optional[Union[List[str], Callable]] = None,
-        preset: Optional[str] = None,
+        preset_file: Optional[str] = None,
         output_name: Optional[str] = None,
         export_visible: bool = True,
         file_format: Optional[str] = "FBX export",
@@ -431,8 +493,8 @@ class SceneExporter(ptk.LoggingMixin):
         self.logger.info("Starting export process ...")
 
         # Set export configuration
-        self._export_dir = export_dir
-        self.preset = preset  # Ensure the setter is called
+        self.export_dir = os.path.abspath(os.path.expandvars(export_dir))
+        self.preset_file = preset_file  # Ensure the setter is called
         self.output_name = output_name
         self.name_regex = name_regex
         self.timestamp = timestamp
@@ -457,8 +519,8 @@ class SceneExporter(ptk.LoggingMixin):
         self.tasks_manager = SceneExporterTasks(self.objects, self.logger)
 
         # Apply preset before running tasks
-        if self.preset:
-            self.apply_preset(self.preset)
+        if self.preset_file:
+            self.load_fbx_export_preset(self.preset_file, verify=True)
 
         # Run tasks and checks
         if tasks:
@@ -467,11 +529,11 @@ class SceneExporter(ptk.LoggingMixin):
                 self.logger.error("Aborting export due to task or check failure.")
                 return False
 
-        # Select objects to export, depending on `export_visible`
+        # Select objects to export
         if export_visible:
             pm.select(self.tasks_manager.objects, replace=True)
-            self.logger.debug(
-                f"Selected objects for export: {self.tasks_manager.objects}"
+            self.logger.info(
+                f"Selected {len(self.tasks_manager.objects)} objects for export."
             )
 
         if not pm.selected():
@@ -538,25 +600,43 @@ class SceneExporter(ptk.LoggingMixin):
                 root_logger.removeHandler(handler)
                 self.logger.debug("File handler closed and removed.")
 
-    def apply_preset(self, preset=None):
-        """Apply a preset for export."""
-        if preset:
-            self.logger.debug(f"Applying preset: {preset}")
-            self.load_fbx_export_preset(preset)
-            self.verify_fbx_preset()
-        self.logger.debug("apply_preset passed")
+    def load_fbx_export_preset(
+        self, preset_file: str = None, verify: bool = False
+    ) -> Optional[dict]:
+        """Load an FBX export preset and optionally verify it.
 
-    def load_fbx_export_preset(self, preset_path: str):
-        preset_path_escaped = preset_path.replace("\\", "/")
-        self.logger.debug(f"Loading FBX export preset from {preset_path_escaped}")
-        try:
-            pm.mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
-            self.logger.info(f"Loaded FBX export preset from {preset_path_escaped}.")
-        except RuntimeError as e:
-            self.logger.error(f"Failed to load FBX export preset: {e}")
-            raise RuntimeError(f"Failed to load FBX export preset: {e}")
+        Parameters:
+            preset_file (str, optional): The path to the preset file to be loaded.
+            verify (bool, optional): If True, verifies the loaded FBX preset. Defaults to False.
 
-    def verify_fbx_preset(self):
+        Returns:
+            Optional[dict]: A dictionary of FBX settings and their current values if verification is performed, otherwise None.
+        """
+        if preset_file:
+            self.logger.debug(f"Loading FBX export preset: {preset_file}")
+            preset_path_escaped = preset_file.replace("\\", "/")
+
+            try:
+                pm.mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
+                self.logger.info(
+                    f"Loaded FBX export preset from {preset_path_escaped}."
+                )
+            except RuntimeError as e:
+                self.logger.error(f"Failed to load FBX export preset: {e}")
+                raise RuntimeError(f"Failed to load FBX export preset: {e}")
+
+        # If verify is True, call the verify_fbx_preset method
+        if verify:
+            return self.verify_fbx_preset()
+
+        return None
+
+    def verify_fbx_preset(self) -> dict:
+        """Verify a set of predefined FBX export settings and log their values.
+
+        Returns:
+            dict: A dictionary of FBX export settings and their current values.
+        """
         settings = [
             "FBXExportBakeComplexAnimation",
             "FBXExportBakeComplexStart",
@@ -582,70 +662,28 @@ class SceneExporter(ptk.LoggingMixin):
             "FBXExportFileVersion",
         ]
         results = {}
-        try:
-            for setting in settings:
+
+        for setting in settings:
+            try:
                 value = pm.mel.eval(f"{setting} -q")
                 results[setting] = value
                 self.logger.info(f"{setting} is set to: {value}")
-        except RuntimeError as e:
-            self.logger.info(f"Error querying FBX settings: {e}")
+            except RuntimeError as e:
+                self.logger.error(f"Error querying {setting}: {e}")
+
         return results
-
-    @property
-    def preset(self) -> str:
-        """Get the preset path."""
-        if self._preset:
-            self.logger.debug(f"Accessing preset: {self._preset}")
-            if os.path.isabs(self._preset):
-                resolved_path = os.path.abspath(os.path.expandvars(self._preset))
-                self.logger.debug(f"Resolved absolute preset path: {resolved_path}")
-                return resolved_path
-            else:
-                resolved_path = os.path.abspath(
-                    os.path.expandvars(
-                        os.path.join(os.path.dirname(__file__), "presets", self._preset)
-                    )
-                )
-                self.logger.debug(f"Resolved relative preset path: {resolved_path}")
-                return resolved_path
-        self.logger.warning("Preset is not set.")
-        return None
-
-    @preset.setter
-    def preset(self, value: str) -> None:
-        """Set the preset path."""
-        self.logger.debug(f"Setting preset to: {value}")
-        self._preset = value
-
-    @property
-    def export_dir(self) -> str:
-        """Get the export directory."""
-        if self._export_dir:
-            return os.path.abspath(os.path.expandvars(self._export_dir))
-        return None
-
-    @export_dir.setter
-    def export_dir(self, value: str) -> None:
-        """Set the export directory."""
-        self.logger.debug(f"Setting export directory to: {value}")
-        self._export_dir = value
 
 
 class SceneExporterSlots(SceneExporter):
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    PRESET_DIR = os.path.join(BASE_DIR, "presets")
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.sb = self.switchboard()
         self.ui = self.sb.scene_exporter
 
         self.logging.setup_logging_redirect(self.ui.txt003)
-        self.ui.set_persistent_value("PRESET_DIR", owner=self, default=self.PRESET_DIR)
 
-        self.ui.txt003.setText(
-            "Any selected objects will be exported. Unless 'Export All Visible Objects' is checked. Hidded children will be exported if their parent is visible. Templated objects are defined as not visible."
-        )
+        self.ui.txt001.setText("")  # Output Name
+        self.ui.txt003.setText("")  # Log Output
 
         # Initialize the export override button
         self.ui.b009.setEnabled(False)
@@ -660,12 +698,38 @@ class SceneExporterSlots(SceneExporter):
         return workspace_path
 
     @property
-    def presets(self) -> Dict[str, str]:
-        return {
-            os.path.splitext(f)[0]: f
-            for f in os.listdir(self.PRESET_DIR)
-            if f.endswith(".fbxexportpreset")
-        }
+    def presets(self) -> Dict[str, Optional[str]]:
+        """Return available presets, using cached values if the preset directory has not changed."""
+        # Retrieve the preset directory using restore_settings
+        preset_dir = self.ui.restore_settings("preset_dir")
+        last_checked_dir = getattr(self, "_preset_dir_last_checked", None)
+
+        # Only refresh the cached presets if the preset directory changes
+        if preset_dir != last_checked_dir:
+            self.logger.debug(f"Preset directory: {preset_dir}")
+            setattr(self, "_preset_dir_last_checked", preset_dir)
+
+            if not preset_dir or not os.path.exists(preset_dir):
+                self.logger.error(
+                    f"Preset directory not set or does not exist: {preset_dir}"
+                )
+            else:
+                try:
+                    presets = {
+                        "None": None,
+                        **{
+                            os.path.splitext(f)[0]: os.path.join(preset_dir, f)
+                            for f in os.listdir(preset_dir)
+                            if f.endswith(".fbxexportpreset")
+                        },
+                    }
+                    setattr(self, "_cached_presets", presets)
+                except Exception as e:
+                    self.logger.error(f"Error accessing preset directory: {e}")
+                    setattr(self, "_cached_presets", {"None": None})
+
+        # Return the cached presets
+        return getattr(self, "_cached_presets", {"None": None})
 
     def cmb000_init(self, widget) -> None:
         """Init Preset"""
@@ -798,6 +862,12 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QCheckBox",
+            setToolTip="Check for default transforms on root group nodes.\nTranslate, rotate, and scale should be (0, 0, 0) and (1, 1, 1) respectively.",
+            setText="Check Root Default Transforms",
+            setObjectName="chk016",
+        )
+        widget.menu.add(
+            "QCheckBox",
             setToolTip="Check for objects with a bounding box having a negative Y value.",
             setText="Check For Objects Below Floor.",
             setObjectName="chk011",
@@ -819,6 +889,18 @@ class SceneExporterSlots(SceneExporter):
             setToolTip="Determine the workspace directory from the scene path.",
             setText="Auto Set Workspace",
             setObjectName="chk006",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setToolTip="Check for untied keyframes on the specified objects.",
+            setText="Check For Untied Keyframes",
+            setObjectName="chk017",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setToolTip="Tie all keyframes on the specified objects.",
+            setText="Tie All Keyframes",
+            setObjectName="chk018",
         )
         widget.menu.add(
             "QCheckBox",
@@ -883,6 +965,9 @@ class SceneExporterSlots(SceneExporter):
             "check_referenced_objects": self.ui.chk002.isChecked(),
             "check_and_delete_visibility_keys": self.ui.chk013.isChecked(),
             "check_hidden_objects_with_keys": self.ui.chk010.isChecked(),
+            "tie_all_keyframes": self.ui.chk018.isChecked(),
+            "check_untied_keyframes": self.ui.chk017.isChecked(),
+            "check_root_default_transforms": self.ui.chk016.isChecked(),
             "check_objects_below_floor": self.ui.chk011.isChecked(),
         }
 
@@ -904,7 +989,7 @@ class SceneExporterSlots(SceneExporter):
         export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
-            preset=self.ui.cmb000.currentData(),
+            preset_file=self.ui.cmb000.currentData(),
             export_visible=self.ui.chk012.isChecked(),
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
@@ -930,7 +1015,11 @@ class SceneExporterSlots(SceneExporter):
             self.ui.txt000.setText(output_dir)
 
     def b003(self) -> None:
-        """Add Preset"""
+        """Add Preset."""
+        preset_dir = self.ui.restore_settings("preset_dir")
+        if not preset_dir:
+            self.logger.error("Preset directory not set. Please set it first.")
+            return
         fbx_presets = self.sb.file_dialog(
             file_types="*.fbxexportpreset",
             title="Select an FBX export preset:",
@@ -938,29 +1027,36 @@ class SceneExporterSlots(SceneExporter):
         )
         if fbx_presets:
             for preset in fbx_presets:
-                shutil.copy(preset, self.PRESET_DIR)
+                shutil.copy(preset, preset_dir)
             self.ui.cmb000.init_slot()
             filename_without_ext = os.path.splitext(os.path.basename(preset))[0]
             self.ui.cmb000.setCurrentText(filename_without_ext)
 
     def b004(self) -> None:
-        """Remove Preset"""
+        """Remove Preset."""
+        preset_dir = self.ui.restore_settings("preset_dir")
+        if not preset_dir:
+            self.logger.error("Preset directory not set. Please set it first.")
+            return
         preset = self.ui.cmb000.currentData()
         if preset:
-            preset_file = os.path.join(self.PRESET_DIR, preset)
-            os.remove(preset_file)
-            self.logger.info(f"Preset deleted: {preset_file}")
-            self.ui.cmb000.init_slot()
+            preset_file = os.path.join(preset_dir, preset)
+            if os.path.exists(preset_file):
+                os.remove(preset_file)
+                self.logger.info(f"Preset deleted: {preset_file}")
+                self.ui.cmb000.init_slot()
+            else:
+                self.logger.warning(f"Preset file does not exist: {preset_file}")
 
     def b005(self) -> None:
-        """Set Preset Directory"""
+        """Set Preset Directory."""
         preset_dir = self.sb.dir_dialog(
-            title="Select a directory containing export presets:",
-            start_dir=self.PRESET_DIR,
+            title="Select a directory containing export presets:"
         )
         if preset_dir:
-            self.PRESET_DIR = preset_dir
+            self.ui.store_settings("preset_dir", preset_dir)
             self.ui.cmb000.init_slot()
+            self.logger.info(f"Preset directory set to: {preset_dir}")
 
     def b006(self) -> None:
         """Open Output Directory"""
@@ -969,14 +1065,29 @@ class SceneExporterSlots(SceneExporter):
             os.startfile(output_dir)
 
     def b007(self) -> None:
-        """Open Preset Directory"""
-        preset_dir = self.PRESET_DIR
-        if os.path.exists(preset_dir):
+        """Open Preset Directory."""
+        preset_dir = self.ui.restore_settings("preset_dir")
+        if preset_dir and os.path.exists(preset_dir):
             os.startfile(preset_dir)
+        else:
+            self.logger.error(
+                "Preset directory is not set or does not exist. Please set it first."
+            )
 
     def b008(self) -> None:
         """Edit Preset"""
-        pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
+        # Load the preset.
+        self.load_fbx_export_preset(self.ui.cmb000.currentData())
+
+        # Reset the layout to ensure it updates.
+        pm.mel.refresh()
+        pm.mel.FBXUICallBack(-1, "updateUIWithProperties")
+
+        if not pm.window("gameExporterWindow", exists=True):
+            try:
+                pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
+            except Exception as e:
+                self.logger.error(f"Failed to open the FBX export preset editor: {e}")
 
     def cmb004(self, index, widget) -> None:
         """Update the output directory based on the selected recent directory."""

@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>596</width>
-    <height>487</height>
+    <width>600</width>
+    <height>500</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -25,8 +25,8 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>200</width>
-     <height>130</height>
+     <width>600</width>
+     <height>500</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -121,6 +121,11 @@
               <property name="toolTip">
                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
+              <item>
+               <property name="text">
+                <string>None</string>
+               </property>
+              </item>
              </widget>
             </item>
            </layout>

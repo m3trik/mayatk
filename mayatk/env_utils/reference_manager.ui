@@ -5,14 +5,6 @@
   <property name="enabled">
    <bool>true</bool>
   </property>
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>350</width>
-    <height>434</height>
-   </rect>
-  </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
   </property>
@@ -25,8 +17,8 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>200</width>
-     <height>130</height>
+     <width>500</width>
+     <height>400</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">

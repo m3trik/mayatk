@@ -30,6 +30,29 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
         toolbar.addAction(menu_action)
 
         layout.addWidget(toolbar)
+        self.scale_by_percentage(50)
+
+    def scale_by_percentage(self, percentage: float):
+        """Scales the window and its content by a percentage using the layout system.
+
+        Optionally sets the new size as fixed.
+        """
+        if percentage <= 0:
+            raise ValueError("Percentage must be greater than 0")
+
+        # Normalizing percentage: 100% means no change, <100% shrinks, >100% enlarges
+        scale_factor = percentage / 100
+
+        # Adjust the size of the entire window
+        current_size = self.size()
+        new_width = int(current_size.width() * scale_factor)
+        new_height = int(current_size.height() * scale_factor)
+
+        # Resize the window
+        self.resize(new_width, new_height)
+
+        # Ensure the layout resizes properly
+        self.layout().update()  # Make sure the layout recalculates its size
 
 
 class MayaMenuHandler(ptk.LoggingMixin):
@@ -37,175 +60,142 @@ class MayaMenuHandler(ptk.LoggingMixin):
         "animation": (
             "Animation",
             "buildAnimationMenu MayaWindow|mainAnimationMenu",
-            "animationMenuSet",
         ),
-        "arnold": (
-            "Arnold",
-            "",
-            "",
-        ),  # This might require specific Arnold initialization
+        "arnold": ("Arnold", ""),  # Specific Arnold initialization
         "cache": (
             "Cache",
             "NucleusCacheMenu MayaWindow|mainCacheMenu",
-            "dynamicsMenuSet",
         ),
         "constrain": (
             "Constrain",
             "AniConstraintsMenu MayaWindow|mainRigConstraintsMenu",
-            "riggingMenuSet",
         ),
         "control": (
             "Control",
             "ChaControlsMenu MayaWindow|mainRigControlMenu",
-            "riggingMenuSet",
         ),
         "create": (
             "Create",
             "editMenuUpdate MayaWindow|mainCreateMenu",
-            "commonMenuSet",
         ),
         "curves": (
             "Curves",
             "ModelingCurvesMenu MayaWindow|mainCurvesMenu",
-            "modelingMenuSet",
         ),
         "deform": (
             "Deform",
             "ChaDeformationsMenu MayaWindow|mainRigDeformationsMenu",
-            "riggingMenuSet",
         ),
         "display": (
             "Display",
             "buildDisplayMenu MayaWindow|mainDisplayMenu",
-            "commonMenuSet",
         ),
-        "edit": ("Edit", "buildEditMenu MayaWindow|mainEditMenu", "commonMenuSet"),
+        "edit": ("Edit", "buildEditMenu MayaWindow|mainEditMenu"),
         "edit_mesh": (
             "Edit Mesh",
             "PolygonsBuildMenu MayaWindow|mainEditMeshMenu",
-            "modelingMenuSet",
         ),
         "effects": (
             "Effects",
             "DynEffectsMenu MayaWindow|mainDynEffectsMenu",
-            "dynamicsMenuSet",
         ),
         "fields_solvers": (
             "Fields/Solvers",
             "DynFieldsSolverMenu MayaWindow|mainFieldsSolverMenu",
-            "dynamicsMenuSet",
         ),
-        "file": ("File", "buildFileMenu MayaWindow|mainFileMenu", "commonMenuSet"),
+        "file": ("File", "buildFileMenu MayaWindow|mainFileMenu"),
         "fluids": (
             "Fluids",
             "DynFluidsMenu MayaWindow|mainFluidsMenu",
-            "dynamicsMenuSet",
         ),
         "generate": (
             "Generate",
             "ModelingGenerateMenu MayaWindow|mainGenerateMenu",
-            "modelingMenuSet",
         ),
-        "help": ("Help", "buildHelpMenu MayaWindow|mainHelpMenu", "commonMenuSet"),
-        "key": ("Key", "AniKeyMenu MayaWindow|mainKeysMenu", "animationMenuSet"),
+        "help": ("Help", "buildHelpMenu MayaWindow|mainHelpMenu"),
+        "key": ("Key", "AniKeyMenu MayaWindow|mainKeysMenu"),
         "lighting_shading": (
             "Lighting/Shading",
             "RenShadersMenu MayaWindow|mainShadingMenu",
-            "renderingMenuSet",
         ),
-        "mash": ("MASH", "", ""),  # Specific initialization might be needed
-        "mesh": ("Mesh", "PolygonsMeshMenu MayaWindow|mainMeshMenu", "modelingMenuSet"),
+        "mash": ("MASH", ""),  # Specific initialization might be needed
+        "mesh": (
+            "Mesh",
+            "PolygonsMeshMenu MayaWindow|mainMeshMenu",
+        ),
         "mesh_display": (
             "Mesh Display",
             "ModelingMeshDisplayMenu MayaWindow|mainMeshDisplayMenu",
-            "modelingMenuSet",
         ),
         "mesh_tools": (
             "Mesh Tools",
             "PolygonsBuildToolsMenu MayaWindow|mainMeshToolsMenu",
-            "modelingMenuSet",
         ),
         "modify": (
             "Modify",
             "ModObjectsMenu MayaWindow|mainModifyMenu",
-            "commonMenuSet",
         ),
         "ncloth": (
             "nCloth",
             "DynClothMenu MayaWindow|mainNClothMenu",
-            "dynamicsMenuSet",
         ),
         "nconstraint": (
             "nConstraint",
             "NucleusConstraintMenu MayaWindow|mainNConstraintMenu",
-            "dynamicsMenuSet",
         ),
         "nhair": (
             "nHair",
             "DynCreateHairMenu MayaWindow|mainHairMenu",
-            "dynamicsMenuSet",
         ),
         "nparticles": (
             "nParticles",
             "DynParticlesMenu MayaWindow|mainParticlesMenu",
-            "dynamicsMenuSet",
         ),
         "playback": (
             "Playback",
             "AniPlaybackMenu MayaWindow|mainPlaybackMenu",
-            "animationMenuSet",
         ),
         "rendering": (
             "Rendering",
             "RenRenderMenu MayaWindow|mainRenderMenu",
-            "renderingMenuSet",
         ),
         "rigging": (
             "Rigging",
             "buildRiggingMenu MayaWindow|mainRiggingMenu",
-            "riggingMenuSet",
         ),
         "select": (
             "Select",
             "buildSelectMenu MayaWindow|mainSelectMenu",
-            "commonMenuSet",
         ),
         "skeleton": (
             "Skeleton",
             "ChaSkeletonsMenu MayaWindow|mainRigSkeletonsMenu",
-            "riggingMenuSet",
         ),
         "skin": (
             "Skin",
             "ChaSkinningMenu MayaWindow|mainRigSkinningMenu",
-            "riggingMenuSet",
         ),
         "stereo": (
             "Stereo",
             "RenStereoMenu MayaWindow|mainStereoMenu",
-            "renderingMenuSet",
         ),
         "surfaces": (
             "Surfaces",
             "ModelingSurfacesMenu MayaWindow|mainSurfacesMenu",
-            "modelingMenuSet",
         ),
         "texturing": (
             "Texturing",
             "RenTexturingMenu MayaWindow|mainRenTexturingMenu",
-            "renderingMenuSet",
         ),
-        "toon": ("Toon", "buildToonMenu MayaWindow|mainToonMenu", "renderingMenuSet"),
-        "uv": ("UV", "ModelingUVMenu MayaWindow|mainUVMenu", "modelingMenuSet"),
+        "toon": ("Toon", "buildToonMenu MayaWindow|mainToonMenu"),
+        "uv": ("UV", "ModelingUVMenu MayaWindow|mainUVMenu"),
         "visualize": (
             "Visualize",
             "AniVisualizeMenu MayaWindow|mainVisualizeMenu",
-            "animationMenuSet",
         ),
         "windows": (
             "Windows",
             "buildViewMenu MayaWindow|mainWindowMenu",
-            "commonMenuSet",
         ),
     }
 
@@ -213,16 +203,36 @@ class MayaMenuHandler(ptk.LoggingMixin):
         super().__init__()
         self.menus = {}
 
-    def __getattr__(self, menu_key: str) -> Optional["QtWidgets.QMenu"]:
-        """Dynamically retrieve and return a Maya menu by its python-friendly name."""
-        return self.get_menu(menu_key)
+        # Get the current menu set before iterating
+        original_menu_set = pm.mel.menuSet(q=True, label=True)
+        self.logger.debug(f"Original menu set: {original_menu_set}")
+
+        # Get all available menu sets
+        all_menu_sets = pm.mel.menuSet(q=True, allMenuSets=True)
+        self.logger.debug(f"All menu sets: {all_menu_sets}")
+
+        # Iterate over all menu sets to initialize them
+        for menu_set in all_menu_sets:
+            self.logger.debug(f"Switching to menu set: {menu_set}")
+            pm.mel.eval(f'setMenuMode("{menu_set}")')
+
+        # Restore the original menu set after initialization
+        self.logger.debug(f"Restoring original menu set: {original_menu_set}")
+        pm.mel.eval(f'setMenuMode("{original_menu_set}")')
+
+    def __getattr__(self, menu_key: str) -> Optional[QtWidgets.QMenu]:
+        """Retrieve Maya menu if menu_key is a valid menu name."""
+        if menu_key in self.menu_init:
+            return self.get_menu(menu_key)
+        else:  # Default behavior for other attribute accesses
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{menu_key}'"
+            )
 
     def initialize_menu(self, menu_key: str):
         """Initializes a Maya menu using the mapped name and initialization command."""
         menu_key = menu_key.lower()
-        maya_menu_name, init_command, required_menu_set = self.menu_init.get(
-            menu_key, (None, None, None)
-        )
+        maya_menu_name, init_command = self.menu_init.get(menu_key, (None, None))
 
         if not (maya_menu_name and init_command):
             self.logger.warning(
@@ -230,75 +240,34 @@ class MayaMenuHandler(ptk.LoggingMixin):
             )
             return
 
-        # Get the current menu set before switching
-        original_menu_set = pm.mel.menuSet(q=True, label=True)
-        self.logger.debug(f"Current menu set: {original_menu_set}")
-
-        # Ensure the required menu set exists before switching
-        all_menu_sets = pm.mel.menuSet(q=True, allMenuSets=True)
-        if required_menu_set and required_menu_set in all_menu_sets:
-            self.logger.debug(f"Switching to temp menu set: {required_menu_set}")
-            pm.mel.eval(f'setMenuMode("{required_menu_set}")')
-
-            # Manually hide the current menu set and show the new set's menus
-            menus_in_required_set = pm.mel.menuSet(q=True, menuArray=True)
-            if menus_in_required_set:
-                for menu in menus_in_required_set:
-                    pm.menu(menu, edit=True, visible=True)
-
-            current_menu_set = pm.mel.menuSet(q=True, label=True)
-            self.logger.debug(f"Switched to menu set: {current_menu_set}")
-        else:
-            self.logger.warning(
-                f"Menu set '{required_menu_set}' does not exist. Skipping switch."
-            )
-
-        # Build the menu
+        # Directly run the initialization command without switching menu sets
         self.logger.debug(f"Running command: {init_command}")
         pm.mel.eval(init_command)
         self.logger.debug(f"Initialized menu '{menu_key}' with command: {init_command}")
 
-        # Place the delay here, after the menu set switch and menu visibility adjustments
-        QtCore.QTimer.singleShot(
-            100,
-            lambda: self._finalize_menu_init(menus_in_required_set, original_menu_set),
-        )
-
-    def _finalize_menu_init(self, menus_in_required_set, original_menu_set):
-        """Finalize the menu initialization process by restoring the original menu set."""
-        # Restore the original menu set using setMenuMode
-        self.logger.debug(f"Restoring original menu set: {original_menu_set}")
-        pm.mel.eval(f'setMenuMode("{original_menu_set}")')
-
-        # Manually hide the temporary set's menus and restore the original set's menus
-        if menus_in_required_set:
-            for menu in menus_in_required_set:
-                pm.menu(menu, edit=True, visible=False)
-
-        menus_in_original_set = pm.mel.menuSet(q=True, menuArray=True)
-        if menus_in_original_set:
-            for menu in menus_in_original_set:
-                pm.menu(menu, edit=True, visible=True)
-
     def get_menu(self, menu_key: str) -> Optional["EmbeddedMenuWidget"]:
         """Retrieves, duplicates, and wraps a Maya menu into an EmbeddedMenuWidget."""
+        import traceback
+
         menu_key = menu_key.lower()
-        # Check if the menu_key exists in the map
-        if menu_key not in self.menu_init:
+
+        # Debug info to track where get_menu is being called from
+        self.logger.debug(f"Accessing get_menu for '{menu_key}'")
+        self.logger.debug(f"Current self.menus: {self.menus}")
+        self.logger.debug("Call stack:")
+        for line in traceback.format_stack():
+            self.logger.debug(line.strip())
+
+        if menu_key in self.menus:
+            self.logger.debug(f"Returning stored embedded menu widget for '{menu_key}'")
+            return self.menus[menu_key]
+
+        # Proceed with menu initialization and duplication if necessary
+        maya_menu_name, _ = self.menu_init.get(menu_key, (None, None))
+        if not maya_menu_name:
             self.logger.error(f"Menu '{menu_key}' not found in the mapping.")
             return None
 
-        # Check if the menu has already been wrapped and stored
-        if menu_key in self.menus:
-            self.logger.debug(
-                f"Returning stored embedded menu widget for '{menu_key}'."
-            )
-            return self.menus[menu_key]
-
-        # Extract the actual Maya menu name, init_command, and menu set (ignore command and set here)
-        maya_menu_name, _, _ = self.menu_init[menu_key]
-
-        # Initialize the Maya menu if necessary
         self.initialize_menu(menu_key)
 
         # Search for the target menu by name in the main menu bar
@@ -312,23 +281,20 @@ class MayaMenuHandler(ptk.LoggingMixin):
                 break
 
         if target_menu:
-            # Duplicate the menu
+            # Duplicate the menu and wrap it
             duplicate_menu = QtWidgets.QMenu(maya_menu_name, main_window)
             duplicate_menu.setObjectName(maya_menu_name)
 
-            # Copy actions from the original menu to the new menu
             for action in target_menu.actions():
                 duplicate_menu.addAction(action)
 
-            # Wrap the duplicate menu in an EmbeddedMenuWidget
             embedded_menu_widget = EmbeddedMenuWidget(duplicate_menu)
             embedded_menu_widget.setObjectName(menu_key)
 
-            # Store the embedded menu widget to prevent garbage collection
+            # Store the menu to prevent duplicate initialization
             self.menus[menu_key] = embedded_menu_widget
-            self.logger.debug(
-                f"Duplicated menu '{menu_key}', wrapped it in EmbeddedMenuWidget, and stored it."
-            )
+            self.logger.debug(f"Duplicated and stored menu '{menu_key}'.")
+
             return embedded_menu_widget
         else:
             self.logger.error(f"Failed to find menu '{menu_key}'.")
@@ -338,6 +304,6 @@ class MayaMenuHandler(ptk.LoggingMixin):
 # --------------------------------------------------------------------------------------------
 if __name__ == "__main__":
     handler = MayaMenuHandler()
-    menu = handler.get_menu("constrain")
+    menu = handler.get_menu("skin")
     print(repr(menu))
     menu.show()

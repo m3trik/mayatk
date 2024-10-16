@@ -542,6 +542,50 @@ class AnimUtils(ptk.HelpMixin):
 
         return frame_ranges
 
+    @staticmethod
+    @CoreUtils.undo
+    def tie_keyframes(objects: List["pm.nt.Transform"] = None, absolute: bool = False):
+        """Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)
+        by setting keyframes only on the attributes that already have keyframes,
+        at the start and end of the specified animation range.
+
+        Parameters:
+            objects (List[pm.nt.Transform], optional): List of PyMel transform nodes to process.
+            If None, all keyed objects in the scene will be used.
+            absolute (bool, optional): If True, uses the absolute start and end keyframes
+            across all objects as the range. If False, uses the scene's playback range. Default is False.
+        """
+        if objects is None:  # Get all objects that have keyframes
+            objects = pm.ls(type="transform")
+            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+
+        if not objects:
+            pm.warning("No keyed objects found.")
+            return
+
+        # Determine the keyframe range
+        if absolute:  # Use the absolute start and end keyframes of all objects
+            all_keyframes = pm.keyframe(objects, query=True, timeChange=True)
+            if not all_keyframes:
+                pm.warning("No keyframes found on any objects.")
+                return
+            start_frame = min(all_keyframes)
+            end_frame = max(all_keyframes)
+        else:  # Use the start and end frames of the entire scene's playback range
+            start_frame = pm.playbackOptions(query=True, minTime=True)
+            end_frame = pm.playbackOptions(query=True, maxTime=True)
+
+        for obj in objects:  # Get all the attributes that have keyframes
+            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+
+            if keyed_attrs:
+                for attr in keyed_attrs:
+                    # Set a keyframe at the start and end of the determined range for the specific attribute
+                    pm.setKeyframe(attr, time=start_frame)
+                    pm.setKeyframe(attr, time=end_frame)
+
+        pm.displayInfo("Keyframes tied to the range for keyed attributes.")
+
 
 # -----------------------------------------------------------------------------
 
