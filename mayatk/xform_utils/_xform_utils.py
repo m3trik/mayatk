@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union, Optional
+from typing import List, Tuple, Union, Optional
 
 try:
     import pymel.core as pm
@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils import CoreUtils, components
 from mayatk.node_utils import NodeUtils
 
 
@@ -197,6 +197,67 @@ class XformUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undo
+    def scale_connected_edges(objects, scale_factor=1.1) -> None:
+        """Scales each set of connected edges separately, either uniformly or non-uniformly.
+
+        This function scales each set of connected edges around their center point. If a single float or int is provided
+        as the scale factor, uniform scaling is applied. If a tuple or list of three numbers is provided, non-uniform
+        scaling is applied to the x, y, and z axes respectively.
+
+        Parameters:
+            objects (list): A list of selected edge components to be scaled.
+            scale_factor (float, int, tuple, list): The factor by which to scale the edges.
+                - float/int: Apply uniform scaling.
+                - tuple/list of three floats: Apply non-uniform scaling to x, y, and z axes.
+
+        Examples:
+            # Uniform scaling: Scale all connected edges by a factor of 1.5
+            scale_connected_edges(pm.ls(selection=True), 1.5)
+
+            # Non-uniform scaling: Scale connected edges by 1.5 in x, 1.0 in y, and 0.5 in z
+            scale_connected_edges(pm.ls(selection=True), (1.5, 1.0, 0.5))
+        """
+        # Get the selected edges
+        if not objects:
+            pm.warning("No edges selected.")
+            return
+
+        # Group edges by connected sets using the existing method
+        connected_edges_sets = components.Components.get_contigious_edges(objects)
+
+        for edge_set in connected_edges_sets:
+            # Get the vertices of the edge set
+            vertices = pm.polyListComponentConversion(
+                edge_set, fromEdge=True, toVertex=True
+            )
+            vertices = pm.ls(vertices, flatten=True)
+
+            # Calculate the center point of the vertices
+            center_point = pm.dt.Vector(0, 0, 0)
+            for vertex in vertices:
+                center_point += vertex.getPosition(space="world")
+            center_point /= len(vertices)
+
+            # Determine if scale_factor is a float/int (uniform scaling) or tuple/list (non-uniform scaling)
+            if isinstance(scale_factor, (tuple, list)):
+                scale_x, scale_y, scale_z = scale_factor
+            else:
+                scale_x = scale_y = scale_z = scale_factor
+
+            # Scale each vertex around the center point
+            for vertex in vertices:
+                pos = vertex.getPosition(space="world")
+                direction = pos - center_point
+                new_pos = pm.dt.Vector(
+                    center_point.x + direction.x * scale_x,
+                    center_point.y + direction.y * scale_y,
+                    center_point.z + direction.z * scale_z,
+                )
+                vertex.setPosition(new_pos, space="world")
+
+    @staticmethod
     @CoreUtils.undo
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
@@ -321,12 +382,53 @@ class XformUtils(ptk.HelpMixin):
         """Set an object’s translation value from its pivot location.
 
         Parameters:
-                node (str/obj/list): An object, or it's name.
+            obj (str/obj/list): The object(s) to set the translation value for.
+            node (str/obj/list): An object, or it's name.
         """
         x, y, z = pm.xform(node, query=True, worldSpace=True, rotatePivot=True)
         pm.xform(node, relative=True, translation=[-x, -y, -z])
         pm.makeIdentity(node, apply=True, translate=True)
         pm.xform(node, translation=[x, y, z])
+
+    @staticmethod
+    def get_manip_pivot_matrix(obj: Union[str, object, list]) -> "pm.datatypes.Matrix":
+        """Retrieves the current manipulator pivot's position and orientation in world space
+        and returns it as a transformation matrix.
+
+        Returns:
+            obj (str/obj/list): The object to retrieve the manipulator pivot matrix for.
+            pm.datatypes.Matrix: A transformation matrix representing the manipulator pivot's position
+                                and orientation in world space.
+        """
+        # Query the object's world space matrix
+        world_matrix = pm.xform(obj, q=True, ws=True, m=True)
+
+        # Convert the world matrix to a Maya Matrix and return it
+        return pm.datatypes.Matrix(world_matrix)
+
+    @staticmethod
+    def set_manip_pivot_matrix(
+        obj: Union[str, object, list], matrix: "pm.datatypes.Matrix"
+    ) -> None:
+        """Sets the manipulator pivot's position and orientation in world space based on
+        the provided transformation matrix.
+
+        Parameters:
+            obj (str/obj/list): The object to set the manipulator pivot for.
+            matrix (pm.datatypes.Matrix): A transformation matrix containing the position and
+                                        orientation to set for the manipulator pivot.
+        """
+        # Extract translation and rotation components from the transformation matrix
+        transform_matrix = pm.datatypes.TransformationMatrix(matrix)
+        pos = transform_matrix.getTranslation(pm.datatypes.Space.kWorld)
+        ori_rotation = transform_matrix.eulerRotation()
+
+        # Convert rotation from radians to degrees
+        ori_degrees = [pm.util.degrees(angle) for angle in ori_rotation]
+
+        # Set the manipulator pivot position and orientation
+        pm.select(obj, replace=True)
+        pm.manipPivot(p=pos, o=ori_degrees)
 
     @staticmethod
     @CoreUtils.undo
@@ -407,6 +509,7 @@ class XformUtils(ptk.HelpMixin):
         position: bool = False,
         orientation: bool = False,
         delete_history: bool = True,
+        preserve_normals: bool = False,
     ) -> None:
         """Bakes the pivot of the given objects.
 
@@ -415,6 +518,7 @@ class XformUtils(ptk.HelpMixin):
             position (bool): Whether to bake the pivot position.
             orientation (bool): Whether to bake the pivot orientation.
             delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
+            preserve_normals (bool): Temporarily duplicate mesh and transfer normals back to the original mesh after baking the pivot.
         """
         if delete_history:
             pm.bakePartialHistory(objects, prePostDeformers=True)
@@ -458,27 +562,31 @@ class XformUtils(ptk.HelpMixin):
             pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
 
         if position:
-            for obj in objects:
-                m = pm.xform(obj, q=True, m=True)
-                p = pm.xform(obj, q=True, os=True, sp=True)
-                oldPivot = [
-                    p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
-                    p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
-                    p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
-                ]
+            try:
+                for obj in objects:
+                    m = pm.xform(obj, q=True, m=True)
+                    p = pm.xform(obj, q=True, os=True, sp=True)
+                    oldPivot = [
+                        p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
+                        p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
+                        p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
+                    ]
 
-                pm.xform(obj, zeroTransformPivots=True)
-                newPivot = pm.getAttr(f"{obj.name()}.translate")
-                pm.move(
-                    obj,
-                    oldPivot[0] - newPivot[0],
-                    oldPivot[1] - newPivot[1],
-                    oldPivot[2] - newPivot[2],
-                    pcp=True,
-                    pgp=True,
-                    ls=True,
-                    r=True,
-                )
+                    pm.xform(obj, zeroTransformPivots=True)
+                    newPivot = pm.getAttr(f"{obj.name()}.translate")
+                    pm.move(
+                        obj,
+                        oldPivot[0] - newPivot[0],
+                        oldPivot[1] - newPivot[1],
+                        oldPivot[2] - newPivot[2],
+                        pcp=True,
+                        pgp=True,
+                        ls=True,
+                        r=True,
+                    )
+            except RuntimeError as e:
+                pm.displayWarning(f"Error during pivot position processing: {str(e)}")
+                return
 
         if pivotModeActive:
             pm.ctxEditMode()
@@ -493,6 +601,24 @@ class XformUtils(ptk.HelpMixin):
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
                     pm.manipPivot(ro=True)
 
+        if preserve_normals:
+            temp_objects = []
+            try:
+                # Create temporary duplicates for normals preservation
+                for obj in objects:
+                    temp_obj = pm.duplicate(obj, name=f"{obj}_tempForNormals")[0]
+                    temp_objects.append(temp_obj)
+
+                # Transfer normals from temp objects back to original objects
+                for original, temp in zip(objects, temp_objects):
+                    components.Components.transfer_normals(
+                        [temp.name(), original.name()]
+                    )
+            except RuntimeError as e:
+                pm.displayWarning(f"Error during normals transfer: {str(e)}")
+            finally:  # Always clean up temporary objects
+                pm.delete(temp_objects)
+
     @staticmethod
     @CoreUtils.undo
     def transfer_pivot(
@@ -502,6 +628,7 @@ class XformUtils(ptk.HelpMixin):
         scale: bool = False,
         bake: bool = False,
         world_space: bool = True,
+        select_targets_after_transfer: bool = False,
     ):
         """Transfer the pivot orientation from the first given object to the remaining given objects.
 
@@ -512,6 +639,7 @@ class XformUtils(ptk.HelpMixin):
             scale (bool): Whether to transfer the scale pivot.
             bake (bool): Whether to bake the pivot orientation into the transform node.
             world_space (bool): Whether to use world space for transformations.
+            select_targets_after_transfer (bool): Whether to select the target objects after the transfer.
         """
         objects = pm.ls(objects, type="transform")
         if not objects or len(objects) < 2:
@@ -519,8 +647,9 @@ class XformUtils(ptk.HelpMixin):
             return
 
         source = objects[0]
+        targets = objects[1:]
 
-        for target in objects[1:]:
+        for target in targets:
             if translate:
                 source_translate_pivot = pm.xform(
                     source, q=True, ws=world_space, rp=True
@@ -556,6 +685,8 @@ class XformUtils(ptk.HelpMixin):
                 pm.makeIdentity(
                     target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
                 )
+            if select_targets_after_transfer:
+                pm.select(targets, replace=True)
 
     @staticmethod
     @CoreUtils.undo
@@ -844,11 +975,112 @@ class XformUtils(ptk.HelpMixin):
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = core_utils.Components.get_closest_verts(
+        closestVerts = components.Components.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 
         return True if vert_setA and len(closestVerts) == len(vert_setA) else False
+
+    @staticmethod
+    def check_objects_against_plane(
+        objects: List["pm.nodetypes.Transform"],
+        plane_point: Tuple[float, float, float],
+        plane_normal: Tuple[float, float, float],
+        return_type: str = "bool",
+    ) -> Union[
+        List[Tuple["pm.nodetypes.Transform", bool]],
+        List[Tuple["pm.nodetypes.Transform", "om.MPoint"]],
+        List[Tuple["pm.nodetypes.Transform", "pm.datatypes.Vector"]],
+        List[Tuple["pm.nodetypes.Transform", "pm.MeshVertex"]],
+    ]:
+        """General method to check if any object's geometry is below a defined plane.
+
+        Parameters:
+            objects: List of objects to check.
+            plane_point: A point on the plane as a tuple (x, y, z).
+            plane_normal: The normal vector of the plane as a tuple (x, y, z).
+            return_type: Type of return value ("bool", "mpoint", "vector", "vertex").
+
+        Return:
+            List of objects with their status relative to the plane.
+        """
+        from maya.api import OpenMaya as om
+
+        # Convert plane_point and plane_normal from tuples to MPoint and MVector
+        plane_point = om.MPoint(*plane_point)
+        plane_normal = om.MVector(*plane_normal).normalize()
+
+        objects_below_threshold = []
+
+        for obj in objects:  # Validate if object is the correct type
+            if not isinstance(obj, pm.nodetypes.Transform):
+                print(f"Invalid object type: {obj}. Expected Transform node.")
+                continue
+
+            # Get the MDagPath of the object
+            try:
+                sel_list = om.MSelectionList()
+                sel_list.add(obj.name())
+                dag_path = sel_list.getDagPath(0)
+            except Exception as e:
+                print(f"Error getting dag path for {obj}: {e}")
+                continue
+
+            # Ensure the object has a mesh shape
+            dag_path_shape = dag_path.extendToShape()
+            if dag_path_shape.apiType() != om.MFn.kMesh:
+                continue
+
+            # Get the world transformation matrix of the object
+            world_matrix = dag_path.inclusiveMatrix()
+
+            # Use MFnMesh to access the mesh vertices
+            mesh_fn = om.MFnMesh(dag_path_shape)
+            points = mesh_fn.getPoints(
+                om.MSpace.kObject
+            )  # Get vertices in object space
+
+            # Prepare to collect vertices that fall behind the plane
+            falling_vertices = []
+
+            # Transform vertices to world space and check their distance to the plane
+            for point in points:
+                # Transform the point to world space
+                transformed_point = point * world_matrix
+
+                # Calculate the distance from the point to the plane
+                distance = (transformed_point - plane_point) * plane_normal
+
+                # Check if the point is below the plane
+                if distance < 0:
+                    if return_type == "bool":
+                        objects_below_threshold.append((obj, True))
+                        break
+                    elif return_type == "mpoint":
+                        falling_vertices.append(transformed_point)
+                    elif return_type == "vector":
+                        falling_vertices.append(
+                            pm.datatypes.Vector(
+                                transformed_point.x,
+                                transformed_point.y,
+                                transformed_point.z,
+                            )
+                        )
+                    elif return_type == "vertex":
+                        falling_vertices.append(obj.vtx[points.index(point)])
+                    else:
+                        print(
+                            f"Invalid return_type: {return_type}. Expected 'bool', 'mpoint', 'vector', or 'vertex'."
+                        )
+                        return []
+
+            if falling_vertices and return_type != "bool":
+                objects_below_threshold.append((obj, falling_vertices))
+
+            if return_type == "bool" and not objects_below_threshold:
+                objects_below_threshold.append((obj, False))
+
+        return objects_below_threshold
 
     @staticmethod
     def get_vertex_positions(objects, worldSpace=True):

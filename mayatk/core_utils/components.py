@@ -952,6 +952,51 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return (inside, outside)
 
     @staticmethod
+    def adjusted_distance_between_vertices(
+        p1, p2, adjust: float = 0.0, as_percentage: bool = False
+    ):
+        """Calculate Adjusted Distance Between Vertices
+
+        This function calculates the distance between two points or vertices, adjusts it by a
+        specified absolute value or percentage, and optionally selects the parent object.
+        The method supports inputs in the form of MeshVertex objects, Points, or strings
+        referencing vertices.
+
+        Parameters:
+            p1 (str/pm.MeshVertex/pm.datatypes.Point): The first vertex or point.
+                Can be a MeshVertex, Point, or a string that references a vertex.
+            p2 (str/pm.MeshVertex/pm.datatypes.Point): The second vertex or point.
+                Can be a MeshVertex, Point, or a string that references a vertex.
+            adjust (float): The absolute or percentage value to adjust the calculated distance.
+                Default is 0.0, meaning no adjustment. Positive values increase the distance,
+                and negative values decrease it. If as_percentage is True, then this value is
+                interpreted as a percentage.
+            as_percentage (bool): If True, the adjust value is treated as a percentage of the
+                original distance. If False, the adjust value is treated as an absolute value
+                to add or subtract from the distance. Default is False.
+
+        Returns:
+            float: The adjusted distance between the two points or vertices.
+        """
+        # Convert MeshVertex to points if necessary
+        if isinstance(p1, pm.MeshVertex):
+            p1 = pm.pointPosition(p1, world=True)
+        if isinstance(p2, pm.MeshVertex):
+            p2 = pm.pointPosition(p2, world=True)
+
+        # Calculate the distance between the two vertices or points
+        dist = ptk.distance_between_points(p1, p2)
+
+        if as_percentage:
+            # Adjust by percentage
+            dist *= 1 + adjust / 100
+        else:
+            # Adjust by absolute value
+            dist += adjust
+
+        return dist
+
+    @staticmethod
     @core_utils.CoreUtils.undo
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging
@@ -1448,21 +1493,18 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             objects (list): List of mesh names, with the first being the source and the rest being the targets.
             space (str): The space in which to transfer the normals ('world' or 'local').
         """
-        # Ensure the list has at least one source and one target
         if len(objects) < 2:
-            raise ValueError("At least one source and one target mesh must be provided.")
-
-        # Map space string to the corresponding integer value
-        space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
-
-        if space not in space_map:
             raise ValueError(
-                "space parameter must be 'world', 'local', 'component', or 'topology'"
+                "At least one source and one target mesh must be provided."
             )
+
+        space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
+        if space not in space_map:
+            valid_spaces = ", ".join(space_map.keys())
+            raise ValueError(f"space parameter must be one of: {valid_spaces}")
 
         sample_space_value = space_map[space]
 
-        # Convert and unpack the list of objects
         source_mesh, *target_meshes = pm.ls(objects, flatten=True)
 
         # Ensure we are working with shape nodes
@@ -1473,26 +1515,28 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             if isinstance(target_mesh, pm.nt.Transform):
                 target_mesh = target_mesh.getShape()
 
-            # Ensure the meshes have the same topology
             source_vertices = source_mesh.numVertices()
             target_vertices = target_mesh.numVertices()
-            if source_vertices != target_vertices:
-                raise ValueError("Source and target meshes do not have the same topology")
 
-            # Select the source and target meshes in the correct order
-            pm.select(source_mesh)
-            pm.select(target_mesh, add=True)
+            if source_vertices != target_vertices:
+                raise ValueError(
+                    "Source and target meshes do not have the same topology"
+                )
 
             # Transfer vertex normals
             pm.transferAttributes(
+                source_mesh,
+                target_mesh,
                 transferNormals=1,
                 sampleSpace=sample_space_value,
                 searchMethod=3,  # closest to point
                 colorBorders=1,
             )
 
-            # Ensure the normals are updated
+            # Ensure normals are unfrozen and correct
             pm.polyNormalPerVertex(target_mesh, unFreezeNormal=True)
+
+            # Soften edges to ensure a smooth appearance
             pm.polySoftEdge(target_mesh, angle=180)
 
     @classmethod

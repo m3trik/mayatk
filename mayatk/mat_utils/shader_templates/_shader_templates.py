@@ -10,8 +10,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.env_utils import EnvUtils
 
 
 class GraphCollector:
@@ -329,7 +330,7 @@ class ShaderTemplatesSlots:
         super().__init__(**kwargs)
         self.sb = self.switchboard()
         self.ui = self.sb.shader_templates
-        self.workspace_dir = core_utils.CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -340,8 +341,8 @@ class ShaderTemplatesSlots:
         self.log.addHandler(log_handler)
 
         # Load plugins
-        core_utils.CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
-        core_utils.CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
 
     @property
     def template_name(self):
@@ -468,14 +469,14 @@ class ShaderTemplatesSlots:
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "shader_templates.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=ShaderTemplatesSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(
+    sb.current_ui.header.configure_buttons(
         menu_button=True, minimize_button=True, hide_button=True
     )
     sb.current_ui.show(pos="screen", app_exec=True)

@@ -13,6 +13,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils
+from mayatk.env_utils import EnvUtils
 
 
 class MapConverterSlots(ptk.ImgUtils):
@@ -33,7 +34,7 @@ class MapConverterSlots(ptk.ImgUtils):
 
     @property
     def sourceimages(self):
-        source_images_path = CoreUtils.get_maya_info("sourceimages")
+        source_images_path = EnvUtils.get_maya_info("sourceimages")
         if not source_images_path:
             print("Source images directory not found.")
         return source_images_path
@@ -184,7 +185,7 @@ class MapConverterSlots(ptk.ImgUtils):
         for texture_path in texture_paths:
             print(f"Optimizing: {texture_path} ..")
             optimized_map_path = self.optimize_texture(
-                texture_path, max_size=4096, suffix="_opt"
+                texture_path, max_size=8192, suffix="_opt"
             )
             print(f"// Result: {optimized_map_path}")
 
@@ -201,7 +202,7 @@ if __name__ == "__main__":
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
+    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
     sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

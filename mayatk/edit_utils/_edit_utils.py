@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils import CoreUtils, components
 from mayatk.display_utils import DisplayUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils
@@ -253,8 +253,8 @@ class EditUtils(ptk.HelpMixin):
             tolerance (float) = Maximum search distance.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        vertices = core_utils.Components.get_components(obj1, "vertices")
-        closestVerts = core_utils.Components.get_closest_vertex(
+        vertices = components.Components.get_components(obj1, "vertices")
+        closestVerts = components.Components.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 
@@ -314,6 +314,46 @@ class EditUtils(ptk.HelpMixin):
                 # return to original state
                 pm.select(clear=1)
                 pm.select(objects)
+
+    @staticmethod
+    @CoreUtils.undo
+    def merge_vertex_pairs(vertices):
+        """Merge vertices in pairs by moving them to their center and merging.
+
+        Parameters:
+            vertices (list): A list of vertices to merge in pairs.
+        """
+        if not vertices:
+            pm.warning("No vertices provided for merging.")
+            return
+
+        # Flatten the list to ensure all vertices are individual PyNodes
+        vertices = pm.ls(vertices, flatten=True)
+        if len(vertices) % 2 != 0:
+            pm.warning(
+                "An odd number of vertices was provided; the last vertex will be ignored."
+            )
+
+        vertex_pairs = [
+            (vertices[i], vertices[i + 1]) for i in range(0, len(vertices) - 1, 2)
+        ]
+
+        for vtx1, vtx2 in vertex_pairs:
+            try:  # Get the world-space positions of the vertices
+                pos1 = vtx1.getPosition(space="world")
+                pos2 = vtx2.getPosition(space="world")
+
+                # Calculate the midpoint
+                center_point = (pos1 + pos2) / 2
+
+                # Move both vertices to the center point
+                vtx1.setPosition(center_point, space="world")
+                vtx2.setPosition(center_point, space="world")
+
+            except Exception as e:
+                pm.warning(f"Failed to move vertices {vtx1} and {vtx2}: {e}")
+
+        pm.polyMergeVertex(vertices, d=0.001)  # Merge the vertices
 
     @staticmethod
     def get_all_faces_on_axis(obj, axis="x", world_space=False):
@@ -676,7 +716,7 @@ class EditUtils(ptk.HelpMixin):
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = core_utils.Components.get_components(objects, "vertices")
+        vertices = components.Components.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1
@@ -926,26 +966,31 @@ class EditUtils(ptk.HelpMixin):
             (list) Similar objects.
 
         Example:
-            get_similar_mesh(selection, vertex=1, area=1)
+            get_similar_mesh(selection, vertex=True, area=True)
         """
-        lst = lambda x: (
-            list(x)
-            if isinstance(x, (list, tuple, set))
-            else list(x.values()) if isinstance(x, dict) else [x]
-        )  # assure the returned result from polyEvaluate is a list of values.
-
         obj, *other = pm.ls(obj, long=True, transforms=True)
-        objProps = lst(pm.polyEvaluate(obj, **kwargs))
+
+        # Ensure the evaluation results are consistently processed
+        objProps = []
+        for key in kwargs:
+            result = pm.polyEvaluate(obj, **{key: kwargs[key]})
+            objProps.append(ptk.make_iterable(result))
 
         otherSceneMeshes = set(
             pm.filterExpand(pm.ls(long=True, typ="transform"), selectionMask=12)
         )  # polygon selection mask.
+
         similar = pm.ls(
             [
                 m
                 for m in otherSceneMeshes
                 if ptk.are_similar(
-                    objProps, lst(pm.polyEvaluate(m, **kwargs)), tolerance=tolerance
+                    objProps,
+                    [
+                        ptk.make_iterable(pm.polyEvaluate(m, **{key: kwargs[key]}))
+                        for key in kwargs
+                    ],
+                    tolerance=tolerance,
                 )
                 and m != obj
             ]

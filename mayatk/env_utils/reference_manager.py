@@ -288,8 +288,7 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         """
         all_references = self.current_references
 
-        if namespaces is None:
-            # Unreference all
+        if namespaces is None:  # Unreference all
             for ref in all_references:
                 ref.remove()
         else:
@@ -518,7 +517,7 @@ if __name__ == "__main__":
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
+    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
     sb.current_ui.show(pos="screen", app_exec=True)
 # -----------------------------------------------------------------------------
 # Notes

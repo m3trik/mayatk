@@ -12,6 +12,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.env_utils import EnvUtils
 
 
 class StingrayArnoldShader:
@@ -62,7 +63,7 @@ class StingrayArnoldShader:
         # Process each texture
         length = len(textures)
         progress = 0
-        base_dir = CoreUtils.get_maya_info("sourceimages")
+        base_dir = EnvUtils.get_maya_info("sourceimages")
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
@@ -111,13 +112,13 @@ class StingrayArnoldShader:
         Returns:
             pm.nt.StingrayPBS: The created StingrayPBS shader node.
         """
-        CoreUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
+        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
         # Create StingrayPBS node
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = CoreUtils.get_maya_info("install_path")
+            maya_install_path = EnvUtils.get_maya_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -151,7 +152,7 @@ class StingrayArnoldShader:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
-        CoreUtils.load_plugin("mtoa")  # Load Arnold plugin
+        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
 
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
@@ -449,6 +450,7 @@ class StingrayArnoldShader:
         """Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothness parameter.
         Prioritizes a metallic smoothness map over separate metallic and roughness maps when use_metallic_smoothness is True.
         If use_metallic_smoothness is False, filters out any metallic smoothness or smoothness maps from the textures.
+        If neither a roughness nor a metallic map is provided, converts the specular map to the necessary maps.
 
         Parameters:
             textures (List[str]): List of texture file paths.
@@ -457,46 +459,81 @@ class StingrayArnoldShader:
         Returns:
             List[str]: Modified list of texture file paths with the correct metallic map handling.
         """
-        # Filter for metallic smoothness, metallic, roughness, and smoothness maps
+        # Filter for existing maps
         metallic_smoothness_map = ptk.filter_images_by_type(
             textures, "Metallic_Smoothness"
         )
         metallic_map = ptk.filter_images_by_type(textures, "Metallic")
         roughness_map = ptk.filter_images_by_type(textures, "Roughness")
         smoothness_map = ptk.filter_images_by_type(textures, "Smoothness")
+        specular_map = ptk.filter_images_by_type(textures, "Specular")
 
-        # If use_metallic_smoothness is True, prioritize the metallic smoothness map
+        filtered_textures = textures.copy()
+
         if use_metallic_smoothness:
             if metallic_smoothness_map:
-                # Remove separate metallic, roughness, and smoothness maps if a metallic smoothness map exists
-                return [
+                # If a metallic smoothness map exists, remove other maps and return
+                filtered_textures = [
                     tex
                     for tex in textures
                     if tex not in metallic_map + roughness_map + smoothness_map
                 ]
+                return filtered_textures
+
+            elif specular_map:
+                # Convert specular map to roughness and metallic maps
+                created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
+                created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
+
+                # Combine the created roughness and metallic maps into a metallic smoothness map
+                combined_map = ptk.pack_smoothness_into_metallic(
+                    created_metallic_map, created_roughness_map, invert_alpha=True
+                )
+
+                # Remove individual metallic, roughness, smoothness maps and the newly created maps
+                filtered_textures = [
+                    tex
+                    for tex in filtered_textures
+                    if tex not in metallic_map + roughness_map + smoothness_map
+                ] + [combined_map]
+                return filtered_textures
+
             elif metallic_map and (roughness_map or smoothness_map):
-                # Create a metallic smoothness map from metallic and roughness or smoothness maps, then update the list
+                # If metallic and roughness/smoothness maps exist, combine them into a metallic smoothness map
                 alpha_map = roughness_map[0] if roughness_map else smoothness_map[0]
-                invert_alpha = bool(
-                    roughness_map
-                )  # Invert alpha if the source is roughness
+                invert_alpha = bool(roughness_map)
                 combined_map = ptk.pack_smoothness_into_metallic(
                     metallic_map[0], alpha_map, invert_alpha=invert_alpha
                 )
-                return [
+                filtered_textures = [
                     tex
-                    for tex in textures
+                    for tex in filtered_textures
                     if tex not in metallic_map + roughness_map + smoothness_map
                 ] + [combined_map]
-        else:  # If use_metallic_smoothness is False, filter out any metallic smoothness or smoothness maps
-            return [
+                return filtered_textures
+
+        else:  # If use_metallic_smoothness is False
+            # Remove any metallic smoothness or smoothness maps from the list
+            filtered_textures = [
                 tex
                 for tex in textures
                 if tex not in metallic_smoothness_map + smoothness_map
             ]
 
+            if not metallic_map and specular_map:
+                # Create a metallic map from the specular map
+                created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
+                filtered_textures.append(created_metallic_map)
+
+            if not roughness_map and specular_map:
+                # Create a roughness map from the specular map
+                created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
+                filtered_textures.append(created_roughness_map)
+
+            return filtered_textures
+
         # Return the textures list unchanged if no conditions are met
-        return textures
+        return filtered_textures
 
     def filter_for_correct_base_color_map(
         self, textures: List[str], use_albedo_transparency: bool
@@ -576,7 +613,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = self.switchboard()
         self.ui = self.sb.stingray_arnold_shader
-        self.workspace_dir = CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -602,7 +639,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     #     ui.set_attributes(WA_TranslucentBackground=True)
     #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    #     ui.header.configureButtons(hide_button=True)
+    #     ui.header.configure_buttons(hide_button=True)
 
     #     # Connect button click to show HDR Manager
     #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
@@ -717,7 +754,7 @@ if __name__ == "__main__":
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(
+    sb.current_ui.header.configure_buttons(
         menu_button=True, minimize_button=True, hide_button=True
     )
     sb.current_ui.show(pos="screen", app_exec=True)

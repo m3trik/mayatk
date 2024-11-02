@@ -39,10 +39,6 @@ class RigUtilsTest(unittest.TestCase):
         result = mtk.create_group(name="emptyGrp").name()
         self.assertEqual(result, "emptyGrp")
 
-    def test_create_group_lra(self):
-        result = mtk.create_group_with_first_obj_lra("cyl", "LRAgrp").name()
-        self.assertEqual(result, "LRAgrp")
-
     def test_create_locator_at_object(self):
         result = mtk.create_locator_at_object("cyl")
         self.assertEqual(result, None)

@@ -54,6 +54,137 @@ class RigUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undo
+    def create_locator_at_object(
+        cls,
+        objects,
+        parent=False,
+        freeze_transforms=False,
+        bake_child_pivot=False,
+        grp_suffix="_GRP#",
+        loc_suffix="_LOC#",
+        obj_suffix="_GEO#",
+        strip_digits=False,
+        strip_suffix=False,
+        loc_scale=1,
+        lock_translate=False,
+        lock_rotation=False,
+        lock_scale=False,
+    ):
+        """Create locators with the same transforms as any selected object(s).
+        If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
+
+        Parameters:
+            objects (str/obj/list): A list of objects, or an object name to create locators at.
+            parent (bool): Parent the object to the locator. (default=False)
+            freeze_transforms (bool): Freeze transforms on the locator. (default=True)
+            bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
+            grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
+            loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
+            obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
+            strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
+            strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
+            loc_scale (float) = The scale of the locator. (default=1)
+            lock_translate (bool): Lock the translate values of the child object. (default=False)
+            lock_rotation (bool): Lock the rotation values of the child object. (default=False)
+            lock_scale (bool): Lock the scale values of the child object. (default=False)
+            remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
+
+        Example:
+            createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
+        """
+        import re
+
+        suffix_strip_regex = (
+            re.escape(grp_suffix).replace(r"\#", r"\d$"),
+            re.escape(loc_suffix).replace(r"\#", r"\d$"),
+            re.escape(obj_suffix).replace(r"\#", r"\d$"),
+        )
+
+        def format_name_with_suffix(base_name: str, o) -> str:
+            """Return the formatted name based on the base name and object's current type with the appropriate suffix."""
+            if NodeUtils.is_locator(o):
+                suffix = loc_suffix
+            elif NodeUtils.is_group(o):
+                suffix = grp_suffix
+            else:
+                suffix = obj_suffix
+
+            return ptk.format_suffix(
+                base_name,
+                suffix=suffix,
+                strip=suffix_strip_regex,
+                strip_trailing_ints=strip_digits,
+                strip_trailing_alpha=strip_suffix,
+            )
+
+        for obj in pm.ls(objects, long=True, type="transform"):
+            base_name = obj.nodeName()  # Use the original object name as the base name
+            vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
+
+            if freeze_transforms:
+                # Store the current pivot position
+                matrix = XformUtils.get_manip_pivot_matrix(obj)
+                pm.makeIdentity(obj, apply=True)
+                XformUtils.set_manip_pivot_matrix(obj, matrix)
+
+            if bake_child_pivot and not NodeUtils.is_group(obj):
+                XformUtils.bake_pivot(
+                    obj, position=True, orientation=True, preserve_normals=True
+                )
+
+            if vertices:
+                objName = vertices[0].split(".")[0]
+                obj = pm.ls(objName)
+
+                loc = cls.create_locator(scale=loc_scale)
+
+                xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
+                x, y, z = (
+                    (xmin + xmax) / 2,
+                    (ymin + ymax) / 2,
+                    (zmin + zmax) / 2,
+                )
+                pm.move(x, y, z, loc)
+
+            else:  # Object
+                loc = cls.create_locator(scale=loc_scale)
+                tempConst = pm.parentConstraint(obj, loc, maintainOffset=False)
+                pm.delete(tempConst)
+
+            try:
+                if parent:
+                    origParent = pm.listRelatives(obj, parent=1)
+
+                    grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
+                    pm.rename(grp, format_name_with_suffix(base_name, grp))
+                    pm.parent(obj, loc)
+                    pm.parent(loc, grp)
+                    pm.parent(grp, origParent)
+
+                if freeze_transforms:  # freeze transforms one last time.
+                    # Assure attributes are unlocked.
+                    cls.set_attr_lock_state(
+                        obj, translate=False, rotate=False, scale=False
+                    )
+                    pm.makeIdentity(obj, apply=True, normal=1)
+                    pm.makeIdentity(loc, apply=True, normal=1)
+                    # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
+
+                pm.rename(loc, format_name_with_suffix(base_name, loc))
+                pm.rename(obj, format_name_with_suffix(base_name, obj))
+
+                cls.set_attr_lock_state(
+                    obj,
+                    translate=lock_translate,
+                    rotate=lock_rotation,
+                    scale=lock_scale,
+                )
+            except Exception as error:
+                pm.delete(loc)
+                raise (error)
+
+    @classmethod
+    @CoreUtils.undo
     def remove_locator(cls, objects):
         """Remove a parented locator from the child object.
 
@@ -64,42 +195,44 @@ class RigUtils(ptk.HelpMixin):
             if not pm.objExists(obj):
                 continue
 
-            elif (
-                NodeUtils.is_locator(obj)
-                and not NodeUtils.get_type(obj)
-                and not NodeUtils.get_children(obj)
-            ):
-                pm.delete(obj)
-                continue
-
-            # unlock attributes
-            cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
-
-            if not NodeUtils.is_locator(obj):
-                try:  # if the 'obj' is not a locator, check if it's parent is.
-                    obj = NodeUtils.get_parent(obj)
-                    if not NodeUtils.is_locator(obj):
-                        pm.inViewMessage(
-                            status_message="Error: Unable to remove locator for the given object.",
-                            pos="topCenter",
-                            fade=True,
-                        )
-                        continue
-                except IndexError:
-                    pm.inViewMessage(
-                        status_message="Error: Unable to remove locator for the given object.",
-                        pos="topCenter",
-                        fade=True,
-                    )
+            if NodeUtils.is_locator(obj):
+                if not NodeUtils.get_type(obj) and not NodeUtils.get_children(obj):
+                    pm.delete(obj)
                     continue
 
-            # unparent child object
-            children = NodeUtils.get_children(obj)
-            for child in children:
-                pm.parent(child, world=True)
+                # Unlock attributes
+                cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
 
-            # remove locator
-            pm.delete(obj)
+                # Get the parent and grandparent
+                parent = NodeUtils.get_parent(obj)
+                grandparent = NodeUtils.get_parent(parent) if parent else None
+
+                # Get children before deleting the locator
+                children = NodeUtils.get_children(obj)
+
+                # Unparent children to world
+                for child in children:
+                    pm.parent(child, world=True)
+
+                # Delete the locator
+                pm.delete(obj)
+
+                # Reparent children to grandparent or parent if grandparent doesn't exist
+                new_parent = grandparent if grandparent else parent
+                if new_parent:
+                    for child in children:
+                        pm.parent(child, new_parent)
+
+                # Check if the parent is a group and delete it if it has no other children
+                if parent and NodeUtils.is_group(parent):
+                    parent_children = NodeUtils.get_children(parent)
+                    if not parent_children:
+                        pm.delete(parent)
+
+            else:
+                pm.warning(f"Object '{obj}' is not a locator.")
+
+        return objects
 
     @classmethod
     @CoreUtils.undo
@@ -183,189 +316,6 @@ class RigUtils(ptk.HelpMixin):
 
         pm.parent(grp, world=True)
         return grp
-
-    @staticmethod
-    @CoreUtils.undo
-    def create_group_with_first_obj_lra(objects, name="", freeze_transforms=True):
-        """Creates a group using the first object to define the local rotation axis.
-
-        Parameters:
-            objects (str/obj/list): The objects to group. The first object will be used to define the groups LRA.
-            name (str): The group name.
-            freeze_transforms (bool): Freeze transforms on group child objects.
-        """
-        try:
-            obj, *other = pm.ls(objects, transforms=1)
-        except IndexError:
-            print(
-                f"{__file__} in create_group_with_first_obj_lra\n\t# Error: Operation requires at least one object. #"
-            )
-            return None
-
-        # Bake the pivot on the object that will define the LRA.
-        XformUtils.bake_pivot(obj, position=True, orientation=True)
-
-        grp = pm.group(empty=True)
-        pm.parent(grp, obj)
-
-        pm.setAttr(grp.translate, (0, 0, 0))
-        pm.setAttr(grp.rotate, (0, 0, 0))
-
-        objParent = pm.listRelatives(obj, parent=1)
-        pm.parent(
-            grp, objParent
-        )  # parent the instance under the original objects parent.
-
-        try:
-            pm.parent(obj, grp)
-        except Exception:  # root level objects
-            pm.parent(grp, world=True)
-            pm.parent(obj, grp)
-
-        for o in other:  # parent any other objects to the new group.
-            pm.parent(o, grp)
-            if freeze_transforms:
-                pm.makeIdentity(o, apply=True)  # freeze transforms on child objects.
-
-        if not name and objParent:  # name the group.
-            pm.rename(grp, objParent[0].name())
-        elif not name:
-            pm.rename(grp, obj.name())
-        else:
-            pm.rename(grp, name)
-
-        return grp
-
-    @classmethod
-    @CoreUtils.undo
-    def create_locator_at_object(
-        cls,
-        objects,
-        parent=False,
-        freeze_transforms=False,
-        bake_child_pivot=False,
-        grp_suffix="_GRP#",
-        loc_suffix="_LOC#",
-        obj_suffix="_GEO#",
-        strip_digits=False,
-        strip_suffix=False,
-        scale=1,
-        lock_translate=False,
-        lock_rotation=False,
-        lock_scale=False,
-    ):
-        """Create locators with the same transforms as any selected object(s).
-        If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
-
-        Parameters:
-            objects (str/obj/list): A list of objects, or an object name to create locators at.
-            parent (bool): Parent the object to the locator. (default=False)
-            freeze_transforms (bool): Freeze transforms on the locator. (default=True)
-            bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
-            grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
-            loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
-            obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
-            strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-            strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
-            scale (float) = The scale of the locator. (default=1)
-            lock_translate (bool): Lock the translate values of the child object. (default=False)
-            lock_rotation (bool): Lock the rotation values of the child object. (default=False)
-            lock_scale (bool): Lock the scale values of the child object. (default=False)
-            remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
-
-        Example:
-            createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
-        """
-        getSuffix = lambda o: (
-            loc_suffix
-            if NodeUtils.is_locator(o)
-            else grp_suffix if NodeUtils.is_group(o) else obj_suffix
-        )  # match the correct suffix to the object type.
-
-        for obj in pm.ls(objects, long=True, type="transform"):
-            if bake_child_pivot:
-                XformUtils.bake_pivot(obj, position=1, orientation=1)
-
-            vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
-            if vertices:
-                objName = vertices[0].split(".")[0]
-                obj = pm.ls(objName)
-
-                loc = cls.create_locator(scale=scale)
-
-                xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
-                x, y, z = (
-                    (xmin + xmax) / 2,
-                    (ymin + ymax) / 2,
-                    (zmin + zmax) / 2,
-                )
-                pm.move(x, y, z, loc)
-
-            else:  # object:
-                loc = cls.create_locator(scale=scale)
-                tempConst = pm.parentConstraint(obj, loc, maintainOffset=False)
-                pm.delete(tempConst)
-
-            try:
-                if parent:
-                    origParent = pm.listRelatives(obj, parent=1)
-
-                    grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
-                    pm.rename(
-                        grp,
-                        ptk.format_suffix(
-                            obj.name(),
-                            suffix=getSuffix(grp),
-                            strip=(obj_suffix, grp_suffix, loc_suffix),
-                            strip_trailing_ints=strip_digits,
-                            strip_trailing_alpha=strip_suffix,
-                        ),
-                    )
-
-                    pm.parent(obj, loc)
-                    pm.parent(loc, grp)
-                    pm.parent(grp, origParent)
-
-                if freeze_transforms:  # freeze transforms before baking pivot.
-                    cls.set_attr_lock_state(
-                        obj, translate=False, rotate=False, scale=False
-                    )  # assure attributes are unlocked.
-                    pm.makeIdentity(obj, apply=True, normal=1)
-                    pm.makeIdentity(
-                        loc, apply=True, normal=1
-                    )  # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
-
-                pm.rename(
-                    loc,
-                    ptk.format_suffix(
-                        obj.name(),
-                        suffix=getSuffix(loc),
-                        strip=(obj_suffix, grp_suffix, loc_suffix),
-                        strip_trailing_ints=strip_digits,
-                        strip_trailing_alpha=strip_suffix,
-                    ),
-                )
-                pm.rename(
-                    obj,
-                    ptk.format_suffix(
-                        obj.name(),
-                        suffix=getSuffix(obj),
-                        strip=(obj_suffix, grp_suffix, loc_suffix),
-                        strip_trailing_ints=strip_digits,
-                        strip_trailing_alpha=strip_suffix,
-                    ),
-                )
-
-                cls.set_attr_lock_state(
-                    obj,
-                    translate=lock_translate,
-                    rotate=lock_rotation,
-                    scale=lock_scale,
-                )
-
-            except Exception as error:
-                pm.delete(loc)
-                raise (error)
 
     @staticmethod
     def constrain(
@@ -552,6 +502,69 @@ class RigUtils(ptk.HelpMixin):
         initial_distance = pm.getAttr(distance_node.distance)
         set_driven_keys(distance_node, initial_distance)
         lock_segment_attributes()
+
+    @staticmethod
+    def reverse_joint_chain(root_joint, keep_original=False):
+        """Create a new joint chain with the same positions as the original, but with reversed hierarchy.
+
+        Parameters:
+            root_joint (str): The root joint of the original joint chain.
+            keep_original (bool): Whether to keep the original joint chain. Default is False.
+
+        Returns:
+            list: The new joint chain with reversed hierarchy.
+        """
+        # Get the original joint chain starting from the root
+        original_joints = pm.listRelatives(
+            root_joint, allDescendents=True, type="joint"
+        )
+        original_joints.append(root_joint)
+        original_joints.reverse()  # Now from end joint to root joint
+
+        # Collect positions and radii of the original joints
+        joint_positions = [
+            joint.getTranslation(space="world") for joint in original_joints
+        ]
+        joint_radii = [joint.radius.get() for joint in original_joints]
+
+        if not keep_original:
+            pm.delete(original_joints)
+
+        # Create a new joint chain along the same positions
+        pm.select(clear=True)
+        new_joints = []
+        for i, pos in enumerate(joint_positions):
+            new_joint = pm.joint(position=pos)
+            new_joints.append(new_joint)
+            # Set the joint radius to match the original
+            new_joint.radius.set(joint_radii[i])
+
+        # Unparent all new joints
+        for joint in new_joints:
+            pm.parent(joint, world=True)
+
+        # Reverse the new joints list to set up reversed hierarchy
+        new_joints.reverse()
+
+        # Re-parent joints in reverse order to create reversed hierarchy
+        for i in range(len(new_joints) - 1):
+            pm.parent(new_joints[i + 1], new_joints[i])
+
+        # Zero out joint orientations before reorienting
+        for joint in new_joints:
+            joint.jointOrient.set([0, 0, 0])
+
+        # Reorient the joints to point towards their children
+        pm.select(new_joints[0], hierarchy=True)
+        pm.joint(
+            edit=True,
+            orientJoint="xyz",
+            secondaryAxisOrient="yup",
+            zeroScaleOrient=True,
+            children=True,
+        )
+
+        return new_joints
 
 
 # -----------------------------------------------------------------------------

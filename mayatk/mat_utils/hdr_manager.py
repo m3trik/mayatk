@@ -9,8 +9,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
+from mayatk.env_utils import EnvUtils
 
 
 class HdrManager:
@@ -28,7 +29,6 @@ class HdrManager:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
-        # NodeUtils.node_exists('aiSkyDomeLight', search='exactType')
         node = self.hdr_env
         if not node:
             node = NodeUtils.create_render_node(
@@ -66,7 +66,7 @@ class HdrManager:
         if node:
             node.camera.set(state)
 
-    @core_utils.CoreUtils.undo
+    @CoreUtils.undo
     def create_network(
         self,
         hdrMap="",
@@ -83,7 +83,7 @@ class HdrManagerSlots(HdrManager):
 
         self.sb = self.switchboard()
         self.ui = self.sb.hdr_manager
-        self.workspace_dir = core_utils.CoreUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
 
         hdr_info = ptk.get_dir_contents(
@@ -179,14 +179,14 @@ class HdrManagerSlots(HdrManager):
 if __name__ == "__main__":
     from uitk import Switchboard
 
-    parent = core_utils.CoreUtils.get_main_window()
+    parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "hdr_manager.ui")
     sb = Switchboard(parent, ui_location=ui_file, slot_location=HdrManagerSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configureButtons(minimize_button=True, hide_button=True)
+    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
     sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

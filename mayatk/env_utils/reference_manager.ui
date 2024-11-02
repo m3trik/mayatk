@@ -5,14 +5,6 @@
   <property name="enabled">
    <bool>true</bool>
   </property>
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>350</width>
-    <height>434</height>
-   </rect>
-  </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
   </property>
@@ -25,8 +17,8 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>200</width>
-     <height>130</height>
+     <width>500</width>
+     <height>400</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -179,7 +171,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>Convert all current references to assembly definitions and references.</string>
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Convert all current references to assembly definitions and references.&lt;/p&gt;&lt;p&gt;This action is irreversible.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
              <property name="text">
               <string>Convert to Assembly</string>
@@ -201,7 +193,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>Convert all referenced objects to regular scene objects. This action is irreversible.</string>
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Convert all referenced objects to regular scene objects.&lt;/p&gt;&lt;p&gt;This action is irreversible.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
              <property name="text">
               <string>UnLink and Import</string>

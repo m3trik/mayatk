@@ -1,5 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
+from typing import Any, Union, List
+
 try:
     import pymel.core as pm
 except ImportError as error:
@@ -13,25 +15,8 @@ from mayatk import core_utils
 class NodeUtils(ptk.HelpMixin):
     """ """
 
-    @staticmethod
-    def node_exists(n, search="name"):
-        """Check if the node exists in the current scene.
-
-        Parameters:
-            search (str): The search parameters. valid: 'name', 'type', 'exactType'
-
-        Returns:
-            (bool)
-        """
-        if search == "name":
-            return bool(pm.ls(n))
-        elif search == "type":
-            return bool(pm.ls(type=n))
-        elif search == "exactType":
-            return bool(pm.ls(exactType=n))
-
     @classmethod
-    def get_type(cls, objects):
+    def get_type(cls, objects: Union[str, Any, List[Any]]) -> Union[str, List[str]]:
         """Get the object type as a string.
 
         Parameters:
@@ -54,20 +39,27 @@ class NodeUtils(ptk.HelpMixin):
 
         return ptk.format_return(types, objects)
 
-    @classmethod
-    def is_locator(cls, obj):
-        """Check if the object is a locator.
+    @staticmethod
+    def is_locator(objects):
+        """Determine if each of the given object(s) is a locator.
         A locator is a transform node that has a shape node child.
         The shape node defines the appearance and behavior of the locator.
 
         Parameters:
-            obj () = The object to query.
+            objects (str/obj/list): The object(s) to query.
 
         Returns:
-            (bool)
+            (bool)(list) A list is always returned when 'objects' is given as a list.
         """
-        shape = cls.get_shape_node(obj)
-        return pm.nodeType(shape) == "locator"
+        objs = pm.ls(objects, transforms=True)
+        # Get all locator shapes and their corresponding transforms
+        locator_shapes = pm.ls(type="locator")
+        locator_transforms = set(
+            pm.listRelatives(locator_shapes, parent=True, path=True)
+        )
+        # Determine if each object is a locator
+        result = [obj in locator_transforms for obj in objs]
+        return ptk.format_return(result, objects)
 
     @staticmethod
     def is_group(objects):
@@ -177,24 +169,42 @@ class NodeUtils(ptk.HelpMixin):
     def get_transform_node(
         nodes, returned_type="obj", attributes=False, inc=[], exc=[]
     ):
-        """Get transform node(s) or node attributes."""
+        """Get transform node(s) or node attributes.
+
+        This method retrieves the transform nodes associated with the given input nodes. It can also return specific attributes of the nodes if requested.
+
+        Parameters:
+            nodes (str/obj/list): The node(s) or objects for which to find the associated transform nodes.
+            returned_type (str): The desired returned object type.
+                (valid: 'str'(default), 'obj'(transform node), 'shape'(as string), 'int'(valid only at sub-object level)).
+            attributes (bool): If True, return the attributes of the node(s) instead of the node itself.
+            inc (list): A list of inclusion filters to apply to the result.
+            exc (list): A list of exclusion filters to apply to the result.
+
+        Returns:
+            (obj/list) Transform node(s) or node attributes. If 'nodes' is provided as a list, a list is always returned. If a single node is provided, a single object or a list, depending on the content, is returned.
+        """
         result = []
         for node in pm.ls(nodes, long=True):
-            # Check if node is a transform and directly add it
-            if isinstance(node, pm.nt.Transform):
-                result.append(node)
-            elif isinstance(node, pm.nt.Mesh):
-                # For mesh nodes, add their parent transform to the result
-                parent = pm.listRelatives(node, parent=True, type="transform")
-                if parent:
-                    result.extend(parent)
-            else:
-                # Handle all other nodes that are not specifically transforms or meshes
-                connected_transforms = pm.listRelatives(
-                    pm.listHistory(node, future=True), parent=True, type="transform"
-                )
-                if connected_transforms:
-                    result.extend(connected_transforms)
+            try:
+                # Check if node is a transform and directly add it
+                if isinstance(node, pm.nt.Transform):
+                    result.append(node)
+                elif isinstance(node, pm.nt.Mesh):
+                    # For mesh nodes, add their parent transform to the result
+                    parent = pm.listRelatives(node, parent=True, type="transform")
+                    if parent:
+                        result.extend(parent)
+                else:
+                    # Handle all other nodes that are not specifically transforms or meshes
+                    connected_transforms = pm.listRelatives(
+                        pm.listHistory(node, future=True), parent=True, type="transform"
+                    )
+                    if connected_transforms:
+                        result.extend(connected_transforms)
+            except pm.MayaNodeError as e:
+                print(f"Error processing node '{node}': {e}")
+                continue  # Skip this node and continue with the next one
 
         # Remove any duplicates and ensure only transforms are in the final result
         result = list(set(result))
@@ -745,16 +755,7 @@ class NodeUtils(ptk.HelpMixin):
 
         Returns:
             (list) The instanced objects.
-
-        Example:
-            convert_to_instances(pm.ls(sl=1))
         """
-        pm.undoInfo(openChunk=True)
-        # Get the world space obj pivot.
-        p0x, p0y, p0z = pm.xform(objects[0], q=True, rotatePivot=1, worldSpace=1)
-        # Get the obj pivot.
-        # pivot = pm.xform(objects[0], q=True, rotatePivot=1, objectSpace=1)
-
         for obj in objects[1:]:
             name = obj.name()
             objParent = pm.listRelatives(obj, parent=1)
@@ -778,7 +779,6 @@ class NodeUtils(ptk.HelpMixin):
             pm.delete(obj)
             pm.rename(instance, name + append)
         pm.select(objects[1:])
-        pm.undoInfo(closeChunk=True)
 
         return objects[1:]
 
