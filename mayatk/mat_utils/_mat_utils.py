@@ -350,9 +350,9 @@ class MatUtils(ptk.HelpMixin):
     @classmethod
     def find_materials_with_duplicate_textures(
         cls,
-        materials: Optional[List[pm.nt.DependNode]] = None,
+        materials: Optional[List["pm.nt.DependNode"]] = None,
         strict: bool = False,
-    ) -> Dict[pm.nt.DependNode, List[pm.nt.DependNode]]:
+    ) -> Dict["pm.nt.DependNode", List["pm.nt.DependNode"]]:
         """Find duplicate materials based on their texture file names or full paths.
 
         Parameters:
