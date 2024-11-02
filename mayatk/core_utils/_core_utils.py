@@ -152,7 +152,7 @@ class CoreUtils(ptk.HelpMixin):
             modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
             wrap_control(modelPanelName, QtWidgets.QtWidget())
         """
-        from PySide2 import QtWidgets
+        from qtpy import QtWidgets
         from shiboken2 import wrapInstance
         from maya.OpenMayaUI import MQtUtil
 

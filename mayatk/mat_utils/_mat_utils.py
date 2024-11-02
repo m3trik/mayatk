@@ -663,7 +663,7 @@ class MatUtils(ptk.HelpMixin):
         Returns:
             (obj) QIcon: The pixmap icon.
         """
-        from PySide2.QtGui import QPixmap, QColor, QIcon
+        from qtpy.QtGui import QPixmap, QColor, QIcon
 
         try:
             # get the string name if a mat object is given.

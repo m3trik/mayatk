@@ -2,7 +2,7 @@
 # coding=utf-8
 
 from typing import Optional
-from PySide2 import QtWidgets, QtCore, QtGui
+from qtpy import QtWidgets
 import pymel.core as pm
 import pythontk as ptk
 
