@@ -28,7 +28,7 @@ class DuplicateRadial:
         translate: Tuple[float, float, float] = (0, 0, 0),
         rotate: Tuple[float, float, float] = (0, 0, 0),
         scale: Tuple[float, float, float] = (1, 1, 1),
-    ) -> Dict[pm.PyNode, List[pm.PyNode]]:
+    ) -> Dict["pm.PyNode", List["pm.PyNode"]]:
         DuplicateRadial._validate_inputs(rotate_axis, weight_bias, weight_curve)
         originals_to_copies = {}
 
@@ -83,8 +83,8 @@ class DuplicateRadial:
 
     @staticmethod
     def _calculate_final_pivot_matrix(
-        manip_pivot_matrix: pm.datatypes.Matrix, offset: Tuple[float, float, float]
-    ) -> pm.datatypes.Matrix:
+        manip_pivot_matrix: "pm.datatypes.Matrix", offset: Tuple[float, float, float]
+    ) -> "pm.datatypes.Matrix":
         offset_matrix = pm.datatypes.TransformationMatrix()
         offset_matrix.translate = pm.datatypes.Vector(offset)
         final_pivot_matrix = manip_pivot_matrix * offset_matrix.asMatrix()
@@ -93,7 +93,7 @@ class DuplicateRadial:
 
     @staticmethod
     def _apply_initial_transformations(
-        node: pm.PyNode,
+        node: "pm.PyNode",
         rotate: Tuple[float, float, float],
         scale: Tuple[float, float, float],
         translate: Tuple[float, float, float],
@@ -106,7 +106,7 @@ class DuplicateRadial:
         pm.move(node, translate, relative=True)
 
     @staticmethod
-    def _create_group_node(node: pm.PyNode) -> pm.PyNode:
+    def _create_group_node(node: "pm.PyNode") -> "pm.PyNode":
         # Check the parent of the node
         parent_node = node.getParent()
 
@@ -134,7 +134,7 @@ class DuplicateRadial:
 
     @staticmethod
     def _create_and_transform_instances(
-        group_node: pm.PyNode,
+        group_node: "pm.PyNode",
         num_copies: int,
         rotate_axis: str,
         start_angle: float,
@@ -142,7 +142,7 @@ class DuplicateRadial:
         translate: Tuple[float, float, float],
         weight_bias: float,
         weight_curve: float,
-    ) -> List[pm.PyNode]:
+    ) -> List["pm.PyNode"]:
         rotation_index = {"x": 0, "y": 1, "z": 2}[rotate_axis]
         total_rotation = end_angle - start_angle
         weight_factor = 2 * abs(weight_bias - 0.5)
@@ -277,19 +277,25 @@ class DuplicateRadialSlots:
 
 if __name__ == "__main__":
     import os
+    import sys
     from uitk import Switchboard
+    from mayatk import ui_utils
 
-    parent = core_utils.CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "duplicate_radial.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=DuplicateRadialSlots)
+    # Workaround for `__file__` in Maya
+    # Get the script's directory by inspecting the first entry of `sys.path`
+    script_dir = os.path.dirname(sys.path[0])
+    ui_file = os.path.join(script_dir, "duplicate_radial.ui")
 
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+    parent = ui_utils.UiUtils.get_main_window()
+    sb = Switchboard(parent, ui_source=ui_file, slot_source=DuplicateRadialSlots)
+    print(sb)
+    # sb.current_ui.set_attributes(WA_TranslucentBackground=True)
+    # sb.current_ui.set_flags(
+    #     Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
+    # )
+    # sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
 
-    sb.current_ui.show(pos="screen", app_exec=True)
+    # sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

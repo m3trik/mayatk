@@ -748,7 +748,7 @@ if __name__ == "__main__":
     parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
     sb = Switchboard(
-        parent, ui_location=ui_file, slot_location=StingrayArnoldShaderSlots
+        parent, ui_source=ui_file, slot_source=StingrayArnoldShaderSlots
     )
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)

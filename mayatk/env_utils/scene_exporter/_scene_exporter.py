@@ -16,7 +16,6 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils import CoreUtils
-from mayatk.node_utils import NodeUtils
 from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
@@ -1131,7 +1130,7 @@ if __name__ == "__main__":
 
     parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "scene_exporter.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=SceneExporterSlots)
+    sb = Switchboard(parent, ui_source=ui_file, slot_source=SceneExporterSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)

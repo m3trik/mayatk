@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union
+from typing import List, Union, Optional
 
 try:
     import pymel.core as pm
@@ -1179,6 +1179,49 @@ class EditUtils(ptk.HelpMixin):
             pm.polySubdivideFacet(divisions=1, mode=0)
 
         return node
+
+    @staticmethod
+    def create_curve_from_edges(edges: Optional[List[str]] = None, **kwargs):
+        """Create a curve from selected polygon edges or a provided list of edges.
+
+        Parameter:
+            edges (Optional[List[str]]): A list of edges to convert to a curve.
+                                        If None, uses the currently selected edges.
+            **kwargs: Additional keyword arguments to override defaults for polyToCurve.
+
+        Returns:
+            pm.nt.Transform: The created curve, or None if the operation failed.
+        """
+        # Default arguments for polyToCurve
+        default_kwargs = {
+            "form": 2,  # Open curve
+            "degree": 1,  # Linear curve
+            "conformToSmoothMeshPreview": True,
+        }
+        # Merge provided kwargs with defaults
+        curve_kwargs = {**default_kwargs, **kwargs}
+
+        # Use provided edges or get selected edges
+        edges_to_convert = edges or pm.filterExpand(selectionMask=32)
+        if not edges_to_convert:
+            pm.warning("No edges provided or selected.")
+            return None
+
+        # Ensure edges are passed as a single selection
+        pm.select(edges_to_convert)
+
+        try:  # Convert edges to curve
+            curve = pm.polyToCurve(**curve_kwargs)
+            if curve:
+                pm.select(curve)
+                print(f"Curve created: {curve}")
+                return curve
+            else:
+                pm.warning("Failed to create a curve from the provided edges.")
+                return None
+        except Exception as e:
+            pm.warning(f"Error during curve creation: {e}")
+            return None
 
 
 # -----------------------------------------------------------------------------

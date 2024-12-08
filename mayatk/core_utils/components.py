@@ -1678,24 +1678,32 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         Parameters:
             objects (obj/list): Polygon object(s) or Polygon face(s).
-            returned_type (str): The desired returned type. valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
+            returned_type (str): The desired returned type. Valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
 
         Returns:
-            (list)(dict) dependent on the given returned_type arg. ex. {0L:[[MeshFace(u'pShape.f[0]'), MeshFace(u'pShape.f[1]')], 1L:[[MeshFace(u'pShape.f[2]'), MeshFace(u'pShape.f[3]')]}
+            (list)(dict): Depending on the given returned_type arg.
+            Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')], 1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
         faces = cls.get_components(objects, "faces", flatten=True)
-
         shells = {}
-        for face in faces:
-            shell_Id = pm.polyEvaluate(face, uvShellIds=True)
 
+        for face in faces:
             try:
-                shells[shell_Id[0]].append(face)
-            except KeyError:
-                try:
-                    shells[shell_Id[0]] = [face]
-                except IndexError:
-                    pm.warning(f"Unable to get UV shell ID for face: {face}")
+                # Attempt to get the UV shell ID, ensure it returns a non-empty list
+                shell_Id = pm.polyEvaluate(face, uvShellIds=True)
+
+                # Validate shell_Id
+                if not isinstance(shell_Id, list) or not shell_Id:
+                    pm.warning(f"Invalid UV shell ID for face: {face}")
+                    continue
+
+                # Use the shell ID to group faces
+                shell_key = shell_Id[0]
+                shells.setdefault(shell_key, []).append(face)
+
+            except pm.MayaNodeError as e:
+                pm.warning(f"Error evaluating UV shell ID for face {face}: {e}")
+                continue
 
         if returned_type == "shell":
             return list(shells.values())

@@ -512,7 +512,7 @@ if __name__ == "__main__":
 
     parent = CoreUtils.get_main_window()
     ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=ReferenceManagerSlots)
+    sb = Switchboard(parent, ui_source=ui_file, slot_source=ReferenceManagerSlots)
 
     sb.current_ui.set_attributes(WA_TranslucentBackground=True)
     sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)

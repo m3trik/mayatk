@@ -746,7 +746,7 @@ class NodeUtils(ptk.HelpMixin):
         return instances
 
     @classmethod
-    def convert_to_instances(cls, objects=[], append=""):
+    def convert_to_instances(cls, objects=None, append=""):
         """The first selected object will be instanced across all other selected objects.
 
         Parameters:
@@ -756,17 +756,27 @@ class NodeUtils(ptk.HelpMixin):
         Returns:
             (list) The instanced objects.
         """
-        for obj in objects[1:]:
-            name = obj.name()
-            objParent = pm.listRelatives(obj, parent=1)
+        objects = pm.ls(objects) or pm.ls(orderedSelection=True)
+        try:
+            source, targets = objects[0], objects[1:]
+        except IndexError:
+            pm.warning("Operation requires a selection of at least two objects.")
+            return
 
-            instance = pm.instance(objects[0])
+        pm.undoInfo(openChunk=True)
+        for target in targets:
+            name = target.name()
+            objParent = pm.listRelatives(target, parent=1)
 
-            cls.uninstance(obj)
-            pm.makeIdentity(obj, apply=1, translate=1, rotate=0, scale=0)
+            instance = pm.instance(source)
+
+            cls.uninstance(target)
+            pm.makeIdentity(target, apply=1, translate=1, rotate=0, scale=0)
 
             # Move object to center of the last selected items bounding box # pm.xform(instance, translation=pos, worldSpace=1, relative=1) #move to the original objects location.
-            pm.matchTransform(instance, obj, position=1, rotation=1, scale=1, pivots=1)
+            pm.matchTransform(
+                instance, target, position=1, rotation=1, scale=1, pivots=1
+            )
 
             try:
                 # Parent the instance under the original objects parent.
@@ -775,12 +785,13 @@ class NodeUtils(ptk.HelpMixin):
                 pass
 
             # Delete history for the object so that the namespace is cleared.
-            pm.delete(obj, constructionHistory=True)
-            pm.delete(obj)
+            pm.delete(target, constructionHistory=True)
+            pm.delete(target)
             pm.rename(instance, name + append)
-        pm.select(objects[1:])
+        pm.select(targets)
+        pm.undoInfo(closeChunk=True)
 
-        return objects[1:]
+        return targets
 
     @classmethod
     def uninstance(cls, objects):
