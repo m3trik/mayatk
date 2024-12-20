@@ -451,10 +451,21 @@ class MatUtils(ptk.HelpMixin):
             delete (bool): Whether to delete the duplicate materials after reassignment.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        # Collect materials directly in the method
-        collected_materials = (
-            pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
-        )
+        if materials:  # Filter out invalid objects and warn about them
+            valid_objects = []
+            for m in materials:
+                if pm.objExists(m):
+                    valid_objects.append(m)
+                else:
+                    pm.warning(f"Object '{m}' does not exist or is not valid.")
+
+            # Collect valid materials
+            collected_materials = pm.ls(valid_objects, mat=True)
+            if not collected_materials:
+                raise ValueError(f"No valid materials found in {materials}")
+        else:  # Collect all materials in the scene
+            collected_materials = pm.ls(mat=True)
+
         # Find duplicates using the updated format
         duplicate_to_original = cls.find_materials_with_duplicate_textures(
             collected_materials, strict=strict

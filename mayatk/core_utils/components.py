@@ -1493,29 +1493,23 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             objects (list): List of mesh names, with the first being the source and the rest being the targets.
             space (str): The space in which to transfer the normals ('world' or 'local').
         """
-        if len(objects) < 2:
-            raise ValueError(
-                "At least one source and one target mesh must be provided."
-            )
-
         space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
         if space not in space_map:
             valid_spaces = ", ".join(space_map.keys())
             raise ValueError(f"space parameter must be one of: {valid_spaces}")
 
+        # Filter objects to ensure only polygonal meshes are included
+        objs = pm.ls(objects, type="mesh")
+        if len(objs) < 2:
+            raise ValueError(
+                "At least one source and one target mesh must be polygonal meshes."
+            )
+
+        source_mesh, *target_meshes = objs
         sample_space_value = space_map[space]
 
-        source_mesh, *target_meshes = pm.ls(objects, flatten=True)
-
-        # Ensure we are working with shape nodes
-        if isinstance(source_mesh, pm.nt.Transform):
-            source_mesh = source_mesh.getShape()
-
+        source_vertices = source_mesh.numVertices()
         for target_mesh in target_meshes:
-            if isinstance(target_mesh, pm.nt.Transform):
-                target_mesh = target_mesh.getShape()
-
-            source_vertices = source_mesh.numVertices()
             target_vertices = target_mesh.numVertices()
 
             if source_vertices != target_vertices:
@@ -1529,7 +1523,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 target_mesh,
                 transferNormals=1,
                 sampleSpace=sample_space_value,
-                searchMethod=3,  # closest to point
+                searchMethod=3,  # Closest to point
                 colorBorders=1,
             )
 

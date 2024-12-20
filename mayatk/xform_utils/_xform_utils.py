@@ -602,15 +602,16 @@ class XformUtils(ptk.HelpMixin):
                     pm.manipPivot(ro=True)
 
         if preserve_normals:
+            meshes = pm.ls(objects, type="mesh")  # Filter for invalid types ie. nurbs
             temp_objects = []
             try:
                 # Create temporary duplicates for normals preservation
-                for obj in objects:
+                for obj in meshes:
                     temp_obj = pm.duplicate(obj, name=f"{obj}_tempForNormals")[0]
                     temp_objects.append(temp_obj)
 
-                # Transfer normals from temp objects back to original objects
-                for original, temp in zip(objects, temp_objects):
+                # Transfer normals from temp objects back to original meshes
+                for original, temp in zip(meshes, temp_objects):
                     components.Components.transfer_normals(
                         [temp.name(), original.name()]
                     )
