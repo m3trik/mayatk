@@ -182,9 +182,9 @@ class DuplicateRadial:
 
 
 class DuplicateRadialSlots:
-    def __init__(self):
-        self.sb = self.switchboard()
-        self.ui = self.sb.duplicate_radial
+    def __init__(self, **kwargs):
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.duplicate_radial
 
         self.preview = core_utils.preview.Preview(
             self,
@@ -273,29 +273,21 @@ class DuplicateRadialSlots:
         pm.undoInfo(closeChunk=True)
 
 
+class DuplicateRadialUi:
+    def __new__(self):
+        """Get the Duplicate Radial UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "dulicate_radial.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DuplicateRadialSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    import sys
-    from uitk import Switchboard
-    from mayatk import ui_utils
-
-    # Workaround for `__file__` in Maya
-    # Get the script's directory by inspecting the first entry of `sys.path`
-    script_dir = os.path.dirname(sys.path[0])
-    ui_file = os.path.join(script_dir, "duplicate_radial.ui")
-
-    parent = ui_utils.UiUtils.get_main_window()
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=DuplicateRadialSlots)
-    print(sb)
-    # sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    # sb.current_ui.set_flags(
-    #     Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    # )
-    # sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-
-    # sb.current_ui.show(pos="screen", app_exec=True)
+    DuplicateRadialUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

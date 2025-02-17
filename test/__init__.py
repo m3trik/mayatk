@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-import os, sys
+import os
 import unittest
 import inspect
 
@@ -17,7 +17,7 @@ class Main(unittest.TestCase):
 
             try:
                 path = os.path.abspath(inspect.getfile(eval(m)))
-            except TypeError as error:
+            except TypeError:
                 path = ""
 
             result = eval(expression)

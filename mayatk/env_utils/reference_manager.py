@@ -302,10 +302,10 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
 
 
 class ReferenceManagerSlots(ReferenceManager):
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.sb = self.switchboard()
-        self.ui = self.sb.reference_manager
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.reference_manager
 
         # Initialize and connect UI components
         self.ui.txt000.setText(self.current_working_dir)
@@ -504,21 +504,23 @@ class ReferenceManagerSlots(ReferenceManager):
             self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
 
 
+class ReferenceManagerUi:
+    def __new__(self):
+        """Get the Referece Manager UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ReferenceManagerSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from uitk import Switchboard
-    from mayatk.core_utils import CoreUtils
+    ReferenceManagerUi().show(pos="screen", app_exec=True)
 
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=ReferenceManagerSlots)
 
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
-    sb.current_ui.show(pos="screen", app_exec=True)
 # -----------------------------------------------------------------------------
 # Notes
 # -----------------------------------------------------------------------------

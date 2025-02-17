@@ -7,7 +7,6 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk import core_utils
 from mayatk import mat_utils
 
 
@@ -269,8 +268,9 @@ class ColorManager(ColorUtils):
 class ColorManagerSlots(ColorManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.sb = self.switchboard()
-        self.ui = self.sb.color_manager
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.color_manager
+
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
         for button in self.button_grp.buttons():
             button.settings = self.ui.settings
@@ -352,24 +352,21 @@ class ColorManagerSlots(ColorManager):
         self.selected_button.color = wireframe_color
 
 
+class ColorManagerUi:
+    def __new__(self):
+        """Get the Color Manager UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "color_manager.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ColorManagerSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    from uitk import Switchboard
-
-    parent = core_utils.CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "color_manager.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=ColorManagerSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
-
-    sb.current_ui.show(pos="screen", app_exec=True)
+    ColorManagerUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

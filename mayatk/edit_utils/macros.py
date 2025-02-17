@@ -13,7 +13,6 @@ from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.edit_utils import EditUtils
 from mayatk.display_utils import DisplayUtils
-from mayatk.ui_utils import UiUtils
 
 
 class MacroManager(ptk.HelpMixin):
@@ -1038,8 +1037,10 @@ class UiMacros:
             toggle_menu (bool): If True, toggles the visibility of the main menu bar.
             toggle_panels (bool): If True, toggles the visibility of panel toolbars.
         """
+        from mayatk import ui_utils
+
         # Get the main Maya window and its menu bar
-        main_window = UiUtils.get_main_window()
+        main_window = ui_utils.UiUtils.get_main_window()
         menu_bar = main_window.menuBar() if main_window else None
 
         # Use the visibility of the menu bar as the source state

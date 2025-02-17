@@ -10,7 +10,6 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.env_utils import EnvUtils
 
@@ -328,8 +327,9 @@ class QTextEditLogger(logging.Handler):
 class ShaderTemplatesSlots:
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.sb = self.switchboard()
-        self.ui = self.sb.shader_templates
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.shader_templates
+
         self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
@@ -355,13 +355,13 @@ class ShaderTemplatesSlots:
             widget.menu.mode = "context"
             widget.menu.setTitle("Template Options")
             widget.menu.add(
-                self.sb.Label,
+                self.sb.registered_widgets.Label,
                 setObjectName="lbl000",
                 setText="Rename",
                 setToolTip="Rename the current template.",
             )
             widget.menu.add(
-                self.sb.Label,
+                self.sb.registered_widgets.Label,
                 setObjectName="lbl001",
                 setText="Delete",
                 setToolTip="Delete the current template.",
@@ -464,22 +464,21 @@ class ShaderTemplatesSlots:
         self.ui.cmb002.init_slot()
 
 
+class ShaderTemplatesUi:
+    def __new__(self):
+        """Get the Shader Templates UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "shader_templates.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ShaderTemplatesSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from uitk import Switchboard
-
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "shader_templates.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=ShaderTemplatesSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(
-        menu_button=True, minimize_button=True, hide_button=True
-    )
-    sb.current_ui.show(pos="screen", app_exec=True)
+    ShaderTemplatesUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

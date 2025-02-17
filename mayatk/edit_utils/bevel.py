@@ -5,7 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk.core_utils import CoreUtils, preview, components
+from mayatk.core_utils import preview, components
 
 
 class Bevel:
@@ -74,9 +74,11 @@ class Bevel:
 
 
 class BevelSlots:
-    def __init__(self):
-        self.sb = self.switchboard()
-        self.ui = self.sb.bevel
+    def __init__(self, **kwargs):
+        """ """
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.bevel
+
         self.preview = preview.Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
@@ -89,23 +91,21 @@ class BevelSlots:
         Bevel.bevel(objects, width, segments)
 
 
+class BevelUi:
+    def __new__(self):
+        """Get the Bevel UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "bevel.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=BevelSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    from uitk import Switchboard
-
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "bevel.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=BevelSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-
-    sb.current_ui.show(pos="screen", app_exec=True)
+    BevelUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

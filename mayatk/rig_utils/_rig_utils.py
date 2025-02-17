@@ -504,6 +504,141 @@ class RigUtils(ptk.HelpMixin):
         lock_segment_attributes()
 
     @staticmethod
+    def setupConstraintOverride(
+        switchAttr, constraintNode, weightIndex, overrideValue=1.0
+    ):
+        """Sets up a node network so that when a given boolean switch attribute is on,
+        it overrides any keyed values on the specified constraint weight.
+
+        Parameters:
+            switchAttr (pm.Attribute): The boolean attribute used as a switch.
+            constraintNode (pm.nt.Constraint): The constraint node whose weight you want to override.
+            weightIndex (int): The index of the weight in the constraintNode's weight list to override.
+            overrideValue (float): The value to force when the switch is on.
+
+        Example:
+            setupConstraintOverride(
+                switchAttr="SMALL_TOW_TRUCK_CTRL.rearTowSwitch",
+                constraintNode=pm.PyNode("C130J_TOWBAR_LOC_pointConstraint1"),
+                weightIndex=0,
+                overrideValue=1.0,
+            )
+        """
+        # Identify the weight attribute
+        weightAliasList = constraintNode.getWeightAliasList()
+        if weightIndex >= len(weightAliasList):
+            raise IndexError(
+                "weightIndex is out of range for this constraint's weight aliases."
+            )
+        weightAttr = weightAliasList[weightIndex]
+
+        # Remove any existing keyframes on the constraint weight attribute
+        # so that it's purely driven by the upcoming node network.
+        pm.cutKey(weightAttr, clear=True)  # Remove any existing animation keys
+
+        # Create a keyable original weight attribute to store user-driven (keyed) values
+        origWeightAttrName = "origWeight{}".format(weightIndex)
+        if not constraintNode.hasAttr(origWeightAttrName):
+            pm.addAttr(
+                constraintNode,
+                ln=origWeightAttrName,
+                at="double",
+                k=True,
+                dv=pm.getAttr(weightAttr),
+            )
+        origWeightAttr = constraintNode.attr(origWeightAttrName)
+
+        # Disconnect any incoming connections to the constraint weight
+        currentConnections = weightAttr.listConnections(plugs=True, s=True, d=False)
+        for conn in currentConnections:
+            pm.disconnectAttr(conn, weightAttr)
+
+        # Create a condition node to handle the switch
+        condNode = pm.createNode(
+            "condition", name=constraintNode.name() + "_overrideCondition"
+        )
+        condNode.operation.set(0)  # "Equal": True if firstTerm == secondTerm
+        condNode.firstTerm.set(1)  # We'll compare switchAttr to 1
+
+        # Connect the switch attribute to secondTerm
+        pm.connectAttr(switchAttr, condNode.secondTerm, f=True)
+
+        # When switch is True, condition passes overrideValue
+        condNode.colorIfTrueR.set(overrideValue)
+
+        # When switch is False, pass through origWeightAttr
+        pm.connectAttr(origWeightAttr, condNode.colorIfFalseR, f=True)
+
+        # Connect condition output to the constraint weight
+        pm.connectAttr(condNode.outColorR, weightAttr, f=True)
+
+    @staticmethod
+    def rig_wheel_rotation(
+        control,
+        wheels,
+        movement_axis="translateZ",
+        rotation_axis="rotateX",
+        wheel_height=1.0,
+        invert_rotation: bool = False,
+    ) -> None:
+        """Rig wheels to rotate automatically as the control moves along a specified axis.
+
+        Parameters:
+            control (str, obj, list): The name of the control that moves the truck.
+            wheels (str, obj, list): The names or objects of the wheel objects to be rotated.
+            movement_axis (str): The movement axis of the control (e.g., 'translateZ', 'translateX').
+            rotation_axis (str): The rotation axis for the wheels (e.g., 'rotateX', 'rotateY').
+            wheel_height (float): The height of the wheel (used to calculate radius and circumference).
+            invert_rotation (bool): If True, inverts the direction of the wheel rotation.
+
+        Example:
+            rig_wheel_rotation(
+                control="C130J_TOW_POINT_LOC",
+                wheels=("FWD_WHEELS_LOC", "AFT_WHEELS_A_LOC", "AFT_WHEELS_B_LOC"),
+                movement_axis="translateZ",
+                rotation_axis="rotateX",
+                wheel_height=91,
+                invert_rotation=False,
+            )
+        """
+        # Calculate the radius and circumference of the wheels
+        wheel_radius = wheel_height / 2.0
+        wheel_circumference = 2 * 3.14159 * wheel_radius  # 2πr
+
+        # Get the control node using pm.ls to support both strings and PyNodes
+        control_nodes = pm.ls(control)
+        if not control_nodes:
+            pm.warning(f"Control '{control}' not found in the scene.")
+            return
+        truck_ctrl = control_nodes[0]  # Get the first match from pm.ls
+
+        # Get wheel nodes using pm.ls to support both strings and PyNodes
+        wheels = pm.ls(wheels)
+        if not wheels:
+            pm.warning(f"No valid wheels found for: {wheels}")
+            return
+
+        # Calculate rotation direction (invert if necessary)
+        rotation_sign = -1 if invert_rotation else 1
+
+        # Generate expression string
+        expression_str = f"""
+        float $distance = {truck_ctrl}.{movement_axis};
+        float $rotation = ($distance / {wheel_circumference}) * 360 * {rotation_sign};
+        """
+        for wheel in wheels:
+            expression_str += f"""
+            {wheel}.{rotation_axis} = $rotation;
+            """
+
+        # Apply the expression to Maya
+        pm.expression(s=expression_str)
+
+        print(
+            f"Successfully rigged {len(wheels)} wheels to rotate with {control} movement on {movement_axis}."
+        )
+
+    @staticmethod
     def reverse_joint_chain(root_joint, keep_original=False):
         """Create a new joint chain with the same positions as the original, but with reversed hierarchy.
 

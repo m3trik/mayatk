@@ -2,6 +2,11 @@
 # coding=utf-8
 from typing import Optional
 
+try:
+    import pymel.core as pm
+except ImportError as error:
+    print(__file__, error)
+
 
 class UiUtils:
     @staticmethod
@@ -107,7 +112,7 @@ class UiUtils:
 # --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    pass
+    ...
 
 # --------------------------------------------------------------------------------------------
 # Notes

@@ -15,7 +15,6 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.core_utils import CoreUtils
 from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
@@ -676,8 +675,8 @@ class SceneExporter(ptk.LoggingMixin):
 class SceneExporterSlots(SceneExporter):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.sb = self.switchboard()
-        self.ui = self.sb.scene_exporter
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.scene_exporter
 
         self.logging.setup_logging_redirect(self.ui.txt003)
 
@@ -782,7 +781,7 @@ class SceneExporterSlots(SceneExporter):
         )
         # Add the ComboBox for recent output directories
         widget.menu.add(
-            self.sb.ComboBox,
+            self.sb.registered_widgets.ComboBox,
             setToolTip="Select from the last 10 output directories.",
             setObjectName="cmb004",
         )
@@ -908,7 +907,7 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="chk014",
         )
         widget.menu.add(
-            self.sb.ComboBox,
+            self.sb.registered_widgets.ComboBox,
             setToolTip="Temporary linear unit to be used during export.",
             setObjectName="cmb001",
         )
@@ -916,7 +915,7 @@ class SceneExporterSlots(SceneExporter):
         items = {f"Override Linear Unit: {key}": value for key, value in items.items()}
         widget.menu.cmb001.add(items)
         widget.menu.add(
-            self.sb.ComboBox,
+            self.sb.registered_widgets.ComboBox,
             setToolTip="Temporary time unit to be used during export.",
             setObjectName="cmb002",
         )
@@ -933,7 +932,7 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="chk005",
         )
         widget.menu.add(
-            self.sb.ComboBox,
+            self.sb.registered_widgets.ComboBox,
             setToolTip="Set the log level.",
             setObjectName="cmb003",
         )
@@ -1123,20 +1122,21 @@ class SceneExporterSlots(SceneExporter):
             )
 
 
+class SceneExporterUI:
+    def __new__(self):
+        """Get the Scene Exporter UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "scene_exporter.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=SceneExporterSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from uitk import Switchboard
-
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "scene_exporter.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=SceneExporterSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
-    sb.current_ui.show(pos="screen", app_exec=True)
+    SceneExporterUI().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -1,7 +1,5 @@
 # !/usr/bin/python
 # coding=utf-8
-import os
-
 # from typing import List, Union, Tuple, Dict, Any
 
 try:
@@ -12,7 +10,6 @@ except ModuleNotFoundError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
 from mayatk.env_utils import EnvUtils
 
 
@@ -27,10 +24,10 @@ class MapConverterSlots(ptk.ImgUtils):
         "*.exr",
     ]
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.sb = self.switchboard()
-        self.ui = self.sb.map_converter
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.map_converter
 
     @property
     def sourceimages(self):
@@ -190,20 +187,21 @@ class MapConverterSlots(ptk.ImgUtils):
             print(f"// Result: {optimized_map_path}")
 
 
+class MapConverterUi:
+    def __new__(self):
+        """Get the Map Converter UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "map_converter.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=MapConverterSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from uitk import Switchboard
-
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "map_converter.ui")
-    sb = Switchboard(parent, ui_source=ui_file, slot_source=MapConverterSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
-    sb.current_ui.show(pos="screen", app_exec=True)
+    MapConverterUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes
