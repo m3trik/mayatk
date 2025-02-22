@@ -128,9 +128,7 @@ class RigUtils(ptk.HelpMixin):
                 XformUtils.set_manip_pivot_matrix(obj, matrix)
 
             if bake_child_pivot and not NodeUtils.is_group(obj):
-                XformUtils.bake_pivot(
-                    obj, position=True, orientation=True, preserve_normals=True
-                )
+                XformUtils.bake_pivot(obj, position=True, orientation=True)
 
             if vertices:
                 objName = vertices[0].split(".")[0]

@@ -504,121 +504,91 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undo
-    def bake_pivot(
-        objects: list[str],
-        position: bool = False,
-        orientation: bool = False,
-        delete_history: bool = True,
-        preserve_normals: bool = False,
-    ) -> None:
-        """Bakes the pivot of the given objects.
+    def bake_pivot(objects, position=False, orientation=False):
+        """Bake the pivot orientation and position of the given object(s).
 
         Parameters:
-            objects (list[str]): List of objects to bake the pivot for.
+            objects (str/obj/list): The object(s) to bake the pivot orientation and position for.
             position (bool): Whether to bake the pivot position.
-            orientation (bool): Whether to bake the pivot orientation.
-            delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
-            preserve_normals (bool): Temporarily duplicate mesh and transfer normals back to the original mesh after baking the pivot.
+            orientation (bool): Whether to bake the pivot orientation
         """
-        if delete_history:
-            pm.bakePartialHistory(objects, prePostDeformers=True)
-
-        transforms = pm.ls(objects, objectsOnly=True, transforms=True, flatten=True)
-        shapes = NodeUtils.get_shape_node(transforms)
+        transforms = pm.ls(objects, transforms=1)
+        shapes = pm.ls(objects, shapes=1)
         objects = transforms + pm.listRelatives(
-            shapes, path=True, parent=True, type="transform"
+            shapes, path=1, parent=1, type="transform"
         )
 
         ctx = pm.currentCtx()
-        pivotModeActive = False
-        customModeActive = False
-        customOri = []
-
-        if ctx in ("RotateSuperContext", "manipRotateContext"):
-            customOri = pm.manipRotateContext("Rotate", q=True, orientAxes=True)
-            pivotModeActive = pm.manipRotateContext(
-                "Rotate", q=True, editPivotMode=True
-            )
-            customModeActive = pm.manipRotateContext("Rotate", q=True, mode=True) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):
-            customOri = pm.manipScaleContext("Scale", q=True, orientAxes=True)
-            pivotModeActive = pm.manipScaleContext("Scale", q=True, editPivotMode=True)
-            customModeActive = pm.manipScaleContext("Scale", q=True, mode=True) == 6
-        else:
-            customOri = pm.manipMoveContext("Move", q=True, orientAxes=True)
-            pivotModeActive = pm.manipMoveContext("Move", q=True, editPivotMode=True)
-            customModeActive = pm.manipMoveContext("Move", q=True, mode=True) == 6
+        pivotModeActive = 0
+        customModeActive = 0
+        if ctx in ("RotateSuperContext", "manipRotateContext"):  # Rotate tool
+            customOri = pm.manipRotateContext("Rotate", q=1, orientAxes=1)
+            pivotModeActive = pm.manipRotateContext("Rotate", q=1, editPivotMode=1)
+            customModeActive = pm.manipRotateContext("Rotate", q=1, mode=1) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):  # Scale tool
+            customOri = pm.manipScaleContext("Scale", q=1, orientAxes=1)
+            pivotModeActive = pm.manipScaleContext("Scale", q=1, editPivotMode=1)
+            customModeActive = pm.manipScaleContext("Scale", q=1, mode=1) == 6
+        else:  # use the move tool orientation
+            customOri = pm.manipMoveContext(
+                "Move", q=1, orientAxes=1
+            )  # get custom orientation
+            pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
+            customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
 
         if orientation and customModeActive:
             if not position:
                 pm.mel.error(
-                    pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError")
+                    (pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))
                 )
                 return
 
             from math import degrees
 
-            customOri = [degrees(ori) for ori in customOri]
-            pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
+            cX, cY, cZ = customOri = [
+                degrees(customOri[0]),
+                degrees(customOri[1]),
+                degrees(customOri[2]),
+            ]
+
+            pm.rotate(
+                objects, cX, cY, cZ, a=1, pcp=1, pgp=1, ws=1, fo=1
+            )  # Set object(s) rotation to the custom one (preserving child transform positions and geometry positions)
 
         if position:
-            try:
-                for obj in objects:
-                    m = pm.xform(obj, q=True, m=True)
-                    p = pm.xform(obj, q=True, os=True, sp=True)
-                    oldPivot = [
-                        p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
-                        p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
-                        p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
-                    ]
+            for obj in objects:
+                # Get pivot in parent space
+                m = pm.xform(obj, q=1, m=1)
+                p = pm.xform(obj, q=1, os=1, sp=1)
+                oldX, oldY, oldZ = [
+                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
+                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
+                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
+                ]
 
-                    pm.xform(obj, zeroTransformPivots=True)
-                    newPivot = pm.getAttr(f"{obj.name()}.translate")
-                    pm.move(
-                        obj,
-                        oldPivot[0] - newPivot[0],
-                        oldPivot[1] - newPivot[1],
-                        oldPivot[2] - newPivot[2],
-                        pcp=True,
-                        pgp=True,
-                        ls=True,
-                        r=True,
-                    )
-            except RuntimeError as e:
-                pm.displayWarning(f"Error during pivot position processing: {str(e)}")
-                return
+                pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
+
+                # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
+                newX, newY, newZ = pm.getAttr(
+                    obj.name() + ".translate"
+                )  # obj.translate
+                pm.move(
+                    obj, oldX - newX, oldY - newY, oldZ - newZ, pcp=1, pgp=1, ls=1, r=1
+                )
 
         if pivotModeActive:
-            pm.ctxEditMode()
+            pm.ctxEditMode()  # exit pivot mode
 
+        # Set the axis orientation mode back to obj
         if orientation and customModeActive:
             if ctx in ("RotateSuperContext", "manipRotateContext"):
                 pm.manipPivot(rotateToolOri=0)
             elif ctx in ("scaleSuperContext", "manipScaleContext"):
                 pm.manipPivot(scaleToolOri=0)
-            else:
+            else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
                 pm.manipPivot(moveToolOri=0)
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=True)
-
-        if preserve_normals:
-            meshes = pm.ls(objects, type="mesh")  # Filter for invalid types ie. nurbs
-            temp_objects = []
-            try:
-                # Create temporary duplicates for normals preservation
-                for obj in meshes:
-                    temp_obj = pm.duplicate(obj, name=f"{obj}_tempForNormals")[0]
-                    temp_objects.append(temp_obj)
-
-                # Transfer normals from temp objects back to original meshes
-                for original, temp in zip(meshes, temp_objects):
-                    components.Components.transfer_normals(
-                        [temp.name(), original.name()]
-                    )
-            except RuntimeError as e:
-                pm.displayWarning(f"Error during normals transfer: {str(e)}")
-            finally:  # Always clean up temporary objects
-                pm.delete(temp_objects)
+                    pm.manipPivot(ro=1)
 
     @staticmethod
     @CoreUtils.undo
