@@ -290,7 +290,13 @@ class EditUtils(ptk.HelpMixin):
             tolerance (float) = The maximum merge distance.
             selected_only (bool): Merge only the currently selected components.
         """
-        for obj in pm.ls(objects):
+        for obj in NodeUtils.get_shape_node(ptk.make_iterable(objects)):
+            if not isinstance(obj, pm.nt.Mesh):  # Ensure obj is a Mesh
+                print(
+                    f"Merge Vertices: Skipping non-mesh object: {obj}"
+                )  # Debugging line
+                continue  # Skip locators, cameras, etc.
+
             if selected_only:  # merge selected components.
                 if pm.filterExpand(selectionMask=31):  # selectionMask=vertices
                     sel = pm.ls(obj, sl=1)

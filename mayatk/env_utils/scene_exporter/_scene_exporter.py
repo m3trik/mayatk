@@ -674,7 +674,6 @@ class SceneExporter(ptk.LoggingMixin):
 
 class SceneExporterSlots(SceneExporter):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.scene_exporter
 

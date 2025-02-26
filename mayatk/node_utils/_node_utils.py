@@ -185,7 +185,7 @@ class NodeUtils(ptk.HelpMixin):
             (obj/list) Transform node(s) or node attributes. If 'nodes' is provided as a list, a list is always returned. If a single node is provided, a single object or a list, depending on the content, is returned.
         """
         result = []
-        for node in pm.ls(nodes, long=True):
+        for node in pm.ls(nodes, long=True, flatten=True):
             try:
                 # Check if node is a transform and directly add it
                 if isinstance(node, pm.nt.Transform):
@@ -235,7 +235,7 @@ class NodeUtils(ptk.HelpMixin):
             (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
-        for node in pm.ls(nodes, long=True):
+        for node in pm.ls(nodes, long=True, flatten=True):
             shapes = pm.listRelatives(
                 node, children=1, shapes=1
             )  # get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]
@@ -277,7 +277,7 @@ class NodeUtils(ptk.HelpMixin):
             (obj/list) node(s) or node attributes. A list is always returned when 'nodes' is given as a list.
         """
         result = []
-        for node in pm.ls(nodes, long=True):
+        for node in pm.ls(nodes, long=True, flatten=True):
             shapes = pm.listRelatives(
                 node, children=1, shapes=1
             )  # get shape node from transform: returns list ie. [nt.Mesh('pConeShape1')]

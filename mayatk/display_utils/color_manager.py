@@ -267,7 +267,6 @@ class ColorManager(ColorUtils):
 
 class ColorManagerSlots(ColorManager):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.color_manager
 
