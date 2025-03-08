@@ -502,7 +502,7 @@ class CoreUtils(ptk.HelpMixin):
         return attributes_dict
 
     @staticmethod
-    def clear_scroll_field_reporters():
+    def clear_scrollfield_reporters():
         """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
 
         This function is useful for cleaning up the script output display in Maya's UI,

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Union
+from typing import List, Union, Optional
 
 try:
     import pymel.core as pm
@@ -18,10 +18,13 @@ class RigUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    def create_locator(*, scale: float = 1, **kwargs) -> object:
+    def create_locator(
+        *, scale: float = 1, parent: Optional["pm.nodetypes.Transform"] = None, **kwargs
+    ) -> object:
         """Create a locator with the given scale.
 
         Parameters:
+            * (args): Additional arguments for the spaceLocator command.
             scale (float): The desired scale of the locator.
             **kwargs: Additional keyword arguments for the spaceLocator command, including 'name' and 'position'.
 
@@ -33,8 +36,7 @@ class RigUtils(ptk.HelpMixin):
         Returns:
             pm.nt.Transform: The created locator transform node.
         """
-        pos = kwargs.get("position")
-
+        pos = kwargs.get("position", None)
         if pos is not None:
             if not isinstance(pos, (tuple, list)):
                 transform_node = NodeUtils.get_transform_node(pos)
@@ -46,9 +48,10 @@ class RigUtils(ptk.HelpMixin):
                     kwargs.pop("position", None)
 
         loc = pm.spaceLocator(**{k: v for k, v in kwargs.items() if v is not None})
-
         if scale != 1:
-            pm.scale(loc, scale, scale, scale)  # scale the locator
+            pm.scale(loc, scale, scale, scale)
+        if parent:
+            loc.setParent(parent)
 
         return loc
 
@@ -245,6 +248,9 @@ class RigUtils(ptk.HelpMixin):
             translate (bool): Lock/Unlock all translate x,y,z values at once.
             rotate (bool): Lock/Unlock all rotate x,y,z values at once.
             scale (bool): Lock/Unlock all scale x,y,z values at once.
+
+        Example:
+            setAttrLockState(objects, translate=False, rotate=True)
         """
         objects = pm.ls(objects, transforms=True, long=True)
 

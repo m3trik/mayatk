@@ -15,7 +15,7 @@ class CutOnAxis:
     @staticmethod
     @core_utils.CoreUtils.undo
     def perform_cut_on_axis(
-        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False
+        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False, pivot=0
     ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
@@ -27,20 +27,23 @@ class CutOnAxis:
             delete (bool): If True, delete the faces on the specified axis. Default is False.
             mirrot (bool): After deleting, mirror the object(s).
         """
-        axis = axis.lower()  # Assure lower case.
+        if cuts:
+            axis = axis.lower()  # Assure lower case.
 
-        for obj in (o for o in objects if not NodeUtils.is_group(o)):
-            if cuts:
-                EditUtils.cut_along_axis(obj, axis, cuts, cut_offset, delete)
-
-            elif delete:
-                EditUtils.delete_along_axis(obj, axis)
+            EditUtils.cut_along_axis(
+                objects,
+                axis=axis,
+                pivot=pivot,
+                amount=cuts,
+                offset=cut_offset,
+                delete=delete,
+            )
 
             if mirror:
                 opposing_axis = axis.strip("-") if "-" in axis else f"-{axis}"
-                EditUtils.mirror(obj, opposing_axis, axis_pivot=0)
+                EditUtils.mirror(objects, axis=opposing_axis, mirrorAxis="boundingBox")
 
-        pm.select(objects)
+            pm.select(objects)
 
 
 class CutOnAxisSlots:
@@ -56,10 +59,12 @@ class CutOnAxisSlots:
         # Connect sliders and checkboxes to preview refresh function
         self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
+        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
     def perform_operation(self, objects):
         # Read values from UI and execute mirror operation
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
+        pivot = self.ui.cmb000.currentIndex()
         cuts = self.ui.s000.value()
         cut_offset = self.ui.s001.value()
         delete = self.ui.chk005.isChecked()
@@ -68,6 +73,7 @@ class CutOnAxisSlots:
         CutOnAxis.perform_cut_on_axis(
             objects,
             axis=axis,
+            pivot=pivot,
             cuts=cuts,
             cut_offset=cut_offset,
             delete=delete,

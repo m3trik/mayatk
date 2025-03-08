@@ -292,24 +292,22 @@ class EditUtils(ptk.HelpMixin):
         """
         for obj in NodeUtils.get_shape_node(ptk.make_iterable(objects)):
             if not isinstance(obj, pm.nt.Mesh):  # Ensure obj is a Mesh
-                print(
-                    f"Merge Vertices: Skipping non-mesh object: {obj}"
-                )  # Debugging line
+                print(f"Merge Vertices: Skipping non-mesh object: {obj}")
                 continue  # Skip locators, cameras, etc.
 
-            if selected_only:  # merge selected components.
+            if selected_only:  # Merge only selected components
                 if pm.filterExpand(selectionMask=31):  # selectionMask=vertices
-                    sel = pm.ls(obj, sl=1)
+                    sel = pm.selected()
                     pm.polyMergeVertex(
                         sel,
                         distance=tolerance,
                         alwaysMergeTwoVertices=True,
                         constructionHistory=True,
                     )
-                else:  # if selection type =edges or facets:
+                else:  # If selection type is edges or facets:
                     pm.mel.MergeToCenter()
 
-            else:  # merge all vertices on the object.
+            else:  # Merge all vertices
                 vertices = obj.vtx[:]  # mel expression: select -r geometry.vtx[0:1135];
                 pm.polyMergeVertex(
                     vertices,
@@ -317,8 +315,7 @@ class EditUtils(ptk.HelpMixin):
                     alwaysMergeTwoVertices=False,
                     constructionHistory=False,
                 )
-                # return to original state
-                pm.select(clear=1)
+                pm.select(clear=True)
                 pm.select(objects)
 
     @staticmethod
@@ -362,148 +359,205 @@ class EditUtils(ptk.HelpMixin):
         pm.polyMergeVertex(vertices, d=0.001)  # Merge the vertices
 
     @staticmethod
-    def get_all_faces_on_axis(obj, axis="x", world_space=False):
-        """Get all faces on a specified axis using local or world space bounding box comparisons.
+    def get_all_faces_on_axis(
+        obj, axis="x", pivot="boundingBox", boundingBoxMode="center"
+    ):
+        """Get all faces on the specified axis of an object.
 
         Parameters:
             obj (str/obj): The name of the geometry.
-            axis (str): The representing axis. Case insensitive. (valid: 'x', '-x', 'y', '-y', 'z', '-z')
-            world_space (bool): Specify world or local space.
+            axis (str): The axis, e.g. 'x', '-x', 'y', '-y', 'z', '-z'.
+            pivot (int/str/tuple/list): The pivot point for the operation.
+                Valid values are 'boundingBox', 'object', 'world', or a tuple/list of 3 floats.
+            boundingBoxMode (str): Determines which part of the bounding box is used if pivot="boundingBox".
+                Valid values are 'center', 'min', 'max', 'centerMin', 'centerMax'.
 
-        Example:
-            get_all_faces_on_axis('polyObject', 'y')
+        Returns:
+            list: A list of faces on the specified axis.
         """
-        # Ensure obj is a single transform node
         obj_list = pm.ls(obj, type="transform")
         if not obj_list:
             raise ValueError(f"No transform node found with the name: {obj}")
         obj = obj_list[0]
 
-        # Validate axis and set the bounding box value
-        axis_key = axis.lower()
-        axis_index = "xyz".find(axis_key.strip("-"))
-        if axis_index == -1:
-            raise ValueError(
-                "Invalid axis. Valid options are 'x', '-x', 'y', '-y', 'z', '-z'"
-            )
+        axis = XformUtils.convert_axis(axis)
+        axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
-        # Map the axis to the corresponding bounding box value
-        bbox_values = ["xmin", "ymin", "zmin"]
-        if axis_key.startswith("-"):
-            bbox_values = ["xmax", "ymax", "zmax"]
-
-        bbox_value = bbox_values[axis_index]
-
-        # Axis comparison function
-        compare = (
-            (lambda v: v >= -0.00001)
-            if axis_key[0] != "-"
-            else (lambda v: v <= 0.00001)
+        # Use the same method to compute pivot_value
+        pivot_value = XformUtils.get_operation_axis_pos(
+            obj, pivot, axis_index, boundingBoxMode
         )
 
-        # Collect faces on the specified axis
-        relevant_faces = [
-            face
-            for shape in obj.getShapes()
-            if pm.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]
-            for face in pm.ls(shape.faces, fl=True)
-            if compare(
-                XformUtils.get_bounding_box(
-                    face, value=bbox_value, world_space=world_space
-                )
-            )
-        ]
+        # Decide which side of pivot_value to keep
+        if axis.startswith("-"):
+            compare = lambda v: v <= pivot_value + 0.00001
+            bbox_values = ["xmax", "ymax", "zmax"]
+        else:
+            compare = lambda v: v >= pivot_value - 0.00001
+            bbox_values = ["xmin", "ymin", "zmin"]
+
+        bbox_value = bbox_values[axis_index]
+        relevant_faces = []
+
+        for shape in obj.getShapes():
+            if pm.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]:
+                for face in pm.ls(shape.faces, fl=True):
+                    bb_val = XformUtils.get_bounding_box(
+                        face, value=bbox_value, world_space=True
+                    )
+                    if compare(bb_val):
+                        relevant_faces.append(face)
 
         return relevant_faces
 
     @classmethod
     @CoreUtils.undo
     def cut_along_axis(
-        cls, obj, axis="x", invert=False, ortho=False, amount=1, offset=0, delete=False
+        cls,
+        objects,
+        axis="x",
+        invert=False,
+        ortho=False,
+        amount=1,
+        offset=0,
+        delete=False,
+        pivot="boundingBox",
+        boundingBoxMode="center",
     ):
-        """Performs cut operations on the specified object along a given axis with
-        optional multiple cuts and an offset.
+        """Cut objects along the specified axis.
 
         Parameters:
-            obj (str/obj): The object to cut.
-            axis (str/int): Axis along which to cut ('x', '-x', 'y', '-y', 'z', '-z').
-            invert (bool): When True, inverts the axis direction.
-            ortho (bool): When True, returns the axis that is orthogonal to the given axis.
+            objects (str/obj/list): The object(s) to cut.
+            axis (str): The axis to cut along ('x', '-x', 'y', '-y', 'z', '-z'). Default is 'x'.
+            invert (bool): Invert the axis direction.
+            ortho (bool): Use orthographic projection.
             amount (int): The number of cuts to make. Default is 1.
-            offset (float): Offset amount from the center for the cut. Default is 0.
-            delete (bool): If True, delete faces on the opposite side of the cut plane.
-
-        Example:
-            cut_along_axis('pCube1', axis='y', delete=True, amount=2, offset=0.1)
+            offset (float): The offset amount from the center for the cut. Default is 0.
+            delete (bool): If True, delete the faces on the specified axis. Default is False.
+            pivot (str): The pivot point for the operation. Default is 'boundingBox'.
+                Valid values are 'boundingBox', 'object', 'world', or a tuple/list of 3 floats.
+            boundingBoxMode (str): Determines which part of the bounding box is used if pivot="boundingBox".
+                Valid values are 'center', 'min', 'max', 'centerMin', 'centerMax'.
         """
         axis = XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
+        axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
-        def calculate_cut_position(bounding_box, axis, amount, offset, cut_index):
-            axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
+        for node in pm.ls(objects, type="transform", flatten=True):
+            if NodeUtils.is_group(node):
+                continue
+
+            bounding_box = XformUtils.get_bounding_box(
+                node, "xmin|ymin|zmin|xmax|ymax|zmax", True
+            )
+            if not bounding_box or len(bounding_box) < 6:
+                pm.warning(
+                    f"Skipping cut_along_axis: Unable to retrieve bounding box for {node}"
+                )
+                continue
+
             sign = -1 if axis.startswith("-") else 1
             axis_length = bounding_box[axis_index + 3] - bounding_box[axis_index]
+            if axis_length == 0:
+                pm.warning(
+                    f"Skipping cut: Axis length is zero along {axis} for {node}."
+                )
+                continue
 
-            # Calculate the distance between cuts and the position for the current cut
+            pivot_value = XformUtils.get_operation_axis_pos(
+                node, pivot, axis_index, boundingBoxMode
+            )
+            pivot_value = max(
+                bounding_box[axis_index], min(bounding_box[axis_index + 3], pivot_value)
+            )
+
             cut_spacing = axis_length / (amount + 1)
 
-            cut_position = list(bounding_box[:3])  # Starting from the minimum corner
-            cut_position[axis_index] += cut_spacing * (cut_index + 1) + offset * sign
+            # 🔹 Corrected rotation dictionary
+            rotations = {
+                "x": (0, 90, 0),
+                "-x": (0, -90, 0),
+                "y": (-90, 0, 0),
+                "-y": (90, 0, 0),
+                "z": (0, 0, 0),
+                "-z": (0, 0, 180),
+            }
+            rotation = rotations.get(axis, (0, 0, 0))
 
-            return tuple(cut_position)
+            for i in range(amount):
+                cut_position = list(bounding_box[:3])
+                cut_position[axis_index] = (
+                    pivot_value
+                    - ((amount - 1) * cut_spacing / 2)
+                    + (cut_spacing * i)
+                    + offset * sign
+                )
 
-        bounding_box = XformUtils.get_bounding_box(
-            obj, "xmin|ymin|zmin|xmax|ymax|zmax", True
-        )
-
-        # The rotation values for the cutting plane based on the axis
-        rotations = {
-            "x": (0, 90, 0),
-            "y": (90, 0, 0),
-            "z": (0, 0, 0),
-            "-x": (0, -90, 0),
-            "-y": (90, 0, 0),
-            "-z": (0, 0, 0),
-        }
-        rotation = rotations.get(axis, (0, 0, 0))
-
-        # Perform the cuts
-        for i in range(amount):
-            cut_position = calculate_cut_position(bounding_box, axis, amount, offset, i)
-            pm.polyCut(obj, df=False, pc=cut_position, ro=rotation, ch=True)
+                pm.polyCut(node, df=False, pc=cut_position, ro=rotation, ch=True)
 
             if delete:
-                cls.delete_along_axis(obj, axis)
+                cls.delete_along_axis(
+                    node, axis, invert, pivot, boundingBoxMode, delete_history=False
+                )
 
     @classmethod
     @CoreUtils.undo
     def delete_along_axis(
-        cls, objects, axis="-x", invert=False, world_space=False, delete_history=True
+        cls,
+        objects,
+        axis="-x",
+        invert=False,
+        pivot="boundingBox",
+        boundingBoxMode="center",
+        delete_history=True,
     ):
-        """Delete components of the given mesh object along the specified axis.
+        """Delete faces along the specified axis.
 
         Parameters:
-            objects (obj): Mesh objects to process.
-            axis (str/int): Axis to delete on, e.g., '-x', or an integer mapped to an axis.
-            invert (bool): When True, inverts the axis direction.
-            world_space (bool): Specify world or local space.
-            delete_history (bool): Specify whether to delete construction history.
+            objects (str/obj/list): The object(s) to delete faces from.
+            axis (str): The axis to delete along ('x', '-x', 'y', '-y', 'z', '-z'). Default is '-x'.
+            invert (bool): Invert the axis direction.
+            pivot (str): The pivot point for the operation. Default is 'boundingBox'.
+                Valid values are 'boundingBox', 'object', 'world', or a tuple/list of 3 floats.
+            boundingBoxMode (str): Determines which part of the bounding box is used if pivot="boundingBox".
+                Valid values are 'center', 'min', 'max', 'centerMin', 'centerMax'.
+            delete_history (bool): If True, delete the construction history of the object(s). Default is True.
         """
         axis = XformUtils.convert_axis(axis, invert=invert)
+        axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
-        # Process each object individually
         for node in pm.ls(objects, type="transform", flatten=True):
             if NodeUtils.is_group(node):
-                continue  # Skip group nodes
+                continue
 
             if delete_history:
                 pm.delete(node, ch=True)
 
-            faces = cls.get_all_faces_on_axis(node, axis, world_space)
-            if len(faces) == pm.polyEvaluate(node, face=True):
-                # Delete entire node if all faces fall on the specified axis
+            bounding_box = XformUtils.get_bounding_box(
+                node, "xmin|ymin|zmin|xmax|ymax|zmax", True
+            )
+            if not bounding_box or len(bounding_box) < 6:
+                pm.warning(
+                    f"Skipping delete_along_axis: Unable to retrieve bounding box for {node}"
+                )
+                continue
+
+            pivot_value = XformUtils.get_operation_axis_pos(
+                node, pivot, axis_index, boundingBoxMode
+            )
+            pivot_value = max(
+                bounding_box[axis_index], min(bounding_box[axis_index + 3], pivot_value)
+            )
+
+            faces = cls.get_all_faces_on_axis(node, axis, pivot, boundingBoxMode)
+            if not faces:
+                pm.warning(f"No faces found along {axis} on {node}. Skipping deletion.")
+                continue
+
+            total_faces = pm.polyEvaluate(node, face=True)
+            if len(faces) == total_faces:
                 pm.delete(node)
             else:
-                pm.delete(faces)  # Delete only faces on the specified axis
+                pm.delete(faces)
 
     @classmethod
     @CoreUtils.undo
@@ -511,69 +565,106 @@ class EditUtils(ptk.HelpMixin):
     def mirror(
         cls,
         objects,
-        uninstance=False,
-        delete_history=False,
+        uninstance: bool = False,
+        delete_history: bool = False,
         **kwargs,
     ):
-        """Mirror geometry across a given axis.
+        # Always enable construction history
+        kwargs["ch"] = True
 
-        Parameters:
-            objects (obj): The objects to mirror.
-            uninstance (bool): Un-instance the object(s) before performing the operation.
-            delete_history (bool): Delete any non-deformer history on the object(s) before performing the operation.
-            kwargs: Any parameter the polyMirrorFace command takes. In addition, the axis parameter can be given as a string.
-                    ie. ('x', '-x', 'y', '-y', 'z', '-z'). When the axis is given as a string, the axisDirection param is not required.
-        Returns:
-            (obj or list) The mirrored object's transform node or list of transform nodes if multiple objects given.
-        """
-        kwargs["ch"] = True  # Force construction history
+        # Convert axis if given as string, adjusting direction for polyMirrorFace
+        axis_map = {
+            "x": (1, 0),
+            "-x": (0, 0),
+            "y": (1, 1),
+            "-y": (0, 1),
+            "z": (1, 2),
+            "-z": (0, 2),
+        }
+        if isinstance(kwargs.get("axis"), str):
+            direction, axis_val = axis_map.get(kwargs["axis"].lower(), (1, 0))
+            kwargs["axisDirection"] = direction
+            kwargs["axis"] = axis_val
 
-        axis = kwargs.get("axis", "x")  # Default to 'x' axis
-        if isinstance(axis, str):
-            direction_map = {  # Axis direction. axis
-                "-x": (0, 0),
-                "x": (1, 0),
-                "-y": (0, 1),
-                "y": (1, 1),
-                "-z": (0, 2),
-                "z": (1, 2),
-            }
-            axis_direction, axis = direction_map[axis.lower()]
-            kwargs["axisDirection"] = axis_direction
-            kwargs["axis"] = axis  # Update the parameter for polyMirrorFace command
+        # Validate numeric axis
+        axis_val = kwargs.get("axis", 0)
+        if axis_val not in {0, 1, 2}:
+            raise ValueError(
+                f"Invalid axis: {axis_val}. Must be 0 (X), 1 (Y), or 2 (Z)."
+            )
+
+        # Map mirrorAxis int → (pivot, boundingBoxMode)
+        mirror_axis_map = {
+            0: ("boundingBox", "borderMin"),  # boundingBox border
+            1: ("object", None),  # object pivot
+            2: ("world", None),  # world pivot
+            3: ("boundingBox", "center"),  # boundingBox center
+        }
 
         original_objects = pm.ls(objects, type="transform", flatten=True)
-        result = []
+        results = []
+
         for obj in original_objects:
+            if NodeUtils.is_group(obj):
+                continue
+
             if uninstance:
                 NodeUtils.uninstance(obj)
 
             if delete_history and not obj.isReferenced():
                 pm.delete(obj, constructionHistory=True)
 
-            # Configure the polyMirrorFace command with user and default parameters
-            polyMirrorFaceNode = pm.PyNode(pm.polyMirrorFace(obj, **kwargs)[0])
+            obj_kwargs = dict(kwargs)
+            mirror_axis = obj_kwargs.get("mirrorAxis", 0)
+            pivot, bb_mode = mirror_axis_map.get(mirror_axis, ("boundingBox", "center"))
 
-            if kwargs.get("mergeMode", 1) == 0:
-                orig_obj, new_obj, polySeparateNode = pm.ls(
+            # -----------------------------------------------------------
+            # 1) (Optional) cut along the correct pivot
+            if obj_kwargs.get("cutMesh", False):
+                cls.cut_along_axis(
+                    obj,
+                    axis=obj_kwargs.get("axis", "x"),
+                    pivot=pivot,
+                    boundingBoxMode=bb_mode or "center",
+                    delete=True,
+                )
+                obj_kwargs["cutMesh"] = False  # prevent double-cut
+            # -----------------------------------------------------------
+
+            # -----------------------------------------------------------
+            # 2) Use the same pivot for the mirroring pivot
+            pivot_value = XformUtils.get_operation_axis_pos(
+                obj,
+                pivot=pivot,
+                axis_index=axis_val,
+                boundingBoxMode=bb_mode or "center",
+            )
+
+            # polyMirrorFace pivot
+            obj_kwargs["ws"] = True
+            obj_kwargs["px"] = pivot_value if axis_val == 0 else 0
+            obj_kwargs["py"] = pivot_value if axis_val == 1 else 0
+            obj_kwargs["pz"] = pivot_value if axis_val == 2 else 0
+            # -----------------------------------------------------------
+
+            mirror_nodes = pm.polyMirrorFace(obj, **obj_kwargs)
+            mirror_node = pm.PyNode(mirror_nodes[0])
+
+            # Optional: handle separate half
+            if obj_kwargs.get("mergeMode", 1) == 0:
+                orig_obj, new_obj, sep_node = pm.ls(
                     pm.polySeparate(obj, uss=True, inp=True)
                 )
-                pm.connectAttr(
-                    polyMirrorFaceNode.firstNewFace,
-                    polySeparateNode.startFace,
-                    force=True,
-                )
-                pm.connectAttr(
-                    polyMirrorFaceNode.lastNewFace, polySeparateNode.endFace, force=True
-                )
+                pm.connectAttr(mirror_node.firstNewFace, sep_node.startFace, force=True)
+                pm.connectAttr(mirror_node.lastNewFace, sep_node.endFace, force=True)
                 pm.rename(new_obj, orig_obj.name())
                 parent = pm.listRelatives(orig_obj, parent=True, path=True)
                 if parent:
                     pm.parent(new_obj, parent[0])
 
-            result.append(polyMirrorFaceNode)
+            results.append(mirror_node)
 
-        return ptk.format_return(result, objects)
+        return ptk.format_return(results, objects)
 
     @classmethod
     def clean_geometry(

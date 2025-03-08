@@ -22,6 +22,7 @@ class XformUtils(ptk.HelpMixin):
 
         Parameters:
             value (int/str): The axis value to convert, either an integer index or a string representation.
+                        Valid values are: 0 or "x", 1 or "-x", 2 or "y", 3 or "-y", 4 or "z", 5 or "-z".
             invert (bool): When True, inverts the axis direction.
             ortho (bool): When True, returns the axis that is orthogonal to the given axis.
             to_integer (bool): If True, returns the converted axis value as an integer index.
@@ -32,6 +33,13 @@ class XformUtils(ptk.HelpMixin):
         Raises:
             TypeError: If `value` is not an int or str.
             ValueError: If `value` is invalid.
+
+        Example:
+            convert_axis(0)  # Returns "x"
+            convert_axis("y")  # Returns "y"
+            convert_axis("x", invert=True)  # Returns "-x"
+            convert_axis(2, ortho=True)  # Returns "z"
+            convert_axis("z", to_integer=True) # Returns 4
         """
         index_to_axis = {0: "x", 1: "-x", 2: "y", 3: "-y", 4: "z", 5: "-z"}
         axis_to_index = {v: k for k, v in index_to_axis.items()}
@@ -429,6 +437,71 @@ class XformUtils(ptk.HelpMixin):
         # Set the manipulator pivot position and orientation
         pm.select(obj, replace=True)
         pm.manipPivot(p=pos, o=ori_degrees)
+
+    @staticmethod
+    def get_operation_axis_pos(node, pivot, axis_index, boundingBoxMode="center"):
+        """Determines the axis position for an operation like mirroring or cutting.
+
+        Parameters:
+            node (PyNode): The object whose reference position is determined.
+            pivot (int/str/tuple/list): Mode or explicit position.
+                - `0` or `"boundingBox"` → Uses the bounding box (`boundingBoxMode` defines center/min/max/border).
+                - `1` or `"object"` → Uses the object's pivot.
+                - `2` or `"world"` → Uses world origin (0,0,0).
+                - `(x, y, z)` → Uses an explicit user-defined pivot.
+            axis_index (int): Axis index (0=X, 1=Y, 2=Z).
+            boundingBoxMode (str): Determines which part of the bounding box to use:
+                - `"center"` (default): Midpoint.
+                - `"min"`: Minimum bound.
+                - `"max"`: Maximum bound.
+                - `"borderMin"`: Lower bound for mirroring edge cases.
+                - `"borderMax"`: Upper bound for mirroring edge cases.
+
+        Returns:
+            float: The computed axis position.
+        """
+        bbox = pm.exactWorldBoundingBox(node)
+
+        # Handle Bounding Box Pivot Modes
+        if pivot in {0, "boundingBox"}:
+            if boundingBoxMode == "min":
+                pivot_value = bbox[axis_index]  # Lower edge
+            elif boundingBoxMode == "max":
+                pivot_value = bbox[axis_index + 3]  # Upper edge
+            elif boundingBoxMode == "borderMin":
+                pivot_value = bbox[axis_index]  # Edge case lower
+            elif boundingBoxMode == "borderMax":
+                pivot_value = bbox[axis_index + 3]  # Edge case upper
+            else:  # Default: Center
+                pivot_value = (bbox[axis_index] + bbox[axis_index + 3]) / 2
+            return pivot_value
+
+        # Handle Object Pivot Mode (Ensure it correctly retrieves the pivot position)
+        elif pivot in {1, "object"}:
+            # Get world-space pivot
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
+            # Get world-space position
+            obj_translation_ws = pm.xform(node, q=True, ws=True, t=True)
+            # Ensure pivot is retrieved
+            obj_pivot = (
+                obj_pivot_ws if obj_pivot_ws != [0, 0, 0] else obj_translation_ws
+            )
+            return obj_pivot[axis_index]
+
+        # Handle World Pivot Mode
+        elif pivot in {2, "world"}:
+            return 0.0  # Always cuts at world origin
+
+        # Handle Explicit User-Defined Pivot
+        elif isinstance(pivot, (tuple, list)) and len(pivot) == 3:
+            return pivot[axis_index]  # Use provided pivot point
+
+        else:
+            pm.warning(
+                f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
+            )
+            pivot_value = (bbox[axis_index] + bbox[axis_index + 3]) / 2
+            return pivot_value
 
     @staticmethod
     @CoreUtils.undo

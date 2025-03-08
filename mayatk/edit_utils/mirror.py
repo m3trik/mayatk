@@ -5,7 +5,6 @@
 # except ImportError as error:
 #     print(__file__, error)
 # from this package:
-from mayatk.core_utils import CoreUtils
 from mayatk.core_utils import preview
 from mayatk.edit_utils import EditUtils
 
@@ -24,7 +23,7 @@ class MirrorSlots:
         self.sb.connect_multi(
             self.ui, "cmb000-1", "currentIndexChanged", self.preview.refresh
         )
-        self.sb.connect_multi(self.ui, "chk001-7", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
 
     def perform_operation(self, objects):
         # Read values from UI and execute mirror operation
@@ -33,8 +32,7 @@ class MirrorSlots:
             "mirrorAxis": self.ui.cmb000.currentIndex(),
             "mergeMode": self.ui.cmb001.currentIndex(),
             "cutMesh": self.ui.chk005.isChecked(),
-            "delete_history": self.ui.chk006.isChecked(),
-            "uninstance": self.ui.chk007.isChecked(),
+            "uninstance": self.ui.chk006.isChecked(),
         }
         EditUtils.mirror(objects, **kwargs)
         # ex. # polyMirrorFace  -cutMesh 1 -axis 0 -axisDirection 1 -mergeMode 1 -mergeThresholdType 0 -mergeThreshold 0.001 -mirrorAxis 0 -mirrorPosition 0 -smoothingAngle 30 -flipUVs 0 -ch 1 S102_BOOST_PUMP_CANISTER_B;
