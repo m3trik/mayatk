@@ -18,7 +18,9 @@ class TubePath:
     """Handles tube-like path extraction for joint chain generation."""
 
     @staticmethod
-    def get_centerline(edge_selection: List[str]) -> List[pm.datatypes.Point]:
+    def get_centerline_using_edges(
+        edge_selection: List[str],
+    ) -> List[pm.datatypes.Point]:
         """Extracts the centerline points from selected edges of the tube."""
         centerline_points = []
 
@@ -42,24 +44,73 @@ class TubePath:
 
         return centerline_points
 
-    @classmethod
-    def generate_curve(
-        cls, centerline: List[pm.datatypes.Point], rig_name: str
-    ) -> pm.nodetypes.Transform:
-        """Generates the curve from centerline points."""
-        if centerline:  # Generate a curve from the provided centerline points
-            curve = pm.curve(
-                d=1,
-                p=[(pt.x, pt.y, pt.z) for pt in centerline],
-                n=f"{rig_name}_IK_curve",
-            )
-        else:
-            pm.warning("No centerline points provided, using default line.")
-            # Fallback to a default line if no points are provided
-            curve = pm.curve(d=1, p=[(0, 0, 0), (5, 0, 0)], n=f"{rig_name}_guide_curve")
+    def get_centerline_from_bounding_box(
+        obj, precision=10, return_curve=False, smooth=False, window_size=1
+    ):
+        """Calculate the centerline of an object using the cross-section of its largest bounding box axis.
 
-        curve.rename(f"{rig_name}_IK_curve")
-        return curve
+        Parameters:
+            obj (str/obj/list): The object to calculate the centerline for.
+            precision (int): The percentage of the largest axis length to determine the number of cross-sections.
+            return_curve (bool): Whether to return the centerline curve along with the points.
+            smooth (bool): Whether to apply smoothing to the centerline points.
+            window_size (int): The size of the moving window for smoothing.
+
+        Returns:
+            (tuple/curve): Centerline points, or (optionally) the centerline curve.
+        """
+        obj = NodeUtils.get_transform_node(obj)
+        if not obj:
+            raise ValueError(f"Invalid object: `{obj}` {type(obj)}")
+
+        # Calculate the bounding box of the object
+        bbox = pm.exactWorldBoundingBox(obj)
+        min_point = pm.datatypes.Point(bbox[0], bbox[1], bbox[2])
+        max_point = pm.datatypes.Point(bbox[3], bbox[4], bbox[5])
+
+        # Determine the largest axis of the bounding box
+        bbox_size = max_point - min_point
+        largest_axis = max(range(3), key=lambda i: bbox_size[i])
+
+        # Calculate the number of slices based on the precision
+        slice_count = max(1, int(bbox_size[largest_axis] * (precision / 100)))
+
+        # Generate cross-sections along the largest axis
+        centerline_points = []
+        step = bbox_size[largest_axis] / slice_count
+        for i in range(slice_count + 1):
+            slice_pos = min_point[largest_axis] + i * step
+
+            # Find vertices within the slice
+            vertices = pm.ls(
+                pm.polyListComponentConversion(obj, toVertex=True), flatten=True
+            )
+            slice_vertices = [
+                vtx
+                for vtx in vertices
+                if abs(pm.pointPosition(vtx)[largest_axis] - slice_pos) < step / 2
+            ]
+
+            if not slice_vertices:
+                continue
+
+            # Calculate the center point of the slice
+            center_point = sum(
+                (pm.pointPosition(vtx) for vtx in slice_vertices), pm.datatypes.Point()
+            ) / len(slice_vertices)
+            centerline_points.append(center_point)
+
+        # Apply smoothing if requested
+        if smooth and centerline_points:
+            centerline_points = ptk.smooth_points(centerline_points, window_size)
+
+        # Create a curve from the centerline points if requested
+        centerline_curve = None
+        if return_curve and centerline_points:
+            centerline_curve = pm.curve(p=centerline_points, d=3)
+            return centerline_curve
+
+        return centerline_points
 
 
 class TubeRig(ptk.LoggingMixin):
@@ -335,21 +386,26 @@ class TubeRig(ptk.LoggingMixin):
         return skin_cluster
 
 
-def create_tube_rig():
+def main():
     """Main function to create a tube rig from selected edges."""
+
+    # if there is an edge selection use get_centerline_using_edges
     edges = pm.filterExpand(selectionMask=32)  # Ensure selection contains edges
-    if not edges:
-        raise ValueError(
-            "Please select an edge loop along the length of the tube to create the rig."
+    if edges:
+        obj = pm.ls(edges[0], objectsOnly=True)[0]
+        centerline_points = TubePath.get_centerline_using_edges(edges)
+    else:  # If no edge selection use get_centerline_from_bounding_box
+        objects = pm.selected(flatten=True)
+        if not objects:
+            pm.warning("No objects selected. Please select a polygon tube.")
+            return
+        obj = objects[0]
+        if len(objects) > 1:
+            raise ValueError(f"Expected 1 object, got: {len(objects)}\n\t{objects}")
+
+        centerline_points = TubePath.get_centerline_from_bounding_box(
+            obj, smooth=True, precision=30
         )
-    obj, *other = set(pm.ls(edges, objectsOnly=True))
-    if other:
-        print(other)
-        raise ValueError(
-            "Please select only one object containing the edge loop to create the rig."
-        )
-    # Extract centerline points from the selected edges
-    centerline_points = TubePath.get_centerline(edges)
 
     # Create an instance of TubeRig
     tube_rig = TubeRig(rig_name=f"{obj.name()}_RIG")
@@ -381,4 +437,4 @@ def create_tube_rig():
 
 if __name__ == "__main__":
     CoreUtils.clear_scrollfield_reporters()
-    tube_rig = create_tube_rig()
+    tube_rig = main()
