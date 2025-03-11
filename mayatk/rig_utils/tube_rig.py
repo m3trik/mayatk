@@ -114,16 +114,44 @@ class TubePath:
 
 
 class TubeRig(ptk.LoggingMixin):
-    """Handles rigging the tube, creating joints, IK handles, and additional controls."""
+    """Handles rigging the tube, creating joints, IK handles, and additional controls.
 
-    def __init__(self, rig_name: str = None):
-        self._rig_name = rig_name  # Store the rig name as an instance attribute
-        self._rig_group = None  # Private attribute for rig group
+    Attributes:
+        rig_name (str): The name of the rig.
+        rig_group (pm.nodetypes.Transform): The group node for the rig.
+        mesh (pm.nodetypes.Transform): The tube mesh to bind the joints to.
+        joints (List[pm.nodetypes.Joint]): The joint chain for the tube.
+        ik_handle (pm.nodetypes.Transform): The IK handle for the joint chain.
+        pole_vector (pm.nodetypes.Transform): The pole vector control for the IK handle.
+        skin_cluster (pm.nodetypes.DependNode): The skinCluster node for the tube mesh.
+        start_loc (pm.nodetypes.Transform): The start locator for the tube rig.
+        end_loc (pm.nodetypes.Transform): The end locator for the tube rig.
+
+    Example:
+        tube_rig = TubeRig()
+        joints = tube_rig.generate_joint_chain(centerline, num_joints=10)
+        ik_handle = tube_rig.create_ik(joints)
+        pole_vector = tube_rig.create_pole_vector(ik_handle, mid_joint=joints[5])
+        skin_cluster = tube_rig.bind_joint_chain(mesh, joints)
+        start_loc, end_loc = tube_rig.create_start_end_locators(joints, ik_handle)
+    """
+
+    def __init__(self, rig_name: str = None, rig_group: str = None):
+        self._rig_name = rig_name
+        self._rig_group = rig_group
+
+        self.mesh = None
+        self.joints = None
+        self.ik_handle = None
+        self.pole_vector = None
+        self.skin_cluster = None
+        self.start_loc = None
+        self.end_loc = None
 
     @property
     def rig_name(self) -> str:
         """Returns the rig name."""
-        if self._rig_name is None:
+        if not self._rig_name:
             self._rig_name = CoreUtils.generate_unique_name("tube_rig_0")
         return self._rig_name
 
@@ -136,10 +164,12 @@ class TubeRig(ptk.LoggingMixin):
     @property
     def rig_group(self) -> "pm.nodetypes.Transform":
         """Returns or creates the rig group for this rig."""
-        if self._rig_group is None:
-            self._rig_group = pm.group(empty=True, name=f"{self.rig_name}")
+        if not self._rig_group:
+            rig_name = f"{self.rig_name}_GRP"
+            if not pm.objExists(rig_name):
+                self._rig_group = pm.group(empty=True, name=rig_name)
             self.logger.debug(f"Created new rig group: {self._rig_group.name()}")
-        return self._rig_group
+        return NodeUtils.get_transform_node(self._rig_group)
 
     @rig_group.setter
     def rig_group(self, new_group: "pm.nodetypes.Transform"):
@@ -150,6 +180,7 @@ class TubeRig(ptk.LoggingMixin):
         else:
             self.logger.error("Provided rig group is not a valid transform node.")
 
+    @CoreUtils.undo
     def generate_joint_chain(
         self,
         centerline: List[List[float]],
@@ -165,6 +196,9 @@ class TubeRig(ptk.LoggingMixin):
             num_joints (int): Number of joints to generate.
             reverse (bool): Reverse the order of joints.
             **kwargs: Additional keyword arguments to pass to pm.joint.
+
+        Returns:
+            List[pm.nodetypes.Joint]: The generated joint chain.
         """
         radius: float = kwargs.pop("radius", 1.0)
         orientation: List[float] = kwargs.pop("orientation", [0, 0, 0])
@@ -194,16 +228,25 @@ class TubeRig(ptk.LoggingMixin):
             joints.append(jnt)
 
         self.logger.debug(f"Generated joints: {[jnt.name() for jnt in joints]}")
-
+        self.joints = joints
         return joints
 
+    @CoreUtils.undo
     def create_start_end_locators(
         self,
         joints: List["pm.nodetypes.Joint"],
         ik_handle: Optional["pm.nodetypes.Transform"] = None,
     ) -> Tuple["pm.nodetypes.Transform", "pm.nodetypes.Transform"]:
-        """Creates start and end locators, correctly constraining them based on rig hierarchy."""
+        """Creates start and end locators, correctly constraining them based on rig hierarchy.
 
+        Parameters:
+            joints (str/list): The joint chain to create locators for.
+            ik_handle (pm.nodetypes.Transform): The IK handle to follow the end locator.
+
+        Returns:
+            Tuple[pm.nodetypes.Transform, pm.nodetypes.Transform]: The start and end locators.
+        """
+        joints = pm.ls(joints, type="joint", flatten=True)
         if len(joints) < 2:
             self.logger.error("Not enough joints to create locators.")
             return None, None
@@ -244,9 +287,11 @@ class TubeRig(ptk.LoggingMixin):
         self.logger.debug(
             f"Created start and end locators: {start_locator.name()}, {end_locator.name()}"
         )
-
+        self.start_loc = start_locator
+        self.end_loc = end_locator
         return start_locator, end_locator
 
+    @CoreUtils.undo
     def create_ik(
         self, joints: List["pm.nodetypes.Joint"], **kwargs
     ) -> Optional["pm.nodetypes.Transform"]:
@@ -260,6 +305,7 @@ class TubeRig(ptk.LoggingMixin):
         Returns:
             pm.nodetypes.Transform: The created IK handle.
         """
+        joints = pm.ls(joints, type="joint", flatten=True)
         if len(joints) < 2:
             self.logger.error(
                 f"Insufficient joints to create IK handle. Required: 2, Provided: {len(joints)}"
@@ -284,11 +330,13 @@ class TubeRig(ptk.LoggingMixin):
             )
             ik_handle[0].setParent(self.rig_group)
             self.logger.debug(f"IK handle created: {ik_handle[0].name()}")
+            self.ik_handle = ik_handle[0]
             return ik_handle[0]
         except Exception as e:
             self.logger.error(f"Error creating IK handle: {str(e)}")
             return None
 
+    @CoreUtils.undo
     def create_pole_vector(
         self, ik_handle, mid_joint: "pm.nodetypes.Joint", offset=(0, 5, 0)
     ) -> "pm.nodetypes.Transform":
@@ -317,8 +365,10 @@ class TubeRig(ptk.LoggingMixin):
         RigUtils.set_attr_lock_state(pole_vector, rotate=True, scale=True)
 
         self.logger.debug(f"Created pole vector: {pole_vector.name()}")
+        self.pole_vector = pole_vector
         return pole_vector
 
+    @CoreUtils.undo
     def bind_joint_chain(
         self, obj, joints: List["pm.nodetypes.Joint"]
     ) -> Optional["pm.nodetypes.DependNode"]:
@@ -383,58 +433,146 @@ class TubeRig(ptk.LoggingMixin):
                 f"SkinCluster successfully created and bound: {skin_cluster}"
             )
         self.logger.debug(f"SkinCluster attributes: {skin_cluster.listAttr()}")
+        self.mesh = obj
+        self.skin_cluster = skin_cluster
         return skin_cluster
 
 
-def main():
-    """Main function to create a tube rig from selected edges."""
+class TubeRigSlots:
+    def __init__(self, **kwargs):
+        # Initialize the switchboard and UI here
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.tube_rig
 
-    # if there is an edge selection use get_centerline_using_edges
-    edges = pm.filterExpand(selectionMask=32)  # Ensure selection contains edges
-    if edges:
-        obj = pm.ls(edges[0], objectsOnly=True)[0]
-        centerline_points = TubePath.get_centerline_using_edges(edges)
-    else:  # If no edge selection use get_centerline_from_bounding_box
-        objects = pm.selected(flatten=True)
-        if not objects:
-            pm.warning("No objects selected. Please select a polygon tube.")
-            return
-        obj = objects[0]
-        if len(objects) > 1:
-            raise ValueError(f"Expected 1 object, got: {len(objects)}\n\t{objects}")
+        # Initialize stored rigs
+        self._stored_rigs = {}
+        self.max_stored_rigs = 8
 
-        centerline_points = TubePath.get_centerline_from_bounding_box(
-            obj, smooth=True, precision=30
+    def _store_rig_instance(self, obj_name: str, tube_rig: TubeRig) -> None:
+        """Stores the TubeRig instance per object with a limit."""
+        if len(self._stored_rigs) >= self.max_stored_rigs:
+            oldest_key = next(iter(self._stored_rigs))
+            del self._stored_rigs[oldest_key]
+        self._stored_rigs[obj_name] = tube_rig
+
+    def create_joints_from_tube(self, obj, tube_rig):
+        """Creates a joint chain from a tube mesh."""
+        # if there is an edge selection use get_centerline_using_edges
+        edges = pm.filterExpand(selectionMask=32)  # Ensure selection contains edges
+        if edges:
+            centerline_points = TubePath.get_centerline_using_edges(edges)
+        else:  # If no edge selection use get_centerline_from_bounding_box
+            centerline_points = TubePath.get_centerline_from_bounding_box(
+                obj, smooth=True, precision=30
+            )
+
+        # Generate joint chain
+        joints = tube_rig.generate_joint_chain(
+            centerline=centerline_points,
+            num_joints=10,
+            radius=1.0,
+            orientation=[0, 0, 0],
+            reverse=False,
         )
+        return joints
 
-    # Create an instance of TubeRig
-    tube_rig = TubeRig(rig_name=f"{obj.name()}_RIG")
+    def create_rig_from_joints(self, obj, joints, tube_rig):
+        """Creates a tube rig from an existing joint chain."""
+        # Order the joints by hierarchy using pymel
+        joints = pm.ls(joints, type="joint", flatten=True)
+        if len(joints) < 2:  # Get the entire chain using root joint
+            joints = RigUtils.get_joint_chain_from_root(joints[0])
 
-    # Generate joint chain
-    joints = tube_rig.generate_joint_chain(
-        centerline=centerline_points,
-        num_joints=10,
-        radius=1.0,
-        orientation=[0, 0, 0],
-        reverse=False,
-    )
+        # Create IK handle
+        ik_handle = tube_rig.create_ik(joints, solver="ikRPsolver")
 
-    # Create IK handle
-    ik_handle = tube_rig.create_ik(joints, solver="ikRPsolver")
+        # Create pole vector control
+        mid_joint = joints[len(joints) // 2]
+        tube_rig.create_pole_vector(ik_handle, mid_joint=mid_joint)
 
-    # Create pole vector control
-    mid_joint = joints[len(joints) // 2]
-    pole_vector = tube_rig.create_pole_vector(ik_handle, mid_joint=mid_joint)
+        # Bind joint chain to the tube mesh
+        tube_rig.bind_joint_chain(obj, joints)
 
-    # Bind joint chain to the tube mesh
-    skin_cluster = tube_rig.bind_joint_chain(obj, joints)
+        # Create start and end locators
+        tube_rig.create_start_end_locators(joints, ik_handle=ik_handle)
+        return tube_rig
 
-    # Create start and end locators
-    start_loc, end_loc = tube_rig.create_start_end_locators(joints, ik_handle=ik_handle)
+    @CoreUtils.undo
+    def b000(self):
+        """Create Tube Rig."""
+        try:
+            obj, *_ = pm.selected(objectsOnly=True, flatten=True)
+        except ValueError:
+            self.sb.message_box("Select a single polygon tube mesh to create a rig.")
+            return
 
-    return tube_rig
+        # Set the tube rig name
+        rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
+        tube_rig = TubeRig(rig_name=rig_name)
 
+        joints = self.create_joints_from_tube(obj, tube_rig)
+        tube_rig = self.create_rig_from_joints(obj, joints, tube_rig)
+
+        self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
+
+    @CoreUtils.undo
+    def b001(self):
+        """Create Joints from Tube."""
+        try:
+            obj, *_ = pm.selected(objectsOnly=True, flatten=True)
+        except ValueError:
+            self.sb.message_box("Select a single polygon tube mesh to create a rig.")
+            return
+
+        rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
+
+        try:
+            tube_rig = self._stored_rigs[obj.name()]
+        except KeyError:
+            tube_rig = TubeRig(rig_name=rig_name)
+            self._store_rig_instance(obj.name(), tube_rig)
+
+        joints = self.create_joints_from_tube(obj, tube_rig)
+        self.sb.message_box(f"Joints created: {len(joints)}")
+
+    @CoreUtils.undo
+    def b002(self):
+        """Macros: Create Rig from Joints."""
+        try:
+            *joints, obj = pm.selected(flatten=True)
+        except ValueError:
+            self.sb.message_box(
+                "Select the root joint and then a tube mesh to create a rig."
+            )
+            return
+
+        try:
+            tube_rig = self._stored_rigs[obj.name()]
+        except KeyError:
+            rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
+            tube_rig = TubeRig(rig_name=rig_name)
+            self._store_rig_instance(obj.name(), tube_rig)
+
+        tube_rig = self.create_rig_from_joints(obj, joints, tube_rig)
+        self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
+
+
+class TubeRigUi:
+    def __new__(self):
+        """Get the Rig Tube UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "tube_rig.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=TubeRigSlots)
+        return ui
+
+
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    CoreUtils.clear_scrollfield_reporters()
-    tube_rig = main()
+    TubeRigUi().show(pos="screen", app_exec=True)
+
+# -----------------------------------------------------------------------------
+# Notes
+# -----------------------------------------------------------------------------

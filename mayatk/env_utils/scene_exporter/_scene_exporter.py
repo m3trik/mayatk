@@ -112,10 +112,10 @@ class SceneExporterTasksFactory:
             for task_name, result in task_results.items():
                 if task_name.startswith("check_"):
                     if result is False:
-                        self.logger.error(f"Check {task_name} failed.")
+                        self.logger.error(f"Check: {task_name} failed.")
                         all_checks_passed = False
                     else:
-                        self.logger.info(f"Check {task_name} passed.")
+                        self.logger.info(f"Check: {task_name} passed.")
                 else:
                     self.logger.info(f"Task {task_name} completed.")
 
@@ -942,6 +942,9 @@ class SceneExporterSlots(SceneExporter):
             "Log Level: ERROR": 40,  # ERROR
         }
         widget.menu.cmb003.add(items)
+        widget.menu.cmb003.currentIndexChanged.connect(
+            lambda: self.logger.setLevel(widget.menu.cmb003.currentData())
+        )
 
     def b001(self) -> None:
         """Export"""

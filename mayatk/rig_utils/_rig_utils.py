@@ -643,7 +643,42 @@ class RigUtils(ptk.HelpMixin):
         )
 
     @staticmethod
-    def reverse_joint_chain(root_joint, keep_original=False):
+    def get_joint_chain_from_root(
+        root_joint: Union[str, List[str]], reverse: bool = False
+    ) -> List[str]:
+        """Get the joint chain from the root joint or the first joint in the list if more than one joint is given.
+
+        Parameters:
+            root_joint (str): The root joint of the chain.
+            reverse (bool): Whether to return the joint chain in reverse order. Default is False.
+
+        Returns:
+            List[str]: The joint chain.
+        """
+        joints = pm.ls(root_joint, type="joint", flatten=True)
+        if not joints or len(joints) > 1:
+            pm.warning(f"Operation requires a root joint: got {root_joint}")
+            return []
+        root_joint = joints[0]
+
+        # Traverse the hierarchy to get the joint chain
+        joint_chain = []
+        current_joint = root_joint
+        while current_joint:
+            joint_chain.append(current_joint)
+            children = pm.listRelatives(current_joint, children=True, type="joint")
+            if children:
+                current_joint = children[0]
+            else:
+                current_joint = None
+
+        if reverse:
+            joint_chain.reverse()
+
+        return joint_chain
+
+    @staticmethod
+    def invert_joint_chain(root_joint, keep_original=False):
         """Create a new joint chain with the same positions as the original, but with reversed hierarchy.
 
         Parameters:
