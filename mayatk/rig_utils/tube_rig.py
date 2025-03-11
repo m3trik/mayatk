@@ -116,6 +116,11 @@ class TubePath:
 class TubeRig(ptk.LoggingMixin):
     """Handles rigging the tube, creating joints, IK handles, and additional controls.
 
+    Parameters:
+        obj (str/obj): The polygon tube mesh to rig.
+        rig_name (str): The name of the rig.
+        rig_group (str): The group node for the rig.
+
     Attributes:
         rig_name (str): The name of the rig.
         rig_group (pm.nodetypes.Transform): The group node for the rig.
@@ -128,19 +133,36 @@ class TubeRig(ptk.LoggingMixin):
         end_loc (pm.nodetypes.Transform): The end locator for the tube rig.
 
     Example:
-        tube_rig = TubeRig()
+        mesh = pm.selected()
+        tube_rig = TubeRig(mesh)
         joints = tube_rig.generate_joint_chain(centerline, num_joints=10)
-        ik_handle = tube_rig.create_ik(joints)
-        pole_vector = tube_rig.create_pole_vector(ik_handle, mid_joint=joints[5])
-        skin_cluster = tube_rig.bind_joint_chain(mesh, joints)
-        start_loc, end_loc = tube_rig.create_start_end_locators(joints, ik_handle)
+        tube_rig.create_ik(joints)
+        tube_rig.create_pole_vector(joints, mid_joint=joints[5])
+        tube_rig.bind_joint_chain(tube, joints)
+
+        # Later, the rig and it's attributes can be accessed using the mesh
+        mesh.rig.joints
+        mesh.rig.ik_handle
+        mesh.rig.pole_vector
+        mesh.rig.skin_cluster
+        mesh.rig.start_loc
+        mesh.rig.end_loc
     """
 
-    def __init__(self, rig_name: str = None, rig_group: str = None):
+    def __init__(self, obj, rig_name: str = None, rig_group: str = None):
         self._rig_name = rig_name
         self._rig_group = rig_group
 
-        self.mesh = None
+        # Ensure the object is a valid transform node
+        obj = NodeUtils.get_transform_node(obj)
+        if not obj:
+            raise ValueError(f"Invalid object: `{obj}` {type (obj)}")
+        elif isinstance(obj, (set, list, tuple)):
+            obj = obj[0]
+
+        self.mesh = obj
+        self.mesh.rig = self  # Allow access to the rig instance via mesh attribute
+
         self.joints = None
         self.ik_handle = None
         self.pole_vector = None
@@ -163,12 +185,14 @@ class TubeRig(ptk.LoggingMixin):
 
     @property
     def rig_group(self) -> "pm.nodetypes.Transform":
-        """Returns or creates the rig group for this rig."""
+        """Returns the rig group."""
         if not self._rig_group:
             rig_name = f"{self.rig_name}_GRP"
-            if not pm.objExists(rig_name):
+            if pm.objExists(rig_name):
+                self._rig_group = pm.PyNode(rig_name)
+            else:
                 self._rig_group = pm.group(empty=True, name=rig_name)
-            self.logger.debug(f"Created new rig group: {self._rig_group.name()}")
+            self.logger.debug(f"Created/Found rig group: {self._rig_group.name()}")
         return NodeUtils.get_transform_node(self._rig_group)
 
     @rig_group.setter
@@ -433,7 +457,6 @@ class TubeRig(ptk.LoggingMixin):
                 f"SkinCluster successfully created and bound: {skin_cluster}"
             )
         self.logger.debug(f"SkinCluster attributes: {skin_cluster.listAttr()}")
-        self.mesh = obj
         self.skin_cluster = skin_cluster
         return skin_cluster
 
@@ -444,18 +467,15 @@ class TubeRigSlots:
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.tube_rig
 
-        # Initialize stored rigs
-        self._stored_rigs = {}
-        self.max_stored_rigs = 8
+    def get_tube_rig(self, obj):
+        """Get the tube rig instance for the given object."""
+        if not hasattr(obj, "rig"):  # Instantiate the tube rig
+            rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
+            tube_rig = TubeRig(obj, rig_name=rig_name)
+            return tube_rig
+        return obj.rig
 
-    def _store_rig_instance(self, obj_name: str, tube_rig: TubeRig) -> None:
-        """Stores the TubeRig instance per object with a limit."""
-        if len(self._stored_rigs) >= self.max_stored_rigs:
-            oldest_key = next(iter(self._stored_rigs))
-            del self._stored_rigs[oldest_key]
-        self._stored_rigs[obj_name] = tube_rig
-
-    def create_joints_from_tube(self, obj, tube_rig):
+    def create_joints_from_tube(self, obj):
         """Creates a joint chain from a tube mesh."""
         # if there is an edge selection use get_centerline_using_edges
         edges = pm.filterExpand(selectionMask=32)  # Ensure selection contains edges
@@ -463,31 +483,42 @@ class TubeRigSlots:
             centerline_points = TubePath.get_centerline_using_edges(edges)
         else:  # If no edge selection use get_centerline_from_bounding_box
             centerline_points = TubePath.get_centerline_from_bounding_box(
-                obj, smooth=True, precision=30
+                obj, smooth=True, precision=self.ui.s001.value()
             )
 
-        # Generate joint chain
+        # Get the tube rig instance
+        tube_rig = self.get_tube_rig(obj)
+
+        # Generate the joint chain
         joints = tube_rig.generate_joint_chain(
             centerline=centerline_points,
-            num_joints=10,
-            radius=1.0,
+            num_joints=self.ui.s000.value(),
+            radius=self.ui.s002.value(),
             orientation=[0, 0, 0],
-            reverse=False,
+            reverse=self.ui.chk000.isChecked(),
         )
         return joints
 
-    def create_rig_from_joints(self, obj, joints, tube_rig):
+    def create_rig_from_joints(self, obj, joints):
         """Creates a tube rig from an existing joint chain."""
         # Order the joints by hierarchy using pymel
         joints = pm.ls(joints, type="joint", flatten=True)
         if len(joints) < 2:  # Get the entire chain using root joint
             joints = RigUtils.get_joint_chain_from_root(joints[0])
 
+        # Reverse the joint chain if requested
+        if self.ui.chk000.isChecked():
+            joints = RigUtils.invert_joint_chain(joints[0], keep_original=False)
+
+        # Get the tube rig instance
+        tube_rig = self.get_tube_rig(obj)
+
         # Create IK handle
         ik_handle = tube_rig.create_ik(joints, solver="ikRPsolver")
 
-        # Create pole vector control
-        mid_joint = joints[len(joints) // 2]
+        # Create pole vector control with mid joint offset
+        mid_joint_index = int(len(joints) / 2)
+        mid_joint = joints[mid_joint_index]
         tube_rig.create_pole_vector(ik_handle, mid_joint=mid_joint)
 
         # Bind joint chain to the tube mesh
@@ -506,12 +537,8 @@ class TubeRigSlots:
             self.sb.message_box("Select a single polygon tube mesh to create a rig.")
             return
 
-        # Set the tube rig name
-        rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
-        tube_rig = TubeRig(rig_name=rig_name)
-
-        joints = self.create_joints_from_tube(obj, tube_rig)
-        tube_rig = self.create_rig_from_joints(obj, joints, tube_rig)
+        joints = self.create_joints_from_tube(obj)
+        tube_rig = self.create_rig_from_joints(obj, joints)
 
         self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
 
@@ -524,15 +551,7 @@ class TubeRigSlots:
             self.sb.message_box("Select a single polygon tube mesh to create a rig.")
             return
 
-        rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
-
-        try:
-            tube_rig = self._stored_rigs[obj.name()]
-        except KeyError:
-            tube_rig = TubeRig(rig_name=rig_name)
-            self._store_rig_instance(obj.name(), tube_rig)
-
-        joints = self.create_joints_from_tube(obj, tube_rig)
+        joints = self.create_joints_from_tube(obj)
         self.sb.message_box(f"Joints created: {len(joints)}")
 
     @CoreUtils.undo
@@ -546,14 +565,7 @@ class TubeRigSlots:
             )
             return
 
-        try:
-            tube_rig = self._stored_rigs[obj.name()]
-        except KeyError:
-            rig_name = self.ui.txt000.text() or f"{obj.name()}_RIG"
-            tube_rig = TubeRig(rig_name=rig_name)
-            self._store_rig_instance(obj.name(), tube_rig)
-
-        tube_rig = self.create_rig_from_joints(obj, joints, tube_rig)
+        tube_rig = self.create_rig_from_joints(obj, joints)
         self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
 
 
