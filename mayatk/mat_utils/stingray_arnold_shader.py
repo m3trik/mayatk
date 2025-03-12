@@ -67,7 +67,7 @@ class StingrayArnoldShader:
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.get_map_type_from_filename(
+            texture_type = ptk.resolve_map_type(
                 texture,
             )
 
