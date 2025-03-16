@@ -26,16 +26,71 @@ class MirrorSlots:
         self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
 
     def perform_operation(self, objects):
-        # Read values from UI and execute mirror operation
+        # Read values from UI
+        axis = self.sb.get_axis_from_checkboxes(
+            "chk001-4", self.ui
+        )  # Get axis from checkboxes
+        pivot_index = (
+            self.ui.cmb000.currentIndex()
+        )  # Get UI selection for pivot dropdown
+        pivot = self._resolve_pivot(
+            pivot_index, axis
+        )  # Dynamically resolve correct pivot
+
+        mergeMode = (
+            self.ui.cmb001.currentIndex() - 1
+        )  # Adjust mergeMode to match Method signature (-1 for correct mapping)
+
         kwargs = {
-            "axis": self.sb.get_axis_from_checkboxes("chk001-4", self.ui),
-            "mirrorAxis": self.ui.cmb000.currentIndex(),
-            "mergeMode": self.ui.cmb001.currentIndex(),
-            "cutMesh": self.ui.chk005.isChecked(),
-            "uninstance": self.ui.chk006.isChecked(),
+            "axis": axis,
+            "pivot": pivot,
+            "mergeMode": mergeMode,
+            "cutMesh": self.ui.chk005.isChecked(),  # Valid flag for polyMirrorFace
+            "uninstance": self.ui.chk006.isChecked(),  # Uninstance objects before mirroring
         }
-        EditUtils.mirror(objects, **kwargs)
-        # ex. # polyMirrorFace  -cutMesh 1 -axis 0 -axisDirection 1 -mergeMode 1 -mergeThresholdType 0 -mergeThreshold 0.001 -mirrorAxis 0 -mirrorPosition 0 -smoothingAngle 30 -flipUVs 0 -ch 1 S102_BOOST_PUMP_CANISTER_B;
+
+        EditUtils.mirror(
+            objects, **kwargs
+        )  # Call mirror method with resolved parameters
+
+    @staticmethod
+    def _resolve_pivot(pivot_index: int, axis: str) -> str:
+        """
+        Resolves the correct pivot parameter for mirroring based on the axis selection.
+
+        Parameters:
+            pivot_index (int): UI dropdown index for pivot selection.
+            axis (str): The chosen mirror axis ('x', '-x', 'y', '-y', 'z', '-z').
+
+        Returns:
+            str: The appropriate pivot type ('object', 'world', 'xmin', 'xmax', etc.).
+        """
+        # Define min/max mappings for each axis
+        axis_mapping = {
+            "x": ("xmin", "xmax"),
+            "-x": ("xmin", "xmax"),
+            "y": ("ymin", "ymax"),
+            "-y": ("ymin", "ymax"),
+            "z": ("zmin", "zmax"),
+            "-z": ("zmin", "zmax"),
+        }
+
+        # Get the appropriate bounding box min/max keys for the selected axis
+        bbox_min, bbox_max = axis_mapping.get(
+            axis, ("xmin", "xmax")
+        )  # Default to X if invalid
+
+        # Pivot selection mapping based on UI input
+        pivot_mapping = {
+            0: "object",  # Object's pivot point
+            1: "world",  # World origin (0,0,0)
+            2: "center",  # Bounding box center
+            3: bbox_max,  # Maximum bound of the selected axis
+        }
+
+        return pivot_mapping.get(
+            pivot_index, "object"
+        )  # Default to object pivot if out of range
 
 
 class MirrorUi:

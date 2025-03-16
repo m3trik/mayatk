@@ -438,70 +438,74 @@ class XformUtils(ptk.HelpMixin):
         pm.select(obj, replace=True)
         pm.manipPivot(p=pos, o=ori_degrees)
 
-    @staticmethod
-    def get_operation_axis_pos(node, pivot, axis_index, boundingBoxMode="center"):
-        """Determines the axis position for an operation like mirroring or cutting.
+    @classmethod
+    def get_operation_axis_pos(cls, node, pivot, axis_index=None):
+        """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
 
         Parameters:
             node (PyNode): The object whose reference position is determined.
             pivot (int/str/tuple/list): Mode or explicit position.
-                - `0` or `"boundingBox"` → Uses the bounding box (`boundingBoxMode` defines center/min/max/border).
+                - `0` or `"boundingBox"` → Uses bounding box properties.
                 - `1` or `"object"` → Uses the object's pivot.
-                - `2` or `"world"` → Uses world origin (0,0,0).
-                - `(x, y, z)` → Uses an explicit user-defined pivot.
-            axis_index (int): Axis index (0=X, 1=Y, 2=Z).
-            boundingBoxMode (str): Determines which part of the bounding box to use:
-                - `"center"` (default): Midpoint.
-                - `"min"`: Minimum bound.
-                - `"max"`: Maximum bound.
-                - `"borderMin"`: Lower bound for mirroring edge cases.
-                - `"borderMax"`: Upper bound for mirroring edge cases.
+                - `2` or `"world"` → Uses world origin `(0,0,0)`.
+                - `"center"` → Uses bounding box center.
+                - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
+                - `(x, y, z)` → Uses a specified world-space pivot.
+            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns a full `[x, y, z]` list.
 
         Returns:
-            float: The computed axis position.
+            float or list: The computed pivot position (single float if `axis_index` is specified, list if `None`).
         """
-        bbox = pm.exactWorldBoundingBox(node)
+        # Ensure recursion does not nest lists
+        if axis_index is None:
+            return [
+                cls.get_operation_axis_pos(node, pivot, 0),
+                cls.get_operation_axis_pos(node, pivot, 1),
+                cls.get_operation_axis_pos(node, pivot, 2),
+            ]
 
-        # Handle Bounding Box Pivot Modes
-        if pivot in {0, "boundingBox"}:
-            if boundingBoxMode == "min":
-                pivot_value = bbox[axis_index]  # Lower edge
-            elif boundingBoxMode == "max":
-                pivot_value = bbox[axis_index + 3]  # Upper edge
-            elif boundingBoxMode == "borderMin":
-                pivot_value = bbox[axis_index]  # Edge case lower
-            elif boundingBoxMode == "borderMax":
-                pivot_value = bbox[axis_index + 3]  # Edge case upper
-            else:  # Default: Center
-                pivot_value = (bbox[axis_index] + bbox[axis_index + 3]) / 2
-            return pivot_value
+        # If already a tuple/list, return only the requested axis
+        if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
+            return float(pivot[axis_index])  # Ensure float, not list
 
-        # Handle Object Pivot Mode (Ensure it correctly retrieves the pivot position)
-        elif pivot in {1, "object"}:
-            # Get world-space pivot
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
-            # Get world-space position
-            obj_translation_ws = pm.xform(node, q=True, ws=True, t=True)
-            # Ensure pivot is retrieved
-            obj_pivot = (
-                obj_pivot_ws if obj_pivot_ws != [0, 0, 0] else obj_translation_ws
-            )
-            return obj_pivot[axis_index]
+        # Object Pivot (Always Returns the Object's True Pivot Without Modification)
+        if pivot in {1, "object"}:
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)  # Returns (x, y, z)
+            return float(obj_pivot_ws[axis_index])
 
-        # Handle World Pivot Mode
-        elif pivot in {2, "world"}:
-            return 0.0  # Always cuts at world origin
+        # World Pivot (Fixed at 0, 0, 0)
+        if pivot in {2, "world"}:
+            return 0.0  # Always world origin
 
-        # Handle Explicit User-Defined Pivot
-        elif isinstance(pivot, (tuple, list)) and len(pivot) == 3:
-            return pivot[axis_index]  # Use provided pivot point
+        # Handle Bounding Box Center Before axis_map
+        if pivot == "center":
+            bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
+            return bbox_center if axis_index is None else float(bbox_center[axis_index])
 
-        else:
-            pm.warning(
-                f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
-            )
-            pivot_value = (bbox[axis_index] + bbox[axis_index + 3]) / 2
-            return pivot_value
+        # **Bounding Box Pivot Handling**
+        axis_map = {
+            "xmin": 0,
+            "xmax": 0,  # Modify X-axis only
+            "ymin": 1,
+            "ymax": 1,  # Modify Y-axis only
+            "zmin": 2,
+            "zmax": 2,  # Modify Z-axis only
+        }
+
+        valid_bbox_keys = cls.get_bounding_box(node, return_valid_keys=True)
+
+        if isinstance(pivot, str) and pivot in valid_bbox_keys:
+            bbox_value = cls.get_bounding_box(node, pivot)  # Could be a float or tuple
+            if isinstance(bbox_value, (tuple, list)):  # Extract only the relevant axis
+                return float(bbox_value[axis_map[pivot]])
+            return float(bbox_value)
+
+        # Default to Bounding Box Center if Pivot is Invalid
+        pm.warning(
+            f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
+        )
+        bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
+        return bbox_center if axis_index is None else float(bbox_center[axis_index])
 
     @staticmethod
     @CoreUtils.undo
@@ -555,7 +559,7 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     def reset_pivot_transforms(
-        objects: Optional[List[Union[str, object]]] = None
+        objects: Optional[List[Union[str, object]]] = None,
     ) -> None:
         """Reset Pivot Transforms for the specified objects or selected objects.
 
@@ -868,69 +872,77 @@ class XformUtils(ptk.HelpMixin):
         return center_pos
 
     @staticmethod
-    def get_bounding_box(objects, value="", world_space=True):
+    def get_bounding_box(objects, value="", world_space=True, return_valid_keys=False):
         """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s).
 
-        The method computes the bounding box that encompasses all specified objects or components.
-        It can return various properties of this bounding box, such as its minimum and maximum extents,
-        its size along each axis, its total volume, and the central point. The properties to return
-        are specified as strings within the 'value' parameter, which can include multiple values separated by
-        a pipe ('|') character. The calculations can be performed in either world or local object space.
-
         Parameters:
-            objects (str/obj/list): The object(s) or component(s) to query. This can be a single object
-                                    or component, or a list of objects/components.
-            value (str): A string representing the specific bounding box data to return. This can include
-                         multiple properties separated by '|'. Valid options (case insensitive) are:
-                         'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'size', 'sizex', 'sizey',
-                         'sizez', 'volume', 'center', 'centroid', 'minsize', and 'maxsize'.
-            world_space (bool): If True, calculates the bounding box in world space. If False, uses local
-                                object space. Default is True.
+            objects (str/obj/list): The object(s) or component(s) to query.
+            value (str): A string representing the specific bounding box data to return.
+                        Multiple properties can be requested using '|'.
+            world_space (bool): If True, computes the bounding box in world space.
+            return_valid_keys (bool): If True, returns all valid bbox keys instead of computing the bbox.
+
         Returns:
-            float/tuple: The requested bounding box value(s). If a single value is requested, a float is
-                         returned. If multiple values are requested, a tuple of floats is returned.
-        Raises:
-            ValueError: If no objects are provided, if an invalid 'value' is specified, or if other input
-                        parameters are incorrect.
-        Examples:
-            # To get the size of the bounding box:
-            size = YourClassNameHere.get_bounding_box(obj, "size")
-            # To get the x, y, and z sizes individually:
-            sizex, sizey, sizez = YourClassNameHere.get_bounding_box(obj, "sizex|sizey|sizez")
+            float/tuple/list: The requested bounding box value(s), or a list of valid keys if `return_valid_keys=True`.
         """
+        bbox_values = {
+            "xmin": None,
+            "xmax": None,
+            "ymin": None,
+            "ymax": None,
+            "zmin": None,
+            "zmax": None,
+            "sizex": None,
+            "sizey": None,
+            "sizez": None,
+            "size": None,
+            "volume": None,
+            "center": None,
+            "centroid": None,
+            "minsize": None,
+            "maxsize": None,
+        }
+
+        # Return only the valid keys if requested
+        if return_valid_keys:
+            return list(bbox_values.keys())
+
         # Validate input objects
         if not objects:
             raise ValueError("No objects provided for bounding box calculation.")
 
         objs = objects if isinstance(objects, (list, tuple)) else [objects]
+        bbox = (
+            pm.exactWorldBoundingBox(objs)
+            if world_space
+            else pm.xform(objs, q=True, bb=True, ws=False)
+        )
 
-        if world_space:
-            bbox = pm.exactWorldBoundingBox(objs)
-        else:
-            bbox = pm.xform(objs, q=True, bb=True, ws=False)
-
+        # Assign real values to the dictionary
         xmin, ymin, zmin, xmax, ymax, zmax = bbox
         size = (xmax - xmin, ymax - ymin, zmax - zmin)
         center = ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
         volume = size[0] * size[1] * size[2]
 
-        bbox_values = {
-            "xmin": xmin,
-            "xmax": xmax,
-            "ymin": ymin,
-            "ymax": ymax,
-            "zmin": zmin,
-            "zmax": zmax,
-            "sizex": size[0],
-            "sizey": size[1],
-            "sizez": size[2],
-            "size": size,
-            "volume": volume,
-            "center": center,
-            "centroid": center,
-            "minsize": min(size),
-            "maxsize": max(size),
-        }
+        bbox_values.update(
+            {
+                "xmin": xmin,
+                "xmax": xmax,
+                "ymin": ymin,
+                "ymax": ymax,
+                "zmin": zmin,
+                "zmax": zmax,
+                "sizex": size[0],
+                "sizey": size[1],
+                "sizez": size[2],
+                "size": size,
+                "volume": volume,
+                "center": center,
+                "centroid": center,
+                "minsize": min(size),
+                "maxsize": max(size),
+            }
+        )
 
         values = value.lower().split("|")
         try:

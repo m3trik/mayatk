@@ -251,17 +251,17 @@
            </item>
            <item>
             <property name="text">
+             <string>Merge:  Combine</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
              <string>Merge:  Border Edges</string>
             </property>
            </item>
            <item>
             <property name="text">
              <string>Merge:  Extrude</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Merge:  Combine</string>
             </property>
            </item>
           </widget>
@@ -311,11 +311,6 @@
            </property>
            <item>
             <property name="text">
-             <string>Pivot:  Bounding Box (border)</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
              <string>Pivot:  Object</string>
             </property>
            </item>
@@ -327,6 +322,11 @@
            <item>
             <property name="text">
              <string>Pivot:  Bounding Box (center)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  Bounding Box (border)</string>
             </property>
            </item>
           </widget>

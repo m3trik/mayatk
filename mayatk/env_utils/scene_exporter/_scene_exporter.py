@@ -164,7 +164,7 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         """Convert absolute material paths to relative paths."""
         self.logger.debug("Converting absolute paths to relative")
         materials = MatUtils.filter_materials_by_objects(self.objects)
-        MatUtils.convert_to_relative_paths(materials)
+        MatUtils.remap_texture_paths(materials)
         self.logger.debug("Path conversion completed.")
 
     def reassign_duplicate_materials(self):
@@ -274,8 +274,8 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         materials = MatUtils.filter_materials_by_objects(self.objects)
         material_paths = MatUtils.collect_material_paths(
             materials,
-            include_material=True,
-            include_path_type=True,
+            inc_material=True,
+            inc_path_type=True,
             nested_as_unit=True,
         )
         for mat, typ, pth in material_paths:
