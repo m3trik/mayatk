@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>210</height>
+    <height>164</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -96,19 +96,43 @@
          <property name="verticalSpacing">
           <number>1</number>
          </property>
-         <item row="2" column="1">
-          <widget class="QRadioButton" name="chk002">
-           <property name="text">
-            <string>X</string>
+         <item row="1" column="0" colspan="4">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <property name="spacing">
+            <number>0</number>
            </property>
-          </widget>
-         </item>
-         <item row="2" column="2">
-          <widget class="QRadioButton" name="chk003">
-           <property name="text">
-            <string>Y</string>
-           </property>
-          </widget>
+           <item>
+            <widget class="QCheckBox" name="chk000">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Start the operation using any selected mesh objects.</string>
+             </property>
+             <property name="text">
+              <string>Preview</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>18</width>
+               <height>18</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </item>
          <item row="2" column="3">
           <widget class="QRadioButton" name="chk004">
@@ -117,14 +141,7 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="0">
-          <widget class="QCheckBox" name="chk001">
-           <property name="text">
-            <string>—</string>
-           </property>
-          </widget>
-         </item>
-         <item row="13" column="0" colspan="4">
+         <item row="11" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -171,43 +188,22 @@
            </item>
           </layout>
          </item>
-         <item row="1" column="0" colspan="4">
-          <layout class="QHBoxLayout" name="horizontalLayout">
-           <property name="spacing">
-            <number>0</number>
+         <item row="10" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk005">
+           <property name="toolTip">
+            <string>Un-instance the object(s) before performing the operation.</string>
            </property>
-           <item>
-            <widget class="QCheckBox" name="chk000">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>Start the operation using any selected mesh objects.</string>
-             </property>
-             <property name="text">
-              <string>Preview</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
+           <property name="text">
+            <string>Un-Instance</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QCheckBox" name="chk001">
+           <property name="text">
+            <string>—</string>
+           </property>
+          </widget>
          </item>
          <item row="7" column="0" colspan="4">
           <widget class="ComboBox" name="cmb000">
@@ -240,19 +236,31 @@
            </property>
            <item>
             <property name="text">
-             <string>Axis:  Bounding Box</string>
+             <string>Pivot:  Object</string>
             </property>
            </item>
            <item>
             <property name="text">
-             <string>Axis:  Object</string>
+             <string>Pivot:  World</string>
             </property>
            </item>
            <item>
             <property name="text">
-             <string>Axis:  World</string>
+             <string>Pivot:  Bounding Box (center)</string>
             </property>
            </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  Bounding Box (border)</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="2" column="2">
+          <widget class="QRadioButton" name="chk003">
+           <property name="text">
+            <string>Y</string>
+           </property>
           </widget>
          </item>
          <item row="8" column="0" colspan="4">
@@ -291,6 +299,11 @@
            </item>
            <item>
             <property name="text">
+             <string>Merge:  Combine</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
              <string>Merge:  Border Edges</string>
             </property>
            </item>
@@ -299,40 +312,12 @@
              <string>Merge:  Extrude</string>
             </property>
            </item>
-           <item>
-            <property name="text">
-             <string>Merge:  Combine</string>
-            </property>
-           </item>
           </widget>
          </item>
-         <item row="9" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk005">
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-weight:600; color:#000000; background-color:#ffffff;&quot;&gt;ON&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; :  All geometrical values are taken in world reference.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; font-weight:600; color:#000000; background-color:#ffffff;&quot;&gt;OFF&lt;/span&gt;&lt;span style=&quot; font-family:'Times New Roman'; font-size:medium; color:#000000; background-color:#ffffff;&quot;&gt; :  All geometrical values are taken in object reference.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
+         <item row="2" column="1">
+          <widget class="QRadioButton" name="chk002">
            <property name="text">
-            <string>Cut Mesh</string>
-           </property>
-          </widget>
-         </item>
-         <item row="11" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk006">
-           <property name="toolTip">
-            <string>Delete non-deformer history on the object before performing the operation.</string>
-           </property>
-           <property name="text">
-            <string>Delete History</string>
-           </property>
-          </widget>
-         </item>
-         <item row="12" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk007">
-           <property name="toolTip">
-            <string>Un-instance the object(s) before performing the operation.</string>
-           </property>
-           <property name="text">
-            <string>Un-Instance</string>
+            <string>X</string>
            </property>
           </widget>
          </item>

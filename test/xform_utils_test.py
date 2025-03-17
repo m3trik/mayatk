@@ -112,7 +112,7 @@ class XformUtilsTest(unittest.TestCase):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mtk.clear_scroll_field_reporters()
+    mtk.clear_scrollfield_reporters()
 
     # Create a Test Suite
     suite = unittest.TestSuite()

@@ -270,34 +270,26 @@ class MatUtils(ptk.HelpMixin):
     def collect_material_paths(
         materials: Optional[List[str]] = None,
         attributes: Optional[List[str]] = None,
-        include_material: bool = False,
-        include_path_type: bool = False,
+        inc_material: bool = False,
+        inc_path_type: bool = False,
     ) -> Union[List[str], List[Tuple[str, ...]]]:
         """Collects specified attributes file paths for given materials.
 
         Parameters:
             materials (Optional[List[str]]): List of material names.
             attributes (Optional[List[str]]): List of attributes to collect file paths from. Defaults to texture files.
-            include_material (bool): If True, include material name in the result.
-            include_path_type (bool): If True, include path type (Relative/Absolute) in the result.
+            inc_material (bool): If True, include material name in the result.
+            inc_path_type (bool): If True, include path type (Relative/Absolute) in the result.
 
         Returns:
             Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
         """
-
-        def strip_drive_and_filename(path: str) -> str:
-            """Strip the drive letter and filename from a given path."""
-            drive, path_without_drive = os.path.splitdrive(path)
-            directory = os.path.dirname(path_without_drive)
-            return directory.replace("\\", "/").lower()  # Normalize for comparison
 
         materials = pm.ls(materials, mat=True) or pm.ls(mat=True)
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
         project_sourceimages = EnvUtils.get_maya_info("sourceimages")
-
-        stripped_project_path = strip_drive_and_filename(project_sourceimages)
 
         for material in materials:
             for attr in attributes:
@@ -308,29 +300,116 @@ class MatUtils(ptk.HelpMixin):
                         if not file_path:
                             continue
 
-                        # Strip the drive letter and filename
-                        stripped_file_path = strip_drive_and_filename(file_path)
+                        # Ensure path is stored as Maya expects
+                        file_path = file_path.replace("\\", "/")
 
                         # Determine if the path is relative or absolute
-                        if stripped_file_path.startswith(stripped_project_path):
-                            path_type = "Relative"
-                            relative_path = os.path.relpath(
-                                file_path, project_sourceimages
+                        path_type = (
+                            "Relative"
+                            if file_path.startswith(project_sourceimages)
+                            else "Absolute"
+                        )
+                        relative_path = (
+                            os.path.relpath(file_path, project_sourceimages).replace(
+                                "\\", "/"
                             )
-                        else:
-                            path_type = "Absolute"
-                            relative_path = file_path
+                            if path_type == "Relative"
+                            else file_path
+                        )
 
                         entry = (relative_path,)
-                        if include_material:
+                        if inc_material:
                             entry = (material,) + entry
-                        if include_path_type:
+                        if inc_path_type:
                             entry = entry[:1] + (path_type,) + entry[1:]
+
                         material_paths.append(entry)
                     except pm.MayaAttributeError:
                         continue
 
         return material_paths
+
+    @classmethod
+    @CoreUtils.undo
+    def remap_texture_paths(
+        cls,
+        materials: Optional[List[str]] = None,
+        new_dir: Optional[str] = None,
+    ) -> None:
+        """Remaps file texture paths for materials, using a new base directory while preserving filenames.
+
+        Paths inside 'sourceimages' will always be converted to relative.
+        Paths outside 'sourceimages' will remain absolute.
+
+        Parameters:
+            materials (Optional[List[str]]): A list of material names to filter. Defaults to all materials.
+            new_dir (Optional[str]): The new base directory for textures. Defaults to 'sourceimages'.
+        """
+        sourceimages_dir = EnvUtils.get_maya_info("sourceimages")
+
+        # If no directory is given, use 'sourceimages'
+        new_dir = new_dir or sourceimages_dir
+        if not new_dir or not os.path.isdir(new_dir):
+            pm.warning(f"Invalid directory: {new_dir}")
+            return
+
+        pm.displayInfo(
+            f"// remap_texture_paths called with materials={materials}, new_dir={new_dir}"
+        )
+
+        materials = pm.ls(materials, mat=True) if materials else None
+        pm.displayInfo(f"// Materials being processed: {materials}")
+
+        # Extract only valid file paths
+        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        textures = [t[0] if isinstance(t, tuple) else t for t in textures]
+
+        pm.displayInfo(f"// Collected {len(textures)} unique texture paths")
+
+        if not textures:
+            pm.warning("No valid texture paths found.")
+            return
+
+        # Normalize file node paths and build a lookup
+        file_nodes = {}
+        for fn in pm.ls(type="file"):
+            file_path = fn.fileTextureName.get()
+            if file_path:
+                normalized_path = os.path.normpath(file_path).replace("\\", "/").lower()
+                filename = os.path.basename(normalized_path)
+                file_nodes[filename] = fn  # Store by filename for flexible lookup
+
+        pm.displayInfo(f"// Found {len(file_nodes)} file texture nodes in the scene")
+
+        updated_count = 0
+
+        for old_path in textures:
+            old_path = os.path.normpath(old_path).replace("\\", "/").lower()
+            filename = os.path.basename(old_path)
+
+            # Convert to relative if inside sourceimages
+            if sourceimages_dir and old_path.startswith(sourceimages_dir.lower()):
+                try:
+                    new_path = os.path.relpath(old_path, sourceimages_dir).replace(
+                        "\\", "/"
+                    )
+                except ValueError:
+                    pm.warning(
+                        f"// Warning: Failed to compute relative path for {old_path}. Using absolute path."
+                    )
+                    new_path = old_path
+            else:
+                new_path = os.path.join(new_dir, filename).replace("\\", "/")
+
+            if filename in file_nodes:
+                pm.displayInfo(f"// Remapping texture path: {old_path}")
+                pm.displayInfo(f"// New path: {new_path}")
+                file_nodes[filename].fileTextureName.set(new_path)
+                updated_count += 1
+            else:
+                pm.warning(f"// Skipping: No file node found for {filename}")
+
+        pm.displayInfo(f"// Result: Remapped {updated_count} unique texture paths.")
 
     @staticmethod
     def is_duplicate_material(material1: str, material2: str) -> bool:
@@ -451,10 +530,21 @@ class MatUtils(ptk.HelpMixin):
             delete (bool): Whether to delete the duplicate materials after reassignment.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        # Collect materials directly in the method
-        collected_materials = (
-            pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
-        )
+        if materials:  # Filter out invalid objects and warn about them
+            valid_objects = []
+            for m in materials:
+                if pm.objExists(m):
+                    valid_objects.append(m)
+                else:
+                    pm.warning(f"Object '{m}' does not exist or is not valid.")
+
+            # Collect valid materials
+            collected_materials = pm.ls(valid_objects, mat=True)
+            if not collected_materials:
+                raise ValueError(f"No valid materials found in {materials}")
+        else:  # Collect all materials in the scene
+            collected_materials = pm.ls(mat=True)
+
         # Find duplicates using the updated format
         duplicate_to_original = cls.find_materials_with_duplicate_textures(
             collected_materials, strict=strict
@@ -517,39 +607,6 @@ class MatUtils(ptk.HelpMixin):
                     materials = pm.listConnections(f"{sg}.surfaceShader")
                     assigned_materials.update(materials)
         return list(assigned_materials)
-
-    @staticmethod
-    @CoreUtils.undo
-    def convert_to_relative_paths(items: Optional[List[str]] = None) -> None:
-        """Convert absolute file paths to relative paths for file texture nodes.
-
-        This function processes file texture nodes to convert their
-        absolute file paths to relative paths based on the current workspace's 'sourceimages' directory.
-
-        Parameters:
-            items (List[str], optional): List of material or file node names to filter. If None, all items are processed.
-
-        Raises:
-            FileNotFoundError: If the 'sourceimages' directory does not exist.
-        """
-        base_dir = EnvUtils.get_maya_info("sourceimages")
-
-        if not items:
-            items = pm.ls(type="file")
-
-        file_nodes = []
-        for item in items:
-            if pm.nodeType(item) == "file":
-                file_nodes.append(item)
-            else:
-                file_nodes.extend(pm.listConnections(item, type="file"))
-
-        file_nodes = list(set(file_nodes))
-        for file_node in file_nodes:
-            file_path = file_node.fileTextureName.get()
-            relative_path = ptk.convert_to_relative_path(file_path, base_dir)
-            file_node.fileTextureName.set(relative_path)
-            print(f"Converted {file_path} to relative path: {relative_path}")
 
     @staticmethod
     def reload_textures(

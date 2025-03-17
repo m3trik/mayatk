@@ -22,6 +22,7 @@ class XformUtils(ptk.HelpMixin):
 
         Parameters:
             value (int/str): The axis value to convert, either an integer index or a string representation.
+                        Valid values are: 0 or "x", 1 or "-x", 2 or "y", 3 or "-y", 4 or "z", 5 or "-z".
             invert (bool): When True, inverts the axis direction.
             ortho (bool): When True, returns the axis that is orthogonal to the given axis.
             to_integer (bool): If True, returns the converted axis value as an integer index.
@@ -32,6 +33,13 @@ class XformUtils(ptk.HelpMixin):
         Raises:
             TypeError: If `value` is not an int or str.
             ValueError: If `value` is invalid.
+
+        Example:
+            convert_axis(0)  # Returns "x"
+            convert_axis("y")  # Returns "y"
+            convert_axis("x", invert=True)  # Returns "-x"
+            convert_axis(2, ortho=True)  # Returns "z"
+            convert_axis("z", to_integer=True) # Returns 4
         """
         index_to_axis = {0: "x", 1: "-x", 2: "y", 3: "-y", 4: "z", 5: "-z"}
         axis_to_index = {v: k for k, v in index_to_axis.items()}
@@ -430,6 +438,75 @@ class XformUtils(ptk.HelpMixin):
         pm.select(obj, replace=True)
         pm.manipPivot(p=pos, o=ori_degrees)
 
+    @classmethod
+    def get_operation_axis_pos(cls, node, pivot, axis_index=None):
+        """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
+
+        Parameters:
+            node (PyNode): The object whose reference position is determined.
+            pivot (int/str/tuple/list): Mode or explicit position.
+                - `0` or `"boundingBox"` → Uses bounding box properties.
+                - `1` or `"object"` → Uses the object's pivot.
+                - `2` or `"world"` → Uses world origin `(0,0,0)`.
+                - `"center"` → Uses bounding box center.
+                - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
+                - `(x, y, z)` → Uses a specified world-space pivot.
+            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns a full `[x, y, z]` list.
+
+        Returns:
+            float or list: The computed pivot position (single float if `axis_index` is specified, list if `None`).
+        """
+        # Ensure recursion does not nest lists
+        if axis_index is None:
+            return [
+                cls.get_operation_axis_pos(node, pivot, 0),
+                cls.get_operation_axis_pos(node, pivot, 1),
+                cls.get_operation_axis_pos(node, pivot, 2),
+            ]
+
+        # If already a tuple/list, return only the requested axis
+        if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
+            return float(pivot[axis_index])  # Ensure float, not list
+
+        # Object Pivot (Always Returns the Object's True Pivot Without Modification)
+        if pivot in {1, "object"}:
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)  # Returns (x, y, z)
+            return float(obj_pivot_ws[axis_index])
+
+        # World Pivot (Fixed at 0, 0, 0)
+        if pivot in {2, "world"}:
+            return 0.0  # Always world origin
+
+        # Handle Bounding Box Center Before axis_map
+        if pivot == "center":
+            bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
+            return bbox_center if axis_index is None else float(bbox_center[axis_index])
+
+        # **Bounding Box Pivot Handling**
+        axis_map = {
+            "xmin": 0,
+            "xmax": 0,  # Modify X-axis only
+            "ymin": 1,
+            "ymax": 1,  # Modify Y-axis only
+            "zmin": 2,
+            "zmax": 2,  # Modify Z-axis only
+        }
+
+        valid_bbox_keys = cls.get_bounding_box(node, return_valid_keys=True)
+
+        if isinstance(pivot, str) and pivot in valid_bbox_keys:
+            bbox_value = cls.get_bounding_box(node, pivot)  # Could be a float or tuple
+            if isinstance(bbox_value, (tuple, list)):  # Extract only the relevant axis
+                return float(bbox_value[axis_map[pivot]])
+            return float(bbox_value)
+
+        # Default to Bounding Box Center if Pivot is Invalid
+        pm.warning(
+            f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
+        )
+        bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
+        return bbox_center if axis_index is None else float(bbox_center[axis_index])
+
     @staticmethod
     @CoreUtils.undo
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
@@ -482,7 +559,7 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     def reset_pivot_transforms(
-        objects: Optional[List[Union[str, object]]] = None
+        objects: Optional[List[Union[str, object]]] = None,
     ) -> None:
         """Reset Pivot Transforms for the specified objects or selected objects.
 
@@ -504,120 +581,91 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undo
-    def bake_pivot(
-        objects: list[str],
-        position: bool = False,
-        orientation: bool = False,
-        delete_history: bool = True,
-        preserve_normals: bool = False,
-    ) -> None:
-        """Bakes the pivot of the given objects.
+    def bake_pivot(objects, position=False, orientation=False):
+        """Bake the pivot orientation and position of the given object(s).
 
         Parameters:
-            objects (list[str]): List of objects to bake the pivot for.
+            objects (str/obj/list): The object(s) to bake the pivot orientation and position for.
             position (bool): Whether to bake the pivot position.
-            orientation (bool): Whether to bake the pivot orientation.
-            delete_history (bool): Delete Non-deformer history on the given object(s) before performing the operation.
-            preserve_normals (bool): Temporarily duplicate mesh and transfer normals back to the original mesh after baking the pivot.
+            orientation (bool): Whether to bake the pivot orientation
         """
-        if delete_history:
-            pm.bakePartialHistory(objects, prePostDeformers=True)
-
-        transforms = pm.ls(objects, objectsOnly=True, transforms=True, flatten=True)
-        shapes = NodeUtils.get_shape_node(transforms)
+        transforms = pm.ls(objects, transforms=1)
+        shapes = pm.ls(objects, shapes=1)
         objects = transforms + pm.listRelatives(
-            shapes, path=True, parent=True, type="transform"
+            shapes, path=1, parent=1, type="transform"
         )
 
         ctx = pm.currentCtx()
-        pivotModeActive = False
-        customModeActive = False
-        customOri = []
-
-        if ctx in ("RotateSuperContext", "manipRotateContext"):
-            customOri = pm.manipRotateContext("Rotate", q=True, orientAxes=True)
-            pivotModeActive = pm.manipRotateContext(
-                "Rotate", q=True, editPivotMode=True
-            )
-            customModeActive = pm.manipRotateContext("Rotate", q=True, mode=True) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):
-            customOri = pm.manipScaleContext("Scale", q=True, orientAxes=True)
-            pivotModeActive = pm.manipScaleContext("Scale", q=True, editPivotMode=True)
-            customModeActive = pm.manipScaleContext("Scale", q=True, mode=True) == 6
-        else:
-            customOri = pm.manipMoveContext("Move", q=True, orientAxes=True)
-            pivotModeActive = pm.manipMoveContext("Move", q=True, editPivotMode=True)
-            customModeActive = pm.manipMoveContext("Move", q=True, mode=True) == 6
+        pivotModeActive = 0
+        customModeActive = 0
+        if ctx in ("RotateSuperContext", "manipRotateContext"):  # Rotate tool
+            customOri = pm.manipRotateContext("Rotate", q=1, orientAxes=1)
+            pivotModeActive = pm.manipRotateContext("Rotate", q=1, editPivotMode=1)
+            customModeActive = pm.manipRotateContext("Rotate", q=1, mode=1) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):  # Scale tool
+            customOri = pm.manipScaleContext("Scale", q=1, orientAxes=1)
+            pivotModeActive = pm.manipScaleContext("Scale", q=1, editPivotMode=1)
+            customModeActive = pm.manipScaleContext("Scale", q=1, mode=1) == 6
+        else:  # use the move tool orientation
+            customOri = pm.manipMoveContext(
+                "Move", q=1, orientAxes=1
+            )  # get custom orientation
+            pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
+            customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
 
         if orientation and customModeActive:
             if not position:
                 pm.mel.error(
-                    pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError")
+                    (pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))
                 )
                 return
 
             from math import degrees
 
-            customOri = [degrees(ori) for ori in customOri]
-            pm.rotate(objects, *customOri, a=True, pcp=True, pgp=True, ws=True, fo=True)
+            cX, cY, cZ = customOri = [
+                degrees(customOri[0]),
+                degrees(customOri[1]),
+                degrees(customOri[2]),
+            ]
+
+            pm.rotate(
+                objects, cX, cY, cZ, a=1, pcp=1, pgp=1, ws=1, fo=1
+            )  # Set object(s) rotation to the custom one (preserving child transform positions and geometry positions)
 
         if position:
-            try:
-                for obj in objects:
-                    m = pm.xform(obj, q=True, m=True)
-                    p = pm.xform(obj, q=True, os=True, sp=True)
-                    oldPivot = [
-                        p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
-                        p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
-                        p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14],
-                    ]
+            for obj in objects:
+                # Get pivot in parent space
+                m = pm.xform(obj, q=1, m=1)
+                p = pm.xform(obj, q=1, os=1, sp=1)
+                oldX, oldY, oldZ = [
+                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
+                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
+                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
+                ]
 
-                    pm.xform(obj, zeroTransformPivots=True)
-                    newPivot = pm.getAttr(f"{obj.name()}.translate")
-                    pm.move(
-                        obj,
-                        oldPivot[0] - newPivot[0],
-                        oldPivot[1] - newPivot[1],
-                        oldPivot[2] - newPivot[2],
-                        pcp=True,
-                        pgp=True,
-                        ls=True,
-                        r=True,
-                    )
-            except RuntimeError as e:
-                pm.displayWarning(f"Error during pivot position processing: {str(e)}")
-                return
+                pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
+
+                # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
+                newX, newY, newZ = pm.getAttr(
+                    obj.name() + ".translate"
+                )  # obj.translate
+                pm.move(
+                    obj, oldX - newX, oldY - newY, oldZ - newZ, pcp=1, pgp=1, ls=1, r=1
+                )
 
         if pivotModeActive:
-            pm.ctxEditMode()
+            pm.ctxEditMode()  # exit pivot mode
 
+        # Set the axis orientation mode back to obj
         if orientation and customModeActive:
             if ctx in ("RotateSuperContext", "manipRotateContext"):
                 pm.manipPivot(rotateToolOri=0)
             elif ctx in ("scaleSuperContext", "manipScaleContext"):
                 pm.manipPivot(scaleToolOri=0)
-            else:
+            else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
                 pm.manipPivot(moveToolOri=0)
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=True)
-
-        if preserve_normals:
-            temp_objects = []
-            try:
-                # Create temporary duplicates for normals preservation
-                for obj in objects:
-                    temp_obj = pm.duplicate(obj, name=f"{obj}_tempForNormals")[0]
-                    temp_objects.append(temp_obj)
-
-                # Transfer normals from temp objects back to original objects
-                for original, temp in zip(objects, temp_objects):
-                    components.Components.transfer_normals(
-                        [temp.name(), original.name()]
-                    )
-            except RuntimeError as e:
-                pm.displayWarning(f"Error during normals transfer: {str(e)}")
-            finally:  # Always clean up temporary objects
-                pm.delete(temp_objects)
+                    pm.manipPivot(ro=1)
 
     @staticmethod
     @CoreUtils.undo
@@ -824,69 +872,77 @@ class XformUtils(ptk.HelpMixin):
         return center_pos
 
     @staticmethod
-    def get_bounding_box(objects, value="", world_space=True):
+    def get_bounding_box(objects, value="", world_space=True, return_valid_keys=False):
         """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s).
 
-        The method computes the bounding box that encompasses all specified objects or components.
-        It can return various properties of this bounding box, such as its minimum and maximum extents,
-        its size along each axis, its total volume, and the central point. The properties to return
-        are specified as strings within the 'value' parameter, which can include multiple values separated by
-        a pipe ('|') character. The calculations can be performed in either world or local object space.
-
         Parameters:
-            objects (str/obj/list): The object(s) or component(s) to query. This can be a single object
-                                    or component, or a list of objects/components.
-            value (str): A string representing the specific bounding box data to return. This can include
-                         multiple properties separated by '|'. Valid options (case insensitive) are:
-                         'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'size', 'sizex', 'sizey',
-                         'sizez', 'volume', 'center', 'centroid', 'minsize', and 'maxsize'.
-            world_space (bool): If True, calculates the bounding box in world space. If False, uses local
-                                object space. Default is True.
+            objects (str/obj/list): The object(s) or component(s) to query.
+            value (str): A string representing the specific bounding box data to return.
+                        Multiple properties can be requested using '|'.
+            world_space (bool): If True, computes the bounding box in world space.
+            return_valid_keys (bool): If True, returns all valid bbox keys instead of computing the bbox.
+
         Returns:
-            float/tuple: The requested bounding box value(s). If a single value is requested, a float is
-                         returned. If multiple values are requested, a tuple of floats is returned.
-        Raises:
-            ValueError: If no objects are provided, if an invalid 'value' is specified, or if other input
-                        parameters are incorrect.
-        Examples:
-            # To get the size of the bounding box:
-            size = YourClassNameHere.get_bounding_box(obj, "size")
-            # To get the x, y, and z sizes individually:
-            sizex, sizey, sizez = YourClassNameHere.get_bounding_box(obj, "sizex|sizey|sizez")
+            float/tuple/list: The requested bounding box value(s), or a list of valid keys if `return_valid_keys=True`.
         """
+        bbox_values = {
+            "xmin": None,
+            "xmax": None,
+            "ymin": None,
+            "ymax": None,
+            "zmin": None,
+            "zmax": None,
+            "sizex": None,
+            "sizey": None,
+            "sizez": None,
+            "size": None,
+            "volume": None,
+            "center": None,
+            "centroid": None,
+            "minsize": None,
+            "maxsize": None,
+        }
+
+        # Return only the valid keys if requested
+        if return_valid_keys:
+            return list(bbox_values.keys())
+
         # Validate input objects
         if not objects:
             raise ValueError("No objects provided for bounding box calculation.")
 
         objs = objects if isinstance(objects, (list, tuple)) else [objects]
+        bbox = (
+            pm.exactWorldBoundingBox(objs)
+            if world_space
+            else pm.xform(objs, q=True, bb=True, ws=False)
+        )
 
-        if world_space:
-            bbox = pm.exactWorldBoundingBox(objs)
-        else:
-            bbox = pm.xform(objs, q=True, bb=True, ws=False)
-
+        # Assign real values to the dictionary
         xmin, ymin, zmin, xmax, ymax, zmax = bbox
         size = (xmax - xmin, ymax - ymin, zmax - zmin)
         center = ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
         volume = size[0] * size[1] * size[2]
 
-        bbox_values = {
-            "xmin": xmin,
-            "xmax": xmax,
-            "ymin": ymin,
-            "ymax": ymax,
-            "zmin": zmin,
-            "zmax": zmax,
-            "sizex": size[0],
-            "sizey": size[1],
-            "sizez": size[2],
-            "size": size,
-            "volume": volume,
-            "center": center,
-            "centroid": center,
-            "minsize": min(size),
-            "maxsize": max(size),
-        }
+        bbox_values.update(
+            {
+                "xmin": xmin,
+                "xmax": xmax,
+                "ymin": ymin,
+                "ymax": ymax,
+                "zmin": zmin,
+                "zmax": zmax,
+                "sizex": size[0],
+                "sizey": size[1],
+                "sizez": size[2],
+                "size": size,
+                "volume": volume,
+                "center": center,
+                "centroid": center,
+                "minsize": min(size),
+                "maxsize": max(size),
+            }
+        )
 
         values = value.lower().split("|")
         try:

@@ -15,7 +15,7 @@ class CutOnAxis:
     @staticmethod
     @core_utils.CoreUtils.undo
     def perform_cut_on_axis(
-        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False
+        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False, pivot=0
     ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
@@ -27,27 +27,28 @@ class CutOnAxis:
             delete (bool): If True, delete the faces on the specified axis. Default is False.
             mirrot (bool): After deleting, mirror the object(s).
         """
-        axis = axis.lower()  # Assure lower case.
+        if cuts:
+            axis = axis.lower()  # Assure lower case.
 
-        for obj in (o for o in objects if not NodeUtils.is_group(o)):
-            if cuts:
-                EditUtils.cut_along_axis(obj, axis, cuts, cut_offset, delete)
+            EditUtils.cut_along_axis(
+                objects,
+                axis=axis,
+                pivot=pivot,
+                amount=cuts,
+                mirror=mirror,
+                offset=cut_offset,
+                delete=delete,
+            )
 
-            elif delete:
-                EditUtils.delete_along_axis(obj, axis)
-
-            if mirror:
-                opposing_axis = axis.strip("-") if "-" in axis else f"-{axis}"
-                EditUtils.mirror(obj, opposing_axis, axis_pivot=0)
-
-        pm.select(objects)
+            pm.select(objects)
 
 
 class CutOnAxisSlots:
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Initialize the switchboard and UI here
-        self.sb = self.switchboard()
-        self.ui = self.sb.cut_on_axis
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.cut_on_axis
+
         self.preview = preview.Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
@@ -55,18 +56,27 @@ class CutOnAxisSlots:
         # Connect sliders and checkboxes to preview refresh function
         self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
+        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
     def perform_operation(self, objects):
-        # Read values from UI and execute mirror operation
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
+        pivot_index = self.ui.cmb000.currentIndex()
         cuts = self.ui.s000.value()
         cut_offset = self.ui.s001.value()
         delete = self.ui.chk005.isChecked()
         mirror = self.ui.chk006.isChecked()
 
+        pivot_mapping = {
+            0: "object",
+            1: "world",
+            2: "center",
+        }
+        pivot = pivot_mapping.get(pivot_index, "center")
+
         CutOnAxis.perform_cut_on_axis(
             objects,
             axis=axis,
+            pivot=pivot,
             cuts=cuts,
             cut_offset=cut_offset,
             delete=delete,
@@ -74,23 +84,21 @@ class CutOnAxisSlots:
         )
 
 
+class CutOnAxisUi:
+    def __new__(self):
+        """Get the Cut On Axis UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "cut_on_axis.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=CutOnAxisSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    from uitk import Switchboard
-
-    parent = core_utils.CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "cut_on_axis.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=CutOnAxisSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-
-    sb.current_ui.show(pos="screen", app_exec=True)
+    CutOnAxisUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

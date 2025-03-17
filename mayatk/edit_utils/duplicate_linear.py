@@ -8,7 +8,6 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
 from mayatk.display_utils import DisplayUtils
 from mayatk.core_utils import preview
 
@@ -47,9 +46,11 @@ class DuplicateLinear:
                 x = (i + 1) / num_copies
                 f_x = ptk.lerp(
                     x,
-                    x**weight_curve
-                    if weight_bias >= 0.5
-                    else 1 - (1 - x) ** weight_curve,
+                    (
+                        x**weight_curve
+                        if weight_bias >= 0.5
+                        else 1 - (1 - x) ** weight_curve
+                    ),
                     weight_factor,
                 )
 
@@ -112,9 +113,9 @@ class DuplicateLinear:
 
 
 class DuplicateLinearSlots:
-    def __init__(self):
-        self.sb = self.switchboard()
-        self.ui = self.sb.duplicate_linear
+    def __init__(self, **kwargs):
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.duplicate_linear
 
         self.preview = preview.Preview(
             self,
@@ -183,23 +184,21 @@ class DuplicateLinearSlots:
         )
 
 
+class DuplicateLinearUi:
+    def __init__(self):
+        """Get the Duplicate Linear UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "dulicate_linear.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DuplicateLinearSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    from uitk import Switchboard
-
-    parent = core_utils.CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "duplicate_linear.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=DuplicateLinearSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(
-        Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    )
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-
-    sb.current_ui.show(pos="screen", app_exec=True)
+    DuplicateLinearUi().show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

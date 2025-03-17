@@ -396,10 +396,10 @@ class DynamicPipe:
 
 
 class DynamicPipeSlots:
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Initialize the switchboard and UI here
-        self.sb = self.switchboard()
-        self.ui = self.sb.dynamic_pipe
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.dynamic_pipe
 
         self.pipe = None
 
@@ -414,25 +414,21 @@ class DynamicPipeSlots:
     def b001(self, widget): ...
 
 
+class DynamicPipeUi:
+    def __new__(self):
+        """Get the Dynamic Pipe UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_file = os.path.join(os.path.dirname(__file__), "dynamic_pipe.ui")
+        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DynamicPipeSlots)
+        return ui
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # import os
-    # from uitk import Switchboard
-
-    # parent = core_utils.CoreUtils.get_main_window()
-    # ui_file = os.path.join(os.path.dirname(__file__), "dynamic_pipe.ui")
-    # sb = Switchboard(parent, ui_location=ui_file, slot_location=DynamicPipeSlots)
-
-    # sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    # sb.current_ui.set_flags(
-    #     Tool=True, FramelessWindowHint=True, WindowStaysOnTopHint=True
-    # )
-    # sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    # sb.current_ui.header.configure_buttons(
-    #     menu_button=True, minimize_button=True, hide_button=True
-    # )
-    # sb.current_ui.show(pos="screen", app_exec=True)
+    DynamicPipeUi().show(pos="screen", app_exec=True)
 
     pm.select(clear=True)
     for i in range(1, 5):

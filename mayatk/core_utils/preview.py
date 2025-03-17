@@ -40,9 +40,9 @@ class Preview:
         Usage Example:
             ```python
             class BevelSlots:
-                def __init__(self):
-                    self.sb = self.switchboard()
-                    self.ui = self.sb.bevel
+                def __init__(self, *args, **kwargs):
+                    self.sb = kwargs.get('switchboard')
+                    self.ui = self.sb.loaded_ui.bevel
                     self.preview = Preview(
                         self,
                         self.ui.chk000,

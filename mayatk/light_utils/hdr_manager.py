@@ -81,8 +81,8 @@ class HdrManagerSlots(HdrManager):
     def __init__(self, **kwargs):
         super().__init__()
 
-        self.sb = self.switchboard()
-        self.ui = self.sb.hdr_manager
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.hdr_manager
         self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
 
@@ -174,20 +174,23 @@ class HdrManagerSlots(HdrManager):
     #         self.ui.b000.setDisabled(True)
 
 
-# -----------------------------------------------------------------------------
+class HdrManagerUi:
+    def __new__(cls):
+        """Get the HDR Manager UI."""
+        import os
+        from mayatk.ui_utils.ui_manager import UiManager
+
+        ui_filepath = os.path.join(os.path.dirname(__file__), f"hdr_manager.ui")
+        ui = UiManager.get_ui(ui_source=ui_filepath, slot_source=HdrManagerSlots)
+        return ui
+
+
+# ----------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
-    from uitk import Switchboard
+    HdrManagerUi().show(pos="screen", app_exec=True)
 
-    parent = CoreUtils.get_main_window()
-    ui_file = os.path.join(os.path.dirname(__file__), "hdr_manager.ui")
-    sb = Switchboard(parent, ui_location=ui_file, slot_location=HdrManagerSlots)
-
-    sb.current_ui.set_attributes(WA_TranslucentBackground=True)
-    sb.current_ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    sb.current_ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    sb.current_ui.header.configure_buttons(minimize_button=True, hide_button=True)
-    sb.current_ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

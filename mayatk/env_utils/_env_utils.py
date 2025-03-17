@@ -174,7 +174,7 @@ class EnvUtils(ptk.HelpMixin):
             plugin_name (str): The name of the plugin to load.
 
         Examples:
-            >>> load_plugin('nearestPointOnMesh')
+            load_plugin('nearestPointOnMesh')
 
         Raises:
             ValueError: If the plugin is not found or fails to load.
@@ -184,6 +184,35 @@ class EnvUtils(ptk.HelpMixin):
                 pm.loadPlugin(plugin_name, quiet=True)
             except RuntimeError as e:
                 raise ValueError(f"Failed to load plugin {plugin_name}: {e}")
+
+    @staticmethod
+    def vray_plugin(load=False, unload=False, query=False):
+        """Load/Unload/Query the Maya Vray Plugin.
+
+        Parameters:
+            load (bool): Load the VRay plugin.
+            unload (bool): Unload the VRay plugin.
+            query (bool): Query the status of the VRay plugin.
+        """
+
+        def is_loaded(plugin="vrayformaya.mll"):
+            return True if pm.pluginInfo(plugin, q=True, loaded=True) else False
+
+        if query:
+            return is_loaded()
+
+        vray = ["vrayformaya.mll", "vrayformayapatch.mll"]
+        try:
+            if load:
+                for plugin in vray:
+                    if not is_loaded(plugin):
+                        pm.loadPlugin(plugin)
+            if unload:
+                for plugin in vray:
+                    if is_loaded(plugin):
+                        pm.unloadPlugin(plugin)
+        except Exception as error:
+            print(error)
 
     @staticmethod
     def get_recent_files(index=None):

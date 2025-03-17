@@ -1493,29 +1493,23 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             objects (list): List of mesh names, with the first being the source and the rest being the targets.
             space (str): The space in which to transfer the normals ('world' or 'local').
         """
-        if len(objects) < 2:
-            raise ValueError(
-                "At least one source and one target mesh must be provided."
-            )
-
         space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
         if space not in space_map:
             valid_spaces = ", ".join(space_map.keys())
             raise ValueError(f"space parameter must be one of: {valid_spaces}")
 
+        # Filter objects to ensure only polygonal meshes are included
+        objs = pm.ls(objects, type="mesh")
+        if len(objs) < 2:
+            raise ValueError(
+                "At least one source and one target mesh must be polygonal meshes."
+            )
+
+        source_mesh, *target_meshes = objs
         sample_space_value = space_map[space]
 
-        source_mesh, *target_meshes = pm.ls(objects, flatten=True)
-
-        # Ensure we are working with shape nodes
-        if isinstance(source_mesh, pm.nt.Transform):
-            source_mesh = source_mesh.getShape()
-
+        source_vertices = source_mesh.numVertices()
         for target_mesh in target_meshes:
-            if isinstance(target_mesh, pm.nt.Transform):
-                target_mesh = target_mesh.getShape()
-
-            source_vertices = source_mesh.numVertices()
             target_vertices = target_mesh.numVertices()
 
             if source_vertices != target_vertices:
@@ -1529,7 +1523,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 target_mesh,
                 transferNormals=1,
                 sampleSpace=sample_space_value,
-                searchMethod=3,  # closest to point
+                searchMethod=3,  # Closest to point
                 colorBorders=1,
             )
 
@@ -1678,24 +1672,32 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         Parameters:
             objects (obj/list): Polygon object(s) or Polygon face(s).
-            returned_type (str): The desired returned type. valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
+            returned_type (str): The desired returned type. Valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
 
         Returns:
-            (list)(dict) dependent on the given returned_type arg. ex. {0L:[[MeshFace(u'pShape.f[0]'), MeshFace(u'pShape.f[1]')], 1L:[[MeshFace(u'pShape.f[2]'), MeshFace(u'pShape.f[3]')]}
+            (list)(dict): Depending on the given returned_type arg.
+            Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')], 1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
         faces = cls.get_components(objects, "faces", flatten=True)
-
         shells = {}
-        for face in faces:
-            shell_Id = pm.polyEvaluate(face, uvShellIds=True)
 
+        for face in faces:
             try:
-                shells[shell_Id[0]].append(face)
-            except KeyError:
-                try:
-                    shells[shell_Id[0]] = [face]
-                except IndexError:
-                    pm.warning(f"Unable to get UV shell ID for face: {face}")
+                # Attempt to get the UV shell ID, ensure it returns a non-empty list
+                shell_Id = pm.polyEvaluate(face, uvShellIds=True)
+
+                # Validate shell_Id
+                if not isinstance(shell_Id, list) or not shell_Id:
+                    pm.warning(f"Invalid UV shell ID for face: {face}")
+                    continue
+
+                # Use the shell ID to group faces
+                shell_key = shell_Id[0]
+                shells.setdefault(shell_key, []).append(face)
+
+            except pm.MayaNodeError as e:
+                pm.warning(f"Error evaluating UV shell ID for face {face}: {e}")
+                continue
 
         if returned_type == "shell":
             return list(shells.values())
