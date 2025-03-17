@@ -35,13 +35,10 @@ class CutOnAxis:
                 axis=axis,
                 pivot=pivot,
                 amount=cuts,
+                mirror=mirror,
                 offset=cut_offset,
                 delete=delete,
             )
-
-            if mirror:
-                opposing_axis = axis.strip("-") if "-" in axis else f"-{axis}"
-                EditUtils.mirror(objects, axis=opposing_axis, mirrorAxis="boundingBox")
 
             pm.select(objects)
 
@@ -62,13 +59,19 @@ class CutOnAxisSlots:
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
     def perform_operation(self, objects):
-        # Read values from UI and execute mirror operation
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
-        pivot = self.ui.cmb000.currentIndex()
+        pivot_index = self.ui.cmb000.currentIndex()
         cuts = self.ui.s000.value()
         cut_offset = self.ui.s001.value()
         delete = self.ui.chk005.isChecked()
         mirror = self.ui.chk006.isChecked()
+
+        pivot_mapping = {
+            0: "object",
+            1: "world",
+            2: "center",
+        }
+        pivot = pivot_mapping.get(pivot_index, "center")
 
         CutOnAxis.perform_cut_on_axis(
             objects,

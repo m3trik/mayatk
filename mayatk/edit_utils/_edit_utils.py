@@ -414,29 +414,26 @@ class EditUtils(ptk.HelpMixin):
         cls,
         objects,
         axis="x",
-        invert=False,
-        ortho=False,
+        pivot="center",
         amount=1,
         offset=0,
+        invert=False,
+        ortho=False,
         delete=False,
-        pivot="center",
+        mirror=False,
     ):
         """Cut objects along the specified axis.
 
         Parameters:
             objects (str/obj/list): The object(s) to cut.
             axis (str): The axis to cut along ('x', '-x', 'y', '-y', 'z', '-z'). Default is 'x'.
+            amount (int): The number of cuts to make. Default is 1.
+            pivot (str or tuple): Defines the cutting pivot (passed to get_operation_axis_pos).
+            offset (float): The offset amount from the pivot for the cut. Default is 0.
             invert (bool): Invert the axis direction.
             ortho (bool): Use orthographic projection.
-            amount (int): The number of cuts to make. Default is 1.
-            offset (float): The offset amount from the center for the cut. Default is 0.
             delete (bool): If True, delete the faces on the specified axis. Default is False.
-            pivot (str or tuple): Defines the cutting pivot:
-                - `"center"` (default) → Bounding box center.
-                - `"xmin"`, `"xmax"`, `"ymin"`, `"ymax"`, `"zmin"`, `"zmax"` → Bounding box min/max.
-                - `"object"` → Uses the object's pivot.
-                - `"world"` → Uses world origin (0,0,0).
-                - A tuple `(x, y, z)` → Uses a specified world-space pivot.
+            mirror (bool): If True, mirror the result after deletion using the cut position as the pivot.
         """
         axis = XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
@@ -454,7 +451,6 @@ class EditUtils(ptk.HelpMixin):
                 )
                 continue
 
-            sign = -1 if axis.startswith("-") else 1
             axis_length = bounding_box[axis_index + 3] - bounding_box[axis_index]
             if axis_length == 0:
                 pm.warning(
@@ -462,16 +458,16 @@ class EditUtils(ptk.HelpMixin):
                 )
                 continue
 
-            # 🔹 Updated to use new get_operation_axis_pos format
+            # Get pivot position from get_operation_axis_pos
             pivot_value = XformUtils.get_operation_axis_pos(node, pivot, axis_index)
 
-            pivot_value = max(
-                bounding_box[axis_index], min(bounding_box[axis_index + 3], pivot_value)
-            )
+            # Apply offset after resolving pivot
+            sign = -1 if axis.startswith("-") else 1
+            pivot_value += offset * sign
 
             cut_spacing = axis_length / (amount + 1)
 
-            # 🔹 Corrected rotation dictionary
+            # Rotation dictionary
             rotations = {
                 "x": (0, 90, 0),
                 "-x": (0, -90, 0),
@@ -482,19 +478,28 @@ class EditUtils(ptk.HelpMixin):
             }
             rotation = rotations.get(axis, (0, 0, 0))
 
+            cut_positions = []
             for i in range(amount):
                 cut_position = list(bounding_box[:3])
                 cut_position[axis_index] = (
-                    pivot_value
-                    - ((amount - 1) * cut_spacing / 2)
-                    + (cut_spacing * i)
-                    + offset * sign
+                    pivot_value - ((amount - 1) * cut_spacing / 2) + (cut_spacing * i)
                 )
+                cut_positions.append(cut_position[axis_index])  # Store cut positions
 
                 pm.polyCut(node, df=False, pc=cut_position, ro=rotation, ch=True)
 
             if delete:
-                cls.delete_along_axis(node, axis, invert, pivot, delete_history=False)
+                adjusted_pivot = list(XformUtils.get_operation_axis_pos(node, pivot))
+                adjusted_pivot[axis_index] = (
+                    cut_positions[-1] if sign == 1 else cut_positions[0]
+                )
+                cls.delete_along_axis(
+                    node,
+                    axis,
+                    pivot=tuple(adjusted_pivot),
+                    delete_history=False,
+                    mirror=mirror,
+                )
 
     @classmethod
     @CoreUtils.undo
@@ -502,25 +507,20 @@ class EditUtils(ptk.HelpMixin):
         cls,
         objects,
         axis="-x",
-        invert=False,
         pivot="center",
         delete_history=True,
+        mirror=False,
     ):
-        """Delete faces along the specified axis.
+        """Delete faces along the specified axis and optionally mirror the result.
 
         Parameters:
             objects (str/obj/list): The object(s) to delete faces from.
             axis (str): The axis to delete along ('x', '-x', 'y', '-y', 'z', '-z'). Default is '-x'.
-            invert (bool): Invert the axis direction.
-            pivot (str or tuple): Defines the deletion pivot:
-                - `"center"` (default) → Bounding box center.
-                - `"xmin"`, `"xmax"`, `"ymin"`, `"ymax"`, `"zmin"`, `"zmax"` → Bounding box min/max.
-                - `"object"` → Uses the object's pivot.
-                - `"world"` → Uses world origin (0,0,0).
-                - A tuple `(x, y, z)` → Uses a specified world-space pivot.
+            pivot (str or tuple): Defines the deletion pivot (passed to get_operation_axis_pos).
             delete_history (bool): If True, delete the construction history of the object(s). Default is True.
+            mirror (bool): If True, mirrors the result after deletion using the cut position as the pivot.
         """
-        axis = XformUtils.convert_axis(axis, invert=invert)
+        axis = XformUtils.convert_axis(axis)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
         for node in pm.ls(objects, type="transform", flatten=True):
@@ -539,14 +539,10 @@ class EditUtils(ptk.HelpMixin):
                 )
                 continue
 
-            # 🔹 Updated to use new get_operation_axis_pos format
+            # Get pivot position from get_operation_axis_pos
             pivot_value = XformUtils.get_operation_axis_pos(node, pivot, axis_index)
 
-            pivot_value = max(
-                bounding_box[axis_index], min(bounding_box[axis_index + 3], pivot_value)
-            )
-
-            # 🔹 Updated to use new pivot format
+            # Updated to use new pivot format
             faces = cls.get_all_faces_on_axis(node, axis, pivot)
             if not faces:
                 pm.warning(f"No faces found along {axis} on {node}. Skipping deletion.")
@@ -557,6 +553,16 @@ class EditUtils(ptk.HelpMixin):
                 pm.delete(node)
             else:
                 pm.delete(faces)
+
+            if mirror:  # Mirror if enabled
+                mirror_axis = axis.lstrip("-")  # Get base axis without negative sign
+                mirror_pivot = list(XformUtils.get_operation_axis_pos(node, pivot))
+                mirror_pivot[axis_index] = (
+                    pivot_value  # 🔹 Ensure pivot is at the cut plane
+                )
+                cls.mirror(
+                    node, axis=mirror_axis, pivot=tuple(mirror_pivot), mergeMode=1
+                )
 
     @classmethod
     @CoreUtils.undo
@@ -581,10 +587,8 @@ class EditUtils(ptk.HelpMixin):
                 - `"object"` → Mirrors at the object's pivot.
                 - Any valid bounding box keyword (`"xmin"`, `"ymax"`, `"center"`, etc.).
                 - A tuple `(x, y, z)` → Uses a specified world-space pivot.
-            mergeMode (int): Defines how the mirrored geometry is handled:
-                - `1` (default) → Merges the border vertices.
-                - `0` → Uses Maya’s built-in separate mode.
-                - `-1` → Custom separate mode (calls `polySeparate()`).
+            mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
+                - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
             uninstance (bool): If True, uninstances the object before mirroring.
             kwargs: Additional arguments for polyMirrorFace.
 

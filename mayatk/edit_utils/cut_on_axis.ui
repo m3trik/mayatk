@@ -212,10 +212,10 @@
             <string>Amount:	</string>
            </property>
            <property name="minimum">
-            <number>0</number>
+            <number>1</number>
            </property>
            <property name="maximum">
-            <number>1000</number>
+            <number>999</number>
            </property>
           </widget>
          </item>
@@ -346,17 +346,17 @@
            </property>
            <item>
             <property name="text">
-             <string>Pivot:  Bounding Box</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
              <string>Pivot:  Object</string>
             </property>
            </item>
            <item>
             <property name="text">
              <string>Pivot:  World</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  Bounding Box (center)</string>
             </property>
            </item>
           </widget>

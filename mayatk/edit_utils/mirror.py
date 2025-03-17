@@ -23,7 +23,7 @@ class MirrorSlots:
         self.sb.connect_multi(
             self.ui, "cmb000-1", "currentIndexChanged", self.preview.refresh
         )
-        self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "chk001-5", "clicked", self.preview.refresh)
 
     def perform_operation(self, objects):
         # Read values from UI
@@ -45,52 +45,30 @@ class MirrorSlots:
             "axis": axis,
             "pivot": pivot,
             "mergeMode": mergeMode,
-            "cutMesh": self.ui.chk005.isChecked(),  # Valid flag for polyMirrorFace
-            "uninstance": self.ui.chk006.isChecked(),  # Uninstance objects before mirroring
+            "uninstance": self.ui.chk005.isChecked(),  # Uninstance objects before mirroring
         }
 
-        EditUtils.mirror(
-            objects, **kwargs
-        )  # Call mirror method with resolved parameters
+        EditUtils.mirror(objects, **kwargs)
 
     @staticmethod
     def _resolve_pivot(pivot_index: int, axis: str) -> str:
-        """
-        Resolves the correct pivot parameter for mirroring based on the axis selection.
-
-        Parameters:
-            pivot_index (int): UI dropdown index for pivot selection.
-            axis (str): The chosen mirror axis ('x', '-x', 'y', '-y', 'z', '-z').
-
-        Returns:
-            str: The appropriate pivot type ('object', 'world', 'xmin', 'xmax', etc.).
-        """
-        # Define min/max mappings for each axis
         axis_mapping = {
-            "x": ("xmin", "xmax"),
-            "-x": ("xmin", "xmax"),
-            "y": ("ymin", "ymax"),
-            "-y": ("ymin", "ymax"),
-            "z": ("zmin", "zmax"),
-            "-z": ("zmin", "zmax"),
+            "x": "xmax",
+            "-x": "xmax",
+            "y": "ymax",
+            "-y": "ymax",
+            "z": "zmax",
+            "-z": "zmax",
         }
 
-        # Get the appropriate bounding box min/max keys for the selected axis
-        bbox_min, bbox_max = axis_mapping.get(
-            axis, ("xmin", "xmax")
-        )  # Default to X if invalid
-
-        # Pivot selection mapping based on UI input
         pivot_mapping = {
-            0: "object",  # Object's pivot point
-            1: "world",  # World origin (0,0,0)
-            2: "center",  # Bounding box center
-            3: bbox_max,  # Maximum bound of the selected axis
+            0: "object",
+            1: "world",
+            2: "center",
+            3: axis_mapping.get(axis, "xmax"),
         }
 
-        return pivot_mapping.get(
-            pivot_index, "object"
-        )  # Default to object pivot if out of range
+        return pivot_mapping.get(pivot_index, "object")
 
 
 class MirrorUi:

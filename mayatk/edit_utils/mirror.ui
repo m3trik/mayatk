@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>186</height>
+    <height>164</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -96,16 +96,6 @@
          <property name="verticalSpacing">
           <number>1</number>
          </property>
-         <item row="9" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk005">
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Cut and delete opposing faces of the specified axis and pivot.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="text">
-            <string>Cut Mesh</string>
-           </property>
-          </widget>
-         </item>
          <item row="1" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout">
            <property name="spacing">
@@ -144,7 +134,14 @@
            </item>
           </layout>
          </item>
-         <item row="12" column="0" colspan="4">
+         <item row="2" column="3">
+          <widget class="QRadioButton" name="chk004">
+           <property name="text">
+            <string>Z</string>
+           </property>
+          </widget>
+         </item>
+         <item row="11" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -191,8 +188,8 @@
            </item>
           </layout>
          </item>
-         <item row="11" column="0" colspan="4">
-          <widget class="QCheckBox" name="chk006">
+         <item row="10" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk005">
            <property name="toolTip">
             <string>Un-instance the object(s) before performing the operation.</string>
            </property>
@@ -201,17 +198,68 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="3">
-          <widget class="QRadioButton" name="chk004">
-           <property name="text">
-            <string>Z</string>
-           </property>
-          </widget>
-         </item>
          <item row="2" column="0">
           <widget class="QCheckBox" name="chk001">
            <property name="text">
             <string>—</string>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0" colspan="4">
+          <widget class="ComboBox" name="cmb000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="maxVisibleItems">
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContents</enum>
+           </property>
+           <property name="frame">
+            <bool>true</bool>
+           </property>
+           <item>
+            <property name="text">
+             <string>Pivot:  Object</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  World</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  Bounding Box (center)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Pivot:  Bounding Box (border)</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="2" column="2">
+          <widget class="QRadioButton" name="chk003">
+           <property name="text">
+            <string>Y</string>
            </property>
           </widget>
          </item>
@@ -266,69 +314,11 @@
            </item>
           </widget>
          </item>
-         <item row="2" column="2">
-          <widget class="QRadioButton" name="chk003">
-           <property name="text">
-            <string>Y</string>
-           </property>
-          </widget>
-         </item>
          <item row="2" column="1">
           <widget class="QRadioButton" name="chk002">
            <property name="text">
             <string>X</string>
            </property>
-          </widget>
-         </item>
-         <item row="7" column="0" colspan="4">
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="maxVisibleItems">
-            <number>40</number>
-           </property>
-           <property name="maxCount">
-            <number>500</number>
-           </property>
-           <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContents</enum>
-           </property>
-           <property name="frame">
-            <bool>true</bool>
-           </property>
-           <item>
-            <property name="text">
-             <string>Pivot:  Object</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Pivot:  World</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Pivot:  Bounding Box (center)</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Pivot:  Bounding Box (border)</string>
-            </property>
-           </item>
           </widget>
          </item>
         </layout>
