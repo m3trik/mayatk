@@ -184,21 +184,13 @@ class DuplicateLinearSlots:
         )
 
 
-class DuplicateLinearUi:
-    def __init__(self):
-        """Get the Duplicate Linear UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "dulicate_linear.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DuplicateLinearSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    DuplicateLinearUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("duplicate_linear", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

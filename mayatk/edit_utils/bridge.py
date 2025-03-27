@@ -50,21 +50,13 @@ class BridgeSlots:
         Bridge.bridge(objects, **kwargs)
 
 
-class BridgeUi:
-    def __new__(self):
-        """Get the Bridge UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "bridge.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=BridgeSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    BridgeUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("bridge", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -44,46 +44,52 @@ IMPORTED_MODULES = {}
 MODULE_TO_PARENT = {}
 
 
-def build_dictionaries(included_modules=None):
+def build_dictionaries(included_modules=None, included_classes=None):
     base_path = os.path.dirname(__file__)
     base_package = __name__
 
     if base_package == "__main__":
         raise EnvironmentError("build_dictionaries cannot be run as a script.")
 
+    included_classes = included_classes or {}
+
     for importer, modname, ispkg in pkgutil.walk_packages(
         path=[base_path], prefix=base_package + "."
     ):
         module_name_component = modname.split(".")[-1]
 
-        # If included_modules is defined, skip modules not in the list
-        if (
-            included_modules is not None
-            and module_name_component not in included_modules
-        ):
-            parent_package = modname.rsplit(".", 1)[0] if "." in modname else None
-            if parent_package:
-                MODULE_TO_PARENT[module_name_component] = parent_package
-            continue
+        # If included_modules is defined, register the entire module
+        if included_modules and module_name_component in included_modules:
+            try:
+                module = importlib.import_module(modname)
+            except ImportError as e:
+                print(f"Failed to import module {modname}: {e}")
+                continue
 
-        try:
-            module = importlib.import_module(modname)
-        except ImportError as e:
-            print(f"Failed to import module {modname}: {e}")
-            continue
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if obj.__module__ == modname:
+                    CLASS_TO_MODULE[name] = modname
+                    method_members = inspect.getmembers(
+                        obj,
+                        lambda member: inspect.isfunction(member)
+                        or inspect.ismethod(member),
+                    )
+                    for method_name, _ in method_members:
+                        METHOD_TO_MODULE[method_name] = (modname, name)
+                        CLASS_METHOD_TO_MODULE[method_name] = (modname, name)
 
-        for name, obj in inspect.getmembers(module, inspect.isclass):
-            if obj.__module__ == modname:
-                CLASS_TO_MODULE[name] = modname
-                method_members = inspect.getmembers(
-                    obj,
-                    lambda member: inspect.isfunction(member)
-                    or inspect.ismethod(member),
-                )
-                for method_name, _ in method_members:
-                    # Method detection refinement needed here based on actual method classification
-                    METHOD_TO_MODULE[method_name] = (modname, name)
-                    CLASS_METHOD_TO_MODULE[method_name] = (modname, name)
+        # If a class from this module is in included_classes, add only that class
+        elif module_name_component in included_classes:
+            try:
+                module = importlib.import_module(modname)
+            except ImportError as e:
+                print(f"Failed to import module {modname}: {e}")
+                continue
+
+            for class_name in included_classes[module_name_component]:
+                obj = getattr(module, class_name, None)
+                if obj and inspect.isclass(obj) and obj.__module__ == modname:
+                    CLASS_TO_MODULE[class_name] = modname
 
 
 def import_module(module_name):
@@ -121,20 +127,28 @@ def __getattr__(name):
 # --------------------------------------------------------------------------------------------
 # Classes and methods from these modules will be exposed at package level.
 included_modules = [
-    "_core_utils",
-    "components",
-    "_env_utils",
-    "_display_utils",
-    "_edit_utils",
-    "_mat_utils",
     "_anim_utils",
     "_cam_utils",
+    "_core_utils",
+    "_display_utils",
+    "_edit_utils",
+    "_env_utils",
+    "_mat_utils",
     "_node_utils",
     "_rig_utils",
-    "_xform_utils",
     "_ui_utils",
+    "_xform_utils",
 ]
-build_dictionaries(included_modules=included_modules)
+
+included_classes = {
+    "components": ["Components"],
+    "macros": ["Macros"],
+    "maya_menu_handler": ["MayaMenuHandler"],
+    "naming": ["Naming"],
+    "ui_manager": ["UiManager"],
+}
+
+build_dictionaries(included_modules=included_modules, included_classes=included_classes)
 
 # --------------------------------------------------------------------------------------------
 # Notes

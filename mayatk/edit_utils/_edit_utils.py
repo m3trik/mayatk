@@ -18,232 +18,8 @@ from mayatk.xform_utils import XformUtils
 class EditUtils(ptk.HelpMixin):
     """ """
 
-    @classmethod
-    @CoreUtils.undo
-    def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
-        """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
-
-        Parameters:
-            objects (str/obj/list): The object(s) to rename. If empty, all scene objects will be renamed.
-            to (str): Desired name pattern. Asterisk (*) can be used for formatting:
-                    chars - replace all.
-                    *chars* - replace only.
-                    *chars - replace suffix.
-                    **chars - append suffix.
-                    chars* - replace prefix.
-                    chars** - append prefix.
-            fltr (str): Filter to apply on object names using wildcards or regular expressions:
-                    chars - exact match.
-                    *chars* - contains chars.
-                    *chars - ends with chars.
-                    chars* - starts with chars.
-                    chars|chars - matches any of the specified patterns.
-            regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
-            ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
-
-        Returns:
-            None: Objects are renamed in the scene directly.
-
-        Example:
-            rename('Cube', '*001', regex=True) # Replace suffix on objects containing 'Cube' in their name, e.g., 'polyCube' becomes 'polyCube001'.
-            rename('Cube', '**001', regex=True) # Append '001' to names of objects containing 'Cube', e.g., 'polyCube1' becomes 'polyCube1001'.
-        """
-        objects = pm.ls(objectsOnly=1) if not objects else pm.ls(objects)
-        long_names = [obj.name() for obj in objects]
-        short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
-
-        names = ptk.find_str_and_format(
-            short_names,
-            to,
-            fltr,
-            regex=regex,
-            ignore_case=ignore_case,
-            return_orig_strings=True,
-        )
-
-        print(f"Rename: Found {len(names)} matches.")
-
-        for i, (oldName, newName) in enumerate(names):
-            # Strip illegal characters from newName
-            newName = cls.strip_illegal_chars(newName)
-
-            oldName = long_names[i]  # Use the long name to reference the object
-            try:
-                if pm.objExists(oldName):
-                    n = pm.rename(oldName, newName)  # Rename the object
-                    if not n == newName:
-                        pm.warning(
-                            f"'{oldName}' renamed to '{n}'' instead of '{newName}'."
-                        )
-            except Exception as e:
-                if not pm.ls(oldName, readOnly=True) == []:  # Ignore read-only errors
-                    print(f"Error renaming '{oldName}' to '{newName}': {e}")
-
     @staticmethod
-    def strip_illegal_chars(input_data, replace_with="_"):
-        """Strips illegal characters from a string or a list of strings, replacing them with a specified character, conforming to Maya naming conventions.
-
-        Parameters:
-            input_data (str/list): A single string or a list of strings to be sanitized.
-            replace_with (str): The character to replace illegal characters with. Default is underscore (_).
-
-        Returns:
-            str/list: Sanitized string or list of strings, with illegal characters replaced.
-        """
-        import re
-
-        def clean_string(s):
-            pattern = re.compile(r"[^a-zA-Z0-9_]")
-            return pattern.sub(replace_with, s)
-
-        if isinstance(input_data, (list, tuple, set)):
-            return [clean_string(s) for s in input_data]
-        elif isinstance(input_data, str):
-            return clean_string(input_data)
-        else:
-            raise TypeError(
-                "Input data must be a string or a list, tuple, set of strings."
-            )
-
-    @staticmethod
-    @CoreUtils.undo
-    def strip_chars(
-        objects: Union[str, object, List[Union[str, object]]],
-        num_chars: int = 1,
-        trailing: bool = False,
-    ) -> List[str]:
-        """Deletes leading or trailing characters from the names of the provided objects.
-
-        Parameters:
-            objects (Union[str, pm.PyNode, List[Union[str, pm.PyNode]]]): The input string, PyNode, or list of either.
-            num_chars (int): The number of characters to delete.
-            trailing (bool): Whether to delete characters from the rear of the name.
-        """
-        # Flatten the list of objects if needed
-        objects = pm.ls(objects, flatten=True)
-        for obj in objects:
-            s = obj.shortName().split("|")[-1]
-            if num_chars > len(s):
-                print(
-                    f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
-                )
-                continue
-            if trailing:
-                new_name = s[:-num_chars]
-            else:
-                new_name = s[num_chars:]
-            try:
-                pm.rename(obj, new_name)
-            except Exception as e:
-                print(f"Unable to rename {s}: {e}")
-                continue
-
-    @staticmethod
-    @CoreUtils.undo
-    def set_case(objects=[], case="caplitalize"):
-        """Rename objects following the given case.
-
-        Parameters:
-            objects (str/list): The objects to rename. default:all scene objects
-            case (str): Desired case using python case operators.
-                    valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
-        Example:
-            set_case(pm.ls(sl=1), 'upper')
-        """
-        for obj in pm.ls(objects):
-            name = obj.name()
-
-            newName = getattr(name, case)()
-            try:
-                pm.rename(name, newName)
-            except Exception as error:
-                if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
-                    print(name + ": ", error)
-
-    @staticmethod
-    @CoreUtils.undo
-    def append_location_based_suffix(
-        objects,
-        first_obj_as_ref=False,
-        alphabetical=False,
-        strip_trailing_ints=True,
-        strip_trailing_alpha=True,
-        reverse=False,
-    ):
-        """Rename objects with a suffix defined by its location from origin.
-
-        Parameters:
-            objects (str)(int/list): The object(s) to rename.
-            first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
-            alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
-            strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
-            strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
-            reverse (bool): Reverse the naming order. (Farthest object first)
-        """
-        import string
-        import re
-
-        # Determine the reference point
-        reference_point = [0, 0, 0]
-        if first_obj_as_ref and objects:
-            first_obj_bbox = pm.exactWorldBoundingBox(objects[0])
-            reference_point = [
-                (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
-            ]
-
-        length = len(objects)
-        if alphabetical:
-            if length <= 26:
-                suffix = string.ascii_uppercase
-            else:
-                suffix = [str(n).zfill(len(str(length))) for n in range(length)]
-        else:
-            suffix = [str(n).zfill(len(str(length))) for n in range(length)]
-
-        ordered_objs = XformUtils.order_by_distance(
-            objects, reference_point=reference_point, reverse=reverse
-        )
-
-        newNames = {}  # the object with the new name set as a key.
-        for n, obj in enumerate(ordered_objs):
-            current_name = obj.name()
-
-            while (
-                (current_name[-1] == "_" or current_name[-1].isdigit())
-                and strip_trailing_ints
-            ) or (
-                (
-                    len(current_name) > 1
-                    and current_name[-2] == "_"
-                    and current_name[-1].isupper()
-                )
-                and strip_trailing_alpha
-            ):
-                if (
-                    current_name[-2] == "_" and current_name[-1].isupper()
-                ) and strip_trailing_alpha:  # trailing underscore and uppercase alphanumeric char.
-                    current_name = re.sub(
-                        re.escape(current_name[-2:]) + "$", "", current_name
-                    )
-
-                if (
-                    current_name[-1] == "_" or current_name[-1].isdigit()
-                ) and strip_trailing_ints:  # trailing underscore and integers.
-                    current_name = re.sub(
-                        re.escape(current_name[-1:]) + "$", "", current_name
-                    )
-
-            obj_suffix = suffix[n]
-            newNames[obj] = current_name + "_" + obj_suffix
-
-        # Rename all with a placeholder first so that there are no conflicts.
-        for obj in ordered_objs:
-            pm.rename(obj, "p0000000000")
-        for obj in ordered_objs:  # Rename all with the new names.
-            pm.rename(obj, newNames[obj])
-
-    @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
 
@@ -319,7 +95,7 @@ class EditUtils(ptk.HelpMixin):
                 pm.select(objects)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def merge_vertex_pairs(vertices):
         """Merge vertices in pairs by moving them to their center and merging.
 
@@ -409,7 +185,7 @@ class EditUtils(ptk.HelpMixin):
         return relevant_faces
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def cut_along_axis(
         cls,
         objects,
@@ -502,7 +278,7 @@ class EditUtils(ptk.HelpMixin):
                 )
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def delete_along_axis(
         cls,
         objects,
@@ -565,7 +341,7 @@ class EditUtils(ptk.HelpMixin):
                 )
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @DisplayUtils.add_to_isolation
     def mirror(
         cls,
@@ -1165,7 +941,7 @@ class EditUtils(ptk.HelpMixin):
                     pm.delete(obj)  # Delete entire object if no components selected
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @DisplayUtils.add_to_isolation
     def create_default_primitive(
         cls, baseType, subType, scale=False, translate=False, axis=None
@@ -1224,7 +1000,7 @@ class EditUtils(ptk.HelpMixin):
         return NodeUtils.get_history_node(node[0])
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_circle(
         axis="y", numPoints=5, radius=5, center=[0, 0, 0], mode=0, name="pCircle"
     ):

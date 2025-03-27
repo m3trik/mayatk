@@ -13,7 +13,7 @@ from mayatk.core_utils import preview
 
 class CutOnAxis:
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def perform_cut_on_axis(
         objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False, pivot=0
     ):
@@ -84,21 +84,13 @@ class CutOnAxisSlots:
         )
 
 
-class CutOnAxisUi:
-    def __new__(self):
-        """Get the Cut On Axis UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "cut_on_axis.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=CutOnAxisSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    CutOnAxisUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("cut_on_axis", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

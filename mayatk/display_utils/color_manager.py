@@ -351,21 +351,13 @@ class ColorManagerSlots(ColorManager):
         self.selected_button.color = wireframe_color
 
 
-class ColorManagerUi:
-    def __new__(self):
-        """Get the Color Manager UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "color_manager.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ColorManagerSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ColorManagerUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("color_manager", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

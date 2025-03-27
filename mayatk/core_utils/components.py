@@ -846,7 +846,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return vertPairs
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def get_closest_vertex(
         cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type="str"
     ):
@@ -997,7 +997,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return dist
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging
         the new vertices with the corresponding vertices of the second edge.
@@ -1352,7 +1352,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return filtered_edges
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def set_edge_hardness(
         cls,
         objects: Union[str, object, List],
@@ -1461,7 +1461,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return similar_faces
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def average_normals(cls, objects, by_uv_shell=False):
         """Average the normals of the given objects.
 
@@ -1485,7 +1485,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                     pm.polySoftEdge(obj, a=180)
 
     @staticmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def transfer_normals(objects: list[str], space: str = "world"):
         """Transfer vertex normals from source mesh to target meshes.
 

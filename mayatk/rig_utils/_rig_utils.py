@@ -56,7 +56,7 @@ class RigUtils(ptk.HelpMixin):
         return loc
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_locator_at_object(
         cls,
         objects,
@@ -185,7 +185,7 @@ class RigUtils(ptk.HelpMixin):
                 raise (error)
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def remove_locator(cls, objects):
         """Remove a parented locator from the child object.
 
@@ -236,7 +236,7 @@ class RigUtils(ptk.HelpMixin):
         return objects
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def set_attr_lock_state(
         cls, objects, translate=None, rotate=None, scale=None, **kwargs
     ):
@@ -280,7 +280,7 @@ class RigUtils(ptk.HelpMixin):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_group(
         objects=[],
         name="",
@@ -383,7 +383,7 @@ class RigUtils(ptk.HelpMixin):
         )
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def setup_telescope_rig(
         cls,
         base_locator: Union[str, List[str]],

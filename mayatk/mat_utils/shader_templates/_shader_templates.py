@@ -330,7 +330,7 @@ class ShaderTemplatesSlots:
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.shader_templates
 
-        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -464,21 +464,13 @@ class ShaderTemplatesSlots:
         self.ui.cmb002.init_slot()
 
 
-class ShaderTemplatesUi:
-    def __new__(self):
-        """Get the Shader Templates UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "shader_templates.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ShaderTemplatesSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ShaderTemplatesUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("shader_templates", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

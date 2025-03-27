@@ -19,6 +19,7 @@ from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
 from mayatk.xform_utils import XformUtils
+from mayatk.node_utils import NodeUtils
 from mayatk.display_utils import DisplayUtils
 
 
@@ -242,6 +243,8 @@ class SceneExporterTasks(SceneExporterTasksFactory):
         tolerance = 1e-5  # Small tolerance for floating-point comparisons
 
         for node in root_nodes:
+            if not NodeUtils.is_group(node):
+                continue
             # Check if translate, rotate, and scale attributes are at their default values
             translate = node.translate.get()
             rotate = node.rotate.get()
@@ -255,7 +258,9 @@ class SceneExporterTasks(SceneExporterTasksFactory):
             ):
 
                 if not has_non_default_transforms:
-                    self.logger.error("Non-default root group nodes found:")
+                    self.logger.error(
+                        "Root level group nodes found with non-default transforms:"
+                    )
                     has_non_default_transforms = True
 
                 self.logger.error(
@@ -689,7 +694,7 @@ class SceneExporterSlots(SceneExporter):
 
     @property
     def workspace(self) -> Optional[str]:
-        workspace_path = EnvUtils.get_maya_info("workspace")
+        workspace_path = EnvUtils.get_env_info("workspace")
         if not workspace_path:
             self.logger.error("Workspace directory not found.")
         return workspace_path
@@ -1124,21 +1129,13 @@ class SceneExporterSlots(SceneExporter):
             )
 
 
-class SceneExporterUI:
-    def __new__(self):
-        """Get the Scene Exporter UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "scene_exporter.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=SceneExporterSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    SceneExporterUI().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("scene_exporter", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -91,21 +91,13 @@ class BevelSlots:
         Bevel.bevel(objects, width, segments)
 
 
-class BevelUi:
-    def __new__(self):
-        """Get the Bevel UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "bevel.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=BevelSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    BevelUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("bevel", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 try:
     import pymel.core as pm
@@ -12,6 +12,7 @@ import pythontk as ptk
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.rig_utils import RigUtils
+from mayatk.edit_utils.naming import Naming
 
 
 class TubePath:
@@ -174,7 +175,7 @@ class TubeRig(ptk.LoggingMixin):
     def rig_name(self) -> str:
         """Returns the rig name."""
         if not self._rig_name:
-            self._rig_name = CoreUtils.generate_unique_name("tube_rig_0")
+            self._rig_name = Naming.generate_unique_name("tube_rig_0")
         return self._rig_name
 
     @rig_name.setter
@@ -192,6 +193,9 @@ class TubeRig(ptk.LoggingMixin):
                 self._rig_group = pm.PyNode(rig_name)
             else:
                 self._rig_group = pm.group(empty=True, name=rig_name)
+                pm.makeIdentity(
+                    self._rig_group, apply=True, t=1, r=1, s=1, n=0
+                )  # Freeze
             self.logger.debug(f"Created/Found rig group: {self._rig_group.name()}")
         return NodeUtils.get_transform_node(self._rig_group)
 
@@ -204,7 +208,7 @@ class TubeRig(ptk.LoggingMixin):
         else:
             self.logger.error("Provided rig group is not a valid transform node.")
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def generate_joint_chain(
         self,
         centerline: List[List[float]],
@@ -255,21 +259,12 @@ class TubeRig(ptk.LoggingMixin):
         self.joints = joints
         return joints
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_start_end_locators(
         self,
         joints: List["pm.nodetypes.Joint"],
         ik_handle: Optional["pm.nodetypes.Transform"] = None,
     ) -> Tuple["pm.nodetypes.Transform", "pm.nodetypes.Transform"]:
-        """Creates start and end locators, correctly constraining them based on rig hierarchy.
-
-        Parameters:
-            joints (str/list): The joint chain to create locators for.
-            ik_handle (pm.nodetypes.Transform): The IK handle to follow the end locator.
-
-        Returns:
-            Tuple[pm.nodetypes.Transform, pm.nodetypes.Transform]: The start and end locators.
-        """
         joints = pm.ls(joints, type="joint", flatten=True)
         if len(joints) < 2:
             self.logger.error("Not enough joints to create locators.")
@@ -278,89 +273,59 @@ class TubeRig(ptk.LoggingMixin):
         start_locator = pm.spaceLocator(name=f"{self.rig_name}_start_LOC")
         end_locator = pm.spaceLocator(name=f"{self.rig_name}_end_LOC")
 
-        # Get world positions of the first and last joint
         start_position = joints[0].getTranslation(space="world")
         end_position = joints[-1].getTranslation(space="world")
 
-        # Set locator positions
         start_locator.setTranslation(start_position, space="world")
         end_locator.setTranslation(end_position, space="world")
 
-        # Reset locator transformations
         pm.makeIdentity(start_locator, apply=True, t=1, r=1, s=1, n=0)
         pm.makeIdentity(end_locator, apply=True, t=1, r=1, s=1, n=0)
 
-        # Parent to the rig group
         start_locator.setParent(self.rig_group)
         end_locator.setParent(self.rig_group)
 
-        # Constrain the first joint to the start locator
+        # Constrain joints directly to locators without offsets
         pm.pointConstraint(start_locator, joints[0], maintainOffset=False)
 
-        # Constrain the end locator
-        if ik_handle:  # Ik handle follows end locator
-            pm.pointConstraint(end_locator, ik_handle, maintainOffset=True)
-        else:  # End locator follows last joint
-            pm.pointConstraint(joints[-1], end_locator, maintainOffset=True)
+        if ik_handle:
+            # IK follows end_locator without offset
+            pm.pointConstraint(end_locator, ik_handle, maintainOffset=False)
 
-        # Lock unnecessary attributes on locators
         RigUtils.set_attr_lock_state(
             (start_locator, end_locator), rotate=True, scale=True
         )
 
-        self.logger.debug(
-            f"Created start and end locators: {start_locator.name()}, {end_locator.name()}"
-        )
         self.start_loc = start_locator
         self.end_loc = end_locator
         return start_locator, end_locator
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_ik(
         self, joints: List["pm.nodetypes.Joint"], **kwargs
     ) -> Optional["pm.nodetypes.Transform"]:
-        """Creates an IK handle for the given list of joints with additional options from kwargs.
-
-        Parameters:
-            joints (List[pm.nodetypes.Joint]): List of joints to create IK handle for.
-            **kwargs: Additional keyword arguments to pass to pm.ikHandle.
-                note: startJoint and endEffector can be overridden using kwargs.
-                solver (str): The IK solver to use. ikRPsolver, ikSCsolver, ikSplineSolver
-        Returns:
-            pm.nodetypes.Transform: The created IK handle.
-        """
         joints = pm.ls(joints, type="joint", flatten=True)
         if len(joints) < 2:
-            self.logger.error(
-                f"Insufficient joints to create IK handle. Required: 2, Provided: {len(joints)}"
-            )
+            self.logger.error("Insufficient joints to create IK handle.")
             return None
 
         start_joint = joints[0]
         end_joint = joints[-1]
 
-        self.logger.debug(
-            f"Creating IK handle for joints: {[jnt.name() for jnt in joints]}"
-        )
-
-        # Allow overriding start and end joints via kwargs
-        start_joint = kwargs.pop("startJoint", start_joint)
-        end_joint = kwargs.pop("endEffector", end_joint)
         name = kwargs.pop("name", f"{self.rig_name}_ikHandle")
 
         try:
             ik_handle = pm.ikHandle(
                 startJoint=start_joint, endEffector=end_joint, name=name, **kwargs
-            )
-            ik_handle[0].setParent(self.rig_group)
-            self.logger.debug(f"IK handle created: {ik_handle[0].name()}")
-            self.ik_handle = ik_handle[0]
-            return ik_handle[0]
+            )[0]
+            ik_handle.setParent(self.rig_group)
+            self.ik_handle = ik_handle
+            return ik_handle
         except Exception as e:
             self.logger.error(f"Error creating IK handle: {str(e)}")
             return None
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_pole_vector(
         self, ik_handle, mid_joint: "pm.nodetypes.Joint", offset=(0, 5, 0)
     ) -> "pm.nodetypes.Transform":
@@ -392,19 +357,11 @@ class TubeRig(ptk.LoggingMixin):
         self.pole_vector = pole_vector
         return pole_vector
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def bind_joint_chain(
         self, obj, joints: List["pm.nodetypes.Joint"]
     ) -> Optional["pm.nodetypes.DependNode"]:
-        """Binds the joint chain to a polygon tube with smooth skinning.
-
-        Parameters:
-            obj (pm.nodetypes.Transform): The tube mesh to bind the joints to.
-            joints (List[pm.nodetypes.Joint]): The joint chain to bind to the tube.
-
-        Returns:
-            pm.nodetypes.DependNode: The created skinCluster
-        """
+        """Binds the joint chain to a polygon tube with smooth skinning."""
         self.logger.debug(f"Tube mesh type: {type(obj)}")
         self.logger.debug(f"Tube mesh: {obj}")
         obj = list(set(pm.ls(obj, objectsOnly=True, flatten=True)))
@@ -425,24 +382,35 @@ class TubeRig(ptk.LoggingMixin):
             self.logger.error(f"Invalid joint list: {joints}")
             return None
 
-        self.logger.debug(f"Joints to bind: {[jnt.name() for jnt in joints]}")
-
-        if not pm.objExists(obj):
-            self.logger.error(f"Tube mesh {obj.name()} does not exist in the scene.")
-            return None
-
         if not joints:
             self.logger.error("No joints to bind to the tube.")
             return None
 
+        for attr in ("translate", "rotate", "scale"):
+            for axis in "XYZ":
+                try:
+                    transform.attr(f"{attr}{axis}").setLocked(False)
+                except Exception:
+                    pass
+
+        rig_group = self.rig_group
+        tube_parent = transform.getParent()
+        if tube_parent:
+            rig_group.setParent(tube_parent)
+
+        transform.setParent(rig_group)
+        for j in joints:
+            if not j.getParent():
+                j.setParent(rig_group)
+
         self.logger.debug(
-            f"Creating skinCluster with joints: {[jnt.name() for jnt in joints]}, and tube: {obj.name()}"
+            f"Creating skinCluster with joints: {[jnt.name() for jnt in joints]}, and tube: {transform.name()}"
         )
 
         try:
             skin_cluster = pm.skinCluster(
                 joints,
-                obj,
+                transform,
                 toSelectedBones=True,
                 maximumInfluences=4,
                 weightDistribution=0.5,
@@ -452,13 +420,93 @@ class TubeRig(ptk.LoggingMixin):
             self.logger.error(f"Error creating skinCluster: {str(e)}")
             return None
 
-        if skin_cluster:
-            self.logger.debug(
-                f"SkinCluster successfully created and bound: {skin_cluster}"
-            )
-        self.logger.debug(f"SkinCluster attributes: {skin_cluster.listAttr()}")
+        # Disable inheritsTransform and expose in channel box
+        transform.inheritsTransform.set(False)
+        transform.inheritsTransform.setKeyable(True)
+        transform.inheritsTransform.showInChannelBox(True)
+        # Set outliner color (e.g., teal)
+        transform.useOutlinerColor.set(True)
+        transform.outlinerColor.set([0.4, 0.3, 0.5])
+
         self.skin_cluster = skin_cluster
         return skin_cluster
+
+    @CoreUtils.undoable
+    def constrain_end_with_falloff(
+        self,
+        joints: List[pm.nt.Joint],
+        anchor: pm.nt.Transform,
+        falloff: float = 5.0,
+    ) -> Optional[pm.nt.Joint]:
+        """
+        Constrains the end of the joint chain to an anchor and applies distance-based skin weight falloff.
+
+        Parameters:
+            joints (List[pm.nt.Joint]): The hose joint chain.
+            anchor (pm.nt.Transform): The transform the hose end should follow.
+            falloff (float): World-space distance over which weight influence fades.
+
+        Returns:
+            pm.nt.Joint: The constrained joint inserted at the end.
+        """
+        if len(joints) < 2:
+            self.logger.error("Joint chain too short to apply anchor constraint.")
+            return None
+
+        end_joint = joints[-1]
+        anchor_pos = anchor.getTranslation(space="world")
+
+        # Create new joint at anchor location
+        joint_name = Naming.generate_unique_name(f"{self.rig_name}_anchor_jnt")
+        anchor_joint = pm.createNode("joint", name=joint_name)
+        anchor_joint.translate.set(anchor_pos)
+        anchor_joint.radius.set(end_joint.radius.get())
+        pm.makeIdentity(anchor_joint, apply=True, t=True, r=True, s=True)
+
+        # Insert into hierarchy
+        pm.parent(end_joint, anchor_joint)
+        pm.parent(anchor_joint, self.rig_group)
+        pm.xform(anchor_joint, ws=True, t=anchor_pos)
+
+        # Constrain to anchor
+        pm.parentConstraint(anchor, anchor_joint, mo=False)
+
+        # Add to skinCluster with distance-based falloff
+        if self.skin_cluster:
+            influences = self.skin_cluster.influenceObjects()
+            if anchor_joint not in influences:
+                pm.skinCluster(
+                    self.skin_cluster, edit=True, addInfluence=anchor_joint, weight=0.0
+                )
+
+            try:
+                verts = self.mesh.vtx[:]
+                for v in verts:
+                    pos = v.getPosition(space="world")
+                    d = pos.distanceTo(anchor_pos)
+
+                    if d > falloff:
+                        continue  # Out of range
+
+                    w = 1.0 - (d / falloff)
+                    w = max(min(w, 1.0), 0.0)
+
+                    pm.skinPercent(
+                        self.skin_cluster,
+                        v,
+                        transformValue=[
+                            (anchor_joint, w),
+                            (end_joint, 1.0 - w),
+                        ],
+                    )
+
+                self.logger.debug(
+                    f"Applied falloff weights from {anchor_joint} over distance {falloff}"
+                )
+            except Exception as e:
+                self.logger.warning(f"Skin weighting failed: {e}")
+
+        return anchor_joint
 
 
 class TubeRigSlots:
@@ -528,7 +576,7 @@ class TubeRigSlots:
         tube_rig.create_start_end_locators(joints, ik_handle=ik_handle)
         return tube_rig
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def b000(self):
         """Create Tube Rig."""
         try:
@@ -542,7 +590,7 @@ class TubeRigSlots:
 
         self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def b001(self):
         """Create Joints from Tube."""
         try:
@@ -554,7 +602,7 @@ class TubeRigSlots:
         joints = self.create_joints_from_tube(obj)
         self.sb.message_box(f"Joints created: {len(joints)}")
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def b002(self):
         """Macros: Create Rig from Joints."""
         try:
@@ -568,22 +616,37 @@ class TubeRigSlots:
         tube_rig = self.create_rig_from_joints(obj, joints)
         self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
 
+    @CoreUtils.undoable
+    def b003(self):
+        """Macros: Add End Joint Constraint."""
+        try:
+            *joints, end_fitting = pm.selected(flatten=True)
+        except ValueError:
+            self.sb.message_box(
+                "Select the root joint, then the end fitting to add a constraint."
+            )
+            return
 
-class TubeRigUi:
-    def __new__(self):
-        """Get the Rig Tube UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
+        falloff = 0.2
 
-        ui_file = os.path.join(os.path.dirname(__file__), "tube_rig.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=TubeRigSlots)
-        return ui
+        tube_rig = self.get_tube_rig(joints[0])
+        # Get joint chain from root joint
+        joints = RigUtils.get_joint_chain_from_root(joints[0])
+        # Add end joint constraint
+        end_joint = tube_rig.constrain_end_with_falloff(
+            joints, end_fitting, falloff=falloff
+        )
+        self.sb.message_box(f"End joint added: {end_joint.name()}")
 
+    # -----------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    TubeRigUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("tube_rig", reload=True)
+    ui.header.config_buttons(hide_button=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

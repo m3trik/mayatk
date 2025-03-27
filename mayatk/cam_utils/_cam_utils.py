@@ -15,7 +15,7 @@ class CamUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def group_cameras(
         name="cameras", non_default=True, root_only=False, hide_group=False
     ):
@@ -106,7 +106,7 @@ class CamUtils(ptk.HelpMixin):
         return camPath
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
@@ -128,7 +128,7 @@ class CamUtils(ptk.HelpMixin):
             print("No modelPanel found")
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def adjust_camera_clipping(
         camera=None, near_clip=None, far_clip=None, mode="manual"
     ):

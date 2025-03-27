@@ -11,6 +11,7 @@ except ImportError as error:
 from mayatk import core_utils
 from mayatk import DisplayUtils
 from mayatk import XformUtils
+from mayatk import Naming
 
 
 # Untested new code:
@@ -254,7 +255,7 @@ class DuplicateRadialSlots:
             first_obj_name = copies[0].name()
             name = re.sub(r"\d+$", "", first_obj_name)
             name += "_array"
-            unique_name = core_utils.CoreUtils.generate_unique_name(name)
+            unique_name = Naming.generate_unique_name(name)
 
             # Find the parent of the parent of the first object and use it as a parent for the new group
             original_parent = copies[0].getParent().getParent()
@@ -273,21 +274,13 @@ class DuplicateRadialSlots:
         pm.undoInfo(closeChunk=True)
 
 
-class DuplicateRadialUi:
-    def __new__(self):
-        """Get the Duplicate Radial UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "dulicate_radial.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DuplicateRadialSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    DuplicateRadialUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.default().get("duplicate_radial", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

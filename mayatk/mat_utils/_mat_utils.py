@@ -24,7 +24,7 @@ class MatUtils(ptk.HelpMixin):
             objs (list): The objects or components to retrieve the material from.
 
         Returns:
-            set: The set of materials assigned to the objects or components.
+            list: Materials assigned to the objects or components (duplicates romoved).
         """
         # Initialize an empty set to store the materials
         mats = set()
@@ -57,7 +57,7 @@ class MatUtils(ptk.HelpMixin):
                 )
                 mats.update(materials)
 
-        return mats
+        return list(mats)
 
     @staticmethod
     def get_scene_mats(
@@ -135,7 +135,7 @@ class MatUtils(ptk.HelpMixin):
         return False
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_mat(mat_type, prefix="", name=""):
         """Creates a material based on the provided type or a random Lambert material if 'mat_type' is 'random'.
 
@@ -166,7 +166,7 @@ class MatUtils(ptk.HelpMixin):
         return mat
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def assign_mat(objects, mat_name):
         """Assigns a material to a list of objects or components.
 
@@ -289,7 +289,7 @@ class MatUtils(ptk.HelpMixin):
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
-        project_sourceimages = EnvUtils.get_maya_info("sourceimages")
+        project_sourceimages = EnvUtils.get_env_info("sourceimages")
 
         for material in materials:
             for attr in attributes:
@@ -330,86 +330,140 @@ class MatUtils(ptk.HelpMixin):
         return material_paths
 
     @classmethod
-    @CoreUtils.undo
-    def remap_texture_paths(
-        cls,
-        materials: Optional[List[str]] = None,
-        new_dir: Optional[str] = None,
-    ) -> None:
-        """Remaps file texture paths for materials, using a new base directory while preserving filenames.
+    def _remap_file_nodes(
+        cls, file_paths: List[str], target_dir: str, silent: bool = False
+    ) -> int:
+        """Internal helper to remap file nodes to target_dir using relative paths if inside sourceimages."""
+        sourceimages_dir = EnvUtils.get_env_info("sourceimages")
+        sourceimages_name = os.path.basename(os.path.normpath(sourceimages_dir))
 
-        Paths inside 'sourceimages' will always be converted to relative.
-        Paths outside 'sourceimages' will remain absolute.
-
-        Parameters:
-            materials (Optional[List[str]]): A list of material names to filter. Defaults to all materials.
-            new_dir (Optional[str]): The new base directory for textures. Defaults to 'sourceimages'.
-        """
-        sourceimages_dir = EnvUtils.get_maya_info("sourceimages")
-
-        # If no directory is given, use 'sourceimages'
-        new_dir = new_dir or sourceimages_dir
-        if not new_dir or not os.path.isdir(new_dir):
-            pm.warning(f"Invalid directory: {new_dir}")
-            return
-
-        pm.displayInfo(
-            f"// remap_texture_paths called with materials={materials}, new_dir={new_dir}"
-        )
-
-        materials = pm.ls(materials, mat=True) if materials else None
-        pm.displayInfo(f"// Materials being processed: {materials}")
-
-        # Extract only valid file paths
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
-        textures = [t[0] if isinstance(t, tuple) else t for t in textures]
-
-        pm.displayInfo(f"// Collected {len(textures)} unique texture paths")
-
-        if not textures:
-            pm.warning("No valid texture paths found.")
-            return
-
-        # Normalize file node paths and build a lookup
-        file_nodes = {}
+        file_nodes: Dict[str, pm.nt.File] = {}
         for fn in pm.ls(type="file"):
             file_path = fn.fileTextureName.get()
             if file_path:
                 normalized_path = os.path.normpath(file_path).replace("\\", "/").lower()
                 filename = os.path.basename(normalized_path)
-                file_nodes[filename] = fn  # Store by filename for flexible lookup
+                file_nodes[filename] = fn
 
-        pm.displayInfo(f"// Found {len(file_nodes)} file texture nodes in the scene")
-
-        updated_count = 0
-
-        for old_path in textures:
+        updated = 0
+        for old_path in file_paths:
             old_path = os.path.normpath(old_path).replace("\\", "/").lower()
             filename = os.path.basename(old_path)
+            new_path = os.path.join(target_dir, filename).replace("\\", "/")
 
-            # Convert to relative if inside sourceimages
-            if sourceimages_dir and old_path.startswith(sourceimages_dir.lower()):
-                try:
-                    new_path = os.path.relpath(old_path, sourceimages_dir).replace(
-                        "\\", "/"
-                    )
-                except ValueError:
-                    pm.warning(
-                        f"// Warning: Failed to compute relative path for {old_path}. Using absolute path."
-                    )
-                    new_path = old_path
-            else:
-                new_path = os.path.join(new_dir, filename).replace("\\", "/")
+            if sourceimages_dir and new_path.lower().startswith(
+                sourceimages_dir.lower()
+            ):
+                rel_path = os.path.relpath(new_path, sourceimages_dir).replace(
+                    "\\", "/"
+                )
+                new_path = f"{sourceimages_name}/{rel_path}"
 
             if filename in file_nodes:
-                pm.displayInfo(f"// Remapping texture path: {old_path}")
-                pm.displayInfo(f"// New path: {new_path}")
+                if not silent:
+                    pm.displayInfo(f"\nRemapping: {old_path}")
+                    pm.displayInfo(f"New path:  {new_path}")
                 file_nodes[filename].fileTextureName.set(new_path)
-                updated_count += 1
+                updated += 1
             else:
                 pm.warning(f"// Skipping: No file node found for {filename}")
 
-        pm.displayInfo(f"// Result: Remapped {updated_count} unique texture paths.")
+        return updated
+
+    @classmethod
+    @CoreUtils.undoable
+    def remap_texture_paths(
+        cls,
+        materials: Optional[List[str]] = None,
+        new_dir: Optional[str] = None,
+        silent: bool = False,
+    ) -> None:
+        """Remaps file texture paths for materials to new_dir, using relative paths if inside sourceimages."""
+        new_dir = new_dir or EnvUtils.get_env_info("sourceimages")
+        if not new_dir or not os.path.isdir(new_dir):
+            pm.warning(f"Invalid directory: {new_dir}")
+            return
+
+        materials = pm.ls(materials, mat=True) if materials else None
+        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        textures = [t[0] if isinstance(t, tuple) else t for t in textures]
+
+        if not textures:
+            pm.warning("No valid texture paths found.")
+            return
+
+        remapped_count = cls._remap_file_nodes(textures, new_dir, silent)
+        if not silent:
+            pm.displayInfo(
+                f"// Result: Remapped {remapped_count}/{len(textures)} texture paths."
+            )
+
+    @classmethod
+    @CoreUtils.undoable
+    def migrate_textures(
+        cls,
+        materials: Optional[List[str]] = None,
+        old_dir: Optional[str] = None,
+        new_dir: Optional[str] = None,
+        silent: bool = False,
+    ) -> None:
+        """Copies texture files from an old directory to a new one and remaps file nodes accordingly.
+
+        Parameters:
+            materials (Optional[List[str]]): List of materials to process. Only their texture paths will be considered.
+            old_dir (Optional[str]): Source directory to search for texture files.
+            new_dir (Optional[str]): Destination directory where textures will be copied.
+            silent (bool): If True, suppresses display messages.
+        """
+        # Validate directories
+        for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
+            if not path:
+                pm.warning(f"{label} must be specified.")
+                return
+            if not os.path.exists(path):
+                pm.warning(f"// {label} does not exist: {path}")
+                return
+            if not os.path.isdir(path):
+                pm.warning(f"// {label} is not a directory: {path}")
+                return
+
+        # Get only textures assigned to specified materials
+        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        filenames = []
+        for tex in textures:
+            path = tex[0] if isinstance(tex, tuple) else tex
+            if path:
+                filenames.append(os.path.basename(path))
+        filenames = list(set(filenames))
+
+        copied_files: Dict[str, str] = {}
+        copied_count = 0
+
+        for filename in filenames:
+            src_path = os.path.join(old_dir, filename)
+            if not os.path.isfile(src_path):
+                if not silent:
+                    pm.warning(f"// Skipped copy: {filename} not found in old_dir.")
+                continue
+
+            try:
+                copied_path = ptk.copy_file(src_path, new_dir, create_dir=True)
+                copied_files[filename] = copied_path
+                copied_count += 1
+                if not silent:
+                    pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
+            except Exception as e:
+                pm.warning(f"// Failed to copy {filename}: {e}")
+
+        if not silent:
+            pm.displayInfo(f"// Result: Copied {copied_count} textures.")
+
+        if copied_files:
+            cls._remap_file_nodes(
+                file_paths=list(copied_files.values()),
+                target_dir=new_dir,
+                silent=silent,
+            )
 
     @staticmethod
     def is_duplicate_material(material1: str, material2: str) -> bool:
@@ -516,7 +570,7 @@ class MatUtils(ptk.HelpMixin):
         return duplicates
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def reassign_duplicate_materials(
         cls,
         materials: Optional[List[str]] = None,
@@ -680,7 +734,7 @@ class MatUtils(ptk.HelpMixin):
         """
         import shutil
 
-        project_sourceimages = source_dir or EnvUtils.get_maya_info("sourceimages")
+        project_sourceimages = source_dir or EnvUtils.get_env_info("sourceimages")
         unused_folder = output_dir or os.path.join(project_sourceimages, "unused")
 
         if not os.path.exists(unused_folder):

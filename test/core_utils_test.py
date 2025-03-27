@@ -90,13 +90,6 @@ class CoreUtilsTest(unittest.TestCase):
         # Update the assertion with the returned value
         # self.assertEqual(mtk.get_selected_channels(), [])
 
-    def test_generate_unique_name(self):
-        pass
-        # Provide the missing 'base_name' argument for generate_unique_name method
-        # self.assertEqual(
-        #     mtk.generate_unique_name(base_name="<base_name>"), "<expected result>"
-        # )
-
     def test_get_panel(self):
         # Catching RuntimeError to handle the 'Not enough flags and/or arguments' error
         with self.assertRaises(RuntimeError):

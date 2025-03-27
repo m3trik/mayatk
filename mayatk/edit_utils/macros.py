@@ -687,7 +687,7 @@ class EditMacros:
     """ """
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
@@ -707,7 +707,7 @@ class EditMacros:
         return combined_mesh
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
@@ -948,29 +948,62 @@ class SelectionMacros:
             return
 
         for obj in pm.ls(objects, flatten=True):
-            # Check the current selectability state using PyNode attributes
-            override_enabled = obj.overrideEnabled.get()
-            current_state = obj.overrideDisplayType.get()
+            try:
+                # Ensure attributes exist and are not locked or connected before modifying
+                if not obj.hasAttr("overrideEnabled") or obj.overrideEnabled.isLocked():
+                    pm.warning(
+                        f"Cannot modify overrideEnabled for {obj}: Attribute is locked."
+                    )
+                    continue
+                if (
+                    not obj.hasAttr("overrideDisplayType")
+                    or obj.overrideDisplayType.isLocked()
+                ):
+                    pm.warning(
+                        f"Cannot modify overrideDisplayType for {obj}: Attribute is locked."
+                    )
+                    continue
+                if (
+                    not obj.hasAttr("useOutlinerColor")
+                    or obj.useOutlinerColor.isLocked()
+                ):
+                    pm.warning(
+                        f"Cannot modify useOutlinerColor for {obj}: Attribute is locked."
+                    )
+                    continue
+                if not obj.hasAttr("outlinerColor") or obj.outlinerColor.isLocked():
+                    pm.warning(
+                        f"Cannot modify outlinerColor for {obj}: Attribute is locked."
+                    )
+                    continue
 
-            if override_enabled and current_state == 2:
-                # Object is currently non-selectable, make it selectable
-                obj.overrideDisplayType.set(0)  # Normal mode
-                obj.useOutlinerColor.set(0)  # Disable custom outliner color
-                pm.inViewMessage(
-                    statusMessage=f"{obj} <hl>Selectable</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
-            else:  # Object is currently selectable, make it non-selectable
-                obj.overrideEnabled.set(1)
-                obj.overrideDisplayType.set(2)  # Reference mode
-                obj.useOutlinerColor.set(1)  # Enable custom outliner color
-                obj.outlinerColor.set(0.3, 0.6, 0.6)  # Set color to desaturated teal
-                pm.inViewMessage(
-                    statusMessage=f"{obj} <hl>Non-selectable</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
+                override_enabled = obj.overrideEnabled.get()
+                current_state = obj.overrideDisplayType.get()
+
+                if override_enabled and current_state == 2:
+                    # Object is currently non-selectable, make it selectable
+                    obj.overrideDisplayType.set(0)  # Normal mode
+                    obj.useOutlinerColor.set(0)  # Disable custom outliner color
+                    pm.inViewMessage(
+                        statusMessage=f"{obj} <hl>Selectable</hl>.",
+                        pos="topCenter",
+                        fade=True,
+                    )
+                else:  # Object is currently selectable, make it non-selectable
+                    obj.overrideEnabled.set(1)
+                    obj.overrideDisplayType.set(2)  # Reference mode
+                    obj.useOutlinerColor.set(1)  # Enable custom outliner color
+                    obj.outlinerColor.set(
+                        0.3, 0.6, 0.6
+                    )  # Set color to desaturated teal
+                    pm.inViewMessage(
+                        statusMessage=f"{obj} <hl>Non-selectable</hl>.",
+                        pos="topCenter",
+                        fade=True,
+                    )
+
+            except RuntimeError as e:
+                pm.warning(f"Failed to modify selectability for {obj}: {e}")
 
     @staticmethod
     def m_toggle_UV_select_type() -> None:

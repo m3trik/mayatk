@@ -28,7 +28,7 @@ class EnvUtils(ptk.HelpMixin):
     }
 
     @staticmethod
-    def get_maya_info(key):
+    def get_env_info(key):
         """Fetch specific information about the current Maya environment based on the provided key.
 
         Parameters:
@@ -54,6 +54,7 @@ class EnvUtils(ptk.HelpMixin):
             "scene": lambda: pm.sceneName(),
             "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),
             "scene_path": lambda: ptk.format_path(pm.sceneName(), "path"),
+            "scene_modified": lambda: bool(pm.mel.eval("file -q -modified")),
             "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
             "ui_language": lambda: pm.about(uiLanguage=True),
             "os_type": lambda: pm.about(os=True),
@@ -432,7 +433,7 @@ class EnvUtils(ptk.HelpMixin):
             Optional[str]: The directory containing the workspace.mel file, or None if not found.
         """
         if scene_path is None:
-            scene_path = cls.get_maya_info("scene_path")
+            scene_path = cls.get_env_info("scene_path")
 
         dir_path = os.path.dirname(scene_path)
         while dir_path:
