@@ -334,7 +334,7 @@ class EditUtils(ptk.HelpMixin):
                 mirror_axis = axis.lstrip("-")  # Get base axis without negative sign
                 mirror_pivot = list(XformUtils.get_operation_axis_pos(node, pivot))
                 mirror_pivot[axis_index] = (
-                    pivot_value  # 🔹 Ensure pivot is at the cut plane
+                    pivot_value  # Ensure pivot is at the cut plane
                 )
                 cls.mirror(
                     node, axis=mirror_axis, pivot=tuple(mirror_pivot), mergeMode=1

@@ -446,17 +446,18 @@ class XformUtils(ptk.HelpMixin):
             node (PyNode): The object whose reference position is determined.
             pivot (int/str/tuple/list): Mode or explicit position.
                 - `0` or `"boundingBox"` → Uses bounding box properties.
-                - `1` or `"object"` → Uses the object's pivot.
+                - `1` or `"object"` → Uses the object's rotate pivot.
                 - `2` or `"world"` → Uses world origin `(0,0,0)`.
                 - `"center"` → Uses bounding box center.
                 - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
+                - `"baked"` → Uses the baked (original) rotate pivot in world space.
                 - `(x, y, z)` → Uses a specified world-space pivot.
-            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns a full `[x, y, z]` list.
+            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns full (x, y, z) list.
 
         Returns:
             float or list: The computed pivot position (single float if `axis_index` is specified, list if `None`).
         """
-        # Ensure recursion does not nest lists
+        # Return full vector if axis_index is None
         if axis_index is None:
             return [
                 cls.get_operation_axis_pos(node, pivot, 0),
@@ -464,48 +465,48 @@ class XformUtils(ptk.HelpMixin):
                 cls.get_operation_axis_pos(node, pivot, 2),
             ]
 
-        # If already a tuple/list, return only the requested axis
+        # Explicit world-space point
         if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
-            return float(pivot[axis_index])  # Ensure float, not list
+            return float(pivot[axis_index])
 
-        # Object Pivot (Always Returns the Object's True Pivot Without Modification)
+        # Object pivot (rotate pivot in world space)
         if pivot in {1, "object"}:
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)  # Returns (x, y, z)
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
             return float(obj_pivot_ws[axis_index])
 
-        # World Pivot (Fixed at 0, 0, 0)
+        # Baked pivot (local-space rotate pivot transformed to world space)
+        if pivot == "baked":
+            local_rp = pm.xform(node, q=True, rp=True, os=True)
+            world_rp = pm.dt.Point(local_rp) * pm.PyNode(node).getMatrix(
+                worldSpace=True
+            )
+            return float(world_rp[axis_index])
+
+        # World origin
         if pivot in {2, "world"}:
-            return 0.0  # Always world origin
+            return 0.0
 
-        # Handle Bounding Box Center Before axis_map
+        # Bounding box center
         if pivot == "center":
-            bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
-            return bbox_center if axis_index is None else float(bbox_center[axis_index])
+            center = cls.get_bounding_box(node, "center")
+            return float(center[axis_index])
 
-        # **Bounding Box Pivot Handling**
-        axis_map = {
-            "xmin": 0,
-            "xmax": 0,  # Modify X-axis only
-            "ymin": 1,
-            "ymax": 1,  # Modify Y-axis only
-            "zmin": 2,
-            "zmax": 2,  # Modify Z-axis only
-        }
+        # Bounding box limits (xmin, ymax, etc.)
+        axis_map = {"xmin": 0, "xmax": 0, "ymin": 1, "ymax": 1, "zmin": 2, "zmax": 2}
+        valid_keys = cls.get_bounding_box(node, return_valid_keys=True)
 
-        valid_bbox_keys = cls.get_bounding_box(node, return_valid_keys=True)
+        if isinstance(pivot, str) and pivot in valid_keys:
+            val = cls.get_bounding_box(node, pivot)
+            if isinstance(val, (tuple, list)):
+                return float(val[axis_map[pivot]])
+            return float(val)
 
-        if isinstance(pivot, str) and pivot in valid_bbox_keys:
-            bbox_value = cls.get_bounding_box(node, pivot)  # Could be a float or tuple
-            if isinstance(bbox_value, (tuple, list)):  # Extract only the relevant axis
-                return float(bbox_value[axis_map[pivot]])
-            return float(bbox_value)
-
-        # Default to Bounding Box Center if Pivot is Invalid
+        # Fallback to center
         pm.warning(
             f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
         )
-        bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
-        return bbox_center if axis_index is None else float(bbox_center[axis_index])
+        fallback = cls.get_bounding_box(node, "center")
+        return float(fallback[axis_index])
 
     @staticmethod
     @CoreUtils.undoable

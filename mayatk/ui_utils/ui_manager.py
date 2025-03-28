@@ -242,7 +242,11 @@ class UiManager:
 # --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ui = UiManager.default().get("tube_rig", reload=True)
+    from mayatk import CoreUtils
+
+    CoreUtils.clear_scrollfield_reporters()
+
+    ui = UiManager.default().get("duplicate_radial", reload=True)
     ui.header.config_buttons(hide_button=True)
     ui.show(pos="screen", app_exec=True)
 

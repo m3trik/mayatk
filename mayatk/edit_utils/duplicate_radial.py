@@ -1,7 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
+import pythontk as ptk
 
 try:
     import pymel.core as pm
@@ -11,11 +12,11 @@ except ImportError as error:
 from mayatk import core_utils
 from mayatk import DisplayUtils
 from mayatk import XformUtils
-from mayatk import Naming
+from mayatk.edit_utils.naming import Naming
 
 
-# Untested new code:
-class DuplicateRadial:
+class DuplicateRadial(ptk.LoggingMixin):
+
     @staticmethod
     def duplicate_radial(
         objects: List[pm.PyNode],
@@ -29,35 +30,52 @@ class DuplicateRadial:
         translate: Tuple[float, float, float] = (0, 0, 0),
         rotate: Tuple[float, float, float] = (0, 0, 0),
         scale: Tuple[float, float, float] = (1, 1, 1),
-    ) -> Dict["pm.PyNode", List["pm.PyNode"]]:
+        pivot: Union[str, Tuple[float, float, float]] = "object",
+        keep_original: bool = False,
+        instance: bool = False,
+        combine: bool = False,
+        suffix: bool = True,
+    ) -> Dict[pm.PyNode, List[pm.PyNode]]:
+        """Duplicate objects in a radial pattern.
+
+        Parameters:
+            objects (List[pm.PyNode]): List of objects to duplicate.
+            num_copies (int): Number of copies to create.
+            start_angle (float): Starting angle for duplication.
+            end_angle (float): Ending angle for duplication.
+            weight_bias (float): Bias for the weight curve.
+            weight_curve (float): Weight curve value.
+            rotate_axis (str): Axis of rotation ('x', 'y', or 'z').
+            offset (Tuple[float, float, float]): Offset for the pivot point.
+            translate (Tuple[float, float, float]): Translation vector.
+            rotate (Tuple[float, float, float]): Rotation vector.
+            scale (Tuple[float, float, float]): Scale vector.
+            pivot (Union[str, Tuple[float, float, float]]): Pivot point type or position.
+            keep_original (bool): Whether to keep the original object.
+            instance (bool): Whether to create instances of the duplicates.
+            combine (bool): Whether to combine the duplicates into one mesh.
+            suffix (bool): Whether to add a suffix to the duplicated objects.
+
+        Returns:
+            Dict[pm.PyNode, List[pm.PyNode]]: Mapping of original objects to their duplicates.
+
+        Raises:
+            ValueError: If invalid parameters are provided.
+        """
         DuplicateRadial._validate_inputs(rotate_axis, weight_bias, weight_curve)
         originals_to_copies = {}
 
         for node in objects:
-            print(f"Processing node: {node}")
-            manip_pivot_matrix = XformUtils.get_manip_pivot_matrix(node)
-            print(f"Manipulator pivot matrix for {node}: {manip_pivot_matrix}")
+            print(f"\n--- Processing node: {node} ---")
 
-            final_pivot_matrix = DuplicateRadial._calculate_final_pivot_matrix(
-                manip_pivot_matrix, offset
+            driven_group, driven_node, pivot_pos = (
+                DuplicateRadial._prepare_driven_group(
+                    node, rotate, scale, translate, offset, pivot, instance
+                )
             )
-            print(f"Final pivot matrix: {final_pivot_matrix}")
-
-            DuplicateRadial._apply_initial_transformations(
-                node, rotate, scale, translate
-            )
-
-            group_node = DuplicateRadial._create_group_node(node)
-            print(f"Created group node: {group_node}")
-
-            pm.xform(group_node, ws=True, m=final_pivot_matrix)
-            start_rotation = [0, 0, 0]
-            start_rotation[{"x": 0, "y": 1, "z": 2}[rotate_axis]] = start_angle
-            print(f"Applying start rotation to {group_node}: {start_rotation}")
-            pm.rotate(group_node, start_rotation, r=True, os=True, fo=True)
 
             copies = DuplicateRadial._create_and_transform_instances(
-                group_node,
+                driven_group,
                 num_copies,
                 rotate_axis,
                 start_angle,
@@ -66,10 +84,93 @@ class DuplicateRadial:
                 weight_bias,
                 weight_curve,
             )
-            originals_to_copies[node] = copies
-            print(f"Original to copies mapping for {node}: {copies}")
+
+            pm.delete(driven_group)
+            DuplicateRadial._cleanup_original(node, keep_original)
+
+            finalized = DuplicateRadial._finalize_output(
+                node, copies, keep_original, combine
+            )
+
+            if suffix:
+                Naming.append_location_based_suffix(
+                    finalized, first_obj_as_ref=True, alphabetical=True
+                )
+
+            originals_to_copies[node] = finalized
+            print(f"[{node}] Created {len(finalized)} total instances")
 
         return originals_to_copies
+
+    @staticmethod
+    def _finalize_output(
+        node: pm.PyNode,
+        copies: List[pm.PyNode],
+        keep_original: bool,
+        combine: bool,
+    ) -> List[pm.PyNode]:
+        if combine:
+            combined = pm.polyUnite(copies, ch=False, mergeUVSets=True)[0]
+            combined = pm.rename(combined, f"{node}_radialCombined")
+            pm.delete(
+                pm.listRelatives(
+                    combined, shapes=True, noIntermediate=True, type="transform"
+                )
+            )
+            print(f"Combined all instances into: {combined}")
+            return [combined]
+
+        clean_copies = []
+        for copy in copies:
+            parent = pm.listRelatives(copy, parent=True, fullPath=True)
+            if parent:
+                pm.parent(copy, world=True)
+                if not keep_original:
+                    pm.delete(parent[0])
+            clean_copies.append(copy)
+
+        group_name = f"{node}_radialGroup"
+        container_group = pm.group(clean_copies, name=group_name)
+        print(f"Grouped all instances under: {container_group}")
+
+        return clean_copies
+
+    @staticmethod
+    def _cleanup_original(node: pm.PyNode, keep_original: bool) -> None:
+        if not keep_original:
+            print(f"Deleting original node: {node}")
+            pm.delete(node)
+
+    @classmethod
+    def _prepare_driven_group(
+        cls,
+        node: pm.PyNode,
+        rotate: Tuple[float, float, float],
+        scale: Tuple[float, float, float],
+        translate: Tuple[float, float, float],
+        offset: Tuple[float, float, float],
+        pivot: Union[str, Tuple[float, float, float]],
+        instance: bool = False,
+    ) -> Tuple[pm.PyNode, pm.PyNode, Tuple[float, float, float]]:
+        driven_node = pm.duplicate(node, rr=True, instanceLeaf=instance)[0]
+        print(f"[{node}] Duplicated original → driven node: {driven_node}")
+
+        cls._apply_initial_transformations(driven_node, rotate, scale, translate)
+
+        pivot_pos = XformUtils.get_operation_axis_pos(driven_node, pivot)
+        print(f"[{driven_node}] Rotation pivot (world-space): {pivot_pos}")
+
+        group_node = pm.group(em=True)
+        pm.xform(group_node, ws=True, t=(0, 0, 0))
+
+        pivot_offset_pos = [pivot_pos[i] + offset[i] for i in range(3)]
+        print(f"Setting rotate and scale pivot to: {pivot_offset_pos}")
+        pm.xform(group_node, ws=True, rp=pivot_offset_pos, sp=pivot_offset_pos)
+
+        pm.parent(driven_node, group_node)
+        print(f"[{driven_node}] Wrapped in group: {group_node}")
+
+        return group_node, driven_node, pivot_pos
 
     @staticmethod
     def _validate_inputs(
@@ -150,34 +251,30 @@ class DuplicateRadial:
         copies = []
 
         for i in range(num_copies):
-            if i == 0:
-                copies.append(group_node.getChildren()[0])
-                print(f"Adding original node to copies: {group_node.getChildren()[0]}")
-            else:
-                copy_group = pm.instance(group_node, leaf=True)[0]
-                copy = copy_group.getChildren()[0]
-                copies.append(copy)
-                print(f"Creating instance {i}: {copy}")
+            copy_group = pm.instance(group_node, leaf=True)[0]
+            copy = copy_group.getChildren()[0]
+            copies.append(copy)
+            print(f"Creating instance {i}: {copy}")
 
-                x = (i - 1) / (num_copies - 1) if num_copies > 1 else 0.5
-                curve_value = (
-                    x ** (1 / (1 - weight_curve))
-                    if weight_bias >= 0.5
-                    else 1 - (1 - x) ** (1 / (1 - weight_curve))
-                )
+            x = i / (num_copies - 1) if num_copies > 1 else 0.0
+            curve_value = (
+                x ** (1 / (1 - weight_curve))
+                if weight_bias >= 0.5
+                else 1 - (1 - x) ** (1 / (1 - weight_curve))
+            )
 
-                f_x = (1 - weight_factor) * x + weight_factor * curve_value
-                current_rotation = [0, 0, 0]
-                current_rotation[rotation_index] = total_rotation * f_x
-                print(f"Rotation factor for instance {i}: {f_x}")
-                print(f"Applying rotation to instance {i}: {current_rotation}")
-                pm.rotate(copy_group, current_rotation, r=True, os=True, fo=True)
+            f_x = (1 - weight_factor) * x + weight_factor * curve_value
+            current_rotation = [0, 0, 0]
+            current_rotation[rotation_index] = start_angle + total_rotation * f_x
+            print(f"Rotation factor for instance {i}: {f_x}")
+            print(f"Applying rotation to instance {i}: {current_rotation}")
+            pm.rotate(copy_group, current_rotation, r=True, os=True, fo=True)
 
-                t = [x * i / (num_copies - 1) for x in translate]
-                print(f"Applying translation to instance {i}: {t}")
-                pm.move(copy_group, t)
-                DisplayUtils.add_to_isolation_set(copy)
-                print(f"Instance {i} added to isolation set: {copy}")
+            t = [translate[j] * f_x for j in range(3)]
+            print(f"Applying translation to instance {i}: {t}")
+            pm.move(copy_group, t)
+            DisplayUtils.add_to_isolation_set(copy)
+            print(f"Instance {i} added to isolation set: {copy}")
 
         return copies
 
@@ -202,10 +299,11 @@ class DuplicateRadialSlots:
         )
         self.sb.connect_multi(
             self.ui,
-            "chk002-4",
+            "chk002-8",
             "toggled",
             self.preview.refresh,
         )
+        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
     def perform_operation(self, objects):
         """Perform the radial duplication operation."""
@@ -215,6 +313,11 @@ class DuplicateRadialSlots:
             "end_angle": self.ui.s014.value(),
             "weight_bias": self.ui.s015.value(),
             "weight_curve": self.ui.s016.value(),
+            "instance": self.ui.chk005.isChecked(),
+            "keep_original": self.ui.chk006.isChecked(),
+            "combine": self.ui.chk007.isChecked(),
+            "suffix": self.ui.chk008.isChecked(),
+            "pivot": self._resolve_pivot(self.ui.cmb000.currentIndex()),
             "rotate_axis": (
                 "x"
                 if self.ui.chk002.isChecked()
@@ -244,6 +347,11 @@ class DuplicateRadialSlots:
 
         self.copies = DuplicateRadial.duplicate_radial(objects, **kwargs)
 
+    def _resolve_pivot(self, pivot_index: int) -> str:
+        """Resolve the pivot based on the index from the UI dropdown."""
+        axis_mapping = {0: "object", 1: "world"}
+        return axis_mapping.get(pivot_index, "object")
+
     def regroup_copies(self):
         """Regroup the instances under their original parent group."""
         pm.undoInfo(openChunk=True)
@@ -255,7 +363,7 @@ class DuplicateRadialSlots:
             first_obj_name = copies[0].name()
             name = re.sub(r"\d+$", "", first_obj_name)
             name += "_array"
-            unique_name = Naming.generate_unique_name(name)
+            unique_name = core_utils.CoreUtils.generate_unique_name(name)
 
             # Find the parent of the parent of the first object and use it as a parent for the new group
             original_parent = copies[0].getParent().getParent()
