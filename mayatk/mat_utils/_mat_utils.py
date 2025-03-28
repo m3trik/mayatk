@@ -332,43 +332,63 @@ class MatUtils(ptk.HelpMixin):
     @classmethod
     def _remap_file_nodes(
         cls, file_paths: List[str], target_dir: str, silent: bool = False
-    ) -> int:
-        """Internal helper to remap file nodes to target_dir using relative paths if inside sourceimages."""
+    ) -> List[pm.nt.File]:
+        """Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimages."""
+
         sourceimages_dir = EnvUtils.get_env_info("sourceimages")
-        sourceimages_name = os.path.basename(os.path.normpath(sourceimages_dir))
+        sourceimages_dir_norm = os.path.normpath(sourceimages_dir).replace("\\", "/")
+        sourceimages_name = os.path.basename(sourceimages_dir_norm)
 
         file_nodes: Dict[str, pm.nt.File] = {}
+
+        # Build file node lookup by relative path (if inside sourceimages), else by filename
         for fn in pm.ls(type="file"):
             file_path = fn.fileTextureName.get()
             if file_path:
-                normalized_path = os.path.normpath(file_path).replace("\\", "/").lower()
-                filename = os.path.basename(normalized_path)
-                file_nodes[filename] = fn
+                file_path_norm = os.path.normpath(file_path).replace("\\", "/")
+                if file_path_norm.lower().startswith(sourceimages_dir_norm.lower()):
+                    rel_key = (
+                        os.path.relpath(file_path_norm, sourceimages_dir_norm)
+                        .replace("\\", "/")
+                        .lower()
+                    )
+                    file_nodes[rel_key] = fn
+                else:
+                    filename = os.path.basename(file_path_norm).lower()
+                    file_nodes[filename] = fn
 
-        updated = 0
+        remapped_nodes: List[pm.nt.File] = []
+
         for old_path in file_paths:
-            old_path = os.path.normpath(old_path).replace("\\", "/").lower()
-            filename = os.path.basename(old_path)
-            new_path = os.path.join(target_dir, filename).replace("\\", "/")
+            old_path_norm = os.path.normpath(old_path).replace("\\", "/")
+            if old_path_norm.lower().startswith(sourceimages_dir_norm.lower()):
+                rel_subpath = os.path.relpath(
+                    old_path_norm, sourceimages_dir_norm
+                ).replace("\\", "/")
+                key = rel_subpath.lower()
+                new_path = os.path.join(target_dir, rel_subpath).replace("\\", "/")
+            else:
+                filename = os.path.basename(old_path_norm)
+                key = filename.lower()
+                new_path = os.path.join(target_dir, filename).replace("\\", "/")
 
-            if sourceimages_dir and new_path.lower().startswith(
-                sourceimages_dir.lower()
-            ):
-                rel_path = os.path.relpath(new_path, sourceimages_dir).replace(
+            # Use relative path in Maya if inside sourceimages
+            if new_path.lower().startswith(sourceimages_dir_norm.lower()):
+                rel_path = os.path.relpath(new_path, sourceimages_dir_norm).replace(
                     "\\", "/"
                 )
                 new_path = f"{sourceimages_name}/{rel_path}"
 
-            if filename in file_nodes:
+            if key in file_nodes:
                 if not silent:
-                    pm.displayInfo(f"\nRemapping: {old_path}")
+                    pm.displayInfo(f"\nRemapping: {old_path_norm}")
                     pm.displayInfo(f"New path:  {new_path}")
-                file_nodes[filename].fileTextureName.set(new_path)
-                updated += 1
+                file_nodes[key].fileTextureName.set(new_path)
+                remapped_nodes.append(file_nodes[key])
             else:
-                pm.warning(f"// Skipping: No file node found for {filename}")
+                pm.warning(f"// Skipping: No file node found for {key}")
 
-        return updated
+        return remapped_nodes
 
     @classmethod
     @CoreUtils.undoable
@@ -392,10 +412,12 @@ class MatUtils(ptk.HelpMixin):
             pm.warning("No valid texture paths found.")
             return
 
-        remapped_count = cls._remap_file_nodes(textures, new_dir, silent)
+        remapped_nodes = cls._remap_file_nodes(
+            file_paths=textures, target_dir=new_dir, silent=silent
+        )
         if not silent:
             pm.displayInfo(
-                f"// Result: Remapped {remapped_count}/{len(textures)} texture paths."
+                f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
             )
 
     @classmethod
@@ -459,7 +481,7 @@ class MatUtils(ptk.HelpMixin):
             pm.displayInfo(f"// Result: Copied {copied_count} textures.")
 
         if copied_files:
-            cls._remap_file_nodes(
+            remapped = cls._remap_file_nodes(
                 file_paths=list(copied_files.values()),
                 target_dir=new_dir,
                 silent=silent,
