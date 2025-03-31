@@ -133,6 +133,14 @@ class ExplodedView:
 
 
 class ExplodedViewSlots(ExplodedView):
+    """Exploded View Slots"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.exploded_view
+
     def b000(self):
         """Explode button"""
         self.explode_selected()

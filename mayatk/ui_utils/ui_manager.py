@@ -10,7 +10,7 @@ from uitk import Switchboard
 from mayatk import ui_utils
 
 
-class UiManager:
+class UiManager(ptk.LoggingMixin):
     """Manages and tracks Switchboard UI instances."""
 
     _instances: dict[int, Switchboard] = {}
@@ -70,7 +70,7 @@ class UiManager:
         },
         "reference_manager": {
             "ui": "env_utils/reference_manager.ui",
-            "slot": "env_utils.reference_manager.ReferenceManager",
+            "slot": "env_utils.reference_manager.ReferenceManagerSlots",
         },
         "stingray_arnold_shader": {
             "ui": "mat_utils/stingray_arnold_shader.ui",
@@ -82,16 +82,17 @@ class UiManager:
         },
     }
 
-    def __init__(self, switchboard: Switchboard):
+    def __init__(self, switchboard: Switchboard, log_level: str = "WARNING") -> None:
         """Initialize a UiManager with a specific Switchboard instance.
 
         Parameters:
             switchboard (Switchboard): The Switchboard instance to use.
         """
         self.sb = self.switchboard = switchboard
-
         # Register the mayatk root directory once
         self.sb.register(ui_location=self.root_dir, slot_location=self.root_dir)
+
+        self.logger.setLevel(log_level)
 
     @property
     def root_dir(self) -> str:
