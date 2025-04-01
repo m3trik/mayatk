@@ -159,7 +159,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.set_attributes(WA_TranslucentBackground=True)
             ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
             ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-            ui.header.config_buttons(menu_button=True, pin_button=True)
+            ui.header.config_buttons(menu_button=True, hide_button=True)
             return ui
 
     def _load_maya_ui(

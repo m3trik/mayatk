@@ -748,15 +748,21 @@ class NodeUtils(ptk.HelpMixin):
     @classmethod
     @core_utils.CoreUtils.undoable
     def convert_to_instances(
-        cls, objects=None, append="", freeze_transforms=True, delete_history=True
+        cls,
+        objects=None,
+        append="",
+        freeze_transforms=False,
+        center_pivot=True,
+        delete_history=True,
     ):
         """The first selected object will be instanced across all other selected objects.
 
         Parameters:
             objects (list): A list of objects to convert to instances. The first object will be the instance parent.
             append (str): Append a string to the end of any instanced objects. ie. '_INST'
-            freeze_transforms (bool): Freeze transforms on the instanced objects.
-            delete_history (bool): Delete history on the instanced objects.
+            freeze_transforms (bool): Freeze transforms on the given objects.
+            center_pivot (bool): Center pivot on the given objects.
+            delete_history (bool): Delete history on the given objects.
 
         Returns:
             (list) The instanced objects.
@@ -769,21 +775,24 @@ class NodeUtils(ptk.HelpMixin):
             return
 
         for target in targets:
+            if freeze_transforms:
+                pm.makeIdentity(target, apply=True, translate=True)
+
+            if center_pivot:
+                pm.xform(target, centerPivots=True)
+
             if delete_history:
                 pm.delete(target, constructionHistory=True)
 
             name = target.name()
-            objParent = pm.listRelatives(target, parent=1)
+            objParent = pm.listRelatives(target, parent=True)
 
             instance = pm.instance(source)
-
             cls.uninstance(target)
-            if freeze_transforms:
-                pm.makeIdentity(target, apply=1, translate=1, rotate=0, scale=0)
 
             # Move object to center of the last selected items bounding box # pm.xform(instance, translation=pos, worldSpace=1, relative=1) #move to the original objects location.
             pm.matchTransform(
-                instance, target, position=1, rotation=1, scale=1, pivots=1
+                instance, target, position=True, rotation=True, scale=True, pivots=True
             )
 
             try:
