@@ -356,7 +356,7 @@ class ColorManagerSlots(ColorManager):
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.default().get("color_manager", reload=True)
+    ui = UiManager.instance().get("color_manager", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

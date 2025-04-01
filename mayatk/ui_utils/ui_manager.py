@@ -10,10 +10,8 @@ from uitk import Switchboard
 from mayatk import ui_utils
 
 
-class UiManager(ptk.LoggingMixin):
+class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
     """Manages and tracks Switchboard UI instances."""
-
-    _instances: dict[int, Switchboard] = {}
 
     UI_REGISTRY: dict[str, dict[str, str]] = {
         "scene_exporter": {
@@ -80,6 +78,10 @@ class UiManager(ptk.LoggingMixin):
             "ui": "rig_utils/tube_rig.ui",
             "slot": "rig_utils.tube_rig.TubeRigSlots",
         },
+        "wheel_rig": {
+            "ui": "rig_utils/wheel_rig.ui",
+            "slot": "rig_utils.wheel_rig.WheelRigSlots",
+        },
     }
 
     def __init__(self, switchboard: Switchboard, log_level: str = "WARNING") -> None:
@@ -98,37 +100,6 @@ class UiManager(ptk.LoggingMixin):
     def root_dir(self) -> str:
         """Return the root directory of the mayatk package."""
         return os.path.dirname(sys.modules["mayatk"].__file__)
-
-    @classmethod
-    def default(cls) -> "UiManager":
-        """Return the default UiManager instance."""
-        return cls.instance()
-
-    @classmethod
-    def instance(cls, switchboard: Optional[Switchboard] = None) -> "UiManager":
-        """Return a UiManager bound to a given Switchboard instance.
-
-        If no switchboard is passed, use or create the default instance.
-
-        Parameters:
-            switchboard (Switchboard): The Switchboard instance to use.
-
-        Returns:
-            UiManager: The UiManager
-        """
-        if switchboard is None:
-            switchboard = cls._instances.get("default")
-            if switchboard is None:
-                switchboard = Switchboard(
-                    parent=ui_utils._ui_utils.UiUtils.get_main_window()
-                )
-                cls._instances["default"] = switchboard
-            return cls(switchboard)
-
-        key = id(switchboard)
-        if key not in cls._instances:
-            cls._instances[key] = switchboard
-        return cls(switchboard)
 
     def get(self, name: str, **kwargs) -> "QtWidgets.QMainWindow":
         """Retrieve or load a UI or Maya menu by name using the internal registry.
@@ -247,7 +218,7 @@ if __name__ == "__main__":
 
     CoreUtils.clear_scrollfield_reporters()
 
-    ui = UiManager.default().get("duplicate_radial", reload=True)
+    ui = UiManager.instance().get("duplicate_radial", reload=True)
     ui.header.config_buttons(hide_button=True)
     ui.show(pos="screen", app_exec=True)
 

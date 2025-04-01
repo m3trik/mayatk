@@ -1134,7 +1134,7 @@ class SceneExporterSlots(SceneExporter):
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.default().get("scene_exporter", reload=True)
+    ui = UiManager.instance().get("scene_exporter", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

@@ -746,12 +746,17 @@ class NodeUtils(ptk.HelpMixin):
         return instances
 
     @classmethod
-    def convert_to_instances(cls, objects=None, append=""):
+    @core_utils.CoreUtils.undoable
+    def convert_to_instances(
+        cls, objects=None, append="", freeze_transforms=True, delete_history=True
+    ):
         """The first selected object will be instanced across all other selected objects.
 
         Parameters:
             objects (list): A list of objects to convert to instances. The first object will be the instance parent.
             append (str): Append a string to the end of any instanced objects. ie. '_INST'
+            freeze_transforms (bool): Freeze transforms on the instanced objects.
+            delete_history (bool): Delete history on the instanced objects.
 
         Returns:
             (list) The instanced objects.
@@ -763,15 +768,18 @@ class NodeUtils(ptk.HelpMixin):
             pm.warning("Operation requires a selection of at least two objects.")
             return
 
-        pm.undoInfo(openChunk=True)
         for target in targets:
+            if delete_history:
+                pm.delete(target, constructionHistory=True)
+
             name = target.name()
             objParent = pm.listRelatives(target, parent=1)
 
             instance = pm.instance(source)
 
             cls.uninstance(target)
-            pm.makeIdentity(target, apply=1, translate=1, rotate=0, scale=0)
+            if freeze_transforms:
+                pm.makeIdentity(target, apply=1, translate=1, rotate=0, scale=0)
 
             # Move object to center of the last selected items bounding box # pm.xform(instance, translation=pos, worldSpace=1, relative=1) #move to the original objects location.
             pm.matchTransform(
@@ -789,7 +797,6 @@ class NodeUtils(ptk.HelpMixin):
             pm.delete(target)
             pm.rename(instance, name + append)
         pm.select(targets)
-        pm.undoInfo(closeChunk=True)
 
         return targets
 

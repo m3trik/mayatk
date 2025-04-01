@@ -511,7 +511,7 @@ class ReferenceManagerSlots(ReferenceManager):
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.default().get("reference_manager", reload=True)
+    ui = UiManager.instance().get("reference_manager", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

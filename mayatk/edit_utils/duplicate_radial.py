@@ -387,7 +387,7 @@ class DuplicateRadialSlots:
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.default().get("duplicate_radial", reload=True)
+    ui = UiManager.instance().get("duplicate_radial", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

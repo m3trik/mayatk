@@ -745,7 +745,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.default().get("stingray_arnold_shader", reload=True)
+    ui = UiManager.instance().get("stingray_arnold_shader", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

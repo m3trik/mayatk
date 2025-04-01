@@ -11,8 +11,7 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# From this package:
-from mayatk import node_utils
+# Import package modules at class level to avoid circular imports.
 
 
 class CoreUtils(ptk.HelpMixin):
@@ -207,10 +206,10 @@ class CoreUtils(ptk.HelpMixin):
             (generator)
         """
         import maya.OpenMaya as om
-        from mayatk import node_utils
+        from mayatk.node_utils import NodeUtils
 
         selectionList = om.MSelectionList()
-        for mesh in node_utils.NodeUtils.get_shape_node(pm.ls(objects)):
+        for mesh in NodeUtils.get_shape_node(pm.ls(objects)):
             selectionList.add(mesh)
 
         for i in range(selectionList.length()):
@@ -231,7 +230,7 @@ class CoreUtils(ptk.HelpMixin):
         Returns:
             (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
-        from mayatk import node_utils
+        from mayatk.node_utils import NodeUtils
 
         try:
             o = ptk.make_iterable(array)[0]
@@ -242,7 +241,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else NodeUtils.get_type(o)
         )
 
     @staticmethod
@@ -403,8 +402,10 @@ class CoreUtils(ptk.HelpMixin):
         Returns:
             dict: A dictionary mapping the names of source meshes to their most similar target mesh names.
         """
-        source_group = node_utils.NodeUtils.get_unique_children(source)
-        target_group = node_utils.NodeUtils.get_unique_children(target)
+        from mayatk.node_utils import NodeUtils
+
+        source_group = NodeUtils.get_unique_children(source)
+        target_group = NodeUtils.get_unique_children(target)
 
         mapping = {}
         for source_child in source_group:
