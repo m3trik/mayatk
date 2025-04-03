@@ -770,13 +770,19 @@ class XformUtils(ptk.HelpMixin):
     @staticmethod
     def orient_to_vector(
         transform: "pm.nodetypes.Transform",
-        aim_vector: "pm.datatypes.Vector",
-        up_vector: "pm.datatypes.Vector" = pm.datatypes.Vector(0, 1, 0),
+        aim_vector: "pm.datatypes.Vector" = (1, 0, 0),
+        up_vector: "pm.datatypes.Vector" = (0, 1, 0),
     ):
         """Orients a transform so its local +X aims along the given world-space vector."""
         transform = NodeUtils.get_transform_node(transform)
         if not transform:
             raise ValueError(f"// Error: Invalid transform node: {transform}")
+
+        up_vector_X, up_vector_Y, up_vector_Z = up_vector
+        up_vector = pm.datatypes.Vector(up_vector_X, up_vector_Y, up_vector_Z)
+
+        aim_vector_X, aim_vector_Y, aim_vector_Z = aim_vector
+        aim_vector = pm.datatypes.Vector(aim_vector_X, aim_vector_Y, aim_vector_Z)
 
         temp = pm.spaceLocator()
         target = pm.spaceLocator()

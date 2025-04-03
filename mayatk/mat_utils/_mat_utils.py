@@ -332,7 +332,7 @@ class MatUtils(ptk.HelpMixin):
     @staticmethod
     def _remap_file_nodes(
         file_paths: List[str], target_dir: str, silent: bool = False
-    ) -> List[pm.nt.File]:
+    ) -> List["pm.nt.File"]:
         """Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimages.
 
         Parameters:
