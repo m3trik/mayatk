@@ -767,6 +767,8 @@ class NodeUtils(ptk.HelpMixin):
         Returns:
             (list) The instanced objects.
         """
+        from mayatk import XformUtils
+
         objects = pm.ls(objects) or pm.ls(orderedSelection=True)
         try:
             source, targets = objects[0], objects[1:]
@@ -774,16 +776,16 @@ class NodeUtils(ptk.HelpMixin):
             pm.warning("Operation requires a selection of at least two objects.")
             return
 
+        if any((freeze_transforms, center_pivot, delete_history)):
+            XformUtils.freeze_transforms(
+                objects,
+                translate=freeze_transforms,
+                center_pivot=center_pivot,
+                delete_history=delete_history,
+                force=True,
+            )
+
         for target in targets:
-            if freeze_transforms:
-                pm.makeIdentity(target, apply=True, translate=True)
-
-            if center_pivot:
-                pm.xform(target, centerPivots=True)
-
-            if delete_history:
-                pm.delete(target, constructionHistory=True)
-
             name = target.name()
             objParent = pm.listRelatives(target, parent=True)
 
