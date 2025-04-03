@@ -682,7 +682,7 @@ class SceneExporterSlots(SceneExporter):
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.scene_exporter
 
-        self.logging.setup_logging_redirect(self.ui.txt003)
+        self.logger.setup_logging_redirect(self.ui.txt003)
 
         self.ui.txt001.setText("")  # Output Name
         self.ui.txt003.setText("")  # Log Output
