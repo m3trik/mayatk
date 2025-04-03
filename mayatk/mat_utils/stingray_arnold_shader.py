@@ -26,7 +26,7 @@ class StingrayArnoldShader:
     color_warning = "rgb(200, 200, 100)"
     color_error = "rgb(255, 100, 100)"
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_network(
         self,
         textures: List[str],
@@ -63,7 +63,7 @@ class StingrayArnoldShader:
         # Process each texture
         length = len(textures)
         progress = 0
-        base_dir = EnvUtils.get_maya_info("sourceimages")
+        base_dir = EnvUtils.get_env_info("sourceimages")
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
@@ -118,7 +118,7 @@ class StingrayArnoldShader:
         sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
 
         if opacity:
-            maya_install_path = EnvUtils.get_maya_info("install_path")
+            maya_install_path = EnvUtils.get_env_info("install_path")
 
             graph = os.path.join(
                 maya_install_path,
@@ -613,7 +613,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.stingray_arnold_shader
-        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
 
@@ -639,7 +639,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     #     ui.set_attributes(WA_TranslucentBackground=True)
     #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
     #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    #     ui.header.configure_buttons(hide_button=True)
+    #     ui.header.config_buttons(hide_button=True)
 
     #     # Connect button click to show HDR Manager
     #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
@@ -740,21 +740,13 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
             self.sb.QtWidgets.QApplication.instance().processEvents()
 
 
-class StingrayArnoldShaderUi:
-    def __new__(self):
-        """Get the Stingray Arnold Shader UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "stingray_arnold_shader.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=StingrayArnoldShaderSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    StingrayArnoldShaderUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.instance().get("stingray_arnold_shader", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

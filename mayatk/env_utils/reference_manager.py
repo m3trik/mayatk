@@ -309,8 +309,10 @@ class ReferenceManagerSlots(ReferenceManager):
 
         # Initialize and connect UI components
         self.ui.txt000.setText(self.current_working_dir)
-        self.ui.txt000.textChanged.connect(self.update_current_dir)
-        self.ui.txt001.textEdited.connect(self.refresh_file_list)
+        self.ui.txt000.textEdited.connect(
+            lambda: self.sb.defer(self.update_current_dir)
+        )
+        self.ui.txt001.textEdited.connect(lambda: self.sb.defer(self.refresh_file_list))
         self.ui.list000.itemSelectionChanged.connect(self.handle_item_selection)
         self.ui.list000.setSelectionMode(
             self.sb.QtWidgets.QAbstractItemView.MultiSelection
@@ -504,22 +506,13 @@ class ReferenceManagerSlots(ReferenceManager):
             self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
 
 
-class ReferenceManagerUi:
-    def __new__(self):
-        """Get the Referece Manager UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "reference_manager.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=ReferenceManagerSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ReferenceManagerUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
 
+    ui = UiManager.instance().get("reference_manager", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -87,7 +87,7 @@ class AnimUtils(ptk.HelpMixin):
         pm.currentTime(currentTime + time, edit=True, update=update)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def set_keys_for_attributes(objects, **kwargs):
         """Sets keyframes for the specified attributes on given objects at given times.
 
@@ -143,7 +143,7 @@ class AnimUtils(ptk.HelpMixin):
         return filtered_objects
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def adjust_key_spacing(
         cls,
         objects: Optional[List[str]] = None,
@@ -213,7 +213,7 @@ class AnimUtils(ptk.HelpMixin):
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def invert_selected_keys(time=1, relative=True, delete_original=False):
         """Duplicate any selected keyframes and paste them inverted at the given time.
 
@@ -276,7 +276,7 @@ class AnimUtils(ptk.HelpMixin):
                 )
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def stagger_keyframes(
         objects: list,
         offset: int = 1,
@@ -352,7 +352,7 @@ class AnimUtils(ptk.HelpMixin):
                     pm.warning(f"Failed to adjust tangents for {obj}: {e}")
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def transfer_keyframes(
         cls,
         objects: List[Union[str, object]],
@@ -543,7 +543,7 @@ class AnimUtils(ptk.HelpMixin):
         return frame_ranges
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def tie_keyframes(objects: List["pm.nt.Transform"] = None, absolute: bool = False):
         """Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)
         by setting keyframes only on the attributes that already have keyframes,

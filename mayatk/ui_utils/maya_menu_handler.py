@@ -10,7 +10,7 @@ import pymel.core as pm
 import pythontk as ptk
 
 # From this package:
-from mayatk.ui_utils import UiUtils
+from mayatk import ui_utils
 
 
 class EmbeddedMenuWidget(QtWidgets.QWidget):
@@ -33,29 +33,7 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
         toolbar.addAction(menu_action)
 
         layout.addWidget(toolbar)
-        self.scale_by_percentage(50)
-
-    def scale_by_percentage(self, percentage: float):
-        """Scales the window and its content by a percentage using the layout system.
-
-        Optionally sets the new size as fixed.
-        """
-        if percentage <= 0:
-            raise ValueError("Percentage must be greater than 0")
-
-        # Normalizing percentage: 100% means no change, <100% shrinks, >100% enlarges
-        scale_factor = percentage / 100
-
-        # Adjust the size of the entire window
-        current_size = self.size()
-        new_width = int(current_size.width() * scale_factor)
-        new_height = int(current_size.height() * scale_factor)
-
-        # Resize the window
-        self.resize(new_width, new_height)
-
-        # Ensure the layout resizes properly
-        self.layout().update()  # Make sure the layout recalculates its size
+        self.layout().update()
 
 
 class MayaMenuHandler(ptk.LoggingMixin):
@@ -304,7 +282,9 @@ class MayaMenuHandler(ptk.LoggingMixin):
         pm.refresh()
 
         # Create a placeholder menu UI
-        placeholder_menu = QtWidgets.QMenu(maya_menu_name, UiUtils.get_main_window())
+        placeholder_menu = QtWidgets.QMenu(
+            maya_menu_name, ui_utils.UiUtils.get_main_window()
+        )
         placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
         placeholder_widget.setObjectName(menu_key)
         self.menus[menu_key] = placeholder_widget
@@ -325,44 +305,76 @@ class MayaMenuHandler(ptk.LoggingMixin):
         orig_menu_set: str,
         placeholder_widget: EmbeddedMenuWidget,
     ):
-        """Deferred function to duplicate and populate a Maya menu in UI."""
-        main_window = UiUtils.get_main_window()
-        menu_bar = main_window.menuBar()
+        """Properly deferred function to duplicate and populate a Maya menu in UI."""
 
-        target_menu = None
-        max_attempts, sleep_duration = 15, 0.3
+        def _populate_menu():
+            main_window = ui_utils.UiUtils.get_main_window()
+            menu_bar = main_window.menuBar()
 
-        for attempt in range(max_attempts):
-            for action in menu_bar.actions():
-                if action.text() == maya_menu_name:
-                    target_menu = action.menu()
-                    if target_menu and len(target_menu.actions()) > 0:
+            target_menu = None
+            previous_action_count = -1
+            stable_iterations = 0
+            required_stable_iterations = 2  # Require 2 stable checks
+            max_attempts = 15  # Prevent infinite loops
+            attempt = 0
+
+            while attempt < max_attempts:
+                attempt += 1
+
+                # Locate the target menu
+                for action in menu_bar.actions():
+                    if action.text() == maya_menu_name:
+                        target_menu = action.menu()
                         break
 
-            if target_menu and len(target_menu.actions()) > 0:
+                if target_menu:
+                    current_action_count = len(target_menu.actions())
+
+                    if (
+                        current_action_count == previous_action_count
+                        and current_action_count > 0
+                    ):
+                        stable_iterations += 1
+                    else:
+                        stable_iterations = 0  # Reset if count changes
+
+                    previous_action_count = current_action_count
+
+                    if stable_iterations >= required_stable_iterations:
+                        self.logger.debug(
+                            f"Menu '{maya_menu_name}' stabilized with {current_action_count} actions."
+                        )
+                        break
+                    else:
+                        self.logger.debug(
+                            f"Waiting for menu '{maya_menu_name}' to stabilize... "
+                            f"Currently {current_action_count} actions."
+                        )
+
+                else:
+                    self.logger.debug(f"Menu '{maya_menu_name}' not found yet...")
+
+                # Process UI events (prevents freezing)
+                QtWidgets.QApplication.processEvents()
+
+            # Restore the original menu mode
+            pm.setMenuMode(orig_menu_set)
+            self.logger.debug(f"Restored original menu mode: {orig_menu_set}")
+
+            if target_menu and previous_action_count > 0:
+                placeholder_widget.menu.clear()
+                for action in target_menu.actions():
+                    placeholder_widget.menu.addAction(action)
                 self.logger.debug(
-                    f"Menu '{maya_menu_name}' found after {attempt * sleep_duration:.1f}s with {len(target_menu.actions())} actions"
+                    f"Populated menu '{menu_key}' with {previous_action_count} actions."
                 )
-                break
             else:
-                self.logger.debug(
-                    f"Attempt {attempt}/{max_attempts}: Menu '{maya_menu_name}' not fully populated yet..."
+                self.logger.warning(
+                    f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
                 )
-                time.sleep(sleep_duration)
-                pm.refresh()
 
-        pm.setMenuMode(orig_menu_set)
-        self.logger.debug(f"Restored original menu mode: {orig_menu_set}")
-
-        if target_menu and len(target_menu.actions()) > 0:
-            placeholder_widget.menu.clear()
-            for action in target_menu.actions():
-                placeholder_widget.menu.addAction(action)
-            self.logger.debug(f"Populated menu '{menu_key}'.")
-        else:
-            self.logger.warning(
-                f"# Failed to fully initialize menu '{menu_key}' after {max_attempts * sleep_duration:.1f}s."
-            )
+        # Properly defer execution using Maya's deferred queue
+        maya.utils.executeDeferred(_populate_menu)
 
 
 # --------------------------------------------------------------------------------------------
@@ -370,4 +382,4 @@ if __name__ == "__main__":
     handler = MayaMenuHandler()
     menu = handler.get_menu("skin")
     print(repr(menu))
-    menu.show()
+    menu.show(pos="screen", app_exec=True)

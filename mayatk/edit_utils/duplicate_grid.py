@@ -118,21 +118,13 @@ class DuplicateGridSlots:
         )
 
 
-class DuplicateGridUi:
-    def __new__(self):
-        """Get the Duplicate Grid UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "duplicate_grid.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=DuplicateGridSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    DuplicateGridUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.instance().get("duplicate_grid", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -13,6 +13,7 @@ from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.edit_utils import EditUtils
 from mayatk.display_utils import DisplayUtils
+from mayatk.ui_utils import UiUtils
 
 
 class MacroManager(ptk.HelpMixin):
@@ -339,8 +340,6 @@ class DisplayMacros:
     @staticmethod
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
-        from mayatk.ui_utils import UiUtils
-
         currentPanel = UiUtils.get_panel(withFocus=1)
         state = pm.isolateSelect(currentPanel, query=1, state=1)
         if state:
@@ -534,8 +533,6 @@ class DisplayMacros:
         """Toggles the wireframe display state.
         Possible states include: none, shaded, full
         """
-        from mayatk.ui_utils import UiUtils
-
         focused_panel = UiUtils.get_panel(withFocus=True)
         # Check if focused_panel is a modelPanel to avoid errors when it's not
         if not focused_panel or not pm.modelEditor(
@@ -598,8 +595,6 @@ class DisplayMacros:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        from mayatk.ui_utils import UiUtils
-
         currentPanel = UiUtils.get_panel(withFocus=True)
         displayAppearance = pm.modelEditor(currentPanel, q=True, displayAppearance=True)
         displayTextures = pm.modelEditor(currentPanel, q=True, displayTextures=True)
@@ -647,8 +642,6 @@ class DisplayMacros:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        from mayatk.ui_utils import UiUtils
-
         currentPanel = UiUtils.get_panel(withFocus=True)
         displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
 
@@ -687,7 +680,7 @@ class EditMacros:
     """ """
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
@@ -707,7 +700,7 @@ class EditMacros:
         return combined_mesh
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
@@ -948,29 +941,62 @@ class SelectionMacros:
             return
 
         for obj in pm.ls(objects, flatten=True):
-            # Check the current selectability state using PyNode attributes
-            override_enabled = obj.overrideEnabled.get()
-            current_state = obj.overrideDisplayType.get()
+            try:
+                # Ensure attributes exist and are not locked or connected before modifying
+                if not obj.hasAttr("overrideEnabled") or obj.overrideEnabled.isLocked():
+                    pm.warning(
+                        f"Cannot modify overrideEnabled for {obj}: Attribute is locked."
+                    )
+                    continue
+                if (
+                    not obj.hasAttr("overrideDisplayType")
+                    or obj.overrideDisplayType.isLocked()
+                ):
+                    pm.warning(
+                        f"Cannot modify overrideDisplayType for {obj}: Attribute is locked."
+                    )
+                    continue
+                if (
+                    not obj.hasAttr("useOutlinerColor")
+                    or obj.useOutlinerColor.isLocked()
+                ):
+                    pm.warning(
+                        f"Cannot modify useOutlinerColor for {obj}: Attribute is locked."
+                    )
+                    continue
+                if not obj.hasAttr("outlinerColor") or obj.outlinerColor.isLocked():
+                    pm.warning(
+                        f"Cannot modify outlinerColor for {obj}: Attribute is locked."
+                    )
+                    continue
 
-            if override_enabled and current_state == 2:
-                # Object is currently non-selectable, make it selectable
-                obj.overrideDisplayType.set(0)  # Normal mode
-                obj.useOutlinerColor.set(0)  # Disable custom outliner color
-                pm.inViewMessage(
-                    statusMessage=f"{obj} <hl>Selectable</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
-            else:  # Object is currently selectable, make it non-selectable
-                obj.overrideEnabled.set(1)
-                obj.overrideDisplayType.set(2)  # Reference mode
-                obj.useOutlinerColor.set(1)  # Enable custom outliner color
-                obj.outlinerColor.set(0.3, 0.6, 0.6)  # Set color to desaturated teal
-                pm.inViewMessage(
-                    statusMessage=f"{obj} <hl>Non-selectable</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
+                override_enabled = obj.overrideEnabled.get()
+                current_state = obj.overrideDisplayType.get()
+
+                if override_enabled and current_state == 2:
+                    # Object is currently non-selectable, make it selectable
+                    obj.overrideDisplayType.set(0)  # Normal mode
+                    obj.useOutlinerColor.set(0)  # Disable custom outliner color
+                    pm.inViewMessage(
+                        statusMessage=f"{obj} <hl>Selectable</hl>.",
+                        pos="topCenter",
+                        fade=True,
+                    )
+                else:  # Object is currently selectable, make it non-selectable
+                    obj.overrideEnabled.set(1)
+                    obj.overrideDisplayType.set(2)  # Reference mode
+                    obj.useOutlinerColor.set(1)  # Enable custom outliner color
+                    obj.outlinerColor.set(
+                        0.3, 0.6, 0.6
+                    )  # Set color to desaturated teal
+                    pm.inViewMessage(
+                        statusMessage=f"{obj} <hl>Non-selectable</hl>.",
+                        pos="topCenter",
+                        fade=True,
+                    )
+
+            except RuntimeError as e:
+                pm.warning(f"Failed to modify selectability for {obj}: {e}")
 
     @staticmethod
     def m_toggle_UV_select_type() -> None:
@@ -1033,9 +1059,9 @@ class UiMacros:
     @staticmethod
     def m_tentacle_show() -> None:
         """Display the tentacle marking menu."""
-        from tentacle import tcl_maya
+        from tentacle.tcl_maya import TclMaya
 
-        tcl_maya.show(key_show="Key_F12")
+        TclMaya.instance().show()
 
     @staticmethod
     def m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None:
@@ -1045,8 +1071,6 @@ class UiMacros:
             toggle_menu (bool): If True, toggles the visibility of the main menu bar.
             toggle_panels (bool): If True, toggles the visibility of panel toolbars.
         """
-        from mayatk.ui_utils import UiUtils
-
         # Get the main Maya window and its menu bar
         main_window = UiUtils.get_main_window()
         menu_bar = main_window.menuBar() if main_window else None

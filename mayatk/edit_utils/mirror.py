@@ -71,21 +71,13 @@ class MirrorSlots:
         return pivot_mapping.get(pivot_index, "object")
 
 
-class MirrorUi:
-    def __new__(self):
-        """Get the Mirror UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_file = os.path.join(os.path.dirname(__file__), "mirror.ui")
-        ui = UiManager.get_ui(ui_source=ui_file, slot_source=MirrorSlots)
-        return ui
-
-
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    MirrorUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.instance().get("mirror", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

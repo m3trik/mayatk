@@ -11,8 +11,7 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# From this package:
-from mayatk import node_utils
+# Import package modules at class level to avoid circular imports.
 
 
 class CoreUtils(ptk.HelpMixin):
@@ -43,7 +42,7 @@ class CoreUtils(ptk.HelpMixin):
 
         return wrapped
 
-    def undo(fn):
+    def undoable(fn):
         """A decorator to place a function into Maya's undo chunk.
         Prevents the undo queue from breaking entirely if an exception is raised within the given function.
 
@@ -207,10 +206,10 @@ class CoreUtils(ptk.HelpMixin):
             (generator)
         """
         import maya.OpenMaya as om
-        from mayatk import node_utils
+        from mayatk.node_utils import NodeUtils
 
         selectionList = om.MSelectionList()
-        for mesh in node_utils.NodeUtils.get_shape_node(pm.ls(objects)):
+        for mesh in NodeUtils.get_shape_node(pm.ls(objects)):
             selectionList.add(mesh)
 
         for i in range(selectionList.length()):
@@ -231,7 +230,7 @@ class CoreUtils(ptk.HelpMixin):
         Returns:
             (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
-        from mayatk import node_utils
+        from mayatk.node_utils import NodeUtils
 
         try:
             o = ptk.make_iterable(array)[0]
@@ -242,7 +241,7 @@ class CoreUtils(ptk.HelpMixin):
         return (
             "str"
             if isinstance(o, str)
-            else "int" if isinstance(o, int) else node_utils.NodeUtils.get_type(o)
+            else "int" if isinstance(o, int) else NodeUtils.get_type(o)
         )
 
     @staticmethod
@@ -349,21 +348,6 @@ class CoreUtils(ptk.HelpMixin):
             cmd(node, **{p: v})
 
     @staticmethod
-    def generate_unique_name(base_name):
-        """Generate a unique name based on the base_name."""
-        # Base case: If the base_name doesn't exist, just return it.
-        if not pm.objExists(base_name):
-            return base_name
-
-        # Otherwise, append numbers until we get a unique name.
-        counter = 1
-        new_name = f"{base_name}_{counter}"
-        while pm.objExists(new_name):
-            counter += 1
-            new_name = f"{base_name}_{counter}"
-        return new_name
-
-    @staticmethod
     def calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
         """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
 
@@ -418,8 +402,10 @@ class CoreUtils(ptk.HelpMixin):
         Returns:
             dict: A dictionary mapping the names of source meshes to their most similar target mesh names.
         """
-        source_group = node_utils.NodeUtils.get_unique_children(source)
-        target_group = node_utils.NodeUtils.get_unique_children(target)
+        from mayatk.node_utils import NodeUtils
+
+        source_group = NodeUtils.get_unique_children(source)
+        target_group = NodeUtils.get_unique_children(target)
 
         mapping = {}
         for source_child in source_group:

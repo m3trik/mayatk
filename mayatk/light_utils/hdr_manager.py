@@ -66,7 +66,7 @@ class HdrManager:
         if node:
             node.camera.set(state)
 
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def create_network(
         self,
         hdrMap="",
@@ -83,7 +83,7 @@ class HdrManagerSlots(HdrManager):
 
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.hdr_manager
-        self.workspace_dir = EnvUtils.get_maya_info("workspace_dir")
+        self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
 
         hdr_info = ptk.get_dir_contents(
@@ -174,22 +174,14 @@ class HdrManagerSlots(HdrManager):
     #         self.ui.b000.setDisabled(True)
 
 
-class HdrManagerUi:
-    def __new__(cls):
-        """Get the HDR Manager UI."""
-        import os
-        from mayatk.ui_utils.ui_manager import UiManager
-
-        ui_filepath = os.path.join(os.path.dirname(__file__), f"hdr_manager.ui")
-        ui = UiManager.get_ui(ui_source=ui_filepath, slot_source=HdrManagerSlots)
-        return ui
-
-
 # ----------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
-    HdrManagerUi().show(pos="screen", app_exec=True)
+    from mayatk.ui_utils.ui_manager import UiManager
+
+    ui = UiManager.instance().get("hdr_manager", reload=True)
+    ui.show(pos="screen", app_exec=True)
 
 
 # -----------------------------------------------------------------------------

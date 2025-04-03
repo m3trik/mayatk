@@ -57,7 +57,7 @@ class DisplayUtils(ptk.HelpMixin):
             return False
 
     @classmethod
-    @core_utils.CoreUtils.undo
+    @core_utils.CoreUtils.undoable
     def set_visibility(
         cls,
         elements: Union[str, object, List],

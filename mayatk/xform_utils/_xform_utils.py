@@ -123,7 +123,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def drop_to_grid(
         objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
@@ -206,7 +206,7 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.selected
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def scale_connected_edges(objects, scale_factor=1.1) -> None:
         """Scales each set of connected edges separately, either uniformly or non-uniformly.
 
@@ -266,7 +266,7 @@ class XformUtils(ptk.HelpMixin):
                 vertex.setPosition(new_pos, space="world")
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def store_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Store the world matrix and pivot points
@@ -288,18 +288,18 @@ class XformUtils(ptk.HelpMixin):
             pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @classmethod
-    @CoreUtils.undo
-    def freeze_transforms(cls, objects, center_pivot=False, force=False, **kwargs):
+    @CoreUtils.undoable
+    def freeze_transforms(
+        cls, objects, center_pivot=False, force=False, delete_history=False, **kwargs
+    ):
         """Freezes the transformations of the specified objects.
 
         Parameters:
             objects (list): List of objects to freeze transformations on.
             center_pivot (bool, optional): If True, centers the pivot of the objects. Default is False.
             force (bool, optional): If True, unlocks any locked transform attributes and relocks them after the operation. Default is False.
+            delete_history (bool, optional): If True, deletes the history of the objects. Default is False.
             **kwargs: Additional arguments passed to pm.makeIdentity.
-
-        Returns:
-            None
         """
         for obj in pm.ls(objects, type="transform"):
             if center_pivot:
@@ -334,11 +334,14 @@ class XformUtils(ptk.HelpMixin):
             # Freeze transformations to reset them
             pm.makeIdentity(obj, apply=True, **kwargs)
 
+            if delete_history:
+                pm.delete(obj, constructionHistory=True)
+
             if force and locked_attrs:
                 pm.setAttr([f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=True)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def restore_transforms(objects, prefix="original"):
         for obj in pm.ls(objects, type="transform"):
             # Check if the transform attributes are at their default values
@@ -370,7 +373,7 @@ class XformUtils(ptk.HelpMixin):
             pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def reset_translation(cls, objects):
         """Reset the translation transformations on the given object(s).
 
@@ -446,17 +449,18 @@ class XformUtils(ptk.HelpMixin):
             node (PyNode): The object whose reference position is determined.
             pivot (int/str/tuple/list): Mode or explicit position.
                 - `0` or `"boundingBox"` → Uses bounding box properties.
-                - `1` or `"object"` → Uses the object's pivot.
+                - `1` or `"object"` → Uses the object's rotate pivot.
                 - `2` or `"world"` → Uses world origin `(0,0,0)`.
                 - `"center"` → Uses bounding box center.
                 - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
+                - `"baked"` → Uses the baked (original) rotate pivot in world space.
                 - `(x, y, z)` → Uses a specified world-space pivot.
-            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns a full `[x, y, z]` list.
+            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns full (x, y, z) list.
 
         Returns:
             float or list: The computed pivot position (single float if `axis_index` is specified, list if `None`).
         """
-        # Ensure recursion does not nest lists
+        # Return full vector if axis_index is None
         if axis_index is None:
             return [
                 cls.get_operation_axis_pos(node, pivot, 0),
@@ -464,51 +468,51 @@ class XformUtils(ptk.HelpMixin):
                 cls.get_operation_axis_pos(node, pivot, 2),
             ]
 
-        # If already a tuple/list, return only the requested axis
+        # Explicit world-space point
         if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
-            return float(pivot[axis_index])  # Ensure float, not list
+            return float(pivot[axis_index])
 
-        # Object Pivot (Always Returns the Object's True Pivot Without Modification)
+        # Object pivot (rotate pivot in world space)
         if pivot in {1, "object"}:
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)  # Returns (x, y, z)
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
             return float(obj_pivot_ws[axis_index])
 
-        # World Pivot (Fixed at 0, 0, 0)
+        # Baked pivot (local-space rotate pivot transformed to world space)
+        if pivot == "baked":
+            local_rp = pm.xform(node, q=True, rp=True, os=True)
+            world_rp = pm.dt.Point(local_rp) * pm.PyNode(node).getMatrix(
+                worldSpace=True
+            )
+            return float(world_rp[axis_index])
+
+        # World origin
         if pivot in {2, "world"}:
-            return 0.0  # Always world origin
+            return 0.0
 
-        # Handle Bounding Box Center Before axis_map
+        # Bounding box center
         if pivot == "center":
-            bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
-            return bbox_center if axis_index is None else float(bbox_center[axis_index])
+            center = cls.get_bounding_box(node, "center")
+            return float(center[axis_index])
 
-        # **Bounding Box Pivot Handling**
-        axis_map = {
-            "xmin": 0,
-            "xmax": 0,  # Modify X-axis only
-            "ymin": 1,
-            "ymax": 1,  # Modify Y-axis only
-            "zmin": 2,
-            "zmax": 2,  # Modify Z-axis only
-        }
+        # Bounding box limits (xmin, ymax, etc.)
+        axis_map = {"xmin": 0, "xmax": 0, "ymin": 1, "ymax": 1, "zmin": 2, "zmax": 2}
+        valid_keys = cls.get_bounding_box(node, return_valid_keys=True)
 
-        valid_bbox_keys = cls.get_bounding_box(node, return_valid_keys=True)
+        if isinstance(pivot, str) and pivot in valid_keys:
+            val = cls.get_bounding_box(node, pivot)
+            if isinstance(val, (tuple, list)):
+                return float(val[axis_map[pivot]])
+            return float(val)
 
-        if isinstance(pivot, str) and pivot in valid_bbox_keys:
-            bbox_value = cls.get_bounding_box(node, pivot)  # Could be a float or tuple
-            if isinstance(bbox_value, (tuple, list)):  # Extract only the relevant axis
-                return float(bbox_value[axis_map[pivot]])
-            return float(bbox_value)
-
-        # Default to Bounding Box Center if Pivot is Invalid
+        # Fallback to center
         pm.warning(
             f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
         )
-        bbox_center = cls.get_bounding_box(node, "center")  # Returns (cx, cy, cz)
-        return bbox_center if axis_index is None else float(bbox_center[axis_index])
+        fallback = cls.get_bounding_box(node, "center")
+        return float(fallback[axis_index])
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
         """Align one objects pivot point to another using 3 point align.
 
@@ -580,7 +584,7 @@ class XformUtils(ptk.HelpMixin):
             pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def bake_pivot(objects, position=False, orientation=False):
         """Bake the pivot orientation and position of the given object(s).
 
@@ -668,7 +672,7 @@ class XformUtils(ptk.HelpMixin):
                     pm.manipPivot(ro=1)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def transfer_pivot(
         objects: List[Union[str, object]],
         translate: bool = False,
@@ -737,7 +741,7 @@ class XformUtils(ptk.HelpMixin):
                 pm.select(targets, replace=True)
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position.
 
@@ -763,8 +767,47 @@ class XformUtils(ptk.HelpMixin):
 
         pm.delete(const, target)
 
+    @staticmethod
+    def orient_to_vector(
+        transform: "pm.nodetypes.Transform",
+        aim_vector: "pm.datatypes.Vector" = (1, 0, 0),
+        up_vector: "pm.datatypes.Vector" = (0, 1, 0),
+    ):
+        """Orients a transform so its local +X aims along the given world-space vector."""
+        transform = NodeUtils.get_transform_node(transform)
+        if not transform:
+            raise ValueError(f"// Error: Invalid transform node: {transform}")
+
+        up_vector_X, up_vector_Y, up_vector_Z = up_vector
+        up_vector = pm.datatypes.Vector(up_vector_X, up_vector_Y, up_vector_Z)
+
+        aim_vector_X, aim_vector_Y, aim_vector_Z = aim_vector
+        aim_vector = pm.datatypes.Vector(aim_vector_X, aim_vector_Y, aim_vector_Z)
+
+        temp = pm.spaceLocator()
+        target = pm.spaceLocator()
+
+        pos = transform.getTranslation(space="world")
+        temp.setTranslation(pos, space="world")
+        target.setTranslation(pos + aim_vector, space="world")
+
+        pm.delete(
+            pm.aimConstraint(
+                target,
+                temp,
+                aimVector=(1, 0, 0),
+                upVector=up_vector,
+                worldUpType="vector",
+                worldUpVector=up_vector,
+                maintainOffset=False,
+            )
+        )
+
+        transform.setRotation(temp.getRotation(space="world"), space="world")
+        pm.delete([temp, target])
+
     @classmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def rotate_axis(cls, objects, target_pos):
         """Aim the given object at the given world space position.
         All rotations in rotated channel, geometry is transformed so
@@ -1250,7 +1293,7 @@ class XformUtils(ptk.HelpMixin):
         return ordered_objs
 
     @staticmethod
-    @CoreUtils.undo
+    @CoreUtils.undoable
     def align_vertices(mode, average=False, edgeloop=False):
         """Align vertices.
 
