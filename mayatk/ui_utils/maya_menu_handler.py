@@ -40,14 +40,9 @@ class MayaMenuHandler(ptk.LoggingMixin):
     """Handles Maya's menu retrieval and embedding into UI components."""
 
     MENU_MAPPING = {
-        "animation": {
-            "maya_name": "Animation",
-            "command": "buildAnimationMenu MayaWindow|mainAnimationMenu",
-            "menu_set": "animationMenuSet",
-        },
         "arnold": {
             "maya_name": "Arnold",
-            "command": "",  # Specific Arnold initialization if needed
+            "command": 'if (!`pluginInfo -q -l "mtoa"`) loadPlugin "mtoa";',
             "menu_set": "renderingMenuSet",
         },
         "cache": {
@@ -137,7 +132,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
         },
         "mash": {
             "maya_name": "MASH",
-            "command": "",  # Specific initialization might be needed
+            "command": 'if (!`pluginInfo -q -l "MASH"`) loadPlugin "MASH";',
             "menu_set": "animationMenuSet",
         },
         "mesh": {
@@ -185,15 +180,10 @@ class MayaMenuHandler(ptk.LoggingMixin):
             "command": "AniPlaybackMenu MayaWindow|mainPlaybackMenu",
             "menu_set": "animationMenuSet",
         },
-        "rendering": {
-            "maya_name": "Rendering",
+        "render": {
+            "maya_name": "Render",
             "command": "RenRenderMenu MayaWindow|mainRenderMenu",
             "menu_set": "renderingMenuSet",
-        },
-        "rigging": {
-            "maya_name": "Rigging",
-            "command": "buildRiggingMenu MayaWindow|mainRiggingMenu",
-            "menu_set": "riggingMenuSet",
         },
         "select": {
             "maya_name": "Select",
