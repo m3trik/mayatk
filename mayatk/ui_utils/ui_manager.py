@@ -123,7 +123,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         # Registered UIs
         return self._load_ui(name, **kwargs)
 
-    def _load_ui(self, name: str, reload: bool = False) -> "QtWidgets.QMainWindow":
+    def _load_ui(
+        self, name: str, reload: bool = False, **kwargs
+    ) -> "QtWidgets.QMainWindow":
         """Internal method to resolve, register, and load a UI with its slots.
 
         Parameters:

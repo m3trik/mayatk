@@ -292,53 +292,40 @@ class XformUtils(ptk.HelpMixin):
     def freeze_transforms(
         cls, objects, center_pivot=False, force=False, delete_history=False, **kwargs
     ):
-        """Freezes the transformations of the specified objects.
+        """Freezes transformations on the given objects.
 
         Parameters:
-            objects (list): List of objects to freeze transformations on.
-            center_pivot (bool, optional): If True, centers the pivot of the objects. Default is False.
-            force (bool, optional): If True, unlocks any locked transform attributes and relocks them after the operation. Default is False.
-            delete_history (bool, optional): If True, deletes the history of the objects. Default is False.
-            **kwargs: Additional arguments passed to pm.makeIdentity.
+            objects (list): List of transform nodes.
+            center_pivot (bool): If True, centers the pivot.
+            force (bool): If True, unlocks locked transform attributes and restores them after.
+            delete_history (bool): If True, deletes construction history after freeze.
+            **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
         """
-        for obj in pm.ls(objects, type="transform"):
+        from mayatk.rig_utils import RigUtils
+
+        objects = pm.ls(objects, type="transform", long=True)
+
+        for obj in objects:
             if center_pivot:
-                pm.xform(objects, centerPivots=True)
+                pm.xform(obj, centerPivots=True)
 
             if not pm.hasAttr(obj, "original_worldMatrix"):
                 cls.store_transforms(obj)
 
+            # Store and unlock if force is enabled
+            lock_state = {}
             if force:
-                transform_attrs = [
-                    "translateX",
-                    "translateY",
-                    "translateZ",
-                    "rotateX",
-                    "rotateY",
-                    "rotateZ",
-                    "scaleX",
-                    "scaleY",
-                    "scaleZ",
-                ]
+                lock_state = RigUtils.get_attr_lock_state(obj, unlock=True)
 
-                locked_attrs = {
-                    attr: pm.getAttr(f"{obj}.{attr}", lock=True)
-                    for attr in transform_attrs
-                    if pm.getAttr(f"{obj}.{attr}", lock=True)
-                }
-                if locked_attrs:
-                    pm.setAttr(
-                        [f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=False
-                    )
-
-            # Freeze transformations to reset them
+            # Freeze transformations
             pm.makeIdentity(obj, apply=True, **kwargs)
 
             if delete_history:
                 pm.delete(obj, constructionHistory=True)
 
-            if force and locked_attrs:
-                pm.setAttr([f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=True)
+            # Restore lock state
+            if force and lock_state:
+                RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
 
     @staticmethod
     @CoreUtils.undoable

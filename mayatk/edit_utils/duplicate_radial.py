@@ -363,7 +363,7 @@ class DuplicateRadialSlots:
             first_obj_name = copies[0].name()
             name = re.sub(r"\d+$", "", first_obj_name)
             name += "_array"
-            unique_name = core_utils.CoreUtils.generate_unique_name(name)
+            unique_name = Naming.generate_unique_name(name)
 
             # Find the parent of the parent of the first object and use it as a parent for the new group
             original_parent = copies[0].getParent().getParent()

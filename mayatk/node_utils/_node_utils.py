@@ -371,7 +371,7 @@ class NodeUtils(ptk.HelpMixin):
             if name:
                 node.rename(name)
             if node:  # Set attributes if the node was created successfully
-                cls.set_node_attributes(node, option_quiet=False, **attributes)
+                cls.set_node_attributes(node, quiet=False, **attributes)
             return node
         except Exception as e:
             print(f"Failed to create node of type '{node_type}'. Error: {e}")
@@ -492,38 +492,50 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     def set_node_attributes(
-        cls, node, option_create=False, option_quiet=False, **attributes
+        cls,
+        node,
+        create: bool = False,
+        quiet: bool = False,
+        keyable: bool = False,
+        lock: bool = False,
+        **attributes,
     ):
-        """Set node attribute values, with options to create attributes if they don't exist and to suppress errors.
+        """Set values on existing attributes. Optionally makes them keyable or locks them.
 
         Parameters:
             node (str/obj): The node to set attributes on.
-            option_create (bool): If True, creates the attribute if it doesn't exist. Defaults to False.
-            option_quiet (bool): If True, suppresses any errors encountered. Defaults to False.
-            **attributes: Arbitrary keyword arguments for attribute names and their values.
+            create (bool): If True, delegates missing attribute creation to `set_node_custom_attributes`.
+            quiet (bool): Suppress warnings on failure.
+            keyable (bool): Make attribute keyable if not already.
+            lock (bool): Lock the attribute after setting.
+            **attributes: Attr name and value pairs.
         """
+        if isinstance(node, str):
+            node = pm.PyNode(node)
+
         for attr, value in attributes.items():
-            attribute_name = f"{node}.{attr}"
-            try:  # Check if the attribute is locked
-                if pm.getAttr(attribute_name, lock=True):
-                    pm.warning(f"The attribute '{attribute_name}' is locked.")
+            try:
+                if node.attr(attr).isLocked():
+                    pm.warning(f"The attribute '{node}.{attr}' is locked.")
                     continue
 
-                # Set the attribute value
-                pm.setAttr(attribute_name, value)
+                pm.setAttr(
+                    node.attr(attr),
+                    value,
+                    keyable=keyable,
+                    lock=lock,
+                )
 
             except pm.MayaAttributeError:
-                if option_create:  # Attempt to create the attribute and set its value
-                    cls.set_node_custom_attributes(node, **{attr: value})
-                elif not option_quiet:
-                    pm.warning(
-                        f"Attribute '{attr}' does not exist on node '{node}', and 'option_create' is False."
+                if create:
+                    cls.set_node_custom_attributes(
+                        node, keyable=keyable, **{attr: value}
                     )
+                elif not quiet:
+                    pm.warning(f"Attribute '{attr}' does not exist on '{node}'.")
             except Exception as e:
-                if not option_quiet:
-                    pm.warning(
-                        f"Failed to set attribute '{attr}' on node '{node}'. Error: {str(e)}"
-                    )
+                if not quiet:
+                    pm.warning(f"Failed to set '{attr}' on '{node}': {e}")
 
     @classmethod
     def get_maya_attribute_type(cls, value):
@@ -590,12 +602,13 @@ class NodeUtils(ptk.HelpMixin):
                 return "matrix"
 
     @classmethod
-    def set_node_custom_attributes(cls, node, **attributes):
+    def set_node_custom_attributes(cls, node, keyable=True, **attributes):
         """Set node attribute values. If the attribute doesn't exist, it will be created.
 
         Parameters:
             node (str/obj): The node to set attributes of.
-            attributes (dict): Attributes and their corresponding value to set. ie. attribute_name=value
+            keyable (bool): If True, the attribute will be keyable. Defaults to True.
+            **attributes: Arbitrary keyword arguments for attribute names and their values.
         """
         if isinstance(node, str):
             node = pm.PyNode(node)
@@ -626,7 +639,7 @@ class NodeUtils(ptk.HelpMixin):
                         pm.setAttr(f"{node}.{component_name}", component)
                 else:
                     node.addAttr(
-                        attr, defaultValue=value, keyable=True, dataType=attr_type
+                        attr, defaultValue=value, keyable=keyable, dataType=attr_type
                     )
                     pm.setAttr(
                         f"{node}.{attr}", value

@@ -429,16 +429,17 @@ class MatUtils(ptk.HelpMixin):
         old_dir: Optional[str] = None,
         new_dir: Optional[str] = None,
         silent: bool = False,
+        delete_old: bool = False,
     ) -> None:
-        """Copies texture files from an old directory to a new one and remaps file nodes accordingly.
+        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files.
 
         Parameters:
             materials (Optional[List[str]]): List of material names to process. Defaults to all materials.
             old_dir (Optional[str]): Source directory containing the original texture files.
             new_dir (Optional[str]): Target directory to copy the texture files to.
             silent (bool): If True, suppresses output messages.
+            delete_old (bool): If True, deletes the original files after copying.
         """
-
         for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
             if not path or not os.path.exists(path) or not os.path.isdir(path):
                 pm.warning(f"{label} is invalid: {path}")
@@ -467,6 +468,11 @@ class MatUtils(ptk.HelpMixin):
                 copied_count += 1
                 if not silent:
                     pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
+
+                if delete_old:
+                    os.remove(src_path)
+                    if not silent:
+                        pm.displayInfo(f"// Deleted original: {src_path}")
             except Exception as e:
                 pm.warning(f"// Failed to copy {filename}: {e}")
 

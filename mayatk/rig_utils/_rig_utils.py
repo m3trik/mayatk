@@ -235,6 +235,67 @@ class RigUtils(ptk.HelpMixin):
 
         return objects
 
+    @staticmethod
+    def get_attr_lock_state(objects, unlock: bool = False) -> dict:
+        """Returns lock state for standard transform attributes and optionally unlocks them.
+
+        Parameters:
+            objects (list): Maya transform nodes
+            unlock (bool): If True, unlocks the attributes after storing their state.
+
+        Returns:
+            Dict[str, Dict[str, bool]]: {
+                "myObject": {
+                    "translate": True,
+                    "rotate": False,
+                    "scale": None,
+                    "tx": True, "ty": True, ...
+                }
+            }
+        """
+        objects = pm.ls(objects, transforms=True, long=True)
+        attr_groups = {
+            "translate": ("tx", "ty", "tz"),
+            "rotate": ("rx", "ry", "rz"),
+            "scale": ("sx", "sy", "sz"),
+        }
+
+        result = {}
+
+        for obj in objects:
+            try:
+                if NodeUtils.is_locator(obj):
+                    obj = pm.listRelatives(obj, children=1, type="transform")[0]
+            except IndexError:
+                continue
+
+            obj_state = {}
+
+            for group, attrs in attr_groups.items():
+                group_vals = []
+                for attr in attrs:
+                    try:
+                        full_attr = f"{obj}.{attr}"
+                        locked = pm.getAttr(full_attr, lock=True)
+                        obj_state[attr] = locked
+                        group_vals.append(locked)
+                        if unlock and locked:
+                            pm.setAttr(full_attr, lock=False)
+                    except Exception:
+                        obj_state[attr] = None
+                        group_vals.append(None)
+                # Set unified group state
+                if all(v is True for v in group_vals):
+                    obj_state[group] = True
+                elif all(v is False for v in group_vals):
+                    obj_state[group] = False
+                else:
+                    obj_state[group] = None
+
+            result[obj.name()] = obj_state
+
+        return result
+
     @classmethod
     @CoreUtils.undoable
     def set_attr_lock_state(
@@ -673,6 +734,125 @@ class RigUtils(ptk.HelpMixin):
         )
 
         return new_joints
+
+    @classmethod
+    @CoreUtils.undoable
+    def rebind_skin_clusters(
+        cls,
+        meshes: Optional[List[pm.nt.Transform]] = None,
+        temp_dir: Optional[str] = None,
+        inherits_transform: Optional[bool] = None,
+    ) -> None:
+        """Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.
+
+        Parameters:
+            meshes (List[pm.nt.Transform], optional): Mesh transform nodes to process. If None, all skinned meshes are used.
+            temp_dir (str, optional): Directory for exporting temporary weight files. Defaults to Maya temp.
+            inherits_transform (bool or None, optional):
+                - True: explicitly sets inheritsTransform = True
+                - False: explicitly sets inheritsTransform = False
+                - None: preserves the original inheritsTransform value
+        """
+        import os
+
+        if temp_dir is None:
+            temp_dir = os.path.join(
+                pm.internalVar(userTmpDir=True), "skin_rebind_weights"
+            )
+        os.makedirs(temp_dir, exist_ok=True)
+
+        mesh_shapes = (
+            pm.ls(type="mesh", noIntermediate=True)
+            if meshes is None
+            else [
+                m.getShape()
+                for m in meshes
+                if isinstance(m, pm.nt.Transform) and m.getShape()
+            ]
+        )
+
+        for shape in mesh_shapes:
+            try:
+                skin_clusters = pm.listHistory(shape, type="skinCluster")
+                if not skin_clusters:
+                    continue
+
+                skin_cluster = skin_clusters[0]
+                transform = shape.getParent()
+                transform_name = transform.nodeName()
+
+                print(f"Processing: {skin_cluster} on {transform_name}")
+
+                # Preserve inheritsTransform and unlock transform attrs
+                original_inherits = transform.inheritsTransform.get()
+                lock_state = cls.get_attr_lock_state(transform, unlock=True)
+
+                # Cache influences and bindPreMatrix
+                influences = pm.skinCluster(skin_cluster, query=True, influence=True)
+                bind_pre_matrices = {
+                    jnt: skin_cluster.bindPreMatrix[
+                        skin_cluster.indexForInfluenceObject(jnt)
+                    ].get()
+                    for jnt in influences
+                }
+
+                # Export weights
+                weight_file = os.path.join(temp_dir, f"{transform_name}_weights.xml")
+                pm.deformerWeights(
+                    os.path.basename(weight_file),
+                    export=True,
+                    deformer=skin_cluster,
+                    path=temp_dir,
+                    shape=shape,
+                )
+
+                # Delete original skinCluster
+                skin_cluster_name = skin_cluster.nodeName()
+                pm.delete(skin_cluster)
+
+                # Recreate skinCluster
+                new_skin_cluster = pm.skinCluster(
+                    influences,
+                    transform,
+                    toSelectedBones=True,
+                    bindMethod=0,
+                    skinMethod=0,
+                    normalizeWeights=1,
+                    name=skin_cluster_name,
+                )
+
+                # Restore bindPreMatrix
+                for jnt, mat in bind_pre_matrices.items():
+                    index = new_skin_cluster.indexForInfluenceObject(jnt)
+                    new_skin_cluster.bindPreMatrix[index].set(mat)
+
+                # Import weights
+                pm.deformerWeights(
+                    os.path.basename(weight_file),
+                    im=True,
+                    deformer=new_skin_cluster,
+                    method="index",
+                    path=temp_dir,
+                    shape=shape,
+                )
+
+                # Set or restore inheritsTransform
+                final_inherits = (
+                    original_inherits
+                    if inherits_transform is None
+                    else inherits_transform
+                )
+                transform.inheritsTransform.set(final_inherits)
+                transform.inheritsTransform.setKeyable(True)
+                transform.inheritsTransform.showInChannelBox(True)
+
+                # Restore transform lock state
+                cls.set_attr_lock_state(transform, **lock_state[transform.name()])
+
+                print(f"✔ Rebound: {transform_name}")
+
+            except Exception as e:
+                print(f"✘ Failed: {shape.name()} → {e}")
 
 
 # -----------------------------------------------------------------------------

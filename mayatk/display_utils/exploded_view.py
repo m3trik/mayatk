@@ -97,7 +97,7 @@ class ExplodedView:
                 continue
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
             node_utils.NodeUtils.set_node_attributes(
-                obj, option_create=True, original_position=pos
+                obj, create=True, original_position=pos
             )
 
         self.arrange_objects(selection)
