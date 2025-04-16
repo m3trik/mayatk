@@ -13,7 +13,7 @@ from mayatk.core_utils import CoreUtils
 
 
 class AnimUtils(ptk.HelpMixin):
-    """ """
+    """For help on this class use: AnimUtils.help()"""
 
     # Map frame rate types to their numerical values
     FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
@@ -84,7 +84,7 @@ class AnimUtils(ptk.HelpMixin):
         value_tolerance: float = 1e-5,
         recursive: bool = False,
     ) -> List["pm.PyNode"]:
-        """Detects static curves (curves with constant values) and optionally deletes them.
+        """Detects static curves (curves with constant values).
 
         Parameters:
             objects: List of PyNodes (curves or objects).
@@ -176,8 +176,7 @@ class AnimUtils(ptk.HelpMixin):
         time_tolerance: float = 1e-5,
         recursive: bool = False,
     ) -> List["pm.PyNode"]:
-        """
-        Simplifies curves by removing unnecessary keyframes.
+        """Simplifies curves by removing unnecessary keyframes.
 
         Parameters:
             objects: List of PyNodes (curves or objects).
@@ -312,13 +311,13 @@ class AnimUtils(ptk.HelpMixin):
         """Formats and returns a user-friendly frame rate description based on the internal key.
 
         Parameters:
-        key (str): The internal frame rate key.
+            key (str): The internal frame rate key.
 
         Returns:
-        str: A formatted frame rate string for display.
+            str: A formatted frame rate string for display.
         """
-        value = cls.FRAME_RATE_VALUES.get(key, 0)
-        if value == 0:
+        value = cls.FRAME_RATE_VALUES.get(key, None)
+        if value is None:
             return "Unknown Frame Rate"
         else:
             return f"{value} fps {key.upper()}"
