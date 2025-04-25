@@ -84,13 +84,15 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         },
     }
 
-    def __init__(self, switchboard: Switchboard, log_level: str = "WARNING") -> None:
+    def __init__(
+        self, switchboard: Switchboard = None, log_level: str = "WARNING", **kwargs
+    ) -> None:
         """Initialize a UiManager with a specific Switchboard instance.
 
         Parameters:
             switchboard (Switchboard): The Switchboard instance to use.
         """
-        self.sb = self.switchboard = switchboard
+        self.sb = self.switchboard = switchboard or Switchboard(**kwargs)
         # Register the mayatk root directory once
         self.sb.register(ui_location=self.root_dir, slot_location=self.root_dir)
 
@@ -123,7 +125,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         # Registered UIs
         return self._load_ui(name, **kwargs)
 
-    def _load_ui(self, name: str, reload: bool = False) -> "QtWidgets.QMainWindow":
+    def _load_ui(
+        self, name: str, reload: bool = False, **kwargs
+    ) -> "QtWidgets.QMainWindow":
         """Internal method to resolve, register, and load a UI with its slots.
 
         Parameters:
@@ -157,7 +161,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             self.sb.register(ui_path, slot_class, base_dir=slot_class, validate=2)
             ui = self.sb.get_ui(ui_name)
             ui.set_attributes(WA_TranslucentBackground=True)
-            ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
+            ui.set_flags(FramelessWindowHint=True)
             ui.set_style(theme="dark", style_class="translucentBgWithBorder")
             ui.header.config_buttons(menu_button=True, hide_button=True)
             return ui
@@ -205,7 +209,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.set_style(ui.header, "dark", "Header")
 
         ui.set_attributes(WA_TranslucentBackground=True)
-        ui.set_flags(WindowStaysOnTopHint=True)
+        ui.set_flags(FramelessWindowHint=True)
         ui.lock_style = True  # Prevent style changes
 
         return ui
@@ -218,7 +222,7 @@ if __name__ == "__main__":
 
     CoreUtils.clear_scrollfield_reporters()
 
-    ui = UiManager.instance().get("duplicate_radial", reload=True)
+    ui = UiManager.instance().get("scene_exporter", reload=True)
     ui.header.config_buttons(hide_button=True)
     ui.show(pos="screen", app_exec=True)
 

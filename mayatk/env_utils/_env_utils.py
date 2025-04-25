@@ -239,7 +239,7 @@ class EnvUtils(ptk.HelpMixin):
         # Extend file data with modification times and filter invalid or autosave files
         file_data = []
         for f in files:
-            if ptk.is_valid(f) and "Autosave" not in f:
+            if ptk.is_valid(f, "file") and "Autosave" not in f:
                 try:
                     mod_time = os.path.getmtime(f)
                     file_data.append((f, mod_time))
@@ -285,12 +285,11 @@ class EnvUtils(ptk.HelpMixin):
             get_recent_projects(format='timestamp') --> Returns all recent projects in timestamp format.
             get_recent_projects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
-        files = pm.optionVar(query="RecentProjectsList")
-        if not files:
+        dirs = pm.optionVar(query="RecentProjectsList")
+        if not dirs:
             return []
 
-        result = [ptk.format_path(f) for f in reversed(files) if ptk.is_valid(f)]
-
+        result = [ptk.format_path(d) for d in reversed(dirs) if ptk.is_valid(d, "dir")]
         if index is not None:
             try:
                 result = result[index]

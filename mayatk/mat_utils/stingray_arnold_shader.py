@@ -621,29 +621,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.ui.progressBar.setValue(0)
         # self.init_header_menu()
 
-    # def init_header_menu(self):
-    #     """Configure header menu"""
-    #     self.ui.header.menu.setTitle("OPTIONS")
-    #     self.ui.header.menu.add(
-    #         self.sb.registered_widgets.PushButton,
-    #         setText="HDR Manager",
-    #         setObjectName="b002",
-    #     )
-
-    #     module = hdr_manager
-    #     slot_class = module.HdrManagerSlots
-
-    #     # Register and configure HDR Manager UI
-    #     self.sb.register("hdr_manager.ui", slot_class, base_dir=module)
-    #     ui = self.sb.hdr_manager
-    #     ui.set_attributes(WA_TranslucentBackground=True)
-    #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    #     ui.header.config_buttons(hide_button=True)
-
-    #     # Connect button click to show HDR Manager
-    #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
-
     @property
     def mat_name(self) -> str:
         """Get the mat name from the user input text field.

@@ -137,9 +137,10 @@ included_modules = [
     "_node_utils",
     "_rig_utils",
     "_ui_utils",
+    "_uv_utils",
     "_xform_utils",
 ]
-
+# These modules are not included in the package, but their classes will be exposed at package level.
 included_classes = {
     "components": ["Components"],
     "macros": ["Macros"],

@@ -421,71 +421,6 @@ class MatUtils(ptk.HelpMixin):
                 f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
             )
 
-    @classmethod
-    @CoreUtils.undoable
-    def migrate_textures(
-        cls,
-        materials: Optional[List[str]] = None,
-        old_dir: Optional[str] = None,
-        new_dir: Optional[str] = None,
-        silent: bool = False,
-        delete_old: bool = False,
-    ) -> None:
-        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files.
-
-        Parameters:
-            materials (Optional[List[str]]): List of material names to process. Defaults to all materials.
-            old_dir (Optional[str]): Source directory containing the original texture files.
-            new_dir (Optional[str]): Target directory to copy the texture files to.
-            silent (bool): If True, suppresses output messages.
-            delete_old (bool): If True, deletes the original files after copying.
-        """
-        for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
-            if not path or not os.path.exists(path) or not os.path.isdir(path):
-                pm.warning(f"{label} is invalid: {path}")
-                return
-
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
-        filenames = set(
-            os.path.basename(tex[0] if isinstance(tex, tuple) else tex)
-            for tex in textures
-            if tex
-        )
-
-        copied_files: Dict[str, str] = {}
-        copied_count = 0
-
-        for filename in filenames:
-            src_path = os.path.join(old_dir, filename)
-            if not os.path.isfile(src_path):
-                if not silent:
-                    pm.warning(f"// Skipped copy: {filename} not found in old_dir.")
-                continue
-
-            try:
-                copied_path = ptk.copy_file(src_path, new_dir, create_dir=True)
-                copied_files[filename] = copied_path
-                copied_count += 1
-                if not silent:
-                    pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
-
-                if delete_old:
-                    os.remove(src_path)
-                    if not silent:
-                        pm.displayInfo(f"// Deleted original: {src_path}")
-            except Exception as e:
-                pm.warning(f"// Failed to copy {filename}: {e}")
-
-        if not silent:
-            pm.displayInfo(f"// Result: Copied {copied_count} textures.")
-
-        if copied_files:
-            remapped = cls._remap_file_nodes(
-                file_paths=[os.path.join(old_dir, fname) for fname in copied_files],
-                target_dir=new_dir,
-                silent=silent,
-            )
-
     @staticmethod
     def is_duplicate_material(material1: str, material2: str) -> bool:
         """Check if two materials are duplicates based on their textures.
@@ -745,6 +680,161 @@ class MatUtils(ptk.HelpMixin):
                 'hypershadePanelMenuCommand("hyperShadePanel1", "refreshAllSwatches");'
             )
 
+    @classmethod
+    def move_texture_files(
+        cls,
+        found_files: List[Union[str, Tuple[str, str]]],
+        new_dir: str,
+        delete_old: bool = False,
+        create_dir: bool = True,
+    ) -> None:
+        """Move or copy found texture files to a new directory.
+
+        Parameters:
+            found_files (List): List of filepaths or (dir, filename) tuples.
+            new_dir (str): Target directory to move/copy textures to.
+            delete_old (bool): If True, delete original files after copying.
+            create_dir (bool): If True, create the destination directory if it doesn't exist.
+        """
+        if not found_files:
+            pm.warning("No texture files provided for moving.")
+            return
+
+        if not ptk.is_valid(new_dir, "dir") and create_dir:
+            ptk.FileUtils.create_dir(new_dir)
+
+        copied_count = 0
+
+        for entry in found_files:
+            if isinstance(entry, tuple):
+                dir_path, filename = entry
+                src_path = os.path.join(dir_path, filename).replace("\\", "/")
+            else:
+                src_path = entry.replace("\\", "/")
+                filename = os.path.basename(src_path)
+
+            if not os.path.isfile(src_path):
+                pm.warning(f"Source file does not exist: {src_path}")
+                continue
+
+            try:
+                copied_path = ptk.FileUtils.copy_file(
+                    src_path, destination=new_dir, overwrite=True, create_dir=create_dir
+                )
+                copied_count += 1
+                pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
+
+                if delete_old:
+                    os.remove(src_path)
+                    pm.displayInfo(f"// Deleted original: {src_path}")
+
+            except Exception as e:
+                pm.warning(f"// Failed to copy {src_path}: {e}")
+
+        pm.displayInfo(f"// Result: Copied {copied_count} texture(s).")
+
+    @classmethod
+    def find_texture_files(
+        cls,
+        objects: List[str],
+        source_dir: str,
+        recursive: bool = True,
+        return_dir: bool = False,
+        quiet: bool = False,
+    ) -> List[Union[str, Tuple[str, str]]]:
+        """Find texture files for given objects' materials inside source_dir.
+
+        Parameters:
+            objects (List[str]): List of object names to search textures for.
+            source_dir (str): Directory to search.
+            recursive (bool): If True, search subdirectories.
+            return_dir (bool): If True, return (dir, filename) tuples instead of filepaths.
+            quiet (bool): If False, print the found results in a readable format.
+
+        Returns:
+            List[str] or List[Tuple[str, str]]: Filepaths or (dir, filename) based on return_dir.
+        """
+        if not ptk.is_valid(source_dir, "dir"):
+            pm.warning(f"Invalid source directory: {source_dir}")
+            return []
+
+        materials = cls.get_mats(objects)
+        texture_paths = cls.collect_material_paths(
+            materials=materials, inc_material=False
+        )
+        texture_filenames = set(
+            os.path.basename(p[0] if isinstance(p, tuple) else p)
+            for p in texture_paths
+            if p
+        )
+
+        all_files = ptk.FileUtils.get_dir_contents(
+            source_dir, content="filepath", recursive=recursive
+        )
+
+        filename_to_path = {os.path.basename(fp): fp for fp in all_files}
+
+        results = []
+        for tex_file in texture_filenames:
+            match = filename_to_path.get(tex_file)
+            if match:
+                dir_path = os.path.dirname(match).replace("\\", "/")
+                file_name = os.path.basename(match)
+                if return_dir:
+                    results.append((dir_path, file_name))
+                else:
+                    results.append(match.replace("\\", "/"))
+
+        if not quiet:
+            pm.displayInfo("\n[Texture Files Found]")
+            if return_dir:
+                max_dir_len = max(len(d) for d, _ in results) if results else 0
+                for dir_path, filename in results:
+                    pm.displayInfo(f"  {dir_path.ljust(max_dir_len)}  {filename}")
+            else:
+                for filepath in results:
+                    pm.displayInfo(f"  {filepath}")
+        return results
+
+    @classmethod
+    @CoreUtils.undoable
+    def migrate_textures(
+        cls,
+        materials: Optional[List[str]] = None,
+        old_dir: Optional[str] = None,
+        new_dir: Optional[str] = None,
+        silent: bool = False,
+        delete_old: bool = False,
+    ) -> None:
+        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files."""
+        for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
+            if not path or not os.path.exists(path) or not os.path.isdir(path):
+                pm.warning(f"{label} is invalid: {path}")
+                return
+
+        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        found_files = [
+            (old_dir, os.path.basename(tex[0] if isinstance(tex, tuple) else tex))
+            for tex in textures
+            if tex
+        ]
+
+        cls.move_texture_files(
+            found_files=found_files,
+            new_dir=new_dir,
+            delete_old=delete_old,
+            create_dir=True,
+        )
+
+        if found_files:
+            cls._remap_file_nodes(
+                file_paths=[
+                    os.path.join(old_dir, filename) for _, filename in found_files
+                ],
+                target_dir=new_dir,
+                silent=silent,
+            )
+
     @staticmethod
     def move_unused_textures(source_dir: str = None, output_dir: str = None) -> None:
         """Move unused textures to a specified directory.
@@ -814,36 +904,6 @@ class MatUtils(ptk.HelpMixin):
                 raise
 
         return QIcon(pixmap)
-
-    @staticmethod
-    def calculate_uv_padding(
-        map_size: int, normalize: bool = False, factor: int = 128
-    ) -> float:
-        """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
-        Optionally return the padding as a normalized value relative to the map size.
-
-        Parameters:
-        map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
-        normalize (bool): If True, returns the padding as a normalized value. Default is False.
-        factor (int): The factor by which to divide the map size to calculate the padding. Default is 128.
-
-        Returns:
-        float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
-
-        Expected Output:
-        - For a 1024 pixel map: 8.0 pixels of padding or 0.0078125 if normalized
-        - For a 2048 pixel map: 16.0 pixels of padding or 0.0078125 if normalized
-        - For a 4096 pixel map: 32.0 pixels of padding or 0.0078125 if normalized
-        - For a 8192 pixel map: 64.0 pixels of padding or 0.0078125 if normalized
-
-        Example:
-        >>> calculate_uv_padding(4096, normalize=True)
-        0.0078125
-        """
-        padding = map_size / factor
-        if normalize:
-            return padding / map_size
-        return padding
 
 
 # -----------------------------------------------------------------------------

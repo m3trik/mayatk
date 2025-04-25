@@ -86,6 +86,13 @@ class NodeUtils(ptk.HelpMixin):
 
         return ptk.format_return(result, objects)
 
+    @staticmethod
+    def is_geometry(obj) -> bool:
+        """Return True if the given object has a shape node and is not a group."""
+        return isinstance(obj, pm.nt.Transform) and bool(
+            obj.getShapes(noIntermediate=True)
+        )
+
     @classmethod
     def get_groups(cls, empty=False):
         """Get all groups in the scene.

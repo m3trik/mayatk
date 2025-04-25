@@ -310,9 +310,11 @@ class ReferenceManagerSlots(ReferenceManager):
         # Initialize and connect UI components
         self.ui.txt000.setText(self.current_working_dir)
         self.ui.txt000.textEdited.connect(
-            lambda: self.sb.defer(self.update_current_dir)
+            lambda: self.sb.defer_with_timer(self.update_current_dir)
         )
-        self.ui.txt001.textEdited.connect(lambda: self.sb.defer(self.refresh_file_list))
+        self.ui.txt001.textEdited.connect(
+            lambda: self.sb.defer_with_timer(self.refresh_file_list)
+        )
         self.ui.list000.itemSelectionChanged.connect(self.handle_item_selection)
         self.ui.list000.setSelectionMode(
             self.sb.QtWidgets.QAbstractItemView.MultiSelection

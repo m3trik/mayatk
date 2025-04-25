@@ -213,7 +213,7 @@ class AnimUtils(ptk.HelpMixin):
         time_tolerance: float = 0.001,
         remove_flat_keys: bool = True,
         remove_static_curves: bool = True,
-        simplify_keys: bool = True,
+        simplify_keys: bool = False,
         recursive: bool = True,
         quiet: bool = False,
     ) -> List["pm.PyNode"]:
