@@ -900,6 +900,83 @@ class EditUtils(ptk.HelpMixin):
         return similar + [obj] if inc_orig else similar
 
     @staticmethod
+    def invert_geometry(
+        objects: Optional[List] = None, select: bool = False
+    ) -> List["pm.nt.Transform"]:
+        """Invert selection to unselected mesh transforms.
+
+        Parameters:
+            objects (list): List of objects to check. If None, uses the current selection.
+            select (bool): If True, selects the inverted objects.
+
+        Returns:
+            list: List of inverted mesh transforms.
+        """
+        if objects is None:
+            objects = pm.ls(selection=True, transforms=True, type="transform")
+        else:
+            objects = pm.ls(objects, transforms=True, type="transform")
+
+        objects = [
+            obj for obj in objects if obj.getShape() and obj.getShape().type() == "mesh"
+        ]
+
+        all_transforms = [
+            obj
+            for obj in pm.ls(transforms=True, type="transform")
+            if obj.getShape() and obj.getShape().type() == "mesh"
+        ]
+
+        inverted = list(set(all_transforms) - set(objects))
+
+        if select:
+            pm.select(inverted, replace=True)
+        return inverted
+
+    @staticmethod
+    def invert_components(
+        objects: Optional[List] = None, select: bool = False
+    ) -> List[Union["pm.MeshVertex", "pm.MeshEdge", "pm.MeshFace"]]:
+        """Invert selection of mesh components (verts, edges, or faces).
+
+        Parameters:
+            objects (list): List of objects to check. If None, uses the current selection.
+            select (bool): If True, selects the inverted components.
+
+        Returns:
+            list: List of inverted mesh components (verts, edges, or faces).
+        """
+        if objects is None:
+            objects = pm.ls(selection=True, flatten=True)
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            return []
+
+        component_type = type(objects[0])
+        selected_strs = {str(obj) for obj in objects}
+
+        full_set = []
+        for obj in pm.ls(selection=True, objectsOnly=True):
+            shape = mtk.get_shape_node(obj)
+            if not shape or shape.type() != "mesh":
+                continue
+
+            if issubclass(component_type, pm.MeshVertex):
+                full_set.extend(shape.verts)
+            elif issubclass(component_type, pm.MeshEdge):
+                full_set.extend(shape.edges)
+            elif issubclass(component_type, pm.MeshFace):
+                full_set.extend(shape.faces)
+
+        inverted = [x for x in full_set if str(x) not in selected_strs]
+
+        if select:
+            pm.select(inverted, replace=True)
+        return inverted
+
+    @staticmethod
     def delete_selected():
         """Delete selected components or objects in Autodesk Maya based on user's selection mode.
 

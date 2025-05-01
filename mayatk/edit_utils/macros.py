@@ -928,6 +928,21 @@ class SelectionMacros:
         pm.selectMode(component=True)
         pm.selectType(facet=True)
 
+    def m_invert_selection() -> None:
+        """Invert the current selection of geometry or components."""
+        objects = pm.ls(selection=True, flatten=True)
+
+        if not objects:
+            pm.warning("No valid objects selected to invert.")
+            return
+
+        first = objects[0]
+
+        if isinstance(first, (pm.MeshVertex, pm.MeshEdge, pm.MeshFace)):
+            EditUtils.invert_components(select=True)
+        else:
+            EditUtils.invert_geometry(select=True)
+
     @staticmethod
     @CoreUtils.selected
     def m_toggle_selectability(objects):

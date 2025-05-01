@@ -17,45 +17,44 @@ from mayatk.env_utils import EnvUtils
 
 class MatUtils(ptk.HelpMixin):
     @staticmethod
-    def get_mats(objs):
+    def get_mats(objs=None) -> List[str]:
         """Returns the set of materials assigned to a given list of objects or components.
 
         Parameters:
             objs (list): The objects or components to retrieve the material from.
-
+                        If None, current selection will be used.
         Returns:
-            list: Materials assigned to the objects or components (duplicates romoved).
+            list: Materials assigned to the objects or components (duplicates removed).
         """
-        # Initialize an empty set to store the materials
+        if objs is None:
+            objs = pm.ls(selection=True, objectsOnly=True)
+        if not objs:
+            return []
+
+        target_objs = pm.ls(objs, objectsOnly=True)
         mats = set()
 
-        for obj in pm.ls(objs, flatten=True):
-            shading_grps = []
-
+        for obj in target_objs:
             if isinstance(obj, pm.MeshFace):
-                all_shading_grps = pm.ls(type="shadingEngine")
                 shading_grps = [
-                    sg for sg in all_shading_grps if pm.sets(sg, isMember=obj)
+                    sg
+                    for sg in pm.ls(type="shadingEngine")
+                    if pm.sets(sg, isMember=obj)
                 ]
-
                 if not shading_grps:
                     pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=True)
-                    mats_ = pm.ls(pm.selected(), materials=True)
-                    mats.update(mats_)
+                    mats.update(pm.ls(pm.selected(), materials=True))
             else:
-                # Check if the object has a shape node
-                shape = None
-                if hasattr(obj, "getShape"):
-                    shape = obj.getShape()
-
+                shape = obj.getShape() if hasattr(obj, "getShape") else None
                 if shape:
-                    shading_grps = pm.listConnections(shape, type="shadingEngine")
-
-            for shading_grp in shading_grps:
-                materials = pm.ls(
-                    pm.listConnections(f"{shading_grp}.surfaceShader"), materials=True
-                )
-                mats.update(materials)
+                    shading_grps = pm.listConnections(shape, type="shadingEngine") or []
+                    for sg in shading_grps:
+                        mats.update(
+                            pm.ls(
+                                pm.listConnections(f"{sg}.surfaceShader"),
+                                materials=True,
+                            )
+                        )
 
         return list(mats)
 
@@ -285,7 +284,9 @@ class MatUtils(ptk.HelpMixin):
             Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
         """
 
-        materials = pm.ls(materials, mat=True) or pm.ls(mat=True)
+        materials = (
+            pm.ls(materials, mat=True) if materials is not None else pm.ls(mat=True)
+        )
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
@@ -382,7 +383,6 @@ class MatUtils(ptk.HelpMixin):
                 pm.warning(
                     f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"
                 )
-
         return remapped_nodes
 
     @classmethod
@@ -405,7 +405,7 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid directory: {new_dir}")
             return
 
-        materials = pm.ls(materials, mat=True) if materials else None
+        materials = None if materials is None else pm.ls(materials, mat=True)
         textures = cls.collect_material_paths(materials=materials, inc_material=False)
         textures = [t[0] if isinstance(t, tuple) else t for t in textures]
 
@@ -458,7 +458,7 @@ class MatUtils(ptk.HelpMixin):
             filename = os.path.basename(path).lower()
             return os.path.splitext(filename)[0]
 
-        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        materials = None if materials is None else pm.ls(materials, mat=True)
         # Dictionary to store relevant material data (texture names or paths)
         material_data = {}
         for material in materials:
@@ -540,7 +540,7 @@ class MatUtils(ptk.HelpMixin):
             delete (bool): Whether to delete the duplicate materials after reassignment.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        if materials:  # Filter out invalid objects and warn about them
+        if materials is None:  # Filter out invalid objects and warn about them
             valid_objects = []
             for m in materials:
                 if pm.objExists(m):
@@ -637,7 +637,7 @@ class MatUtils(ptk.HelpMixin):
             refresh_viewport (bool): Whether to refresh the viewport.
             refresh_hypershade (bool): Whether to refresh the Hypershade panel.
         """
-        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        materials = None if materials is None else pm.ls(materials, mat=True)
 
         texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
         file_nodes = []
@@ -758,7 +758,15 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid source directory: {source_dir}")
             return []
 
+        if not objects:
+            pm.warning("No objects provided to find textures.")
+            return []
+
         materials = cls.get_mats(objects)
+        if not materials:
+            pm.warning("No materials found for the given objects.")
+            return []
+
         texture_paths = cls.collect_material_paths(
             materials=materials, inc_material=False
         )
@@ -868,6 +876,41 @@ class MatUtils(ptk.HelpMixin):
             dest_path = os.path.join(unused_folder, texture)
             shutil.move(src_path, dest_path)
             print(f"Moved {texture} to {unused_folder}")
+
+    @staticmethod
+    def get_environment_nodes(
+        inc: Union[str, List[str]] = None,
+        exc: Union[str, List[str]] = None,
+    ) -> List["pm.nt.File"]:
+        """Return file nodes considered environment textures by fileTextureName pattern.
+
+        Parameters:
+            inc (str/list): Inclusion patterns for filtering textures.
+            exc (str/list): Exclusion patterns for filtering textures.
+
+        Returns:
+            List[pm.nt.File]: List of file nodes matching the inclusion/exclusion criteria.
+        """
+        if inc is None:
+            inc = (
+                "diffuse_cube",
+                "specular_cube",
+                "ibl_brdf_lut",
+                "latlong",
+                "envmap",
+                "env_map",
+                "env",
+                "hdri",
+                "hdr",
+            )
+
+        file_nodes = pm.ls(type="file")
+        return ptk.filter_list(
+            file_nodes,
+            inc=inc,
+            exc=exc,
+            map_func=lambda f: f.fileTextureName.get().lower(),
+        )
 
     @staticmethod
     def get_mat_swatch_icon(

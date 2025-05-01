@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils import CoreUtils, components
 from mayatk.node_utils import NodeUtils
 
 
@@ -37,7 +37,7 @@ class UvUtils(ptk.HelpMixin):
         - For a 8192 pixel map: 64.0 pixels of padding or 0.0078125 if normalized
 
         Example:
-        >>> calculate_uv_padding(4096, normalize=True)
+            calculate_uv_padding(4096, normalize=True)
         0.0078125
         """
         padding = map_size / factor
@@ -66,8 +66,8 @@ class UvUtils(ptk.HelpMixin):
                 separate=0,
             )
 
-    @classmethod
-    def move_to_uv_space(cls, objects, u, v, relative=True):
+    @staticmethod
+    def move_to_uv_space(objects, u, v, relative=True):
         """Move objects to the given u and v coordinates.
 
         Parameters:
@@ -83,8 +83,8 @@ class UvUtils(ptk.HelpMixin):
         # Move the UVs to the given u and v coordinates
         pm.polyEditUV(uvs, u=u, v=v, relative=relative)
 
-    @classmethod
-    def get_uv_shell_sets(cls, objects=None, returned_type="shell"):
+    @staticmethod
+    def get_uv_shell_sets(objects=None, returned_type="shell"):
         """Get UV shells and their corresponding sets of faces.
 
         Parameters:
@@ -95,7 +95,7 @@ class UvUtils(ptk.HelpMixin):
             (list)(dict): Depending on the given returned_type arg.
             Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')], 1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
-        faces = cls.get_components(objects, "faces", flatten=True)
+        faces = components.Components.get_components(objects, "faces", flatten=True)
         shells = {}
 
         for face in faces:
@@ -223,16 +223,17 @@ class UvUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def set_texel_density(cls, objects, density, map_size):
+    def set_texel_density(cls, objects=None, density=1.0, map_size=4096):
         """Set the texel density for the given objects.
 
         Parameters:
             objects (str, obj, list): List of objects or a single object to set texel density for.
+                If None, the currently selected objects will be used.
             density (float): The desired texel density.
             map_size (int): Size of the map to calculate the texel density against.
         """
         # Get UV shell sets
-        shells = cls.get_uv_shell_sets(objects, returned_type="shell")
+        shells = cls.get_uv_shell_sets(objects or pm.selected(), returned_type="shell")
 
         for shell_faces in shells:
             # Convert face list to UVs

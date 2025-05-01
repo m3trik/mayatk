@@ -101,19 +101,10 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.debug("Unused materials deleted.")
 
     def delete_environment_nodes(self) -> None:
-        """Delete all environment file nodes from the scene."""
-        env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
-        file_nodes = pm.ls(type="file")
-
-        env_file_nodes = [
-            node
-            for node in file_nodes
-            if node.hasAttr("fileTextureName")
-            and any(
-                keyword in node.fileTextureName.get().lower()
-                for keyword in env_keywords
-            )
-        ]
+        """Delete specific environment file nodes from the scene."""
+        env_file_nodes = MatUtils.get_environment_nodes(
+            inc=["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
+        )
 
         if env_file_nodes:
             pm.delete(env_file_nodes)
