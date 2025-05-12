@@ -397,8 +397,8 @@ class TubeRig(ptk.LoggingMixin):
         tube_parent = transform.getParent()
         if tube_parent:
             rig_group.setParent(tube_parent)
+            transform.setParent(world=True)
 
-        transform.setParent(rig_group)
         for j in joints:
             if not j.getParent():
                 j.setParent(rig_group)
@@ -419,14 +419,6 @@ class TubeRig(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Error creating skinCluster: {str(e)}")
             return None
-
-        # Disable inheritsTransform and expose in channel box
-        transform.inheritsTransform.set(False)
-        transform.inheritsTransform.setKeyable(True)
-        transform.inheritsTransform.showInChannelBox(True)
-        # Set outliner color (e.g., teal)
-        transform.useOutlinerColor.set(True)
-        transform.outlinerColor.set([0.4, 0.3, 0.5])
 
         self.skin_cluster = skin_cluster
         return skin_cluster

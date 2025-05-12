@@ -60,51 +60,45 @@ class RigUtils(ptk.HelpMixin):
     def create_locator_at_object(
         cls,
         objects,
-        parent=False,
-        freeze_transforms=False,
-        bake_child_pivot=False,
-        grp_suffix="_GRP#",
-        loc_suffix="_LOC#",
-        obj_suffix="_GEO#",
-        strip_digits=False,
-        strip_suffix=False,
-        loc_scale=1,
-        lock_translate=False,
-        lock_rotation=False,
-        lock_scale=False,
+        parent: bool = True,
+        freeze_object: bool = True,
+        freeze_locator: bool = True,
+        loc_scale: float = 1.0,
+        lock_translate: bool = False,
+        lock_rotation: bool = False,
+        lock_scale: bool = False,
+        grp_suffix: str = "_GRP",
+        loc_suffix: str = "_LOC",
+        obj_suffix: str = "_GEO",
+        strip_digits: bool = False,
+        strip_suffix: bool = False,
     ):
-        """Create locators with the same transforms as any selected object(s).
-        If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
+        """Rig object under a zeroed locator aligned to its baked manip pivot.
 
         Parameters:
-            objects (str/obj/list): A list of objects, or an object name to create locators at.
-            parent (bool): Parent the object to the locator. (default=False)
-            freeze_transforms (bool): Freeze transforms on the locator. (default=True)
-            bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
-            grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
-            loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
-            obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
-            strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-            strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
-            loc_scale (float) = The scale of the locator. (default=1)
-            lock_translate (bool): Lock the translate values of the child object. (default=False)
-            lock_rotation (bool): Lock the rotation values of the child object. (default=False)
-            lock_scale (bool): Lock the scale values of the child object. (default=False)
-            remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
-
-        Example:
-            createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
+            objects (str/obj/list): Objects to create locator rigs for.
+            parent (bool): Whether to parent object under locator and locator under group.
+            freeze_object (bool): Freeze object transforms after setup.
+            freeze_locator (bool): Freeze locator transforms after alignment.
+            loc_scale (float): Scale of locator display.
+            lock_translate (bool): Lock object's translate attributes.
+            lock_rotation (bool): Lock object's rotate attributes.
+            lock_scale (bool): Lock object's scale attributes.
+            grp_suffix (str): Naming suffix for the created group. Default "_GRP".
+            loc_suffix (str): Naming suffix for the locator. Default "_LOC".
+            obj_suffix (str): Naming suffix for the renamed object. Default "_OBJ".
+            strip_digits (bool): Whether to strip trailing digits before suffixing.
+            strip_suffix (bool): Whether to strip prior suffix patterns before suffixing.
         """
         import re
 
         suffix_strip_regex = (
-            re.escape(grp_suffix).replace(r"\#", r"\d$"),
-            re.escape(loc_suffix).replace(r"\#", r"\d$"),
-            re.escape(obj_suffix).replace(r"\#", r"\d$"),
+            re.escape(grp_suffix) + r"\d*$",
+            re.escape(loc_suffix) + r"\d*$",
+            re.escape(obj_suffix) + r"\d*$",
         )
 
         def format_name_with_suffix(base_name: str, o) -> str:
-            """Return the formatted name based on the base name and object's current type with the appropriate suffix."""
             if NodeUtils.is_locator(o):
                 suffix = loc_suffix
             elif NodeUtils.is_group(o):
@@ -120,69 +114,51 @@ class RigUtils(ptk.HelpMixin):
                 strip_trailing_alpha=strip_suffix,
             )
 
-        for obj in pm.ls(objects, long=True, type="transform"):
-            base_name = obj.nodeName()  # Use the original object name as the base name
-            vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
+        for obj in pm.ls(objects, long=True, type="transform", flatten=True):
+            base_name = obj.nodeName()
+            mesh_shape = obj.getShape()
+            vertices = mesh_shape.vtx[:] if mesh_shape else None
+            orig_parent = pm.listRelatives(obj, parent=True)
 
-            if freeze_transforms:
-                # Store the current pivot position
-                matrix = XformUtils.get_manip_pivot_matrix(obj)
-                pm.makeIdentity(obj, apply=True)
-                XformUtils.set_manip_pivot_matrix(obj, matrix)
-
-            if bake_child_pivot and not NodeUtils.is_group(obj):
+            if not NodeUtils.is_group(obj):
                 XformUtils.bake_pivot(obj, position=True, orientation=True)
 
+            matrix = XformUtils.get_manip_pivot_matrix(obj, ws=True)
+
+            loc = cls.create_locator(scale=loc_scale)
+            pm.xform(loc, matrix=matrix, ws=True)
+
+            if parent:
+                grp = pm.group(em=True)
+                pm.delete(pm.parentConstraint(loc, grp))
+                pm.parent(loc, grp)
+                pm.parent(obj, loc)
+
+                if freeze_locator:
+                    pm.makeIdentity(loc, apply=True, normal=True)
+
+                if orig_parent:
+                    pm.parent(grp, orig_parent)
+
             if vertices:
-                objName = vertices[0].split(".")[0]
-                obj = pm.ls(objName)
+                pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
 
-                loc = cls.create_locator(scale=loc_scale)
+            if freeze_object:
+                cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
+                pm.makeIdentity(obj, apply=True, normal=True)
 
-                xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
-                x, y, z = (
-                    (xmin + xmax) / 2,
-                    (ymin + ymax) / 2,
-                    (zmin + zmax) / 2,
-                )
-                pm.move(x, y, z, loc)
+            pm.rename(loc, format_name_with_suffix(base_name, loc))
+            pm.rename(obj, format_name_with_suffix(base_name, obj))
+            if parent:
+                pm.rename(grp, format_name_with_suffix(base_name, grp))
+                pm.makeIdentity(grp, apply=True, scale=True)
 
-            else:  # Object
-                loc = cls.create_locator(scale=loc_scale)
-                tempConst = pm.parentConstraint(obj, loc, maintainOffset=False)
-                pm.delete(tempConst)
-
-            try:
-                if parent:
-                    origParent = pm.listRelatives(obj, parent=1)
-
-                    grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
-                    pm.rename(grp, format_name_with_suffix(base_name, grp))
-                    pm.parent(obj, loc)
-                    pm.parent(loc, grp)
-                    pm.parent(grp, origParent)
-
-                if freeze_transforms:  # freeze transforms one last time.
-                    # Assure attributes are unlocked.
-                    cls.set_attr_lock_state(
-                        obj, translate=False, rotate=False, scale=False
-                    )
-                    pm.makeIdentity(obj, apply=True, normal=1)
-                    pm.makeIdentity(loc, apply=True, normal=1)
-                    # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
-
-                pm.rename(loc, format_name_with_suffix(base_name, loc))
-                pm.rename(obj, format_name_with_suffix(base_name, obj))
-
-                cls.set_attr_lock_state(
-                    obj,
-                    translate=lock_translate,
-                    rotate=lock_rotation,
-                    scale=lock_scale,
-                )
-            except Exception as error:
-                pm.delete(loc)
-                raise (error)
+            cls.set_attr_lock_state(
+                obj,
+                translate=lock_translate,
+                rotate=lock_rotation,
+                scale=lock_scale,
+            )
 
     @classmethod
     @CoreUtils.undoable

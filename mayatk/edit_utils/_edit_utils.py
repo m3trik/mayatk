@@ -959,7 +959,7 @@ class EditUtils(ptk.HelpMixin):
 
         full_set = []
         for obj in pm.ls(selection=True, objectsOnly=True):
-            shape = mtk.get_shape_node(obj)
+            shape = NodeUtils.get_shape_node(obj)
             if not shape or shape.type() != "mesh":
                 continue
 
@@ -1069,8 +1069,6 @@ class EditUtils(ptk.HelpMixin):
         if selection:
             if translate:
                 XformUtils.move_to(node, selection)
-                # center_pos = mtk.get_center_point(selection)
-                # pm.xform(node, translation=center_pos, worldSpace=1, absolute=1)
             if scale:
                 XformUtils.match_scale(node[0], selection, average=True)
 

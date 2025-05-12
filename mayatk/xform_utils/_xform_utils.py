@@ -389,44 +389,40 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    def get_manip_pivot_matrix(obj: Union[str, object, list]) -> "pm.datatypes.Matrix":
-        """Retrieves the current manipulator pivot's position and orientation in world space
-        and returns it as a transformation matrix.
+    def get_manip_pivot_matrix(
+        obj: Union[str, object, list], **kwargs
+    ) -> "pm.datatypes.Matrix":
+        """Return the object's transform matrix using xform, allowing kwargs override.
+
+        Parameters:
+            obj (str/object/list): Object to query.
+            **kwargs: Passed directly to pm.xform() in query mode.
 
         Returns:
-            obj (str/obj/list): The object to retrieve the manipulator pivot matrix for.
-            pm.datatypes.Matrix: A transformation matrix representing the manipulator pivot's position
-                                and orientation in world space.
+            pm.datatypes.Matrix: The resulting transformation matrix.
         """
-        # Query the object's world space matrix
-        world_matrix = pm.xform(obj, q=True, ws=True, m=True)
-
-        # Convert the world matrix to a Maya Matrix and return it
-        return pm.datatypes.Matrix(world_matrix)
+        matrix = pm.xform(obj, q=True, matrix=True, **kwargs)
+        return pm.datatypes.Matrix(matrix)
 
     @staticmethod
     def set_manip_pivot_matrix(
-        obj: Union[str, object, list], matrix: "pm.datatypes.Matrix"
+        obj: Union[str, object, list],
+        matrix: "pm.datatypes.Matrix",
+        **kwargs,
     ) -> None:
-        """Sets the manipulator pivot's position and orientation in world space based on
-        the provided transformation matrix.
+        """Apply a transformation matrix's position and orientation to the manip pivot.
 
         Parameters:
-            obj (str/obj/list): The object to set the manipulator pivot for.
-            matrix (pm.datatypes.Matrix): A transformation matrix containing the position and
-                                        orientation to set for the manipulator pivot.
+            obj (str/object/list): Object to set pivot on.
+            matrix (pm.datatypes.Matrix): Source matrix.
+            **kwargs: Passed directly to pm.manipPivot().
         """
-        # Extract translation and rotation components from the transformation matrix
-        transform_matrix = pm.datatypes.TransformationMatrix(matrix)
-        pos = transform_matrix.getTranslation(pm.datatypes.Space.kWorld)
-        ori_rotation = transform_matrix.eulerRotation()
+        tm = pm.datatypes.TransformationMatrix(matrix)
+        pos = tm.getTranslation(pm.datatypes.Space.kWorld)
+        rot = [pm.util.degrees(a) for a in tm.eulerRotation()]
 
-        # Convert rotation from radians to degrees
-        ori_degrees = [pm.util.degrees(angle) for angle in ori_rotation]
-
-        # Set the manipulator pivot position and orientation
         pm.select(obj, replace=True)
-        pm.manipPivot(p=pos, o=ori_degrees)
+        pm.manipPivot(p=pos, o=rot, **kwargs)
 
     @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):

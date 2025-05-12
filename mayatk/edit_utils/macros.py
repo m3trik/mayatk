@@ -928,6 +928,7 @@ class SelectionMacros:
         pm.selectMode(component=True)
         pm.selectType(facet=True)
 
+    @staticmethod
     def m_invert_selection() -> None:
         """Invert the current selection of geometry or components."""
         objects = pm.ls(selection=True, flatten=True)
