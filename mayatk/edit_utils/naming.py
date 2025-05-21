@@ -112,22 +112,20 @@ class Naming(ptk.HelpMixin):
             generate_unique_name("Cube") # Returns "Cube_001"
             generate_unique_name("Cube", suffix="-", padding=2) # Returns "Cube-01"
         """
-        # Base case: If the base_name doesn't exist, just return it.
         if not pm.objExists(base_name):
             return base_name
 
-        # Otherwise, append numbers until we get a unique name.
         counter = 1
-        new_name_formatted = f"{base_name}{suffix}{str(counter).zfill(padding)}"
-        new_name_clean = cls.strip_illegal_chars(new_name_formatted)
-        if new_name_formatted != new_name_clean:  # The new name contained illegal chars
-            pm.warning(
-                f"// Warning: Illegal characters found in generated name: {new_name}, replacing with: {new_name_clean}"
-            )
-        while pm.objExists(new_name_clean):
+        while True:
+            new_name = f"{base_name}{suffix}{str(counter).zfill(padding)}"
+            new_name_clean = cls.strip_illegal_chars(new_name)
+            if new_name != new_name_clean:
+                pm.warning(
+                    f"// Warning: Illegal characters found in generated name: {new_name}, replacing with: {new_name_clean}"
+                )
+            if not pm.objExists(new_name_clean):
+                return new_name_clean
             counter += 1
-            new_name = f"{base_name}_{counter}"
-        return new_name
 
     @staticmethod
     def strip_illegal_chars(input_data, replace_with="_"):

@@ -20,14 +20,11 @@ from mayatk.env_utils.scene_exporter import task_factory
 class _TaskDataMixin:
     """ """
 
-    _all_keyframes = None
-    _all_materials = None
-
     @property
     def _has_keyframes(self) -> bool:
         """Check if the current objects have keyframes."""
-        if self._all_keyframes is not None:
-            return True
+        if hasattr(self, "_key_times"):
+            return bool(self._key_times)
         return bool(self._get_all_keyframes())
 
     def _get_all_keyframes(self) -> List[float]:
@@ -41,14 +38,12 @@ class _TaskDataMixin:
                 key_times.update(times)
 
         if key_times:
-            self._all_keyframes = key_times
+            self._key_times = key_times
         return sorted(key_times)
 
     def _get_all_materials(self) -> List["pm.nt.ShadingNode"]:
         """Return a list of all materials assigned to the specified objects."""
         mats = MatUtils.filter_materials_by_objects(self.objects)
-        if mats:
-            self._all_materials = mats
         return mats
 
 
@@ -100,17 +95,23 @@ class _TaskActionsMixin(_TaskDataMixin):
         pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
         self.logger.debug("Unused materials deleted.")
 
-    def delete_environment_nodes(self) -> None:
-        """Delete specific environment file nodes from the scene."""
-        env_file_nodes = MatUtils.get_environment_nodes(
-            inc=["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
-        )
+    def delete_env_nodes(self) -> None:
+        """Delete environment file nodes based on filtered texture path patterns."""
+        env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
+        file_nodes = pm.ls(type="file")
 
-        if env_file_nodes:
-            pm.delete(env_file_nodes)
-            self.logger.info(
-                f"Deleted {len(env_file_nodes)} environment texture nodes."
+        file_nodes = [
+            node
+            for node in file_nodes
+            if node.hasAttr("fileTextureName")
+            and any(
+                keyword in node.fileTextureName.get().lower()
+                for keyword in env_keywords
             )
+        ]
+        if file_nodes:
+            pm.delete(file_nodes)
+            self.logger.info(f"Deleted {len(file_nodes)} environment file nodes.")
         else:
             self.logger.info("No environment file nodes found.")
 
@@ -207,7 +208,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         materials = self._get_all_materials()
         material_paths = MatUtils.collect_material_paths(
             materials,
-            inc_material=True,
+            inc_mat_name=True,
             inc_path_type=True,
             nested_as_unit=True,
         )
@@ -422,7 +423,7 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Check the scene framerate against the target framerate.",
                 "add": self._frame_rate_options,
             },
-            "delete_environment_nodes": {
+            "delete_env_nodes": {
                 "widget_type": "QCheckBox",
                 "setText": "Delete Environment Nodes",
                 "setToolTip": "Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",

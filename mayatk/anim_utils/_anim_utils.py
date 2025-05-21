@@ -467,6 +467,75 @@ class AnimUtils(ptk.HelpMixin):
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
 
     @staticmethod
+    def add_intermediate_keys(
+        objects: Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]],
+        start: int,
+        end: int,
+        percent: Optional[float] = None,
+        include_flat: bool = False,
+    ) -> None:
+        """Keys selected or animated attributes on given object(s) between `start` and `end`.
+        If attributes are selected in the channel box, only those will be keyed.
+
+        Parameters:
+            objects (str/list): One or more objects to key.
+            start (int): Start frame.
+            end (int): End frame.
+            percent (float): Optional percent (0–100) of frames to key, evenly distributed.
+            include_flat (bool): If False, skips keys where value doesn't vary across time.
+        """
+        from math import isclose
+
+        targets = pm.ls(objects, flatten=True)
+        attrs = pm.channelBox("mainChannelBox", q=True, selectedMainAttributes=True)
+        if not attrs:
+            attrs = set()
+            for obj in targets:
+                for plug in obj.listAttr(keyable=True, scalar=True):
+                    if plug.isConnected():
+                        attrs.add(plug.attrName())
+            attrs = list(attrs)
+
+        if not attrs:
+            pm.warning("No keyable or connected attributes found.")
+            return
+
+        frames = list(range(start + 1, end))
+        if percent is not None:
+            count = max(1, int(len(frames) * (percent / 100.0)))
+            step = max(1, len(frames) // count)
+            frames = frames[::step]
+
+        frame_values = {}
+        for frame in frames:
+            pm.currentTime(frame, edit=True)
+            frame_values[frame] = {}
+            for obj in targets:
+                obj_data = frame_values[frame].setdefault(obj, {})
+                for attr in attrs:
+                    plug = obj.attr(attr)
+                    if plug.isConnected() and plug.isKeyable():
+                        obj_data[attr] = plug.get()
+
+        for frame, obj_data in frame_values.items():
+            pm.currentTime(frame, edit=True)
+            for obj, attr_values in obj_data.items():
+                for attr, value in attr_values.items():
+                    plug = obj.attr(attr)
+                    if not include_flat:
+                        try:
+                            val_prev = plug.get(time=frame - 1)
+                            val_next = plug.get(time=frame + 1)
+                            if isclose(value, val_prev, abs_tol=1e-6) and isclose(
+                                value, val_next, abs_tol=1e-6
+                            ):
+                                continue
+                        except Exception:
+                            continue
+                    plug.set(value)
+                    plug.setKey()
+
+    @staticmethod
     @CoreUtils.undoable
     def invert_selected_keys(time=1, relative=True, delete_original=False):
         """Duplicate any selected keyframes and paste them inverted at the given time.

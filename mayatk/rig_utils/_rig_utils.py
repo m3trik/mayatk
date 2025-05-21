@@ -18,6 +18,48 @@ class RigUtils(ptk.HelpMixin):
     """ """
 
     @staticmethod
+    @CoreUtils.undoable
+    def create_group(
+        objects=[],
+        name="",
+        zero_translation=False,
+        zero_rotation=False,
+        zero_scale=False,
+    ):
+        """Create a group containing any given objects.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to group.
+            name (str): Name the group.
+            zero_translation (bool): Freeze translation before parenting.
+            zero_rotation (bool): Freeze rotation before parenting.
+            zero_scale (bool): Freeze scale before parenting.
+
+        Returns:
+            (obj) the group.
+        """
+        grp = pm.group(empty=True, n=name)
+        try:
+            pm.parent(grp, objects)
+        except Exception as error:
+            print(
+                f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
+            )
+
+        if zero_translation:
+            for attr in ("tx", "ty", "tz"):
+                pm.setAttr(getattr(grp, attr), 0)  # pm.setAttr(node.translate, 0)
+        if zero_rotation:
+            for attr in ("rx", "ry", "rz"):
+                pm.setAttr(getattr(grp, attr), 0)
+        if zero_scale:
+            for attr in ("sx", "sy", "sz"):
+                pm.setAttr(getattr(grp, attr), 0)
+
+        pm.parent(grp, world=True)
+        return grp
+
+    @staticmethod
     def create_locator(
         *, scale: float = 1, parent: Optional["pm.nodetypes.Transform"] = None, **kwargs
     ) -> object:
@@ -315,48 +357,6 @@ class RigUtils(ptk.HelpMixin):
                     continue
                 for a in ptk.make_iterable(attrs):
                     pm.setAttr("{}.{}".format(obj, a), lock=state)
-
-    @staticmethod
-    @CoreUtils.undoable
-    def create_group(
-        objects=[],
-        name="",
-        zero_translation=False,
-        zero_rotation=False,
-        zero_scale=False,
-    ):
-        """Create a group containing any given objects.
-
-        Parameters:
-            objects (str/obj/list): The object(s) to group.
-            name (str): Name the group.
-            zero_translation (bool): Freeze translation before parenting.
-            zero_rotation (bool): Freeze rotation before parenting.
-            zero_scale (bool): Freeze scale before parenting.
-
-        Returns:
-            (obj) the group.
-        """
-        grp = pm.group(empty=True, n=name)
-        try:
-            pm.parent(grp, objects)
-        except Exception as error:
-            print(
-                f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
-            )
-
-        if zero_translation:
-            for attr in ("tx", "ty", "tz"):
-                pm.setAttr(getattr(grp, attr), 0)  # pm.setAttr(node.translate, 0)
-        if zero_rotation:
-            for attr in ("rx", "ry", "rz"):
-                pm.setAttr(getattr(grp, attr), 0)
-        if zero_scale:
-            for attr in ("sx", "sy", "sz"):
-                pm.setAttr(getattr(grp, attr), 0)
-
-        pm.parent(grp, world=True)
-        return grp
 
     @staticmethod
     def constrain(

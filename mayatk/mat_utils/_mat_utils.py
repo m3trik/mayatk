@@ -269,28 +269,30 @@ class MatUtils(ptk.HelpMixin):
     def collect_material_paths(
         materials: Optional[List[str]] = None,
         attributes: Optional[List[str]] = None,
-        inc_material: bool = False,
+        inc_mat_name: bool = False,
         inc_path_type: bool = False,
+        resolve_full_path: bool = False,
     ) -> Union[List[str], List[Tuple[str, ...]]]:
         """Collects specified attributes file paths for given materials.
 
         Parameters:
             materials (Optional[List[str]]): List of material names.
-            attributes (Optional[List[str]]): List of attributes to collect file paths from. Defaults to texture files.
-            inc_material (bool): If True, include material name in the result.
+            attributes (Optional[List[str]]): List of attributes to collect file paths from.
+            inc_mat_name (bool): If True, include material name in the result.
             inc_path_type (bool): If True, include path type (Relative/Absolute) in the result.
+            resolve_full_path (bool): If True, return absolute full path instead of relative.
 
         Returns:
-            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
+            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing requested info.
         """
-
         materials = (
             pm.ls(materials, mat=True) if materials is not None else pm.ls(mat=True)
         )
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
-        project_sourceimages = EnvUtils.get_env_info("sourceimages")
+        project_sourceimages = os.path.abspath(EnvUtils.get_env_info("sourceimages"))
+        sourceimages_name = os.path.basename(project_sourceimages).replace("\\", "/")
 
         for material in materials:
             for attr in attributes:
@@ -301,25 +303,33 @@ class MatUtils(ptk.HelpMixin):
                         if not file_path:
                             continue
 
-                        # Ensure path is stored as Maya expects
                         file_path = file_path.replace("\\", "/")
+                        abs_file_path = (
+                            os.path.abspath(
+                                os.path.join(project_sourceimages, file_path)
+                            )
+                            if not os.path.isabs(file_path)
+                            else os.path.abspath(file_path)
+                        )
 
-                        # Determine if the path is relative or absolute
                         path_type = (
                             "Relative"
-                            if file_path.startswith(project_sourceimages)
+                            if abs_file_path.startswith(project_sourceimages)
                             else "Absolute"
                         )
-                        relative_path = (
-                            os.path.relpath(file_path, project_sourceimages).replace(
-                                "\\", "/"
-                            )
-                            if path_type == "Relative"
-                            else file_path
-                        )
 
-                        entry = (relative_path,)
-                        if inc_material:
+                        if path_type == "Relative":
+                            rel_path = os.path.relpath(
+                                abs_file_path, project_sourceimages
+                            ).replace("\\", "/")
+                            if not rel_path.startswith(sourceimages_name + "/"):
+                                rel_path = f"{sourceimages_name}/{rel_path}"
+                            path_out = abs_file_path if resolve_full_path else rel_path
+                        else:
+                            path_out = abs_file_path
+
+                        entry = (path_out,)
+                        if inc_mat_name:
                             entry = (material,) + entry
                         if inc_path_type:
                             entry = entry[:1] + (path_type,) + entry[1:]
@@ -406,7 +416,7 @@ class MatUtils(ptk.HelpMixin):
             return
 
         materials = None if materials is None else pm.ls(materials, mat=True)
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        textures = cls.collect_material_paths(materials=materials)
         textures = [t[0] if isinstance(t, tuple) else t for t in textures]
 
         if not textures:
@@ -626,6 +636,7 @@ class MatUtils(ptk.HelpMixin):
         log=False,
         refresh_viewport=False,
         refresh_hypershade=False,
+        texture_types: Optional[List[str]] = None,
     ):
         """Reloads textures connected to specified materials with inclusion/exclusion filters.
 
@@ -636,12 +647,14 @@ class MatUtils(ptk.HelpMixin):
             log (bool): Whether to log the textures being reloaded.
             refresh_viewport (bool): Whether to refresh the viewport.
             refresh_hypershade (bool): Whether to refresh the Hypershade panel.
+            texture_types (List[str]): List of texture types to filter by.
         """
-        materials = None if materials is None else pm.ls(materials, mat=True)
+        if texture_types is None:
+            texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
 
-        texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+
         file_nodes = []
-
         for material in materials:
             for tex_type in texture_types:
                 file_nodes.extend(pm.listConnections(material, type=tex_type))
@@ -767,9 +780,7 @@ class MatUtils(ptk.HelpMixin):
             pm.warning("No materials found for the given objects.")
             return []
 
-        texture_paths = cls.collect_material_paths(
-            materials=materials, inc_material=False
-        )
+        texture_paths = cls.collect_material_paths(materials=materials)
         texture_filenames = set(
             os.path.basename(p[0] if isinstance(p, tuple) else p)
             for p in texture_paths
@@ -820,7 +831,7 @@ class MatUtils(ptk.HelpMixin):
                 pm.warning(f"{label} is invalid: {path}")
                 return
 
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        textures = cls.collect_material_paths(materials=materials)
         found_files = [
             (old_dir, os.path.basename(tex[0] if isinstance(tex, tuple) else tex))
             for tex in textures
@@ -876,41 +887,6 @@ class MatUtils(ptk.HelpMixin):
             dest_path = os.path.join(unused_folder, texture)
             shutil.move(src_path, dest_path)
             print(f"Moved {texture} to {unused_folder}")
-
-    @staticmethod
-    def get_environment_nodes(
-        inc: Union[str, List[str]] = None,
-        exc: Union[str, List[str]] = None,
-    ) -> List["pm.nt.File"]:
-        """Return file nodes considered environment textures by fileTextureName pattern.
-
-        Parameters:
-            inc (str/list): Inclusion patterns for filtering textures.
-            exc (str/list): Exclusion patterns for filtering textures.
-
-        Returns:
-            List[pm.nt.File]: List of file nodes matching the inclusion/exclusion criteria.
-        """
-        if inc is None:
-            inc = (
-                "diffuse_cube",
-                "specular_cube",
-                "ibl_brdf_lut",
-                "latlong",
-                "envmap",
-                "env_map",
-                "env",
-                "hdri",
-                "hdr",
-            )
-
-        file_nodes = pm.ls(type="file")
-        return ptk.filter_list(
-            file_nodes,
-            inc=inc,
-            exc=exc,
-            map_func=lambda f: f.fileTextureName.get().lower(),
-        )
 
     @staticmethod
     def get_mat_swatch_icon(

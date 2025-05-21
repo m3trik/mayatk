@@ -12,6 +12,7 @@ import pythontk as ptk
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.edit_utils import EditUtils
+from mayatk.mat_utils import MatUtils
 from mayatk.display_utils import DisplayUtils
 from mayatk.ui_utils import UiUtils
 
@@ -684,8 +685,13 @@ class EditMacros:
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
-    def m_combine(objects):
-        """Combine multiple meshes"""
+    def m_combine(objects, allow_multiple_materials: bool = True):
+        """Combine multiple meshes.
+
+        Parameters:
+            objects (list): List of mesh objects to combine.
+            allow_multiple_materials (bool): If False, abort if selected objects use different materials.
+        """
         if not objects or len(objects) < 2:
             pm.inViewMessage(
                 statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
@@ -693,6 +699,14 @@ class EditMacros:
                 position="topCenter",
             )
             return None
+
+        if not allow_multiple_materials:
+            all_mats = MatUtils.get_mats(objects)
+            if len(set(all_mats)) > 1:
+                pm.warning(
+                    "Cannot combine: selected objects do not share the same material."
+                )
+                return None
 
         combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
         combined_mesh = pm.rename(combined_mesh, objects[0].name())

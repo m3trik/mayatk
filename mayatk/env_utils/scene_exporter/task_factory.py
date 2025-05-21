@@ -82,33 +82,39 @@ class TaskFactory:
             raise
 
     def run_tasks(self, tasks: Dict[str, Any]) -> bool:
-        """Run tasks and checks, returning True if all pass, False if any checks fail."""
+        """Run tasks and checks, returning True if all checks pass, False if any fail."""
         if not tasks:
             self.logger.notice("No tasks provided to run.")
             return True
 
-        all_checks_passed = True
+        # Split tasks and checks
+        tasks_only = {k: v for k, v in tasks.items() if not k.startswith("check_")}
+        checks_only = {k: v for k, v in tasks.items() if k.startswith("check_")}
+
         failed_checks = []
-        task_list = list(tasks.items())
+        all_checks_passed = True
 
-        with self._manage_context(tasks) as task_results:
-            for index, (task_name, result) in enumerate(task_results.items(), start=1):
-                progress = f"[{index}/{len(task_list)}]"
+        # Run all tasks first
+        with self._manage_context(tasks_only):
+            pass
 
-                if task_name.startswith("check_"):
-                    if isinstance(result, tuple):
-                        success, _ = result
-                    else:
-                        success = result
+        # Then run all checks
+        with self._manage_context(checks_only) as check_results:
+            for index, (task_name, result) in enumerate(check_results.items(), start=1):
+                progress = f"[{index}/{len(checks_only)}]"
 
-                    if not success:
-                        failed_checks.append(task_name)
-                        all_checks_passed = False
-                    else:
-                        self.logger.success(f"{progress} Check passed: {task_name}")
+                if isinstance(result, tuple):
+                    success, _ = result
                 else:
-                    self.logger.result(f"{progress} Task completed: {task_name}")
+                    success = result
 
+                if not success:
+                    failed_checks.append(task_name)
+                    all_checks_passed = False
+                else:
+                    self.logger.success(f"{progress} Check passed: {task_name}")
+
+        # Log summary
         if not all_checks_passed:
             self.logger.log_box(
                 "SUMMARY OF FAILED CHECKS",
