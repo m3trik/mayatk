@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Dict, Union, Optional
 
 try:
     import pymel.core as pm
@@ -290,7 +290,7 @@ class XformUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
-        cls, objects, center_pivot=False, force=False, delete_history=False, **kwargs
+        cls, objects, center_pivot=False, force=True, delete_history=False, **kwargs
     ):
         """Freezes transformations on the given objects.
 
@@ -305,26 +305,28 @@ class XformUtils(ptk.HelpMixin):
 
         objects = pm.ls(objects, type="transform", long=True)
 
+        lock_state: Dict[str, Dict[str, bool]] = {}
+
         for obj in objects:
             if center_pivot:
                 pm.xform(obj, centerPivots=True)
 
-            if not pm.hasAttr(obj, "original_worldMatrix"):
-                cls.store_transforms(obj)
-
-            # Store and unlock if force is enabled
-            lock_state = {}
+            # Store lock state and unlock if force
             if force:
-                lock_state = RigUtils.get_attr_lock_state(obj, unlock=True)
+                lock_state[obj.name()] = RigUtils.get_attr_lock_state(obj)
+                RigUtils.set_attr_lock_state(
+                    obj, translate=False, rotate=False, scale=False
+                )
 
-            # Freeze transformations
-            pm.makeIdentity(obj, apply=True, **kwargs)
-
+            # Delete history if requested
             if delete_history:
                 pm.delete(obj, constructionHistory=True)
 
-            # Restore lock state
-            if force and lock_state:
+            # Freeze transforms
+            pm.makeIdentity(obj, apply=True, **kwargs)
+
+            # Restore lock state if needed
+            if force and obj.name() in lock_state:
                 RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
 
     @staticmethod

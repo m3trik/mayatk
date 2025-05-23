@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union, Optional
+from typing import List, Tuple, Dict, Union, Optional
 
 try:
     import pymel.core as pm
@@ -140,14 +140,7 @@ class RigUtils(ptk.HelpMixin):
             re.escape(obj_suffix) + r"\d*$",
         )
 
-        def format_name_with_suffix(base_name: str, o) -> str:
-            if NodeUtils.is_locator(o):
-                suffix = loc_suffix
-            elif NodeUtils.is_group(o):
-                suffix = grp_suffix
-            else:
-                suffix = obj_suffix
-
+        def format_name_with_suffix(base_name: str, suffix: str) -> str:
             return ptk.format_suffix(
                 base_name,
                 suffix=suffix,
@@ -177,7 +170,7 @@ class RigUtils(ptk.HelpMixin):
                 pm.parent(obj, loc)
 
                 if freeze_locator:
-                    pm.makeIdentity(loc, apply=True, normal=True)
+                    XformUtils.freeze_transforms(loc, normal=True)
 
                 if orig_parent:
                     pm.parent(grp, orig_parent)
@@ -185,15 +178,19 @@ class RigUtils(ptk.HelpMixin):
             if vertices:
                 pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
 
+            # Freeze the object transforms after parenting, if requested
             if freeze_object:
-                cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
-                pm.makeIdentity(obj, apply=True, normal=True)
+                XformUtils.freeze_transforms(obj, normal=True)
 
-            pm.rename(loc, format_name_with_suffix(base_name, loc))
-            pm.rename(obj, format_name_with_suffix(base_name, obj))
+            # Rename everything *after* hierarchy is set up
             if parent:
-                pm.rename(grp, format_name_with_suffix(base_name, grp))
-                pm.makeIdentity(grp, apply=True, scale=True)
+                pm.rename(grp, format_name_with_suffix(base_name, grp_suffix))
+            pm.rename(loc, format_name_with_suffix(base_name, loc_suffix))
+            pm.rename(obj, format_name_with_suffix(base_name, obj_suffix))
+
+            if parent:
+                # Freeze group scale only (after renaming)
+                XformUtils.freeze_transforms(grp, scale=True)
 
             cls.set_attr_lock_state(
                 obj,
@@ -317,46 +314,61 @@ class RigUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def set_attr_lock_state(
-        cls, objects, translate=None, rotate=None, scale=None, **kwargs
-    ):
-        """Lock/Unlock any attribute for the given objects, by passing it into kwargs as <attr>=<value>.
-        A 'True' value locks the attribute, 'False' unlocks, while 'None' leaves the state unchanged.
-
-        Parameters:
-            objects (str/obj/list): The object(s) to lock/unlock attributes of.
-            translate (bool): Lock/Unlock all translate x,y,z values at once.
-            rotate (bool): Lock/Unlock all rotate x,y,z values at once.
-            scale (bool): Lock/Unlock all scale x,y,z values at once.
-
-        Example:
-            setAttrLockState(objects, translate=False, rotate=True)
+        cls,
+        objects,
+        lock_state: Optional[Dict[str, Dict[str, bool]]] = None,
+        translate: Optional[bool] = None,
+        rotate: Optional[bool] = None,
+        scale: Optional[bool] = None,
+        **kwargs,
+    ) -> None:
+        """
+        Restore lock state using saved per-axis info, or lock/unlock in bulk.
         """
         objects = pm.ls(objects, transforms=True, long=True)
-
-        attrs_and_state = {
-            (
-                "tx",
-                "ty",
-                "tz",
-            ): translate,  # attributes and state. ex. ('tx','ty','tz'):False
-            ("rx", "ry", "rz"): rotate,
-            ("sx", "sy", "sz"): scale,
-        }
-
-        attrs_and_state.update(kwargs)  # update the dict with any values from kwargs.
 
         for obj in objects:
             try:
                 if NodeUtils.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
-            except IndexError:
-                return
+            except (IndexError, TypeError):
+                continue
 
-            for attrs, state in attrs_and_state.items():
+            # Restore per-attribute lock state
+            if lock_state and obj.name() in lock_state:
+                state = lock_state[obj.name()]
+                for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
+                    lock_val = state.get(attr)
+                    if lock_val is not None:
+                        try:
+                            pm.setAttr(f"{obj}.{attr}", lock=lock_val)
+                        except Exception:
+                            pass
+                continue  # skip bulk lock logic if restoring from lock_state
+
+            # Bulk translate/rotate/scale lock
+            attr_map = {
+                ("tx", "ty", "tz"): translate,
+                ("rx", "ry", "rz"): rotate,
+                ("sx", "sy", "sz"): scale,
+            }
+            for attrs, state in attr_map.items():
                 if state is None:
                     continue
-                for a in ptk.make_iterable(attrs):
-                    pm.setAttr("{}.{}".format(obj, a), lock=state)
+                for attr in attrs:
+                    try:
+                        pm.setAttr(f"{obj}.{attr}", lock=state)
+                    except Exception:
+                        pass
+
+            # Individual attribute locks from kwargs
+            for attr, state in kwargs.items():
+                if state is None:
+                    continue
+                try:
+                    pm.setAttr(f"{obj}.{attr}", lock=state)
+                except Exception:
+                    pass
 
     @staticmethod
     def constrain(
