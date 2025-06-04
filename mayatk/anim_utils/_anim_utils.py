@@ -133,7 +133,7 @@ class AnimUtils(ptk.HelpMixin):
         import numpy as np
 
         curves = cls.objects_to_curves(objects, recursive=recursive)
-        redundant_keys = []
+        redundant = []
 
         for curve in curves:
             times = pm.keyframe(curve, query=True, timeChange=True) or []
@@ -141,32 +141,37 @@ class AnimUtils(ptk.HelpMixin):
                 continue
 
             values = np.array([curve.evaluate(t) for t in times])
-            diffs = np.abs(np.diff(values)) < value_tolerance
+            remove_indices = []
+            # Find internal flat segments (at least three consecutive identical values)
+            i = 1
+            while i < len(values) - 1:
+                if (
+                    abs(values[i] - values[i - 1]) < value_tolerance
+                    and abs(values[i] - values[i + 1]) < value_tolerance
+                ):
+                    # Is it a flat run? Only remove if the values before and after are the same
+                    start = i - 1
+                    end = i + 1
+                    while (
+                        end < len(values)
+                        and abs(values[end] - values[start]) < value_tolerance
+                    ):
+                        end += 1
+                    # Only remove internal keys, not the segment endpoints
+                    remove_indices.extend(list(range(start + 1, end - 1)))
+                    i = end
+                else:
+                    i += 1
+            # Remove keys at the identified times
+            removed_times = []
+            if remove and remove_indices:
+                for idx in sorted(set(remove_indices)):
+                    pm.cutKey(curve, time=(times[idx], times[idx]), option="keys")
+                    removed_times.append(times[idx])
+            if remove_indices:
+                redundant.append((curve, [times[idx] for idx in remove_indices]))
 
-            # Identify redundant key ranges to remove
-            to_remove = []
-            i = 0
-            while i < len(diffs) - 1:
-                if diffs[i] and diffs[i + 1]:  # redundant section found
-                    start = i
-                    while i + 1 < len(diffs) and diffs[i + 1]:  # continue until break
-                        i += 1
-                    end = i  # last redundant key
-
-                    if end > start + 1:  # ensure there are keys to remove
-                        to_remove.append(
-                            (times[start + 1], times[end - 1])
-                        )  # store range for removal
-                i += 1
-
-            # Optionally remove the redundant keys
-            if remove and to_remove:
-                for start, end in to_remove:
-                    pm.cutKey(curve, time=(start, end), option="keys")
-
-            redundant_keys.extend(to_remove)
-
-        return redundant_keys
+        return redundant
 
     @classmethod
     def simplify_curve(

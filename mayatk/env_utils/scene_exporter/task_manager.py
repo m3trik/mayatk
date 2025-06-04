@@ -9,6 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
+from mayatk.edit_utils import EditUtils
 from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
@@ -291,6 +292,22 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no objects below the floor
 
+    def check_overlapping_duplicates(self) -> tuple:
+        """Check if there are any duplicate overlapping geometry objects in the current selection.
+
+        Parameters:
+            select (bool): Select any found duplicate objects.
+            verbose (bool): Print found duplicates to the console.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        duplicates = EditUtils.get_overlapping_duplicates(objects=self.objects)
+        if duplicates:
+            messages = [f"Overlapping duplicate object: {obj}" for obj in duplicates]
+            return False, messages  # Failed, duplicates found
+        return True, []  # Passed, no duplicates
+
     def check_hidden_geometry(self) -> tuple:
         """Check if any geometry objects are hidden."""
         hidden_objects = [
@@ -475,6 +492,12 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "widget_type": "QCheckBox",
                 "setText": "Check For Referenced Objects.",
                 "setToolTip": "Check for referenced objects.",
+                "setChecked": True,
+            },
+            "check_overlapping_duplicates": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Overlapping Duplicates",
+                "setToolTip": "Check for overlapping duplicate geometry.",
                 "setChecked": True,
             },
             "check_objects_below_floor": {

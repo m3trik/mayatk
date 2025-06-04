@@ -485,9 +485,19 @@ class StingrayArnoldShader:
                 created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
                 created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
 
-                # Combine the created roughness and metallic maps into a metallic smoothness map
+                # Save these images to disk and get their file paths
+                base_name = ptk.get_base_texture_name(specular_map[0])
+                out_dir = os.path.dirname(specular_map[0])
+
+                rough_path = os.path.join(out_dir, f"{base_name}_Roughness.png")
+                metal_path = os.path.join(out_dir, f"{base_name}_Metallic.png")
+
+                created_roughness_map.save(rough_path)
+                created_metallic_map.save(metal_path)
+
+                # Now you can combine using file paths:
                 combined_map = ptk.pack_smoothness_into_metallic(
-                    created_metallic_map, created_roughness_map, invert_alpha=True
+                    metal_path, rough_path, invert_alpha=True
                 )
 
                 # Remove individual metallic, roughness, smoothness maps and the newly created maps

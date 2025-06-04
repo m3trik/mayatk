@@ -515,64 +515,70 @@ class EditUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_overlapping_duplicates(
-        objects=[], retain_given_objects=False, select=False, verbose=False
-    ):
-        """Find any duplicate overlapping geometry at the object level.
+        objects: Optional[List] = None,
+        retain_given_objects: bool = False,
+        select: bool = False,
+        verbose: bool = False,
+    ) -> set:
+        """Find duplicate, overlapping geometry at the object (transform) level.
 
         Parameters:
-            objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
-            retain_given_objects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
-            select (bool): Select any found duplicate objects.
-            verbose (bool): Print each found object to console.
+            objects (list): A list of objects to check for duplicates. If None, checks all transforms in the scene.
+            retain_given_objects (bool): If True, retains the given objects in the result set.
+            select (bool): If True, selects the found duplicates in the scene.
+            verbose (bool): If True, prints detailed information about found duplicates.
 
         Returns:
-            (set)
-
-        Example:
-            duplicates = get_overlapping_duplicates(retain_given_objects=True, select=True, verbose=True)
+            set: Overlapping duplicate transform PyNodes.
         """
-        scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
+        from collections import defaultdict
 
-        # Attach a unique identifier consisting each objects polyEvaluate attributes, and it's bounding box center point in world space.
-        scene_objs = {
-            i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
-            for i in scene_objs
-            if not NodeUtils.is_group(i)
-        }
-        selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
+        # Get all transform nodes with geometry shapes
+        scene_objs = [
+            obj
+            for obj in pm.ls(transforms=True)
+            if not NodeUtils.is_group(obj) and obj.getShape() is not None
+        ]
 
-        objs_inverted = {}  # Invert the dict, combining objects with like identifiers.
-        for k, v in scene_objs.items():
-            objs_inverted[v] = objs_inverted.get(v, []) + [k]
+        # Fingerprint by bounding box min/max (rounded) and topology
+        obj_fingerprints = {}
+        for obj in scene_objs:
+            bbox = obj.getBoundingBox(space="world")
+            bbox_min = tuple(round(x, 6) for x in bbox.min())
+            bbox_max = tuple(round(x, 6) for x in bbox.max())
+            topo = str(pm.polyEvaluate(obj))
+            obj_fingerprints[obj] = (bbox_min, bbox_max, topo)
+
+        if objects is None:
+            selected_set = set(pm.ls(obj_fingerprints.keys(), sl=True))
+        else:
+            selected_set = set(pm.ls(objects))
+
+        fingerprint_groups = defaultdict(list)
+        for obj, fingerprint in obj_fingerprints.items():
+            fingerprint_groups[fingerprint].append(obj)
 
         duplicates = set()
-        for k, v in objs_inverted.items():
-            if len(v) > 1:
-                if selected_objs:  # Limit scope to only selected objects.
-                    if set(selected_objs) & set(
-                        v
-                    ):  # If any selected objects in found duplicates:
+        for group in fingerprint_groups.values():
+            if len(group) > 1:
+                if selected_set:
+                    if selected_set & set(group):
                         if retain_given_objects:
-                            [
-                                duplicates.add(i) for i in v if i not in selected_objs
-                            ]  # Add any duplicated of that object, omitting the selected object.
+                            duplicates.update(
+                                obj for obj in group if obj not in selected_set
+                            )
                         else:
-                            [
-                                duplicates.add(i) for i in v[1:]
-                            ]  # Add all but the first object to the set of duplicates.
+                            duplicates.update(group[1:])
                 else:
-                    [
-                        duplicates.add(i) for i in v[1:]
-                    ]  # Add all but the first object to the set of duplicates.
+                    duplicates.update(group[1:])
 
         if verbose:
-            for i in duplicates:
-                print("# Found: overlapping duplicate object: {} #".format(i))
-        print("# {} overlapping duplicate objects found. #".format(len(duplicates)))
-
-        if select:
-            pm.select(duplicates)
-
+            for obj in sorted(duplicates, key=lambda x: x.name()):
+                print(f"# Found: overlapping duplicate object: {obj} #")
+        if verbose or select:
+            print(f"# {len(duplicates)} overlapping duplicate objects found. #")
+        if select and duplicates:
+            pm.select(list(duplicates), r=True)
         return duplicates
 
     @staticmethod

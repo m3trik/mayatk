@@ -370,10 +370,10 @@ class XformUtils(ptk.HelpMixin):
             objects (str/obj/list): The object(s) to reset the translation values for.
         """
         for obj in pm.ls(objects):
-            pos = pm.objectCenter(obj)  # get the object's current position.
+            pos = pm.objectCenter(obj)  # Get the object's current position.
             # Move to origin and center pivot.
             cls.drop_to_grid(obj, origin=1, center_pivot=1)
-            pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # bake transforms
+            pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # Bake transforms
             # Move the object back to it's original position.
             pm.xform(obj, translation=pos)
 

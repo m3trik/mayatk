@@ -25,19 +25,31 @@ class NodeUtils(ptk.HelpMixin):
         Returns:
             (str/list) The node type. A list is always returned when 'objects' is given as a list.
         """
+        from mayatk import Components
+
         types = []
         for obj in pm.ls(objects):
             if cls.is_group(obj):
                 typ = "group"
             elif cls.is_locator(obj):
                 typ = "locator"
+            elif cls.is_mesh(obj):
+                typ = "mesh"
             else:
-                typ = core_utils.Components.get_component_type(obj)
+                typ = Components.get_component_type(obj)
             if not typ:
                 typ = pm.objectType(obj)
             types.append(typ)
+            print(obj.name(), typ)
 
         return ptk.format_return(types, objects)
+
+    @staticmethod
+    def is_mesh(obj) -> bool:
+        """Return True if the given object is a transform node with a mesh shape child."""
+        return isinstance(obj, pm.nt.Transform) and any(
+            isinstance(s, pm.nt.Mesh) for s in obj.getShapes(noIntermediate=True)
+        )
 
     @staticmethod
     def is_locator(objects):

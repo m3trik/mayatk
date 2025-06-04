@@ -685,7 +685,7 @@ class EditMacros:
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
-    def m_combine(objects, allow_multiple_materials: bool = True):
+    def m_combine(objects, allow_multiple_mats: bool = True):
         """Combine multiple meshes.
 
         Parameters:
@@ -700,7 +700,7 @@ class EditMacros:
             )
             return None
 
-        if not allow_multiple_materials:
+        if not allow_multiple_mats:
             all_mats = MatUtils.get_mats(objects)
             if len(set(all_mats)) > 1:
                 pm.warning(

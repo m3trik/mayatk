@@ -101,7 +101,9 @@ class RigUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def create_locator_at_object(
         cls,
-        objects,
+        objects: Union[
+            str, "pm.nodetypes.Transform", List[Union[str, "pm.nodetypes.Transform"]]
+        ],
         parent: bool = True,
         freeze_object: bool = True,
         freeze_locator: bool = True,
@@ -114,8 +116,9 @@ class RigUtils(ptk.HelpMixin):
         obj_suffix: str = "_GEO",
         strip_digits: bool = False,
         strip_suffix: bool = False,
-    ):
-        """Rig object under a zeroed locator aligned to its baked manip pivot.
+        strip_trailing_underscores: bool = True,
+    ) -> None:
+        """Rig object under a zeroed locator aligned to its d manip pivot.
 
         Parameters:
             objects (str/obj/list): Objects to create locator rigs for.
@@ -128,29 +131,31 @@ class RigUtils(ptk.HelpMixin):
             lock_scale (bool): Lock object's scale attributes.
             grp_suffix (str): Naming suffix for the created group. Default "_GRP".
             loc_suffix (str): Naming suffix for the locator. Default "_LOC".
-            obj_suffix (str): Naming suffix for the renamed object. Default "_OBJ".
+            obj_suffix (str): Naming suffix for the renamed object. Default "_GEO".
             strip_digits (bool): Whether to strip trailing digits before suffixing.
             strip_suffix (bool): Whether to strip prior suffix patterns before suffixing.
+            strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
         """
         import re
 
-        suffix_strip_regex = (
-            re.escape(grp_suffix) + r"\d*$",
-            re.escape(loc_suffix) + r"\d*$",
-            re.escape(obj_suffix) + r"\d*$",
-        )
-
         def format_name_with_suffix(base_name: str, suffix: str) -> str:
-            return ptk.format_suffix(
+            strip_tuple = (grp_suffix, loc_suffix, obj_suffix)
+            clean_name = ptk.format_suffix(
                 base_name,
-                suffix=suffix,
-                strip=suffix_strip_regex,
+                suffix="",
+                strip=strip_tuple,
                 strip_trailing_ints=strip_digits,
                 strip_trailing_alpha=strip_suffix,
             )
+            if strip_trailing_underscores:
+                clean_name = re.sub(r"_+$", "", clean_name)
+            return f"{clean_name}{suffix}"
 
         for obj in pm.ls(objects, long=True, type="transform", flatten=True):
-            base_name = obj.nodeName()
+            orig_name = obj.nodeName()
+            # Strip suffixes from the original name once
+            base_name_stripped = format_name_with_suffix(orig_name, "")
+
             mesh_shape = obj.getShape()
             vertices = mesh_shape.vtx[:] if mesh_shape else None
             orig_parent = pm.listRelatives(obj, parent=True)
@@ -178,18 +183,17 @@ class RigUtils(ptk.HelpMixin):
             if vertices:
                 pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
 
-            # Freeze the object transforms after parenting, if requested
+            # Freeze object after hierarchy is set up
             if freeze_object:
                 XformUtils.freeze_transforms(obj, normal=True)
 
-            # Rename everything *after* hierarchy is set up
+            # Rename group, locator, and object using the clean base name
             if parent:
-                pm.rename(grp, format_name_with_suffix(base_name, grp_suffix))
-            pm.rename(loc, format_name_with_suffix(base_name, loc_suffix))
-            pm.rename(obj, format_name_with_suffix(base_name, obj_suffix))
+                pm.rename(grp, f"{base_name_stripped}{grp_suffix}")
+            pm.rename(loc, f"{base_name_stripped}{loc_suffix}")
+            pm.rename(obj, f"{base_name_stripped}{obj_suffix}")
 
             if parent:
-                # Freeze group scale only (after renaming)
                 XformUtils.freeze_transforms(grp, scale=True)
 
             cls.set_attr_lock_state(
@@ -198,6 +202,7 @@ class RigUtils(ptk.HelpMixin):
                 rotate=lock_rotation,
                 scale=lock_scale,
             )
+            pm.select(loc, replace=True)
 
     @classmethod
     @CoreUtils.undoable

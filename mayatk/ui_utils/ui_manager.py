@@ -205,7 +205,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         if header:
             ui.header = self.sb.registered_widgets.Header()
             ui.header.setTitle(ui.name.upper())
-            ui.header.attach_to(ui)
+            ui.header.attach_to(ui.centralWidget())
             ui.set_style(ui.header, "dark", "Header")
 
         ui.set_attributes(WA_TranslucentBackground=True)
