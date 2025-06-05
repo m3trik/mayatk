@@ -63,6 +63,12 @@ class EnvUtils(ptk.HelpMixin):
             "loaded_plugins": lambda: pm.pluginInfo(q=True, listPlugins=True),
             "api_version": lambda: pm.about(api=True),
             "host_name": lambda: pm.about(hostName=True),
+            "batch_mode": lambda: pm.about(batch=True),
+            "build_dir": lambda: pm.about(buildDirectory=True),
+            "build_version": lambda: pm.about(buildVersion=True),
+            "build_varient": lambda: pm.about(buildVariant=True),
+            "api_version": lambda: pm.about(apiVersion=True),
+            "application": lambda: pm.about(application=True),
             "current_frame": lambda: pm.currentTime(q=True),
             "frame_range": lambda: (
                 pm.playbackOptions(q=True, min=True),
