@@ -221,6 +221,28 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return all_relative, log_messages
 
+    def check_duplicate_locator_names(self) -> tuple:
+        """Check for duplicate locator short names among the specified objects.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        log_messages = []
+        locators = NodeUtils.is_locator(self.objects, filter=True)
+        seen = {}
+        duplicates = set()
+        for loc in locators:
+            name = loc.nodeName()
+            if name in seen:
+                duplicates.add(name)
+            else:
+                seen[name] = loc
+        if duplicates:
+            for name in sorted(duplicates):
+                log_messages.append(f"Duplicate locator name: {name}")
+            return False, log_messages
+        return True, log_messages
+
     def check_duplicate_materials(self) -> tuple:
         """Check if any duplicate materials are present in the scene."""
         log_messages = []
@@ -450,6 +472,12 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "widget_type": "QCheckBox",
                 "setText": "Delete Unused Materials",
                 "setToolTip": "Delete unassigned material nodes.",
+                "setChecked": True,
+            },
+            "check_duplicate_locator_names": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Duplicate Locator Names",
+                "setToolTip": "Check for duplicate locator names.",
                 "setChecked": True,
             },
             "reassign_duplicate_materials": {

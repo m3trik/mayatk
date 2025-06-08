@@ -45,65 +45,98 @@ class NodeUtils(ptk.HelpMixin):
         return ptk.format_return(types, objects)
 
     @staticmethod
-    def is_mesh(obj) -> bool:
-        """Return True if the given object is a transform node with a mesh shape child."""
-        return isinstance(obj, pm.nt.Transform) and any(
-            isinstance(s, pm.nt.Mesh) for s in obj.getShapes(noIntermediate=True)
-        )
-
-    @staticmethod
-    def is_locator(objects):
-        """Determine if each of the given object(s) is a locator.
-        A locator is a transform node that has a shape node child.
-        The shape node defines the appearance and behavior of the locator.
+    def is_mesh(objects, filter: bool = False):
+        """Return True for each object that is a transform node with a mesh shape child.
 
         Parameters:
             objects (str/obj/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are meshes.
 
         Returns:
-            (bool)(list) A list is always returned when 'objects' is given as a list.
+            (bool/list) A list of booleans indicating whether each object is a mesh.
+            If 'filter' is True, returns a list of objects that are meshes.
         """
         objs = pm.ls(objects, transforms=True)
-        # Get all locator shapes and their corresponding transforms
+        result = [
+            isinstance(obj, pm.nt.Transform)
+            and any(
+                isinstance(s, pm.nt.Mesh) for s in obj.getShapes(noIntermediate=True)
+            )
+            for obj in objs
+        ]
+        if filter:
+            return [obj for obj, is_mesh in zip(objs, result) if is_mesh]
+        return ptk.format_return(result, objects)
+
+    @staticmethod
+    def is_locator(objects, filter: bool = False):
+        """Determine if each of the given object(s) is a locator.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are locators.
+
+        Returns:
+            (bool/list) A list of booleans indicating whether each object is a locator.
+            If 'filter' is True, returns a list of objects that are locators.
+        """
+        objs = pm.ls(objects, transforms=True)
         locator_shapes = pm.ls(type="locator")
         locator_transforms = set(
             pm.listRelatives(locator_shapes, parent=True, path=True)
         )
-        # Determine if each object is a locator
         result = [obj in locator_transforms for obj in objs]
+        if filter:
+            return [obj for obj, is_loc in zip(objs, result) if is_loc]
         return ptk.format_return(result, objects)
 
     @staticmethod
-    def is_group(objects):
+    def is_group(objects, filter: bool = False):
         """Determine if each of the given object(s) is a group.
-        A group is defined as a transform node with children and no shape nodes directly beneath it.
 
         Parameters:
             objects (str/obj/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are groups.
 
         Returns:
-            (bool)(list) A list is always returned when 'objects' is given as a list.
+            (bool/list) A list of booleans indicating whether each object is a group.
+            If 'filter' is True, returns a list of objects that are groups.
         """
+        objs = pm.ls(objects)
         result = []
-        for n in pm.ls(objects):
+        for n in objs:
             try:
-                # Check if the object is a transform node
                 is_transform = type(n) == pm.nodetypes.Transform
-                # Check if the transform node does not have any shape nodes directly beneath it
                 no_shapes = len(n.getShapes(noIntermediate=True)) == 0
                 q = is_transform and no_shapes
             except AttributeError:
                 q = False
             result.append(q)
-
+        if filter:
+            return [obj for obj, is_grp in zip(objs, result) if is_grp]
         return ptk.format_return(result, objects)
 
     @staticmethod
-    def is_geometry(obj) -> bool:
-        """Return True if the given object has a shape node and is not a group."""
-        return isinstance(obj, pm.nt.Transform) and bool(
-            obj.getShapes(noIntermediate=True)
-        )
+    def is_geometry(objects, filter: bool = False):
+        """Return True for each object that has a shape node and is not a group.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are geometries.
+
+        Returns:
+            (bool/list) A list of booleans indicating whether each object is geometry.
+            If 'filter' is True, returns a list of objects that are geometries.
+        """
+        objs = pm.ls(objects, transforms=True)
+        result = [
+            isinstance(obj, pm.nt.Transform)
+            and bool(obj.getShapes(noIntermediate=True))
+            for obj in objs
+        ]
+        if filter:
+            return [obj for obj, is_geom in zip(objs, result) if is_geom]
+        return ptk.format_return(result, objects)
 
     @classmethod
     def get_groups(cls, empty=False):
@@ -779,7 +812,7 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     @core_utils.CoreUtils.undoable
-    def convert_to_instances(
+    def instance(
         cls,
         objects=None,
         append="",
@@ -787,18 +820,6 @@ class NodeUtils(ptk.HelpMixin):
         center_pivot=True,
         delete_history=True,
     ):
-        """The first selected object will be instanced across all other selected objects.
-
-        Parameters:
-            objects (list): A list of objects to convert to instances. The first object will be the instance parent.
-            append (str): Append a string to the end of any instanced objects. ie. '_INST'
-            freeze_transforms (bool): Freeze transforms on the given objects.
-            center_pivot (bool): Center pivot on the given objects.
-            delete_history (bool): Delete history on the given objects.
-
-        Returns:
-            (list) The instanced objects.
-        """
         from mayatk import XformUtils
 
         objects = pm.ls(objects) or pm.ls(orderedSelection=True)
@@ -817,31 +838,25 @@ class NodeUtils(ptk.HelpMixin):
                 force=True,
             )
 
+        new_instances = []
         for target in targets:
             name = target.name()
             objParent = pm.listRelatives(target, parent=True)
-
-            instance = pm.instance(source)
-            cls.uninstance(target)
-
-            # Move object to center of the last selected items bounding box # pm.xform(instance, translation=pos, worldSpace=1, relative=1) #move to the original objects location.
+            instance = pm.instance(source)[0]  # returns a list
             pm.matchTransform(
                 instance, target, position=True, rotation=True, scale=True, pivots=True
             )
-
-            try:
-                # Parent the instance under the original objects parent.
-                pm.parent(instance, objParent)
-            except RuntimeError:  # It is already a child of the parent.
-                pass
-
-            # Delete history for the object so that the namespace is cleared.
-            pm.delete(target, constructionHistory=True)
-            pm.delete(target)
+            if objParent:
+                try:
+                    pm.parent(instance, objParent)
+                except RuntimeError:
+                    pass
             pm.rename(instance, name + append)
-        pm.select(targets)
+            pm.delete(target)  # delete only the transform
+            new_instances.append(instance)
 
-        return targets
+        pm.select(new_instances)
+        return new_instances
 
     @classmethod
     def uninstance(cls, objects):
@@ -861,6 +876,30 @@ class NodeUtils(ptk.HelpMixin):
                 duplicatedObject = pm.duplicate(obj)
                 pm.delete(obj)
                 pm.rename(duplicatedObject[0], obj)
+
+    @staticmethod
+    def filter_duplicate_instances(nodes) -> List["pm.PyNode"]:
+        """Keep only one transform per instance group.
+
+        Parameters:
+            nodes (str/obj/list): The nodes to filter.
+
+        Returns:
+            List[pm.PyNode]: Filtered list of nodes with unique instance groups.
+        """
+        transforms = NodeUtils.get_transform_node(nodes, returned_type="obj")
+        filtered = []
+        visited = set()
+        for t in transforms:
+            inst_group = NodeUtils.get_instances(t, return_parent_objects=True)
+            if not inst_group:
+                key = (t.longName(),)
+            else:
+                key = tuple(sorted(x.longName() for x in inst_group))
+            if key not in visited:
+                visited.add(key)
+                filtered.append(t)
+        return filtered
 
 
 # -----------------------------------------------------------------------------
