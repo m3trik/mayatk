@@ -19,6 +19,51 @@ class RigUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
+    def create_helper(
+        name: str,
+        helper_type: str = "locator",
+        parent: Optional["pm.nt.Transform"] = None,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        cleanup: bool = False,
+    ) -> Optional["pm.nt.Transform"]:
+        """Create a hidden helper object (e.g., locator, joint) with a consistent naming convention.
+        Optionally cleans up (deletes) the helper if it already exists and cleanup is True.
+
+        Parameters:
+            name (str): Helper name (should include "__" as per convention).
+            helper_type (str): Maya node type to create (e.g., "locator", "joint").
+            parent (pm.nt.Transform or None): Optional parent transform.
+            position (tuple): Position in world space.
+            cleanup (bool): If True, deletes existing helper with same name and returns None.
+
+        Returns:
+            pm.nt.Transform or None: The created or existing helper, or None if cleaned up.
+        """
+        if pm.objExists(name):
+            if cleanup:
+                pm.delete(name)
+                return None
+            return pm.PyNode(name)
+
+        if helper_type.lower() == "locator":
+            helper = pm.spaceLocator(n=name)
+        elif helper_type.lower() == "joint":
+            helper = pm.createNode("joint", n=name)
+        else:
+            helper = pm.createNode(helper_type, n=name)
+
+        if parent is not None:
+            helper.setParent(parent)
+        else:
+            helper.setParent(world=True)
+
+        helper.translate.set(position)
+        helper.visibility.set(0)
+
+        return helper
+
+    @staticmethod
+    @CoreUtils.undoable
     def create_group(
         objects=[],
         name="",
@@ -375,67 +420,6 @@ class RigUtils(ptk.HelpMixin):
                 except Exception:
                     pass
 
-    @staticmethod
-    def constrain(
-        target, objects_to_constrain, constraint_type: str = "point", **kwargs
-    ) -> None:
-        """Constrain all selected objects to the specified target object in Maya.
-
-        Parameters:
-            target (str or PyNode): The target object to which the constraints will be applied.
-            objects_to_constrain (list): List of objects to be constrained to the target.
-            constraint_type (str): The type of constraint to apply. Options are 'point', 'orient', 'parent',
-                                   'scale', 'aim', or 'poleVector'. Default is 'point'.
-            **kwargs: Additional keyword arguments to be passed to the constraint functions.
-                      The 'maintainOffset' argument defaults to False if not provided.
-
-        Example:
-            # Point constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point')
-
-            # Point constraint with maintaining offset
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point', maintainOffset=True)
-
-            # Orient constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='orient')
-
-            # Parent constraint with maintaining offset and additional options
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='parent', maintainOffset=True, skip=['rotateX', 'rotateY'])
-
-            # Scale constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='scale')
-
-            # Aim constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='aim', aimVector=[1, 0, 0], upVector=[0, 1, 0], worldUpType='scene')
-
-            # Pole vector constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='poleVector')
-        """
-        if constraint_type in ["point", "orient", "parent", "scale"]:
-            kwargs.setdefault("maintainOffset", False)
-
-        for obj in objects_to_constrain:
-            if constraint_type == "point":
-                pm.pointConstraint(target, obj, **kwargs)
-            elif constraint_type == "orient":
-                pm.orientConstraint(target, obj, **kwargs)
-            elif constraint_type == "parent":
-                pm.parentConstraint(target, obj, **kwargs)
-            elif constraint_type == "scale":
-                pm.scaleConstraint(target, obj, **kwargs)
-            elif constraint_type == "aim":
-                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
-                pm.aimConstraint(target, obj, **kwargs)
-            elif constraint_type == "poleVector":
-                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
-                pm.poleVectorConstraint(target, obj, **kwargs)
-            else:
-                pm.warning(f"Unsupported constraint type: {constraint_type}")
-
-        print(
-            f"Applied {constraint_type} constraint from '{target}' to {len(objects_to_constrain)} objects."
-        )
-
     @classmethod
     @CoreUtils.undoable
     def setup_telescope_rig(
@@ -562,73 +546,203 @@ class RigUtils(ptk.HelpMixin):
         lock_segment_attributes()
 
     @staticmethod
-    def setupConstraintOverride(
-        switchAttr, constraintNode, weightIndex, overrideValue=1.0
-    ):
-        """Sets up a node network so that when a given boolean switch attribute is on,
-        it overrides any keyed values on the specified constraint weight.
+    @CoreUtils.undoable
+    def create_switch_attr(
+        node: "pm.PyNode",
+        attr_name: str,
+        weighted: bool = False,
+        min_value: float = 0.0,
+        max_value: float = 1.0,
+    ) -> "pm.Attribute":
+        """Create a bool or float (weighted) attribute on the node if it doesn't exist.
 
         Parameters:
-            switchAttr (pm.Attribute): The boolean attribute used as a switch.
-            constraintNode (pm.nt.Constraint): The constraint node whose weight you want to override.
-            weightIndex (int): The index of the weight in the constraintNode's weight list to override.
-            overrideValue (float): The value to force when the switch is on.
+            node (pm.PyNode): Node to add the attribute to.
+            attr_name (str): Attribute name.
+            weighted (bool): If True, create float (0–1), else bool.
+            min_value (float): Min value for weighted attr.
+            max_value (float): Max value for weighted attr.
 
-        Example:
-            setupConstraintOverride(
-                switchAttr="SMALL_TOW_TRUCK_CTRL.rearTowSwitch",
-                constraintNode=pm.PyNode("C130J_TOWBAR_LOC_pointConstraint1"),
-                weightIndex=0,
-                overrideValue=1.0,
-            )
+        Returns:
+            pm.Attribute: The created or existing attribute.
         """
-        # Identify the weight attribute
-        weightAliasList = constraintNode.getWeightAliasList()
-        if weightIndex >= len(weightAliasList):
-            raise IndexError(
-                "weightIndex is out of range for this constraint's weight aliases."
-            )
-        weightAttr = weightAliasList[weightIndex]
+        if node.hasAttr(attr_name):
+            return node.attr(attr_name)
 
-        # Remove any existing keyframes on the constraint weight attribute
-        # so that it's purely driven by the upcoming node network.
-        pm.cutKey(weightAttr, clear=True)  # Remove any existing animation keys
-
-        # Create a keyable original weight attribute to store user-driven (keyed) values
-        origWeightAttrName = "origWeight{}".format(weightIndex)
-        if not constraintNode.hasAttr(origWeightAttrName):
+        if weighted:
             pm.addAttr(
-                constraintNode,
-                ln=origWeightAttrName,
+                node,
+                ln=attr_name,
                 at="double",
+                min=min_value,
+                max=max_value,
                 k=True,
-                dv=pm.getAttr(weightAttr),
+                dv=0,
             )
-        origWeightAttr = constraintNode.attr(origWeightAttrName)
+        else:
+            pm.addAttr(
+                node,
+                ln=attr_name,
+                at="bool",
+                k=True,
+                dv=0,
+            )
+        return node.attr(attr_name)
 
-        # Disconnect any incoming connections to the constraint weight
-        currentConnections = weightAttr.listConnections(plugs=True, s=True, d=False)
-        for conn in currentConnections:
-            pm.disconnectAttr(conn, weightAttr)
+    @classmethod
+    @CoreUtils.undoable
+    def connect_switch_to_constraint(
+        cls,
+        constraint_node: "pm.nt.Constraint",
+        constraint_targets: Optional[List["pm.nt.Transform"]] = None,
+        attr_name: str = "parent_switch",
+        overwrite_existing: bool = False,
+        node: Optional["pm.PyNode"] = None,
+        weighted: bool = False,
+        anchor: Optional[str] = None,
+    ) -> dict:
+        """
+        Create a space switch attribute to drive a constraint node.
+        - 1 target, no anchor: bool (on/off toggle)
+        - 2 targets: enum or float (blend if weighted)
+        - 3+ targets: enum (dropdown snap)
 
-        # Create a condition node to handle the switch
-        condNode = pm.createNode(
-            "condition", name=constraintNode.name() + "_overrideCondition"
-        )
-        condNode.operation.set(0)  # "Equal": True if firstTerm == secondTerm
-        condNode.firstTerm.set(1)  # We'll compare switchAttr to 1
+        Parameters:
+            constraint_node (pm.nt.Constraint): The constraint node to control.
+            constraint_targets (Optional[List[pm.nt.Transform]]): List of target transforms for the constraint. If None, auto-detected.
+            attr_name (str): Name of the switch attribute to create.
+            overwrite_existing (bool): If True, deletes and recreates the attribute if it exists.
+            node (Optional[pm.PyNode]): Node to add the switch attribute to. If None, derived from the driven object.
+            weighted (bool): If True, creates a float attribute for smooth blending (2 targets only).
+            anchor (Optional[str]): If given, creates a locator at origin as a neutral/anchor/world target with this name.
 
-        # Connect the switch attribute to secondTerm
-        pm.connectAttr(switchAttr, condNode.secondTerm, f=True)
+        Returns:
+            dict: Dictionary of created nodes and attributes for further processing.
+        """
+        if not constraint_node or not isinstance(constraint_node, pm.nt.Constraint):
+            raise TypeError(
+                "constraint_node must be a valid PyMEL constraint node (pm.nt.Constraint)."
+            )
 
-        # When switch is True, condition passes overrideValue
-        condNode.colorIfTrueR.set(overrideValue)
+        result = {}
+        # Target autodetect if not provided
+        if constraint_targets is None:
+            if hasattr(constraint_node, "getTargetList"):
+                constraint_targets = constraint_node.getTargetList()
+            else:
+                constraint_targets = [
+                    t
+                    for t in constraint_node.target.inputs()
+                    if isinstance(t, pm.nt.Transform)
+                ]
 
-        # When switch is False, pass through origWeightAttr
-        pm.connectAttr(origWeightAttr, condNode.colorIfFalseR, f=True)
+        # Check targets
+        if not constraint_targets or len(constraint_targets) < 1:
+            pm.warning("No constraint targets found or provided.")
+            return result
 
-        # Connect condition output to the constraint weight
-        pm.connectAttr(condNode.outColorR, weightAttr, f=True)
+        # Optionally add anchor as the last target
+        if anchor:
+            anchor_obj = cls.create_helper(
+                name=anchor,
+                helper_type="locator",
+                position=(0, 0, 0),
+            )
+            constraint_targets = list(constraint_targets) + [anchor_obj]
+            result["anchor_helper"] = anchor_obj
+
+        num_targets = len(constraint_targets)
+
+        if node is None:
+            try:
+                node = constraint_node.getOutputTransform()
+            except Exception:
+                driven = pm.listRelatives(
+                    constraint_node, type="transform", parent=True
+                )
+                node = driven[0] if driven else None
+        if node is None:
+            pm.warning("Could not determine node to add switch attribute to.")
+            return result
+
+        # Check for duplicate attribute, handle overwrite
+        if node.hasAttr(attr_name):
+            if overwrite_existing:
+                node.deleteAttr(attr_name)
+            else:
+                pm.warning(f"{node}.{attr_name} already exists.")
+                return result
+
+        weight_alias_list = constraint_node.getWeightAliasList()
+
+        # Ensure number of weights matches number of targets
+        if len(weight_alias_list) < num_targets:
+            pm.warning("Number of constraint weights does not match number of targets.")
+            return result
+
+        # Disconnect all inputs from weights
+        for weight_attr in weight_alias_list:
+            pm.cutKey(weight_attr, clear=True)
+            for conn in weight_attr.listConnections(plugs=True, s=True, d=False):
+                pm.disconnectAttr(conn, weight_attr)
+
+        # --- Single target, no anchor: simple bool toggle for constraint on/off ---
+        if num_targets == 1:
+            node.addAttr(attr_name, at="bool", k=True)
+            switch_attr = node.attr(attr_name)
+            pm.setAttr(switch_attr, 0)
+            result["switch_attr"] = switch_attr
+
+            weight_attr = weight_alias_list[0]
+            cond_name = f"{constraint_node.nodeName()}_{attr_name}_cond0"
+            cond_node = pm.createNode("condition", name=cond_name)
+            cond_node.operation.set(0)  # == compare
+            cond_node.firstTerm.set(1)
+            pm.connectAttr(switch_attr, cond_node.secondTerm, f=True)
+            cond_node.colorIfTrueR.set(1.0)
+            cond_node.colorIfFalseR.set(0.0)
+            pm.connectAttr(cond_node.outColorR, weight_attr, f=True)
+            result["condition_node"] = cond_node
+            return result
+
+        # --- Weighted float blend for 2 targets only ---
+        if weighted and num_targets == 2:
+            node.addAttr(attr_name, at="double", min=0.0, max=1.0, k=True)
+            switch_attr = node.attr(attr_name)
+            result["switch_attr"] = switch_attr
+            pm.setAttr(switch_attr, 0)
+            pm.connectAttr(switch_attr, weight_alias_list[0], f=True)
+            rev_name = f"{node.nodeName()}_{attr_name}_reverse"
+            if pm.objExists(rev_name):
+                rev_node = pm.PyNode(rev_name)
+            else:
+                rev_node = pm.createNode("reverse", name=rev_name)
+            pm.connectAttr(switch_attr, rev_node.inputX, f=True)
+            pm.connectAttr(rev_node.outputX, weight_alias_list[1], f=True)
+            result["reverse_node"] = rev_node
+            return result
+
+        # --- Enum dropdown for snap switching (2 or more targets) ---
+        enum_names = [t.nodeName() for t in constraint_targets]
+        enum_string = ":".join(enum_names)
+        node.addAttr(attr_name, at="enum", en=enum_string, k=True)
+        switch_attr = node.attr(attr_name)
+        pm.setAttr(switch_attr, 0)
+        result["switch_attr"] = switch_attr
+
+        # For each weight, create a condition node that checks if switch matches index
+        for i, weight_attr in enumerate(weight_alias_list[:num_targets]):
+            cond_name = f"{constraint_node.nodeName()}_{attr_name}_cond{i}"
+            cond_node = pm.createNode("condition", name=cond_name)
+            cond_node.operation.set(0)  # == compare
+            pm.setAttr(cond_node.firstTerm, i)
+            pm.connectAttr(switch_attr, cond_node.secondTerm, f=True)
+            pm.setAttr(cond_node.colorIfTrueR, 1.0)
+            pm.setAttr(cond_node.colorIfFalseR, 0.0)
+            pm.connectAttr(cond_node.outColorR, weight_attr, f=True)
+            result[f"condition_node_{i}"] = cond_node
+
+        return result
 
     @staticmethod
     def get_joint_chain_from_root(
