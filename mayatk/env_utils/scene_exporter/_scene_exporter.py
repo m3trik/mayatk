@@ -293,8 +293,8 @@ class SceneExporterSlots(SceneExporter):
     @property
     def presets(self) -> Dict[str, Optional[str]]:
         """Return available presets, using cached values if the preset directory has not changed."""
-        # Retrieve the preset directory using restore_settings
-        preset_dir = self.ui.restore_settings("preset_dir")
+        # Retrieve the preset directory using settings
+        preset_dir = self.ui.settings.value("preset_dir")
         last_checked_dir = getattr(self, "_preset_dir_last_checked", None)
 
         # Only refresh the cached presets if the preset directory changes
@@ -504,7 +504,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b003(self) -> None:
         """Add Preset."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -522,7 +522,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b004(self) -> None:
         """Remove Preset."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -554,7 +554,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b007(self) -> None:
         """Open Preset Directory."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if preset_dir and os.path.exists(preset_dir):
             os.startfile(preset_dir)
         else:

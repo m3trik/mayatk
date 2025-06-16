@@ -498,18 +498,6 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Check for hidden geometry that will be exported.",
                 "setChecked": True,
             },
-            "check_and_delete_visibility_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Delete Visibility Keys",
-                "setToolTip": "Delete visibility keys from the exported objects.",
-                "setChecked": True,
-            },
-            "optimize_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Optimize Keys",
-                "setToolTip": "Optimize animation keys by removing redundant keys.",
-                "setChecked": True,
-            },
             "check_root_default_transforms": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Root Default Transforms",
@@ -556,6 +544,18 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "widget_type": "QCheckBox",
                 "setText": "Check For Untied Keyframes",
                 "setToolTip": "Check for untied keyframes on the specified objects.",
+                "setChecked": True,
+            },
+            "check_and_delete_visibility_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Delete Visibility Keys",
+                "setToolTip": "Delete visibility keys from the exported objects.",
+                "setChecked": True,
+            },
+            "optimize_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Optimize Keys",
+                "setToolTip": "Optimize animation keys by removing redundant keys.",
                 "setChecked": True,
             },
             "set_bake_animation_range": {

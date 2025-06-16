@@ -160,7 +160,6 @@ class RigUtils(ptk.HelpMixin):
         loc_suffix: str = "_LOC",
         obj_suffix: str = "_GEO",
         strip_digits: bool = False,
-        strip_suffix: bool = False,
         strip_trailing_underscores: bool = True,
     ) -> None:
         """Rig object under a zeroed locator aligned to its d manip pivot.
@@ -178,7 +177,6 @@ class RigUtils(ptk.HelpMixin):
             loc_suffix (str): Naming suffix for the locator. Default "_LOC".
             obj_suffix (str): Naming suffix for the renamed object. Default "_GEO".
             strip_digits (bool): Whether to strip trailing digits before suffixing.
-            strip_suffix (bool): Whether to strip prior suffix patterns before suffixing.
             strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
         """
         import re
@@ -190,14 +188,23 @@ class RigUtils(ptk.HelpMixin):
                 suffix="",
                 strip=strip_tuple,
                 strip_trailing_ints=strip_digits,
-                strip_trailing_alpha=strip_suffix,
             )
             if strip_trailing_underscores:
                 clean_name = re.sub(r"_+$", "", clean_name)
-            return f"{clean_name}{suffix}"
+            result = f"{clean_name}{suffix}" if suffix else clean_name
+            if not result:
+                pm.warning(
+                    f"[create_locator_at_object] Skipping rename: "
+                    f"Attempted to rename '{base_name}' with suffix '{suffix}', "
+                    f"but this would result in an empty or invalid name. Using base name instead."
+                )
+                result = base_name
 
         for obj in pm.ls(objects, long=True, type="transform", flatten=True):
             orig_name = obj.nodeName()
+            if not orig_name:
+                orig_name = obj.name().split("|")[-1]
+
             # Strip suffixes from the original name once
             base_name_stripped = format_name_with_suffix(orig_name, "")
 
