@@ -87,6 +87,72 @@ class MatUtils(ptk.HelpMixin):
         return sorted(filtered_mats, key=lambda x: x.name()) if sort else filtered_mats
 
     @staticmethod
+    def get_file_nodes(
+        materials: Optional[List[str]] = None,
+        raw: bool = False,
+        return_type: str = "node",
+    ) -> list:
+        """Returns file nodes, paths, or (node, path) pairs based on return_type.
+
+        return_type: "node", "path", "node|path", "path|node"
+
+        Parameters:
+            materials (Optional[List[str]]): List of material names to filter file nodes.
+            raw (bool): If True, returns all file nodes without filtering by materials.
+            return_type (str): Specifies the format of the returned data. Options are:
+                - "node": Returns a list of file nodes.
+                - "path": Returns a list of file paths.
+                - "node|path": Returns a list of tuples (node, path).
+                - "path|node": Returns a list of tuples (path, node).
+
+        Returns:
+            list: A list of file nodes, paths, or (node, path) pairs based on return_type.
+        """
+        # Get all file nodes in the scene
+        file_nodes = pm.ls(type="file")
+
+        # Optionally filter by materials (if materials are provided)
+        if materials:
+            file_nodes = [
+                fn
+                for fn in file_nodes
+                if any(material in fn.listConnections() for material in materials)
+            ]
+
+        # Prepare the list of tuples (node, path)
+        file_info = []
+        for file_node in file_nodes:
+            # Get the file path
+            file_path = file_node.fileTextureName.get()
+
+            if raw:
+                # If raw=True, keep the relative path inside the project, absolute outside the project
+                if not file_path.startswith(pm.workspace(q=True, rd=True)):
+                    file_info.append((file_node, file_path))  # absolute path
+                else:
+                    relative_path = os.path.relpath(
+                        file_path, pm.workspace(q=True, rd=True)
+                    )
+                    file_info.append((file_node, relative_path))  # relative path
+            else:
+                # If raw=False, always use the absolute path
+                file_info.append((file_node, file_path))  # absolute path
+
+        # Process return_type
+        if return_type == "node":
+            return [item[0] for item in file_info]
+        elif return_type == "path":
+            return [item[1] for item in file_info]
+        elif return_type == "node|path":
+            return file_info
+        elif return_type == "path|node":
+            return [(item[1], item[0]) for item in file_info]
+        else:
+            raise ValueError(
+                f"Invalid return_type: {return_type}. Expected 'node', 'path', 'node|path', or 'path|node'."
+            )
+
+    @staticmethod
     def get_fav_mats():
         """Retrieves the list of favorite materials in Maya.
 
@@ -285,9 +351,7 @@ class MatUtils(ptk.HelpMixin):
         Returns:
             Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing requested info.
         """
-        materials = (
-            pm.ls(materials, mat=True) if materials is not None else pm.ls(mat=True)
-        )
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
@@ -415,7 +479,7 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid directory: {new_dir}")
             return
 
-        materials = None if materials is None else pm.ls(materials, mat=True)
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
         textures = cls.collect_material_paths(materials=materials)
         textures = [t[0] if isinstance(t, tuple) else t for t in textures]
 
@@ -468,7 +532,8 @@ class MatUtils(ptk.HelpMixin):
             filename = os.path.basename(path).lower()
             return os.path.splitext(filename)[0]
 
-        materials = None if materials is None else pm.ls(materials, mat=True)
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+
         # Dictionary to store relevant material data (texture names or paths)
         material_data = {}
         for material in materials:

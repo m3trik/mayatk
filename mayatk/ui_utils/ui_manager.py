@@ -74,6 +74,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "mat_utils/stingray_arnold_shader.ui",
             "slot": "mat_utils.stingray_arnold_shader.StingrayArnoldShaderSlots",
         },
+        "texture_path_editor": {
+            "ui": "mat_utils/texture_path_editor.ui",
+            "slot": "mat_utils.texture_path_editor.TexturePathEditorSlots",
+        },
         "tube_rig": {
             "ui": "rig_utils/tube_rig.ui",
             "slot": "rig_utils.tube_rig.TubeRigSlots",

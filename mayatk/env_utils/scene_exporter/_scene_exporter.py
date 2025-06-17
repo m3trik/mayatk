@@ -155,10 +155,23 @@ class SceneExporter(ptk.LoggingMixin):
         return os.path.join(self.export_dir, f"{export_name}.fbx")
 
     def format_export_name(self, name: str) -> str:
-        """Format the export name using a regex if provided."""
+        """Format the export name using a regex pattern and replacement (e.g. 'pattern->replace')."""
         if self.name_regex:
-            pattern, replacement = self.name_regex.split("->")
-            return re.sub(pattern, replacement, name)
+            # Try to find a delimiter
+            for delim in ("->", "=>", "|"):
+                if delim in self.name_regex:
+                    pattern, replacement = self.name_regex.split(delim, 1)
+                    break
+            else:
+                pattern, replacement = self.name_regex, ""
+            # Strip whitespace and apply
+            pattern = pattern.strip()
+            replacement = replacement.strip()
+            try:
+                return re.sub(pattern, replacement, name)
+            except re.error as e:
+                self.logger.error(f"Invalid regex pattern: {pattern}. Error: {e}")
+                return name
         return name
 
     def generate_log_file_path(self, export_path: str) -> str:
@@ -396,8 +409,14 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QLineEdit",
-            setToolTip="Regex pattern for formatting the output name.",
-            setText=r"_module->",
+            setToolTip=(
+                "Regex pattern for formatting the output name.\n\n"
+                "Format:  PATTERN->REPLACEMENT\n"
+                "Examples:\n"
+                "  _bar.*->       Remove '_bar' and everything after\n"
+                "  (foo|bar)->baz    Replace 'foo' or 'bar' with 'baz'\n"
+                "Use standard Python regular expressions. If no '->', everything matching PATTERN is removed."
+            ),
             setPlaceholderText="RegEx",
             setObjectName="txt002",
         )
