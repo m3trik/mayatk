@@ -339,9 +339,9 @@ class SceneExporterSlots(SceneExporter):
 
     def cmb000_init(self, widget) -> None:
         """Init Preset"""
-        widget.refresh = True
-        widget.restore_state = True  # Enable state restore
         if not widget.is_initialized:
+            widget.restore_state = True  # Enable state restore
+            widget.refresh_on_show = True  # Call this method on show
             widget.menu.add(
                 "QPushButton",
                 setToolTip="Set the preset directory.",

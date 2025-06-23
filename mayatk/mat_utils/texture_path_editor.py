@@ -16,11 +16,35 @@ class TexturePathEditorSlots:
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.texture_path_editor
 
-    def b000(self):
-        """Convert to Relative Paths"""
-        MatUtils.remap_texture_paths()
+    def header_init(self, widget):
+        """ """
+        # Add a button to open the hypershade editor.
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Set Texture Directory",
+            setToolTip="Set the texture file paths for selected objects.\nThe path will be relative if it is within the project's source images directory.",
+            setObjectName="lbl010",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Find and Move Textures",
+            setToolTip="Find texture files for selected objects by searching recursively from the given source directory.\nAny textures found will be moved to the destination directory.\n\nNote: This will not work with Arnold texture nodes.",
+            setObjectName="lbl011",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Migrate Textures",
+            setToolTip="Migrate file textures for selected objects to a new directory.\nFirst, select the objects with the textures you want to migrate and the directory to migrate from.\nThen, select the directory you want to migrate the textures to.",
+            setObjectName="lbl012",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Convert to Relative Paths",
+            setToolTip="Convert all texture paths to relative paths based on the project's source images directory.",
+            setObjectName="lbl013",
+        )
 
-    def b001(self):
+    def lbl010(self):
         """Set Texture Paths for Selected Objects."""
         texture_dir = self.sb.dir_dialog(
             title="Set Texture Paths for Selected Objects",
@@ -32,7 +56,7 @@ class TexturePathEditorSlots:
         materials = MatUtils.get_mats()
         MatUtils.remap_texture_paths(materials, new_dir=texture_dir)
 
-    def b002(self):
+    def lbl011(self):
         """Find and Move Textures"""
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
@@ -61,7 +85,7 @@ class TexturePathEditorSlots:
             found_files=found_textures, new_dir=dest_dir, delete_old=False
         )
 
-    def b003(self):
+    def lbl012(self):
         """Migrate Textures"""
         old_dir = self.sb.dir_dialog(
             title="Select a directory to migrate textures from:",
@@ -84,63 +108,66 @@ class TexturePathEditorSlots:
 
         MatUtils.migrate_textures(materials=materials, old_dir=old_dir, new_dir=new_dir)
 
-    def cmb000_init(self, widget):
-        """Initialize the combo box with file nodes and their texture paths."""
-        widget.refresh = True
+    def lbl013(self):
+        """Convert to Relative Paths"""
+        MatUtils.remap_texture_paths()
+
+    def tbl000_init(self, widget):
+        print("Initializing Texture Path Editor Table", widget.is_initialized)
         if not widget.is_initialized:
-            widget.editable = True
-            widget.menu.mode = "context"
-            widget.menu.setTitle("Texture Path Editor: Options")
-            widget.menu.add(
-                self.sb.registered_widgets.Label,
-                setText="Edit in Place",
-                setObjectName="lbl000",
-                setToolTip="Set a new file path for the selected texture node.",
-            )
-            widget.menu.add(
-                self.sb.registered_widgets.Label,
-                setText="Open in Editor",
-                setObjectName="lbl001",
-                setToolTip="Open the material in the hypershade editor.",
-            )
-
-            def set_file_path(text: str) -> None:
-                file_node = widget.currentData()
-                if not file_node or not hasattr(file_node, "fileTextureName"):
-                    pm.warning("No valid file node selected.")
-                    return
-                file_node.fileTextureName.set(text)
-
-            widget.on_editing_finished.connect(set_file_path)
-            widget.before_popup_shown.connect(widget.init_slot)
+            widget.refresh_on_show = True
+            widget.cellChanged.connect(self.handle_cell_edit)
 
         widget.clear()
-        items = MatUtils.get_file_nodes(return_type="path|node", raw=True)
-        if not items:
-            items = [("No file nodes found", None)]
-        widget.add(items)
+        rows = MatUtils.get_file_nodes(
+            return_type="shaderName|path|fileNodeName|fileNode", raw=True
+        )
+        if not rows:
+            rows = [("No file nodes found", "", "", None)]
 
-    def lbl000(self, widget):
-        """Edit in Place"""
-        self.ui.cmb000.setEditable(True)
-        self.ui.cmb000.menu.hide()
+        formatted = [
+            [shader_name, path, (file_node_name, file_node)]
+            for shader_name, path, file_node_name, file_node in rows
+        ]
 
-    def lbl001(self, widget):
-        """Open in Editor (Hypershade)"""
-        node = self.ui.cmb000.currentData()
-        if not node or not pm.objExists(node):
-            pm.warning("No node selected.")
-            return
+        widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
+        widget.fit_to_path_column(1)
+        self.setup_formatting(widget)
+        widget.apply_formatting()
 
-        # Select the node (file or material)
-        pm.select(node, r=True)
-        pm.mel.HypershadeWindow()
+    def setup_formatting(self, widget):
+        """Attach formatters for the texture path table."""
+        import os
 
-        def graph_selected():
-            pm.mel.hyperShadePanelGraphCommand("hyperShadePanel1", "graphMaterials")
-            pm.mel.hyperShadePanelGraphCommand("hyperShadePanel1", "addSelected")
+        def format_if_invalid(item, value, *_):
+            exists = bool(value) and os.path.exists(str(value))
+            fg_color = widget.to_qobject(
+                widget.ACTION_COLOR_MAP["valid_fg" if exists else "invalid_fg"],
+                "QColor",
+            )
+            item.setForeground(fg_color)
 
-        pm.evalDeferred(graph_selected)
+        widget.set_column_formatter(1, format_if_invalid)
+
+    def handle_cell_edit(self, row: int, col: int):
+
+        tbl = self.ui.tbl000
+        value = tbl.item(row, col).text()
+
+        if col == 0:  # Shader rename
+            shader_name = tbl.item(row, 0).text()
+            if shader_name and pm.objExists(shader_name):
+                pm.rename(shader_name, value)
+
+        elif col == 1:  # File path update
+            file_node = tbl.item_data(row, 2)
+            if file_node and hasattr(file_node, "fileTextureName"):
+                file_node.fileTextureName.set(value)
+
+        elif col == 2:  # File node rename
+            file_node = tbl.item_data(row, 2)
+            if file_node and pm.objExists(file_node):
+                pm.rename(file_node, value)
 
 
 # --------------------------------------------------------------------------------------------

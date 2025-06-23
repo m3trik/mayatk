@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>200</width>
-    <height>228</height>
+    <width>800</width>
+    <height>400</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -25,15 +25,15 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>200</width>
-     <height>0</height>
+     <width>800</width>
+     <height>400</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
      <layout class="QVBoxLayout" name="main_layout">
       <property name="spacing">
-       <number>6</number>
+       <number>1</number>
       </property>
       <property name="sizeConstraint">
        <enum>QLayout::SetFixedSize</enum>
@@ -48,7 +48,7 @@
         </property>
         <property name="maximumSize">
          <size>
-          <width>999</width>
+          <width>9999</width>
           <height>22</height>
          </size>
         </property>
@@ -64,209 +64,13 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="Formatting_2">
-        <property name="title">
-         <string>Set Paths</string>
+       <widget class="TableWidget" name="tbl000">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>350</height>
+         </size>
         </property>
-        <layout class="QVBoxLayout" name="verticalLayout_5">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QPushButton" name="b001">
-           <property name="enabled">
-            <bool>true</bool>
-           </property>
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Set the texture file paths for selected objects.
-The path will be relative if it is within the project's source images directory.</string>
-           </property>
-           <property name="text">
-            <string>Set Texture Dir</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="b002">
-           <property name="enabled">
-            <bool>true</bool>
-           </property>
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Find texture files for selected objects by searching recursively from the given source directory.
-Any textures found will be moved to the destination directory.
-
-Note: This will not work with Arnold texture nodes.</string>
-           </property>
-           <property name="text">
-            <string>Find Textures</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="b003">
-           <property name="enabled">
-            <bool>true</bool>
-           </property>
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Migrate file textures for selected objects to a new directory.
-First, select the objects with the textures you want to migrate and the directory to migrate from.
-Then, select the directory you want to migrate the textures to.</string>
-           </property>
-           <property name="text">
-            <string>Migrate Textures</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item>
-       <widget class="QGroupBox" name="Formatting">
-        <property name="title">
-         <string>Format Paths</string>
-        </property>
-        <layout class="QVBoxLayout" name="verticalLayout_4">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QPushButton" name="b000">
-           <property name="enabled">
-            <bool>true</bool>
-           </property>
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Convert all texture paths to relative paths.</string>
-           </property>
-           <property name="text">
-            <string>Convert to Reletive Paths</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item>
-       <widget class="QGroupBox" name="Formatting_3">
-        <property name="title">
-         <string>View Paths</string>
-        </property>
-        <layout class="QVBoxLayout" name="verticalLayout_6">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the map &lt;span style=&quot; font-weight:600;&quot;&gt;output file format&lt;/span&gt;.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="maxVisibleItems">
-            <number>30</number>
-           </property>
-           <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContentsOnFirstShow</enum>
-           </property>
-           <property name="frame">
-            <bool>false</bool>
-           </property>
-          </widget>
-         </item>
-        </layout>
        </widget>
       </item>
       <item>
@@ -294,9 +98,9 @@ Then, select the directory you want to migrate the textures to.</string>
    <header>uitk.widgets.header.Header.h</header>
   </customwidget>
   <customwidget>
-   <class>ComboBox</class>
-   <extends>QComboBox</extends>
-   <header>uitk.widgets.comboBox.ComboBox.h</header>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.tableWidget.TableWidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

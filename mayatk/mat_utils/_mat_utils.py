@@ -60,97 +60,117 @@ class MatUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_scene_mats(
-        inc: Union[str, int, list] = [],
-        exc: Union[str, int, list] = [],
+        inc=None,
+        exc=None,
+        node_type=None,
         sort: bool = False,
         as_dict: bool = False,
-    ) -> Union[List[str], Dict[str, str]]:
-        """Retrieves all materials from the current scene, optionally including or excluding certain materials by name.
+        **filter_kwargs,
+    ):
+        """
+        Retrieves all materials from the current scene, with flexible name/type filtering.
 
         Parameters:
-            inc (str/int/obj/list, optional): The objects to include in the search. Supports using the '*' operator for pattern matching. Defaults to [].
-            exc (str/int/obj/list, optional): The objects to exclude from the search. Supports using the '*' operator for pattern matching. Defaults to [].
-            sort (bool, optional): Whether to return the materials in alphabetical order. Defaults to False.
-            as_dict (bool, optional): Whether to return the materials as a dictionary. Defaults to False.
+            inc, exc: Inclusion/exclusion patterns (applies to names).
+            node_type (str/list/callable, optional): Material node type(s) to restrict results, e.g. "StingrayPBS".
+            sort (bool): Sort result by material name.
+            as_dict (bool): Return as dict {name: node}.
+            **filter_kwargs: Additional keyword args passed to ptk.filter_dict (e.g. map_func, ignore_case).
 
         Returns:
-            list or dict: A list or dictionary of materials in the scene.
+            list or dict: Filtered materials.
         """
-        matList = pm.ls(mat=True, flatten=True)
-        d = {m.name(): m for m in matList}
-        filtered = ptk.filter_dict(d, keys=True, map_func=pm.nodeType, inc=inc, exc=exc)
+        mat_list = pm.ls(mat=True, flatten=True)
+        d = {m.name(): m for m in mat_list}
+        filtered = ptk.filter_dict(d, keys=True, inc=inc, exc=exc, **filter_kwargs)
+
+        mats = list(filtered.values())
+
+        # Node type filtering (after name filtering)
+        if node_type:
+            # Callable or string/list support via filter_list
+            mats = ptk.filter_list(mats, inc=node_type, map_func=pm.nodeType)
 
         if as_dict:
-            return dict(sorted(filtered.items())) if sort else filtered
+            dct = {m.name(): m for m in mats}
+            return dict(sorted(dct.items())) if sort else dct
 
-        filtered_mats = list(filtered.values())
-        return sorted(filtered_mats, key=lambda x: x.name()) if sort else filtered_mats
+        return sorted(mats, key=lambda x: x.name()) if sort else mats
 
     @staticmethod
+    def get_connected_material(file_node) -> Optional["pm.nt.Shader"]:
+        """Trace from file node to its final assigned surface material."""
+        future = pm.listHistory(file_node, future=True)
+        shading_groups = [n for n in future if n.type() == "shadingEngine"]
+
+        for sg in shading_groups:
+            for slot in ["surfaceShader", "volumeShader", "displacementShader"]:
+                conns = sg.attr(slot).inputs()
+                if conns:
+                    return conns[0]
+        return None
+
+    @classmethod
     def get_file_nodes(
+        cls,
         materials: Optional[List[str]] = None,
         raw: bool = False,
-        return_type: str = "node",
+        return_type: str = "fileNode",
     ) -> list:
-        """Returns file nodes, paths, or (node, path) pairs based on return_type.
-
-        return_type: "node", "path", "node|path", "path|node"
+        """Returns file node info in any column order based on return_type:
+        e.g. 'shader|shaderName|path|fileNode|fileNodeName'
 
         Parameters:
-            materials (Optional[List[str]]): List of material names to filter file nodes.
-            raw (bool): If True, returns all file nodes without filtering by materials.
-            return_type (str): Specifies the format of the returned data. Options are:
-                - "node": Returns a list of file nodes.
-                - "path": Returns a list of file paths.
-                - "node|path": Returns a list of tuples (node, path).
-                - "path|node": Returns a list of tuples (path, node).
-
+            materials (Optional[List[str]]): List of material names to filter file nodes by.
+            raw (bool): If True, returns relative paths instead of absolute paths.
+            return_type (str): Pipe-separated string defining the columns to return.
+                               Options: 'shader', 'shaderName', 'path', 'fileNode', 'fileNodeName'.
         Returns:
-            list: A list of file nodes, paths, or (node, path) pairs based on return_type.
+            list: List of tuples or single values based on return_type.
+                  Each tuple contains the requested columns in the specified order.
         """
-        # Get all file nodes in the scene
         file_nodes = pm.ls(type="file")
 
-        # Optionally filter by materials (if materials are provided)
+        # Filter by materials (optional)
         if materials:
-            file_nodes = [
-                fn
-                for fn in file_nodes
-                if any(material in fn.listConnections() for material in materials)
-            ]
+            mat_objs = pm.ls(materials, materials=True)
+            filtered_nodes = []
+            for fn in file_nodes:
+                connected_mats = [c for c in fn.listConnections() if c in mat_objs]
+                if connected_mats:
+                    filtered_nodes.append(fn)
+            file_nodes = filtered_nodes
 
-        # Prepare the list of tuples (node, path)
+        workspace_dir = pm.workspace(q=True, rd=True)
         file_info = []
+
         for file_node in file_nodes:
-            # Get the file path
             file_path = file_node.fileTextureName.get()
-
-            if raw:
-                # If raw=True, keep the relative path inside the project, absolute outside the project
-                if not file_path.startswith(pm.workspace(q=True, rd=True)):
-                    file_info.append((file_node, file_path))  # absolute path
-                else:
-                    relative_path = os.path.relpath(
-                        file_path, pm.workspace(q=True, rd=True)
-                    )
-                    file_info.append((file_node, relative_path))  # relative path
+            if raw and file_path.startswith(workspace_dir):
+                file_path_out = os.path.relpath(file_path, workspace_dir)
             else:
-                # If raw=False, always use the absolute path
-                file_info.append((file_node, file_path))  # absolute path
+                file_path_out = file_path
 
-        # Process return_type
-        if return_type == "node":
-            return [item[0] for item in file_info]
-        elif return_type == "path":
-            return [item[1] for item in file_info]
-        elif return_type == "node|path":
-            return file_info
-        elif return_type == "path|node":
-            return [(item[1], item[0]) for item in file_info]
-        else:
-            raise ValueError(
-                f"Invalid return_type: {return_type}. Expected 'node', 'path', 'node|path', or 'path|node'."
-            )
+            shader = cls.get_connected_material(file_node)
+
+            columns = return_type.split("|")
+            row = []
+            for col in columns:
+                if col == "shader":
+                    row.append(shader)
+                elif col == "shaderName":
+                    row.append(shader.name() if shader else "")
+                elif col == "path":
+                    row.append(file_path_out)
+                elif col == "fileNode":
+                    row.append(file_node)
+                elif col == "fileNodeName":
+                    row.append(file_node.name())
+                else:
+                    row.append("")
+            file_info.append(tuple(row) if len(row) > 1 else row[0])
+
+        return file_info
 
     @staticmethod
     def get_fav_mats():
