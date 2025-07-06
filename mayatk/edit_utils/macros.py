@@ -905,10 +905,11 @@ class EditMacros:
     @CoreUtils.selected
     def m_group(objects) -> None:
         """Group selected object(s)."""
+        objects = pm.ls(objects, objectsOnly=True)
         if objects:
             grp = pm.group(objects)
             pm.xform(grp, centerPivots=True)
-            pm.rename(grp, objects[0])
+            pm.rename(grp, objects[0].name())
         else:  # If nothing selected, create empty group.
             pm.group(empty=True, name="null")
 

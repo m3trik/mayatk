@@ -98,17 +98,31 @@ class MatUtils(ptk.HelpMixin):
         return sorted(mats, key=lambda x: x.name()) if sort else mats
 
     @staticmethod
-    def get_connected_material(file_node) -> Optional["pm.nt.Shader"]:
-        """Trace from file node to its final assigned surface material."""
-        future = pm.listHistory(file_node, future=True)
-        shading_groups = [n for n in future if n.type() == "shadingEngine"]
+    def get_connected_shaders(
+        file_nodes: Union[str, pm.nt.DependNode, List[Union[str, pm.nt.DependNode]]],
+    ) -> List[pm.nt.ShadingDependNode]:
+        """Return surface shaders connected to one or more file nodes, ignoring intermediates."""
+        file_nodes = pm.ls(file_nodes, flatten=True)
+        visited = set()
+        shaders = set()
 
-        for sg in shading_groups:
-            for slot in ["surfaceShader", "volumeShader", "displacementShader"]:
-                conns = sg.attr(slot).inputs()
-                if conns:
-                    return conns[0]
-        return None
+        def _traverse(node):
+            if node in visited:
+                return
+            visited.add(node)
+
+            if isinstance(node, pm.nt.DependNode):
+                for out in node.outputs():
+                    if not isinstance(out, pm.nt.ShadingDependNode):
+                        continue
+                    for sg in out.outputs(type="shadingEngine"):
+                        shaders.add(out)
+                    _traverse(out)
+
+        for file_node in file_nodes:
+            _traverse(file_node)
+
+        return list(shaders)
 
     @classmethod
     def get_file_nodes(
@@ -151,7 +165,9 @@ class MatUtils(ptk.HelpMixin):
             else:
                 file_path_out = file_path
 
-            shader = cls.get_connected_material(file_node)
+            shaders = cls.get_connected_shaders(file_node)
+            shader = shaders[0] if shaders else None
+            shader_name = shaders[0].name() if shader else ""
 
             columns = return_type.split("|")
             row = []
@@ -159,7 +175,7 @@ class MatUtils(ptk.HelpMixin):
                 if col == "shader":
                     row.append(shader)
                 elif col == "shaderName":
-                    row.append(shader.name() if shader else "")
+                    row.append(shader_name)
                 elif col == "path":
                     row.append(file_path_out)
                 elif col == "fileNode":

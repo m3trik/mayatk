@@ -96,11 +96,17 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         Parameters:
             switchboard (Switchboard): The Switchboard instance to use.
         """
-        self.sb = self.switchboard = switchboard or Switchboard(**kwargs)
+        self.logger.setLevel(log_level)
+
+        self.sb = switchboard or Switchboard(**kwargs)
         # Register the mayatk root directory once
         self.sb.register(ui_location=self.root_dir, slot_location=self.root_dir)
 
-        self.logger.setLevel(log_level)
+    @classmethod
+    def instance(cls, switchboard: Switchboard = None, **kwargs) -> "UiManager":
+        kwargs.setdefault("switchboard", switchboard)
+        kwargs["singleton_key"] = id(switchboard)
+        return super().instance(**kwargs)
 
     @property
     def root_dir(self) -> str:
@@ -108,65 +114,54 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         return os.path.dirname(sys.modules["mayatk"].__file__)
 
     def get(self, name: str, **kwargs) -> "QtWidgets.QMainWindow":
-        """Retrieve or load a UI or Maya menu by name using the internal registry.
-
-        Parameters:
-            name (str): The registered UI name, Maya menu key, or internal UI name.
-            reload (bool): Whether to reload the slot module before resolving.
-            **kwargs: Additional keyword arguments passed to internal loader methods.
-
-        Returns:
-            QtWidgets.QMainWindow: The loaded UI instance.
-        """
-        # Early return if already loaded
+        """Retrieve or load a UI or Maya menu by name using the internal registry."""
+        # print(f"[UiManager.get] Loading UI: {name}")
         if name in self.sb.loaded_ui:
-            return self.sb.get_ui(name)
+            # print(f"[UiManager.get] Returning cached UI: {name}")
+            return self.sb.loaded_ui[name]
 
-        # Maya menu UIs
+        # print(f"[UiManager.get] Loading UI: {name}")
         if name in ui_utils.maya_menu_handler.MayaMenuHandler.MENU_MAPPING:
             return self._load_maya_ui(menu_key=name, **kwargs)
 
-        # Registered UIs
         return self._load_ui(name, **kwargs)
 
     def _load_ui(
         self, name: str, reload: bool = False, **kwargs
     ) -> "QtWidgets.QMainWindow":
-        """Internal method to resolve, register, and load a UI with its slots.
-
-        Parameters:
-            name (str): Registered name for UI.
-            reload (bool): Whether to reload the slot module before resolving.
-            **kwargs: Additional keyword arguments for Switchboard.
-
-        Returns:
-            QtWidgets.QMainWindow: Loaded UI instance.
-        """
+        """Internal method to resolve, register, and load a UI with its slots."""
+        # print(f"[UiManager._load_ui] Loading: {name}")
         if name not in self.UI_REGISTRY:
             raise KeyError(f"UI '{name}' not found in internal registry.")
 
-        # Resolve slot class dynamically
         slot_path = self.UI_REGISTRY[name]["slot"]
         mod_path, class_name = slot_path.rsplit(".", 1)
         full_mod_path = f"mayatk.{mod_path}"
         mod = importlib.import_module(full_mod_path)
         if reload:
+            # print(f"[UiManager._load_ui] Reloading module: {full_mod_path}")
             importlib.reload(mod)
         slot_class = getattr(mod, class_name)
 
-        # Resolve .ui file path dynamically
         ui_rel_path = self.UI_REGISTRY[name]["ui"]
         ui_path = os.path.join(self.root_dir, ui_rel_path)
         ui_name = ptk.format_path(ui_path, "name")
 
+        # print(f"[UiManager._load_ui] Resolved ui_name: {ui_name}")
+
         try:
+            # print(
+            #     f"[UiManager._load_ui] Attempting to get UI via Switchboard: {ui_name}"
+            # )
             return self.sb.get_ui(ui_name)
-        except AttributeError:  # Not registered yet, register now.
+        except AttributeError:
+            # print(f"[UiManager._load_ui] UI not found in loaded_ui, registering...")
             self.sb.register(ui_path, slot_class, base_dir=slot_class, validate=2)
             ui = self.sb.get_ui(ui_name)
+            # print(f"[UiManager._load_ui] UI created and registered: {ui_name}")
             ui.set_attributes(WA_TranslucentBackground=True)
             ui.set_flags(FramelessWindowHint=True)
-            ui.set_style(theme="dark", style_class="translucentBgWithBorder")
+            ui.style.set(theme="dark", style_class="translucentBgWithBorder")
             ui.header.config_buttons(menu_button=True, hide_button=True)
             return ui
 
@@ -210,7 +205,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.header = self.sb.registered_widgets.Header()
             ui.header.setTitle(ui.objectName().upper())
             ui.header.attach_to(ui.centralWidget())
-            ui.set_style(ui.header, "dark", "Header")
+            ui.style.set(ui.header, "dark", "Header")
 
         ui.set_attributes(WA_TranslucentBackground=True)
         ui.set_flags(FramelessWindowHint=True)

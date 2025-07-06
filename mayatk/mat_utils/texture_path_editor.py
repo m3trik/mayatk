@@ -56,6 +56,9 @@ class TexturePathEditorSlots:
         materials = MatUtils.get_mats()
         MatUtils.remap_texture_paths(materials, new_dir=texture_dir)
 
+        # Refresh the table widget to show updated paths
+        self.ui.tbl000.init_slot()
+
     def lbl011(self):
         """Find and Move Textures"""
         start_dir = EnvUtils.get_env_info("sourceimages")
@@ -85,6 +88,9 @@ class TexturePathEditorSlots:
             found_files=found_textures, new_dir=dest_dir, delete_old=False
         )
 
+        # Refresh the table widget to show updated paths
+        self.ui.tbl000.init_slot()
+
     def lbl012(self):
         """Migrate Textures"""
         old_dir = self.sb.dir_dialog(
@@ -108,12 +114,17 @@ class TexturePathEditorSlots:
 
         MatUtils.migrate_textures(materials=materials, old_dir=old_dir, new_dir=new_dir)
 
+        # Refresh the table widget to show updated paths
+        self.ui.tbl000.init_slot()
+
     def lbl013(self):
         """Convert to Relative Paths"""
         MatUtils.remap_texture_paths()
 
+        # Refresh the table widget to show updated paths
+        self.ui.tbl000.init_slot()
+
     def tbl000_init(self, widget):
-        print("Initializing Texture Path Editor Table", widget.is_initialized)
         if not widget.is_initialized:
             widget.refresh_on_show = True
             widget.cellChanged.connect(self.handle_cell_edit)
@@ -123,7 +134,7 @@ class TexturePathEditorSlots:
             return_type="shaderName|path|fileNodeName|fileNode", raw=True
         )
         if not rows:
-            rows = [("No file nodes found", "", "", None)]
+            rows = [("", "", "No file nodes found", None)]
 
         formatted = [
             [shader_name, path, (file_node_name, file_node)]
@@ -131,43 +142,42 @@ class TexturePathEditorSlots:
         ]
 
         widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
-        widget.fit_to_path_column(1)
+        widget.stretch_column_to_fill(1)  # Move after add()
         self.setup_formatting(widget)
         widget.apply_formatting()
 
     def setup_formatting(self, widget):
-        """Attach formatters for the texture path table."""
-        import os
+        source_root = EnvUtils.get_env_info("workspace")
 
-        def format_if_invalid(item, value, *_):
-            exists = bool(value) and os.path.exists(str(value))
-            fg_color = widget.to_qobject(
-                widget.ACTION_COLOR_MAP["valid_fg" if exists else "invalid_fg"],
-                "QColor",
+        def format_if_invalid(item, value, row, col, *_):
+            path = str(value).strip()
+            abs_path = (
+                os.path.normpath(os.path.join(source_root, path))
+                if not os.path.isabs(path)
+                else os.path.normpath(path)
             )
-            item.setForeground(fg_color)
+            exists = os.path.exists(abs_path)
+            widget.set_action_color(item, "reset" if exists else "invalid", row, col)
+            item.setToolTip("" if exists else f"Missing file:\n{abs_path}")
 
         widget.set_column_formatter(1, format_if_invalid)
 
     def handle_cell_edit(self, row: int, col: int):
-
         tbl = self.ui.tbl000
         value = tbl.item(row, col).text()
 
-        if col == 0:  # Shader rename
-            shader_name = tbl.item(row, 0).text()
-            if shader_name and pm.objExists(shader_name):
-                pm.rename(shader_name, value)
-
-        elif col == 1:  # File path update
+        if col == 1:  # File path update
             file_node = tbl.item_data(row, 2)
             if file_node and hasattr(file_node, "fileTextureName"):
                 file_node.fileTextureName.set(value)
+                tbl.apply_formatting()  # Recheck path formatting after update
 
-        elif col == 2:  # File node rename
-            file_node = tbl.item_data(row, 2)
-            if file_node and pm.objExists(file_node):
-                pm.rename(file_node, value)
+        if col in (0, 2):
+            node_name = tbl.item(row, col).text()
+            if pm.objExists(node_name):
+                pm.select(node_name, r=True)
+                pm.mel.eval("NodeEditorWindow;")
+                pm.mel.eval("nodeEditor -e -f true nodeEditor1;")
 
 
 # --------------------------------------------------------------------------------------------

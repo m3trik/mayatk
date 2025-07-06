@@ -354,7 +354,6 @@ class EditUtils(ptk.HelpMixin):
     ):
         """Mirror geometry across a given axis.
 
-        Parameters:
             objects (obj): The objects to mirror.
             axis (str): The axis to mirror across. Accepts:
                 - 'x', '-x', 'y', '-y', 'z', '-z'
@@ -415,16 +414,19 @@ class EditUtils(ptk.HelpMixin):
                 0 if custom_separate else mergeMode
             )  # Use 0 for built-in separate if custom mode is requested
 
-            # Execute polyMirrorFace
-            mirror_nodes = pm.polyMirrorFace(obj, **kwargs)
-            mirror_node = pm.PyNode(mirror_nodes[0])
+            try:
+                mirror_shape = pm.polyMirrorFace(obj, **kwargs)[0]
+                mirror_node = mirror_shape.getParent()
+            except Exception as e:
+                pm.warning(f"Mirror operation failed for {obj}: {e}")
+                continue
 
-            # Custom separate logic
-            if custom_separate:
+            if custom_separate:  # Custom separate logic
                 try:
-                    orig_obj, new_obj, sep_node = pm.ls(
-                        pm.polySeparate(obj, uss=True, inp=True)
-                    )
+                    sep_nodes = pm.polySeparate(mirror_node, uss=True, inp=True)
+                    if len(sep_nodes) >= 2:
+                        orig_obj, new_obj = sep_nodes[:2]
+                        sep_node = sep_nodes[-1]
                     pm.connectAttr(
                         mirror_node.firstNewFace, sep_node.startFace, force=True
                     )
@@ -439,7 +441,6 @@ class EditUtils(ptk.HelpMixin):
                     pm.warning(f"Mirror separation failed: {e}")
 
             results.append(mirror_node)
-
         return ptk.format_return(results, objects)
 
     @classmethod
@@ -533,12 +534,7 @@ class EditUtils(ptk.HelpMixin):
         """
         from collections import defaultdict
 
-        # Get all transform nodes with geometry shapes
-        scene_objs = [
-            obj
-            for obj in pm.ls(transforms=True)
-            if not NodeUtils.is_group(obj) and obj.getShape() is not None
-        ]
+        scene_objs = NodeUtils.is_mesh(objects, filter=True)
 
         # Fingerprint by bounding box min/max (rounded) and topology
         obj_fingerprints = {}

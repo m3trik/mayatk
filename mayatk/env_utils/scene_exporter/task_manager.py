@@ -314,7 +314,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no objects below the floor
 
-    def check_overlapping_duplicates(self) -> tuple:
+    def check_overlapping_duplicate_mesh(self) -> tuple:
         """Check if there are any duplicate overlapping geometry objects in the current selection.
 
         Parameters:
@@ -510,7 +510,7 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Check for referenced objects.",
                 "setChecked": True,
             },
-            "check_overlapping_duplicates": {
+            "check_overlapping_duplicate_mesh": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Overlapping Duplicates",
                 "setToolTip": "Check for overlapping duplicate geometry.",

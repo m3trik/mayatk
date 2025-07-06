@@ -117,7 +117,6 @@ class SceneExporter(ptk.LoggingMixin):
         if tasks:
             tasks_successful = self.task_manager.run_tasks(tasks)
             if not tasks_successful:  # If any tasks failed, return them
-                self.logger.error("Aborting export due to task or check failure.")
                 return False
 
         # Select objects to export

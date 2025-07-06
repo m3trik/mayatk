@@ -3,12 +3,17 @@
 import os
 import re
 import glob
+from functools import partial, wraps
+from typing import Optional
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+
+# From this package:
+from mayatk.env_utils import EnvUtils
 
 
 class AssemblyManager:
@@ -140,13 +145,6 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         return pm.system.listReferences()
 
     @property
-    def workspace_files(self):
-        """Get workspace files, utilizing a cache to improve performance."""
-        if not hasattr(self, "_workspace_files") or self._workspace_files is None:
-            self._workspace_files = self.get_workspace_files(self.current_working_dir)
-        return self._workspace_files
-
-    @property
     def recursive_search(self):
         if not hasattr(self, "_recursive_search"):
             self._recursive_search = True  # Default value
@@ -157,37 +155,46 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         self._recursive_search = value
         self.invalidate_workspace_files()  # Invalidate cache when recursive_search changes
 
-    def invalidate_workspace_files(self):
-        """Invalidate the workspace files cache."""
-        self._workspace_files = None
+    @property
+    def workspace_files(self) -> dict[str, list[str]]:
+        """Return the cached workspace file dictionary, rebuilding if needed."""
+        if not hasattr(self, "_workspace_files") or self._workspace_files is None:
+            self.invalidate_workspace_files()
+        return self._workspace_files
 
-    def resolve_file_path(self, selected_file):
-        """Resolve file path without requiring search_root as argument."""
-        return next((fp for fp in self.workspace_files if selected_file in fp), None)
+    def invalidate_workspace_files(self):
+        """Rebuild workspace file cache as {workspace_path: [maya files]}."""
+        self._workspace_files = {}
+
+        workspaces = EnvUtils.find_workspaces(
+            self.current_working_dir,
+            return_type="dirname|dir",
+            ignore_empty=True,
+        )
+
+        for _, ws_path in workspaces:
+            if os.path.isdir(ws_path):
+                self._workspace_files[ws_path] = EnvUtils.get_workspace_scenes(
+                    root_dir=ws_path,
+                    full_path=True,
+                    recursive=self.recursive_search,
+                    omit_autosave=True,
+                )
+
+    def resolve_file_path(self, selected_file: str) -> Optional[str]:
+        return next(
+            (
+                fp
+                for files in self.workspace_files.values()
+                for fp in files
+                if os.path.basename(fp) == selected_file
+            ),
+            None,
+        )
 
     def _matches_prefilter_regex(self, filename):
         """Check if a file is an auto-save file based on its name."""
         return bool(self.prefilter_regex.match(filename))
-
-    def get_workspace_files(self, omit_autosave=True) -> list[str]:
-        # Use self.recursive_search to determine whether to search recursively
-        workspace_files = glob.glob(
-            os.path.join(self.current_working_dir, "**", "*.ma"),
-            recursive=self.recursive_search,
-        ) + glob.glob(
-            os.path.join(self.current_working_dir, "**", "*.mb"),
-            recursive=self.recursive_search,
-        )
-
-        # Filter out auto-save files if omit_autosave is True
-        if omit_autosave:
-            workspace_files = [
-                fp
-                for fp in workspace_files
-                if not self._matches_prefilter_regex(os.path.basename(fp))
-            ]
-
-        return workspace_files
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
@@ -253,15 +260,9 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
             return False
 
     def import_references(self, namespaces=None, remove_namespace=False):
-        """Imports the referenced objects into the scene.
-
-        Parameters:
-            namespaces (str, list of str, or None): A list of namespaces to import. If not provided, all references will be imported.
-            remove_namespace (bool): Whether to remove the namespace when importing the references. Default is False.
-        """
+        """Import referenced objects into the scene."""
         all_references = self.current_references
 
-        # If namespaces are provided, filter the references
         if namespaces is not None:
             all_references = [
                 ref
@@ -269,8 +270,14 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
                 if ref.namespace in ptk.make_iterable(namespaces)
             ]
 
-        for ref in all_references:
-            ref.importContents(removeNamespace=remove_namespace)
+        with pm.UndoChunk():
+            for ref in all_references:
+                try:
+                    ref.importContents(removeNamespace=remove_namespace)
+                except RuntimeError as e:
+                    self.logger.warning(
+                        f"Failed to import reference '{ref.namespace}': {e}"
+                    )
 
     def update_references(self):
         """Update all references to reflect the latest changes from the original files."""
@@ -301,149 +308,47 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
                     ref.remove()
 
 
-class ReferenceManagerSlots(ReferenceManager):
-    def __init__(self, **kwargs):
+class ReferenceManagerController(ReferenceManager):
+    def __init__(self, slot):
         super().__init__()
-        self.sb = kwargs.get("switchboard")
-        self.ui = self.sb.loaded_ui.reference_manager
+        self.slot = slot
+        self.sb = slot.sb
+        self.ui = slot.ui
 
-        # Initialize and connect UI components
-        self.ui.txt000.setText(self.current_working_dir)
-        self.ui.txt000.textEdited.connect(
-            lambda: self.sb.defer_with_timer(self.update_current_dir)
-        )
-        self.ui.txt001.textEdited.connect(
-            lambda: self.sb.defer_with_timer(self.refresh_file_list)
-        )
-        self.ui.list000.itemSelectionChanged.connect(self.handle_item_selection)
-        self.ui.list000.setSelectionMode(
-            self.sb.QtWidgets.QAbstractItemView.MultiSelection
-        )
-        self.ui.b002.clicked.connect(self.unreference_all)
-        self.ui.b003.clicked.connect(self.unlink_all)
-        self.ui.b005.clicked.connect(self.convert_to_assembly)
-        self.ui.b004.clicked.connect(lambda: self.refresh_file_list(invalidate=True))
+        self._last_dir_valid = None
 
-        # Connect scene change event to refresh_file_list method
-        self.script_job = pm.scriptJob(event=["SceneOpened", self.refresh_file_list])
+    @property
+    def current_working_dir(self):
+        if not hasattr(self, "_current_working_dir"):
+            self._current_working_dir = self.current_workspace
+        return self._current_working_dir
 
-    def __del__(self):
-        """Ensure the scriptJob is killed when the instance is deleted."""
-        if pm.scriptJob(exists=self.script_job):
-            pm.scriptJob(kill=self.script_job, force=True)
-
-    def txt000_init(self, widget):
-        """ """
-        widget.menu.mode = "context"
-        widget.menu.add(
-            "QPushButton",
-            setText="Browse",
-            setObjectName="b000",
-            setToolTip="Open a file browser to select a root directory.",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="Set To Workspace",
-            setObjectName="b001",
-            setToolTip="Set the root folder to that of the current workspace.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Recursive Search",
-            setObjectName="chk000",
-            setChecked=True,
-            setToolTip="Also search sub-folders.",
-        )
-
-        # Connect buttons and checkbox to their respective methods
-        widget.menu.b000.clicked.connect(self.browse_for_root_directory)
-        widget.menu.b001.clicked.connect(self.set_dir_to_workspace)
-        widget.menu.chk000.toggled.connect(self.handle_recursive_search_toggle)
-
-        # Initialize list
-        self.update_current_dir_tooltip()
-        self.refresh_file_list()
-
-    def handle_recursive_search_toggle(self, checked):
-        self.recursive_search = checked
-        self.refresh_file_list(invalidate=True)  # Invalidate and refresh the file list
-
-    def update_current_dir(self, text=None, invalidate_and_refresh=False):
-        """Update the current working directory.
-
-        Parameters:
-            text (str, optional): The directory path. If None, the text from ui.txt000 is used.
-            invalidate_and_refresh (bool, optional): Whether to invalidate and refresh the file list.
-        """
-        new_dir = text or self.ui.txt000.text()
-        if os.path.isdir(new_dir):
-            self.current_working_dir = new_dir
-            self.update_current_dir_tooltip()
-            if invalidate_and_refresh:
-                self.refresh_file_list(invalidate=True)
-
-    def update_current_dir_tooltip(self):
-        """Update the tooltip of txt000 based on its current text."""
-        new_dir = self.ui.txt000.text()
-        self.ui.txt000.setToolTip(new_dir)
-
-    def browse_for_root_directory(self):
-        selected_directory = self.sb.dir_dialog("Select a root directory")
-        if selected_directory:
-            self.ui.txt000.setText(selected_directory)
-            self.update_current_dir(invalidate_and_refresh=True)
-
-    def set_dir_to_workspace(self):
-        self.ui.txt000.setText(self.current_workspace)
-        self.update_current_dir(invalidate_and_refresh=True)
-
-    def refresh_file_list(self, invalidate=False) -> None:
-        """Refresh the file list based on the current filter text and workspace root."""
-        if invalidate:
+    @current_working_dir.setter
+    def current_working_dir(self, value):
+        if os.path.isdir(value):
+            self._current_working_dir = value
             self.invalidate_workspace_files()
+            self.refresh_file_list()
 
-        # Filter workspace files
-        filter_text = self.ui.txt001.text().strip()
+    def block_table_selection_method(method):
+        @wraps(method)
+        def wrapper(self, *args, **kwargs):
+            t = self.ui.tbl000
+            t.blockSignals(True)
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                t.blockSignals(False)
 
-        file_list = self.workspace_files
-        if filter_text:
-            file_list = ptk.filter_list(file_list, inc=filter_text, basename_only=True)
-        file_list = [os.path.basename(fp) for fp in file_list]
-
-        # Block signals to prevent unintended UI updates
-        self.ui.list000.blockSignals(True)
-        self.ui.list000.clear()
-
-        current_references = self.current_references
-
-        # Populate list and set selection states
-        items_to_select = []
-        for file in file_list:
-            item = self.sb.QtWidgets.QListWidgetItem(file)
-            full_path = self.resolve_file_path(file)
-            item.setData(self.sb.QtCore.Qt.UserRole, full_path)
-
-            if any(
-                os.path.normpath(ref.path) == os.path.normpath(full_path)
-                for ref in current_references
-            ):
-                items_to_select.append(item)
-
-            self.ui.list000.addItem(item)
-
-        for item in items_to_select:
-            item.setSelected(True)
-
-        self.update_references()  # Update references to reflect the latest changes
-
-        # Unblock signals after updating the list
-        self.ui.list000.blockSignals(False)
+        return wrapper
 
     def handle_item_selection(self):
-        """Handle the logic for item selection changes."""
-
-        # Fetch selected items and associated data
-        selected_items = self.ui.list000.selectedItems()
+        t = self.ui.tbl000
+        selected_items = [
+            t.item(idx.row(), 0)
+            for idx in t.selectedIndexes()
+            if idx.column() == 0 and t.item(idx.row(), 0)
+        ]
         selected_data = {
             (item.text(), item.data(self.sb.QtCore.Qt.UserRole))
             for item in selected_items
@@ -462,50 +367,258 @@ class ReferenceManagerSlots(ReferenceManager):
             file_path = next(fp for ns, fp in selected_data if ns == namespace)
             success = self.add_reference(namespace, file_path)
             if not success:
-                # Uncheck the item if the reference could not be added
                 for item in selected_items:
                     if item.text() == namespace:
                         item.setSelected(False)
                         break
 
+    @block_table_selection_method
+    def sync_selection_to_references(self):
+        t = self.ui.tbl000
+        t.blockSignals(True)
+        try:
+            t.clearSelection()
+            current_namespaces = {ref.namespace for ref in self.current_references}
+            for row in range(t.rowCount()):
+                item = t.item(row, 0)
+                if item and item.text() in current_namespaces:
+                    item.setSelected(True)
+        finally:
+            t.blockSignals(False)
+
+    def update_current_dir(self, text: Optional[str] = None):
+        text = text or self.ui.txt000.text()
+        new_dir = os.path.normpath(text.strip())
+
+        is_valid = os.path.isdir(new_dir)
+        changed = new_dir != self.current_working_dir
+
+        self.ui.txt000.setToolTip(new_dir if is_valid else "Invalid directory")
+        self.ui.txt000.set_action_color("reset" if is_valid else "invalid")
+
+        revalidate = is_valid and (changed or self._last_dir_valid is False)
+        self._last_dir_valid = is_valid
+
+        if revalidate:
+            self.current_working_dir = new_dir
+            self.ui.cmb000.init_slot()
+            self.refresh_file_list(invalidate=True)
+        elif not is_valid:
+            self.ui.cmb000.clear()
+            self.current_working_dir = new_dir
+
+    @block_table_selection_method
+    def refresh_file_list(self, invalidate=False):
+        """Refresh the file list for the table widget."""
+        if invalidate:
+            self.invalidate_workspace_files()
+
+        index = self.ui.cmb000.currentIndex()
+        workspace_path = self.ui.cmb000.itemData(index)
+
+        if not workspace_path or not os.path.isdir(workspace_path):
+            self.slot.logger.warning(
+                f"[refresh_file_list] Invalid workspace: {workspace_path}"
+            )
+            return
+
+        file_list = self.workspace_files.get(workspace_path, [])
+
+        filter_text = self.ui.txt001.text().strip()
+        if filter_text:
+            file_list = ptk.filter_list(file_list, inc=filter_text, basename_only=True)
+
+        file_names = [os.path.basename(f) for f in file_list]
+        self.update_table(file_names, file_list)
+
+    @block_table_selection_method
+    def update_table(self, file_names, file_list):
+        t = self.ui.tbl000
+        existing = {
+            t.item(row, 0).text(): row for row in range(t.rowCount()) if t.item(row, 0)
+        }
+
+        to_remove = [row for name, row in existing.items() if name not in file_names]
+        for row in reversed(sorted(to_remove)):
+            if t.cellWidget(row, 1):
+                t.removeCellWidget(row, 1)
+            t.removeRow(row)
+
+        for idx, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
+            row = existing.get(scene_name)
+            if row is None:
+                row = t.rowCount()
+                t.insertRow(row)
+
+            item = t.item(row, 0)
+            if not item:
+                item = self.sb.QtWidgets.QTableWidgetItem(scene_name)
+                item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
+                item.setData(self.sb.QtCore.Qt.UserRole, file_path)
+                t.setItem(row, 0, item)
+            else:
+                if item.text() != scene_name:
+                    item.setText(scene_name)
+                item.setData(self.sb.QtCore.Qt.UserRole, file_path)
+
+            if not t.cellWidget(row, 1):
+                btn_open = self.sb.QtWidgets.QPushButton("Open")
+                btn_open.clicked.connect(partial(self.open_scene, file_path))
+                t.setCellWidget(row, 1, btn_open)
+
+        self.sync_selection_to_references()
+        t.apply_formatting()
+        t.stretch_column_to_fill(0)
+
+    def open_scene(self, file_path: str):
+        if os.path.exists(file_path):
+            pm.openFile(file_path, force=True)
+        else:
+            self.slot.logger.error(f"Scene file not found: {file_path}")
+            self.sb.message_box(f"Scene file not found:<br>{file_path}")
+
+    @block_table_selection_method
     def unreference_all(self):
-        """Slot to handle the unreference all button click."""
         self.remove_references()
-        # Update the filtered list to reflect the changes
         self.refresh_file_list()
 
+    @block_table_selection_method
     def unlink_all(self):
-        """Slot to handle the unlink all button click."""
-        # Display a warning message box to the user
-        user_choice = self.sb.message_box(
-            "<b>Warning:</b> The unlink operation is not undoable.<br>Do you want to proceed?",
-            "Yes",
-            "No",
-        )
-        # Proceed with the operation only if the user confirms
-        if user_choice == "Yes":
-            # Import references, effectively unlinking them
-            self.import_references(remove_namespace=True)
-            # Update the filtered list to reflect the changes
-            self.refresh_file_list()
-        else:
-            # Optionally, display a message indicating the operation was canceled
+        if (
+            self.sb.message_box(
+                "<b>Warning:</b> The unlink operation is not undoable.<br>Do you want to proceed?",
+                "Yes",
+                "No",
+            )
+            != "Yes"
+        ):
             self.sb.message_box("<b>Unlink operation cancelled.</b>")
+            return
+
+        self.import_references(remove_namespace=True)
+        self.refresh_file_list()
 
     def convert_to_assembly(self):
-        """Slot to handle the unlink all button click."""
-        # Display a warning message box to the user
         user_choice = self.sb.message_box(
             "<b>Warning:</b> The convert to assembly operation is not undoable.<br>Do you want to proceed?",
             "Yes",
             "No",
         )
-        # Proceed with the operation only if the user confirms
         if user_choice == "Yes":
             AssemblyManager.convert_references_to_assemblies()
         else:
-            # Optionally, display a message indicating the operation was canceled
             self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
+
+
+class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.sb = kwargs.get("switchboard")
+        self.ui = self.sb.loaded_ui.reference_manager
+
+        self.controller = ReferenceManagerController(self)
+        self.ui.txt000.setText(self.controller.current_working_dir)
+
+        self.ui.b002.clicked.connect(self.controller.unreference_all)
+        print("Unreference button connected.", self)
+        self.ui.b003.clicked.connect(self.controller.unlink_all)
+        self.ui.b005.clicked.connect(self.controller.convert_to_assembly)
+        self.ui.b004.clicked.connect(
+            lambda: self.controller.refresh_file_list(invalidate=True)
+        )
+
+        self.script_job = pm.scriptJob(
+            event=["SceneOpened", self.controller.refresh_file_list]
+        )
+
+    def __del__(self):
+        if hasattr(self, "script_job") and pm.scriptJob(exists=self.script_job):
+            pm.scriptJob(kill=self.script_job, force=True)
+
+    def tbl000_init(self, widget):
+        if not widget.is_initialized:
+            widget.setColumnCount(2)
+            widget.setHorizontalHeaderLabels(["Files", "Open"])
+            widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.DoubleClicked)
+            widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
+            widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
+            widget.verticalHeader().setVisible(False)
+            widget.setAlternatingRowColors(True)
+            widget.setWordWrap(False)
+            widget.itemSelectionChanged.connect(self.controller.handle_item_selection)
+
+    def txt000_init(self, widget):
+        """Initialize the text input for the current working directory."""
+        if not widget.is_initialized:
+            widget.menu.add(
+                "QPushButton",
+                setText="Browse",
+                setObjectName="b000",
+                setToolTip="Open a file browser to select a root directory.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Set To Workspace",
+                setObjectName="b001",
+                setToolTip="Set the root folder to that of the current workspace.",
+            )
+            widget.menu.add(
+                "QCheckBox",
+                setText="Recursive Search",
+                setObjectName="chk000",
+                setChecked=True,
+                setToolTip="Also search sub-folders.",
+            )
+            widget.textChanged.connect(
+                lambda text: self.sb.defer_with_timer(
+                    lambda: self.controller.update_current_dir(text), ms=500
+                )
+            )
+
+        self.controller.update_current_dir()
+
+    def cmb000_init(self, widget):
+        root_dir = self.ui.txt000.text()
+        workspaces = EnvUtils.find_workspaces(
+            root_dir, return_type="dirname|dir", ignore_empty=True
+        )
+
+        widget.clear()
+        widget.add(workspaces)
+
+        if workspaces:
+            widget.setCurrentIndex(0)
+
+    def cmb000(self, index, widget):
+        """Handle workspace selection changes."""
+        path = widget.itemData(index)
+        if path and os.path.isdir(path):
+            self.controller.current_working_dir = path
+
+    def chk000(self, checked):
+        """Handle the recursive search toggle."""
+        self.controller.recursive_search = checked
+
+    def txt001(self, text):
+        """Handle the filter text input."""
+        self.controller._filter_text = text.strip()
+        self.controller.refresh_file_list(invalidate=True)
+
+    def b000(self):
+        """Browse for a root directory."""
+        start_dir = self.ui.txt000.text()
+        if not os.path.isdir(start_dir):
+            start_dir = self.controller.current_workspace
+
+        selected_directory = self.sb.dir_dialog(
+            "Select a root directory", start_dir=start_dir
+        )
+        if selected_directory:
+            self.ui.txt000.setText(selected_directory)
+
+    def b001(self):
+        """Set dir to current workspace."""
+        self.ui.txt000.setText(self.controller.current_workspace)
 
 
 # -----------------------------------------------------------------------------

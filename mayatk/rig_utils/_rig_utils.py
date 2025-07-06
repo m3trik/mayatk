@@ -199,6 +199,7 @@ class RigUtils(ptk.HelpMixin):
                     f"but this would result in an empty or invalid name. Using base name instead."
                 )
                 result = base_name
+            return result
 
         for obj in pm.ls(objects, long=True, type="transform", flatten=True):
             orig_name = obj.nodeName()
