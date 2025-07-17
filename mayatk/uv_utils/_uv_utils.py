@@ -17,7 +17,7 @@ from mayatk.node_utils import NodeUtils
 class UvUtils(ptk.HelpMixin):
     @staticmethod
     def calculate_uv_padding(
-        map_size: int, normalize: bool = False, factor: int = 128
+        map_size: int, normalize: bool = False, factor: int = 64
     ) -> float:
         """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
         Optionally return the padding as a normalized value relative to the map size.
@@ -31,10 +31,10 @@ class UvUtils(ptk.HelpMixin):
         float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
 
         Expected Output:
-        - For a 1024 pixel map: 8.0 pixels of padding or 0.0078125 if normalized
-        - For a 2048 pixel map: 16.0 pixels of padding or 0.0078125 if normalized
-        - For a 4096 pixel map: 32.0 pixels of padding or 0.0078125 if normalized
-        - For a 8192 pixel map: 64.0 pixels of padding or 0.0078125 if normalized
+        - For a 1024 pixel map: 4.0 pixels of padding or 0.0078125 if normalized
+        - For a 2048 pixel map: 8.0 pixels of padding or 0.0078125 if normalized
+        - For a 4096 pixel map: 16.0 pixels of padding or 0.0078125 if normalized
+        - For a 8192 pixel map: 32.0 pixels of padding or 0.0078125 if normalized
 
         Example:
             calculate_uv_padding(4096, normalize=True)
