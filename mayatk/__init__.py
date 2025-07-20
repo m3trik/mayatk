@@ -7,7 +7,7 @@ import pkgutil
 
 
 __package__ = "mayatk"
-__version__ = "0.9.28"
+__version__ = "0.9.29"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -137,9 +137,10 @@ included_modules = [
     "_node_utils",
     "_rig_utils",
     "_ui_utils",
+    "_uv_utils",
     "_xform_utils",
 ]
-
+# These modules are not included in the package, but their classes will be exposed at package level.
 included_classes = {
     "components": ["Components"],
     "macros": ["Macros"],

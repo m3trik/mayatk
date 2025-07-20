@@ -5,6 +5,14 @@
   <property name="enabled">
    <bool>true</bool>
   </property>
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>442</height>
+   </rect>
+  </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
   </property>
@@ -17,7 +25,7 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>500</width>
+     <width>800</width>
      <height>400</height>
     </size>
    </property>
@@ -49,7 +57,7 @@
       <item>
        <widget class="QGroupBox" name="File">
         <property name="title">
-         <string>Root</string>
+         <string/>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_3">
          <property name="spacing">
@@ -71,6 +79,36 @@
           <widget class="LineEdit" name="txt000"/>
          </item>
          <item>
+          <widget class="ComboBox" name="cmb000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maxVisibleItems">
+            <number>30</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContentsOnFirstShow</enum>
+           </property>
+           <property name="frame">
+            <bool>false</bool>
+           </property>
+           <item>
+            <property name="text">
+             <string>Workspaces:</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item>
           <widget class="QLineEdit" name="txt001">
            <property name="toolTip">
             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter text to filter the file list.&lt;/p&gt;&lt;p&gt;'text*' matches files starting with 'text', &lt;/p&gt;&lt;p&gt;'*text*' matches files containing 'text', &lt;/p&gt;&lt;p&gt;'*text' matches files ending with 'text', &lt;/p&gt;&lt;p&gt;?text' matches any file with a character followed by 'text'.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -81,30 +119,13 @@
           </widget>
          </item>
          <item>
-          <widget class="CollapsableGroup" name="scenes_group">
-           <property name="title">
-            <string>• • •</string>
+          <widget class="TableWidget" name="tbl000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>300</height>
+            </size>
            </property>
-           <property name="alignment">
-            <set>Qt::AlignCenter</set>
-           </property>
-           <layout class="QVBoxLayout" name="verticalLayout_4">
-            <property name="leftMargin">
-             <number>0</number>
-            </property>
-            <property name="topMargin">
-             <number>0</number>
-            </property>
-            <property name="rightMargin">
-             <number>0</number>
-            </property>
-            <property name="bottomMargin">
-             <number>0</number>
-            </property>
-            <item>
-             <widget class="QListWidget" name="list000"/>
-            </item>
-           </layout>
           </widget>
          </item>
          <item>
@@ -112,7 +133,7 @@
            <property name="spacing">
             <number>0</number>
            </property>
-           <item row="0" column="1">
+           <item row="1" column="4">
             <widget class="QPushButton" name="b002">
              <property name="minimumSize">
               <size>
@@ -134,29 +155,7 @@
              </property>
             </widget>
            </item>
-           <item row="0" column="0">
-            <widget class="QPushButton" name="b004">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>21</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>21</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Refresh the list of references based on the current workspace and filter settings.&lt;/p&gt;&lt;p&gt;Also updates any references in the scene to their latest versions.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-             </property>
-             <property name="text">
-              <string>Refresh</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="0">
+           <item row="1" column="1">
             <widget class="QPushButton" name="b005">
              <property name="minimumSize">
               <size>
@@ -178,7 +177,7 @@
              </property>
             </widget>
            </item>
-           <item row="1" column="1">
+           <item row="1" column="2">
             <widget class="QPushButton" name="b003">
              <property name="minimumSize">
               <size>
@@ -200,10 +199,45 @@
              </property>
             </widget>
            </item>
+           <item row="1" column="3">
+            <widget class="QPushButton" name="b004">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>21</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>21</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Refresh the list of references based on the current workspace and filter settings.&lt;/p&gt;&lt;p&gt;Also updates any references in the scene to their latest versions.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             </property>
+             <property name="text">
+              <string>Refresh</string>
+             </property>
+            </widget>
+           </item>
           </layout>
          </item>
         </layout>
        </widget>
+      </item>
+      <item>
+       <spacer name="verticalSpacer">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>10</height>
+         </size>
+        </property>
+       </spacer>
       </item>
      </layout>
     </item>
@@ -217,15 +251,19 @@
    <header>uitk.widgets.header.Header.h</header>
   </customwidget>
   <customwidget>
-   <class>CollapsableGroup</class>
-   <extends>QGroupBox</extends>
-   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
-   <container>1</container>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.tableWidget.TableWidget.h</header>
   </customwidget>
   <customwidget>
    <class>LineEdit</class>
    <extends>QLineEdit</extends>
    <header>widgets.lineedit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

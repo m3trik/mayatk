@@ -354,7 +354,6 @@ class EditUtils(ptk.HelpMixin):
     ):
         """Mirror geometry across a given axis.
 
-        Parameters:
             objects (obj): The objects to mirror.
             axis (str): The axis to mirror across. Accepts:
                 - 'x', '-x', 'y', '-y', 'z', '-z'
@@ -415,16 +414,19 @@ class EditUtils(ptk.HelpMixin):
                 0 if custom_separate else mergeMode
             )  # Use 0 for built-in separate if custom mode is requested
 
-            # Execute polyMirrorFace
-            mirror_nodes = pm.polyMirrorFace(obj, **kwargs)
-            mirror_node = pm.PyNode(mirror_nodes[0])
+            try:
+                mirror_shape = pm.polyMirrorFace(obj, **kwargs)[0]
+                mirror_node = mirror_shape.getParent()
+            except Exception as e:
+                pm.warning(f"Mirror operation failed for {obj}: {e}")
+                continue
 
-            # Custom separate logic
-            if custom_separate:
+            if custom_separate:  # Custom separate logic
                 try:
-                    orig_obj, new_obj, sep_node = pm.ls(
-                        pm.polySeparate(obj, uss=True, inp=True)
-                    )
+                    sep_nodes = pm.polySeparate(mirror_node, uss=True, inp=True)
+                    if len(sep_nodes) >= 2:
+                        orig_obj, new_obj = sep_nodes[:2]
+                        sep_node = sep_nodes[-1]
                     pm.connectAttr(
                         mirror_node.firstNewFace, sep_node.startFace, force=True
                     )
@@ -439,7 +441,6 @@ class EditUtils(ptk.HelpMixin):
                     pm.warning(f"Mirror separation failed: {e}")
 
             results.append(mirror_node)
-
         return ptk.format_return(results, objects)
 
     @classmethod
@@ -515,64 +516,65 @@ class EditUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_overlapping_duplicates(
-        objects=[], retain_given_objects=False, select=False, verbose=False
-    ):
-        """Find any duplicate overlapping geometry at the object level.
+        objects: Optional[List] = None,
+        retain_given_objects: bool = False,
+        select: bool = False,
+        verbose: bool = False,
+    ) -> set:
+        """Find duplicate, overlapping geometry at the object (transform) level.
 
         Parameters:
-            objects (list): A list of objects to find duplicate overlapping geometry for. Default is selected objects, or all if nothing is selected.
-            retain_given_objects (bool): Search only for duplicates of the given objects (or any selected objects if None given), and omit them from the return results.
-            select (bool): Select any found duplicate objects.
-            verbose (bool): Print each found object to console.
+            objects (list): A list of objects to check for duplicates. If None, checks all transforms in the scene.
+            retain_given_objects (bool): If True, retains the given objects in the result set.
+            select (bool): If True, selects the found duplicates in the scene.
+            verbose (bool): If True, prints detailed information about found duplicates.
 
         Returns:
-            (set)
-
-        Example:
-            duplicates = get_overlapping_duplicates(retain_given_objects=True, select=True, verbose=True)
+            set: Overlapping duplicate transform PyNodes.
         """
-        scene_objs = pm.ls(transforms=1, geometry=1)  # get all scene geometry
+        from collections import defaultdict
 
-        # Attach a unique identifier consisting each objects polyEvaluate attributes, and it's bounding box center point in world space.
-        scene_objs = {
-            i: str(pm.objectCenter(i)) + str(pm.polyEvaluate(i))
-            for i in scene_objs
-            if not NodeUtils.is_group(i)
-        }
-        selected_objs = pm.ls(scene_objs.keys(), sl=1) if not objects else objects
+        scene_objs = NodeUtils.is_mesh(objects, filter=True)
 
-        objs_inverted = {}  # Invert the dict, combining objects with like identifiers.
-        for k, v in scene_objs.items():
-            objs_inverted[v] = objs_inverted.get(v, []) + [k]
+        # Fingerprint by bounding box min/max (rounded) and topology
+        obj_fingerprints = {}
+        for obj in scene_objs:
+            bbox = obj.getBoundingBox(space="world")
+            bbox_min = tuple(round(x, 6) for x in bbox.min())
+            bbox_max = tuple(round(x, 6) for x in bbox.max())
+            topo = str(pm.polyEvaluate(obj))
+            obj_fingerprints[obj] = (bbox_min, bbox_max, topo)
+
+        if objects is None:
+            selected_set = set(pm.ls(obj_fingerprints.keys(), sl=True))
+        else:
+            selected_set = set(pm.ls(objects))
+
+        fingerprint_groups = defaultdict(list)
+        for obj, fingerprint in obj_fingerprints.items():
+            fingerprint_groups[fingerprint].append(obj)
 
         duplicates = set()
-        for k, v in objs_inverted.items():
-            if len(v) > 1:
-                if selected_objs:  # Limit scope to only selected objects.
-                    if set(selected_objs) & set(
-                        v
-                    ):  # If any selected objects in found duplicates:
+        for group in fingerprint_groups.values():
+            if len(group) > 1:
+                if selected_set:
+                    if selected_set & set(group):
                         if retain_given_objects:
-                            [
-                                duplicates.add(i) for i in v if i not in selected_objs
-                            ]  # Add any duplicated of that object, omitting the selected object.
+                            duplicates.update(
+                                obj for obj in group if obj not in selected_set
+                            )
                         else:
-                            [
-                                duplicates.add(i) for i in v[1:]
-                            ]  # Add all but the first object to the set of duplicates.
+                            duplicates.update(group[1:])
                 else:
-                    [
-                        duplicates.add(i) for i in v[1:]
-                    ]  # Add all but the first object to the set of duplicates.
+                    duplicates.update(group[1:])
 
         if verbose:
-            for i in duplicates:
-                print("# Found: overlapping duplicate object: {} #".format(i))
-        print("# {} overlapping duplicate objects found. #".format(len(duplicates)))
-
-        if select:
-            pm.select(duplicates)
-
+            for obj in sorted(duplicates, key=lambda x: x.name()):
+                print(f"# Found: overlapping duplicate object: {obj} #")
+        if verbose or select:
+            print(f"# {len(duplicates)} overlapping duplicate objects found. #")
+        if select and duplicates:
+            pm.select(list(duplicates), r=True)
         return duplicates
 
     @staticmethod
@@ -900,6 +902,83 @@ class EditUtils(ptk.HelpMixin):
         return similar + [obj] if inc_orig else similar
 
     @staticmethod
+    def invert_geometry(
+        objects: Optional[List] = None, select: bool = False
+    ) -> List["pm.nt.Transform"]:
+        """Invert selection to unselected mesh transforms.
+
+        Parameters:
+            objects (list): List of objects to check. If None, uses the current selection.
+            select (bool): If True, selects the inverted objects.
+
+        Returns:
+            list: List of inverted mesh transforms.
+        """
+        if objects is None:
+            objects = pm.ls(selection=True, transforms=True, type="transform")
+        else:
+            objects = pm.ls(objects, transforms=True, type="transform")
+
+        objects = [
+            obj for obj in objects if obj.getShape() and obj.getShape().type() == "mesh"
+        ]
+
+        all_transforms = [
+            obj
+            for obj in pm.ls(transforms=True, type="transform")
+            if obj.getShape() and obj.getShape().type() == "mesh"
+        ]
+
+        inverted = list(set(all_transforms) - set(objects))
+
+        if select:
+            pm.select(inverted, replace=True)
+        return inverted
+
+    @staticmethod
+    def invert_components(
+        objects: Optional[List] = None, select: bool = False
+    ) -> List[Union["pm.MeshVertex", "pm.MeshEdge", "pm.MeshFace"]]:
+        """Invert selection of mesh components (verts, edges, or faces).
+
+        Parameters:
+            objects (list): List of objects to check. If None, uses the current selection.
+            select (bool): If True, selects the inverted components.
+
+        Returns:
+            list: List of inverted mesh components (verts, edges, or faces).
+        """
+        if objects is None:
+            objects = pm.ls(selection=True, flatten=True)
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            return []
+
+        component_type = type(objects[0])
+        selected_strs = {str(obj) for obj in objects}
+
+        full_set = []
+        for obj in pm.ls(selection=True, objectsOnly=True):
+            shape = NodeUtils.get_shape_node(obj)
+            if not shape or shape.type() != "mesh":
+                continue
+
+            if issubclass(component_type, pm.MeshVertex):
+                full_set.extend(shape.verts)
+            elif issubclass(component_type, pm.MeshEdge):
+                full_set.extend(shape.edges)
+            elif issubclass(component_type, pm.MeshFace):
+                full_set.extend(shape.faces)
+
+        inverted = [x for x in full_set if str(x) not in selected_strs]
+
+        if select:
+            pm.select(inverted, replace=True)
+        return inverted
+
+    @staticmethod
     def delete_selected():
         """Delete selected components or objects in Autodesk Maya based on user's selection mode.
 
@@ -992,8 +1071,6 @@ class EditUtils(ptk.HelpMixin):
         if selection:
             if translate:
                 XformUtils.move_to(node, selection)
-                # center_pos = mtk.get_center_point(selection)
-                # pm.xform(node, translation=center_pos, worldSpace=1, absolute=1)
             if scale:
                 XformUtils.match_scale(node[0], selection, average=True)
 

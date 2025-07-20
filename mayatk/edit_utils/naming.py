@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union
+from typing import List, Union, Optional, Dict
 import re
 import string
 
@@ -12,6 +12,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils
+from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils
 
 
@@ -20,7 +21,17 @@ class Naming(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def rename(cls, objects, to, fltr="", regex=False, ignore_case=False):
+    def rename(
+        cls,
+        objects: Union[
+            str, "pm.nodetypes.Transform", List[Union[str, "pm.nodetypes.Transform"]]
+        ],
+        to: str,
+        fltr: str = "",
+        regex: bool = False,
+        ignore_case: bool = False,
+        retain_suffix: bool = False,
+    ) -> None:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
         Parameters:
@@ -40,6 +51,7 @@ class Naming(ptk.HelpMixin):
                     chars|chars - matches any of the specified patterns.
             regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
             ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
+            retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
 
         Returns:
             None: Objects are renamed in the scene directly.
@@ -47,12 +59,9 @@ class Naming(ptk.HelpMixin):
         Example:
             rename('Cube', '*001', regex=True) # Replace suffix on objects containing 'Cube' in their name, e.g., 'polyCube' becomes 'polyCube001'.
             rename('Cube', '**001', regex=True) # Append '001' to names of objects containing 'Cube', e.g., 'polyCube1' becomes 'polyCube1001'.
+            rename('Cube', '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
         """
-        objects = (
-            pm.ls(objectsOnly=True, flatten=True)
-            if not objects
-            else pm.ls(objects, objectsOnly=True, flatten=True)
-        )
+        objects = pm.ls(objects, flatten=True)
         long_names = [obj.name() for obj in objects]
         short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
 
@@ -67,6 +76,16 @@ class Naming(ptk.HelpMixin):
 
         count = 0
         for oldName, newName in names:
+            # Optionally retain suffix from oldName
+            if retain_suffix:
+                # Suffix is defined as everything after the last underscore, including the underscore
+                suffix = ""
+                if "_" in oldName:
+                    suffix = oldName[oldName.rfind("_") :]
+                    # Avoid duplicate suffix
+                    if suffix and not newName.endswith(suffix):
+                        newName += suffix
+
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)
 
@@ -112,22 +131,20 @@ class Naming(ptk.HelpMixin):
             generate_unique_name("Cube") # Returns "Cube_001"
             generate_unique_name("Cube", suffix="-", padding=2) # Returns "Cube-01"
         """
-        # Base case: If the base_name doesn't exist, just return it.
         if not pm.objExists(base_name):
             return base_name
 
-        # Otherwise, append numbers until we get a unique name.
         counter = 1
-        new_name_formatted = f"{base_name}{suffix}{str(counter).zfill(padding)}"
-        new_name_clean = cls.strip_illegal_chars(new_name_formatted)
-        if new_name_formatted != new_name_clean:  # The new name contained illegal chars
-            pm.warning(
-                f"// Warning: Illegal characters found in generated name: {new_name}, replacing with: {new_name_clean}"
-            )
-        while pm.objExists(new_name_clean):
+        while True:
+            new_name = f"{base_name}{suffix}{str(counter).zfill(padding)}"
+            new_name_clean = cls.strip_illegal_chars(new_name)
+            if new_name != new_name_clean:
+                pm.warning(
+                    f"// Warning: Illegal characters found in generated name: {new_name}, replacing with: {new_name_clean}"
+                )
+            if not pm.objExists(new_name_clean):
+                return new_name_clean
             counter += 1
-            new_name = f"{base_name}_{counter}"
-        return new_name
 
     @staticmethod
     def strip_illegal_chars(input_data, replace_with="_"):
@@ -161,15 +178,19 @@ class Naming(ptk.HelpMixin):
         num_chars: int = 1,
         trailing: bool = False,
     ) -> List[str]:
-        """Deletes leading or trailing characters from the names of the provided objects.
+        """Deletes leading or trailing characters from the names of the provided objects,
+        ensuring legality in Maya names.
 
         Parameters:
-            objects (Union[str, pm.PyNode, List[Union[str, pm.PyNode]]]): The input string, PyNode, or list of either.
-            num_chars (int): The number of characters to delete.
-            trailing (bool): Whether to delete characters from the rear of the name.
+            objects (Union[str, pm.PyNode, List[Union[str, pm.PyNode]]]): Input objects.
+            num_chars (int): Number of characters to delete.
+            trailing (bool): If True, delete from end, else from start.
+
+        Returns:
+            List[str]: New names assigned.
         """
-        # Flatten the list of objects if needed
         objects = pm.ls(objects, flatten=True)
+        name_pairs = []
         for obj in objects:
             s = obj.shortName().split("|")[-1]
             if num_chars > len(s):
@@ -177,15 +198,32 @@ class Naming(ptk.HelpMixin):
                     f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
                 )
                 continue
+
             if trailing:
                 new_name = s[:-num_chars]
             else:
-                new_name = s[num_chars:]
+                temp_name = s[num_chars:]
+                # Maya does not allow names starting with a digit
+                if temp_name and temp_name[0].isdigit():
+                    temp_name = "_" + temp_name[1:]
+                new_name = temp_name
+
+            # Ensure name is not empty and legal
+            if not new_name or not (new_name[0].isalpha() or new_name[0] == "_"):
+                pm.warning(
+                    f'Name "{new_name}" is not a legal Maya identifier, skipping.'
+                )
+                continue
+
+            name_pairs.append((obj, new_name))
+
+        for obj, new_name in name_pairs:
             try:
                 pm.rename(obj, new_name)
             except Exception as e:
-                print(f"// Error: Unable to rename {s}: {e}")
+                print(f"// Error: Unable to rename {obj}: {e}")
                 continue
+        return [n for _, n in name_pairs]
 
     @staticmethod
     @CoreUtils.undoable
@@ -208,6 +246,89 @@ class Naming(ptk.HelpMixin):
             except Exception as error:
                 if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
                     print(name + ": ", error)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def suffix_by_type(
+        objects: Union[str, object, List[Union[str, object]]],
+        group_suffix: str = "_GRP",
+        locator_suffix: str = "_LOC",
+        joint_suffix: str = "_JNT",
+        mesh_suffix: str = "_GEO",
+        nurbs_curve_suffix: str = "_CRV",
+        camera_suffix: str = "_CAM",
+        light_suffix: str = "_LGT",
+        display_layer_suffix: str = "_LYR",
+        custom_suffixes: Optional[Dict[str, str]] = None,
+        strip: Union[str, List[str]] = None,
+        strip_trailing_ints: bool = False,
+    ) -> List[str]:
+        """Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
+
+        Parameters:
+            objects: Objects to rename.
+            group_suffix (str): Suffix for transform groups.
+            locator_suffix (str): Suffix for locators.
+            joint_suffix (str): Suffix for joints.
+            mesh_suffix (str): Suffix for meshes.
+            nurbs_curve_suffix (str): Suffix for nurbs curves.
+            camera_suffix (str): Suffix for cameras.
+            light_suffix (str): Suffix for lights.
+            display_layer_suffix (str): Suffix for display layers.
+            custom_suffixes (dict): Mapping of Maya node type to suffix.
+            strip (str or list): Extra suffix(es) to strip from the end of the name before applying the new suffix.
+            strip_trailing_ints (bool): If True, remove all trailing integers after stripping suffixes.
+
+        Returns:
+            List[str]: List of new names assigned.
+        """
+        default_map = {
+            "group": group_suffix,
+            "locator": locator_suffix,
+            "joint": joint_suffix,
+            "mesh": mesh_suffix,
+            "nurbsCurve": nurbs_curve_suffix,
+            "camera": camera_suffix,
+            "light": light_suffix,
+            "displayLayer": display_layer_suffix,
+        }
+        if custom_suffixes:
+            default_map.update(custom_suffixes)
+
+        common_strips = set(default_map.values())
+        if strip:
+            common_strips.update(ptk.make_iterable(strip))
+
+        objects = pm.ls(objects, flatten=True)
+        name_pairs = []
+
+        for obj in objects:
+            short_name = obj.shortName().split("|")[-1]
+            # Use NodeUtils for object type resolution
+            typ = NodeUtils.get_type(obj)
+            suffix = default_map.get(typ, "")
+            if not suffix:
+                # fallback to nodeType-based detection if needed
+                node_type = obj.nodeType()
+                suffix = default_map.get(node_type, "")
+
+            new_name = ptk.format_suffix(
+                short_name,
+                suffix=suffix,
+                strip=list(common_strips),
+                strip_trailing_ints=strip_trailing_ints,
+                strip_trailing_alpha=False,
+            )
+            name_pairs.append((obj, new_name))
+
+        for obj, new_name in name_pairs:
+            try:
+                pm.rename(obj, new_name)
+            except Exception as e:
+                print(f"// Error: Unable to rename {obj}: {e}")
+                continue
+
+        return [n for _, n in name_pairs]
 
     @staticmethod
     @CoreUtils.undoable

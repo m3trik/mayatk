@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Dict, Union, Optional
 
 try:
     import pymel.core as pm
@@ -290,55 +290,44 @@ class XformUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
-        cls, objects, center_pivot=False, force=False, delete_history=False, **kwargs
+        cls, objects, center_pivot=False, force=True, delete_history=False, **kwargs
     ):
-        """Freezes the transformations of the specified objects.
+        """Freezes transformations on the given objects.
 
         Parameters:
-            objects (list): List of objects to freeze transformations on.
-            center_pivot (bool, optional): If True, centers the pivot of the objects. Default is False.
-            force (bool, optional): If True, unlocks any locked transform attributes and relocks them after the operation. Default is False.
-            delete_history (bool, optional): If True, deletes the history of the objects. Default is False.
-            **kwargs: Additional arguments passed to pm.makeIdentity.
+            objects (list): List of transform nodes.
+            center_pivot (bool): If True, centers the pivot.
+            force (bool): If True, unlocks locked transform attributes and restores them after.
+            delete_history (bool): If True, deletes construction history after freeze.
+            **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
         """
-        for obj in pm.ls(objects, type="transform"):
+        from mayatk.rig_utils import RigUtils
+
+        objects = pm.ls(objects, type="transform", long=True)
+
+        lock_state: Dict[str, Dict[str, bool]] = {}
+
+        for obj in objects:
             if center_pivot:
-                pm.xform(objects, centerPivots=True)
+                pm.xform(obj, centerPivots=True)
 
-            if not pm.hasAttr(obj, "original_worldMatrix"):
-                cls.store_transforms(obj)
-
+            # Store lock state and unlock if force
             if force:
-                transform_attrs = [
-                    "translateX",
-                    "translateY",
-                    "translateZ",
-                    "rotateX",
-                    "rotateY",
-                    "rotateZ",
-                    "scaleX",
-                    "scaleY",
-                    "scaleZ",
-                ]
+                lock_state[obj.name()] = RigUtils.get_attr_lock_state(obj)
+                RigUtils.set_attr_lock_state(
+                    obj, translate=False, rotate=False, scale=False
+                )
 
-                locked_attrs = {
-                    attr: pm.getAttr(f"{obj}.{attr}", lock=True)
-                    for attr in transform_attrs
-                    if pm.getAttr(f"{obj}.{attr}", lock=True)
-                }
-                if locked_attrs:
-                    pm.setAttr(
-                        [f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=False
-                    )
-
-            # Freeze transformations to reset them
-            pm.makeIdentity(obj, apply=True, **kwargs)
-
+            # Delete history if requested
             if delete_history:
                 pm.delete(obj, constructionHistory=True)
 
-            if force and locked_attrs:
-                pm.setAttr([f"{obj}.{attr}" for attr in locked_attrs.keys()], lock=True)
+            # Freeze transforms
+            pm.makeIdentity(obj, apply=True, **kwargs)
+
+            # Restore lock state if needed
+            if force and obj.name() in lock_state:
+                RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
 
     @staticmethod
     @CoreUtils.undoable
@@ -381,10 +370,10 @@ class XformUtils(ptk.HelpMixin):
             objects (str/obj/list): The object(s) to reset the translation values for.
         """
         for obj in pm.ls(objects):
-            pos = pm.objectCenter(obj)  # get the object's current position.
+            pos = pm.objectCenter(obj)  # Get the object's current position.
             # Move to origin and center pivot.
             cls.drop_to_grid(obj, origin=1, center_pivot=1)
-            pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # bake transforms
+            pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # Bake transforms
             # Move the object back to it's original position.
             pm.xform(obj, translation=pos)
 
@@ -402,44 +391,40 @@ class XformUtils(ptk.HelpMixin):
         pm.xform(node, translation=[x, y, z])
 
     @staticmethod
-    def get_manip_pivot_matrix(obj: Union[str, object, list]) -> "pm.datatypes.Matrix":
-        """Retrieves the current manipulator pivot's position and orientation in world space
-        and returns it as a transformation matrix.
+    def get_manip_pivot_matrix(
+        obj: Union[str, object, list], **kwargs
+    ) -> "pm.datatypes.Matrix":
+        """Return the object's transform matrix using xform, allowing kwargs override.
+
+        Parameters:
+            obj (str/object/list): Object to query.
+            **kwargs: Passed directly to pm.xform() in query mode.
 
         Returns:
-            obj (str/obj/list): The object to retrieve the manipulator pivot matrix for.
-            pm.datatypes.Matrix: A transformation matrix representing the manipulator pivot's position
-                                and orientation in world space.
+            pm.datatypes.Matrix: The resulting transformation matrix.
         """
-        # Query the object's world space matrix
-        world_matrix = pm.xform(obj, q=True, ws=True, m=True)
-
-        # Convert the world matrix to a Maya Matrix and return it
-        return pm.datatypes.Matrix(world_matrix)
+        matrix = pm.xform(obj, q=True, matrix=True, **kwargs)
+        return pm.datatypes.Matrix(matrix)
 
     @staticmethod
     def set_manip_pivot_matrix(
-        obj: Union[str, object, list], matrix: "pm.datatypes.Matrix"
+        obj: Union[str, object, list],
+        matrix: "pm.datatypes.Matrix",
+        **kwargs,
     ) -> None:
-        """Sets the manipulator pivot's position and orientation in world space based on
-        the provided transformation matrix.
+        """Apply a transformation matrix's position and orientation to the manip pivot.
 
         Parameters:
-            obj (str/obj/list): The object to set the manipulator pivot for.
-            matrix (pm.datatypes.Matrix): A transformation matrix containing the position and
-                                        orientation to set for the manipulator pivot.
+            obj (str/object/list): Object to set pivot on.
+            matrix (pm.datatypes.Matrix): Source matrix.
+            **kwargs: Passed directly to pm.manipPivot().
         """
-        # Extract translation and rotation components from the transformation matrix
-        transform_matrix = pm.datatypes.TransformationMatrix(matrix)
-        pos = transform_matrix.getTranslation(pm.datatypes.Space.kWorld)
-        ori_rotation = transform_matrix.eulerRotation()
+        tm = pm.datatypes.TransformationMatrix(matrix)
+        pos = tm.getTranslation(pm.datatypes.Space.kWorld)
+        rot = [pm.util.degrees(a) for a in tm.eulerRotation()]
 
-        # Convert rotation from radians to degrees
-        ori_degrees = [pm.util.degrees(angle) for angle in ori_rotation]
-
-        # Set the manipulator pivot position and orientation
         pm.select(obj, replace=True)
-        pm.manipPivot(p=pos, o=ori_degrees)
+        pm.manipPivot(p=pos, o=rot, **kwargs)
 
     @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):

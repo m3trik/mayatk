@@ -17,75 +17,178 @@ from mayatk.env_utils import EnvUtils
 
 class MatUtils(ptk.HelpMixin):
     @staticmethod
-    def get_mats(objs):
+    def get_mats(objs=None) -> List[str]:
         """Returns the set of materials assigned to a given list of objects or components.
 
         Parameters:
             objs (list): The objects or components to retrieve the material from.
-
+                        If None, current selection will be used.
         Returns:
-            list: Materials assigned to the objects or components (duplicates romoved).
+            list: Materials assigned to the objects or components (duplicates removed).
         """
-        # Initialize an empty set to store the materials
+        if objs is None:
+            objs = pm.ls(selection=True, objectsOnly=True)
+        if not objs:
+            return []
+
+        target_objs = pm.ls(objs, objectsOnly=True)
         mats = set()
 
-        for obj in pm.ls(objs, flatten=True):
-            shading_grps = []
-
+        for obj in target_objs:
             if isinstance(obj, pm.MeshFace):
-                all_shading_grps = pm.ls(type="shadingEngine")
                 shading_grps = [
-                    sg for sg in all_shading_grps if pm.sets(sg, isMember=obj)
+                    sg
+                    for sg in pm.ls(type="shadingEngine")
+                    if pm.sets(sg, isMember=obj)
                 ]
-
                 if not shading_grps:
                     pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=True)
-                    mats_ = pm.ls(pm.selected(), materials=True)
-                    mats.update(mats_)
+                    mats.update(pm.ls(pm.selected(), materials=True))
             else:
-                # Check if the object has a shape node
-                shape = None
-                if hasattr(obj, "getShape"):
-                    shape = obj.getShape()
-
+                shape = obj.getShape() if hasattr(obj, "getShape") else None
                 if shape:
-                    shading_grps = pm.listConnections(shape, type="shadingEngine")
-
-            for shading_grp in shading_grps:
-                materials = pm.ls(
-                    pm.listConnections(f"{shading_grp}.surfaceShader"), materials=True
-                )
-                mats.update(materials)
+                    shading_grps = pm.listConnections(shape, type="shadingEngine") or []
+                    for sg in shading_grps:
+                        mats.update(
+                            pm.ls(
+                                pm.listConnections(f"{sg}.surfaceShader"),
+                                materials=True,
+                            )
+                        )
 
         return list(mats)
 
     @staticmethod
     def get_scene_mats(
-        inc: Union[str, int, list] = [],
-        exc: Union[str, int, list] = [],
+        inc=None,
+        exc=None,
+        node_type=None,
         sort: bool = False,
         as_dict: bool = False,
-    ) -> Union[List[str], Dict[str, str]]:
-        """Retrieves all materials from the current scene, optionally including or excluding certain materials by name.
+        **filter_kwargs,
+    ):
+        """
+        Retrieves all materials from the current scene, with flexible name/type filtering.
 
         Parameters:
-            inc (str/int/obj/list, optional): The objects to include in the search. Supports using the '*' operator for pattern matching. Defaults to [].
-            exc (str/int/obj/list, optional): The objects to exclude from the search. Supports using the '*' operator for pattern matching. Defaults to [].
-            sort (bool, optional): Whether to return the materials in alphabetical order. Defaults to False.
-            as_dict (bool, optional): Whether to return the materials as a dictionary. Defaults to False.
+            inc, exc: Inclusion/exclusion patterns (applies to names).
+            node_type (str/list/callable, optional): Material node type(s) to restrict results, e.g. "StingrayPBS".
+            sort (bool): Sort result by material name.
+            as_dict (bool): Return as dict {name: node}.
+            **filter_kwargs: Additional keyword args passed to ptk.filter_dict (e.g. map_func, ignore_case).
 
         Returns:
-            list or dict: A list or dictionary of materials in the scene.
+            list or dict: Filtered materials.
         """
-        matList = pm.ls(mat=True, flatten=True)
-        d = {m.name(): m for m in matList}
-        filtered = ptk.filter_dict(d, keys=True, map_func=pm.nodeType, inc=inc, exc=exc)
+        mat_list = pm.ls(mat=True, flatten=True)
+        d = {m.name(): m for m in mat_list}
+        filtered = ptk.filter_dict(d, keys=True, inc=inc, exc=exc, **filter_kwargs)
+
+        mats = list(filtered.values())
+
+        # Node type filtering (after name filtering)
+        if node_type:
+            # Callable or string/list support via filter_list
+            mats = ptk.filter_list(mats, inc=node_type, map_func=pm.nodeType)
 
         if as_dict:
-            return dict(sorted(filtered.items())) if sort else filtered
+            dct = {m.name(): m for m in mats}
+            return dict(sorted(dct.items())) if sort else dct
 
-        filtered_mats = list(filtered.values())
-        return sorted(filtered_mats, key=lambda x: x.name()) if sort else filtered_mats
+        return sorted(mats, key=lambda x: x.name()) if sort else mats
+
+    @staticmethod
+    def get_connected_shaders(
+        file_nodes: Union[
+            str, "pm.nt.DependNode", List[Union[str, "pm.nt.DependNode"]]
+        ],
+    ) -> List["pm.nt.ShadingDependNode"]:
+        """Return surface shaders connected to one or more file nodes, ignoring intermediates."""
+        file_nodes = pm.ls(file_nodes, flatten=True)
+        visited = set()
+        shaders = set()
+
+        def _traverse(node):
+            if node in visited:
+                return
+            visited.add(node)
+
+            if isinstance(node, pm.nt.DependNode):
+                for out in node.outputs():
+                    if not isinstance(out, pm.nt.ShadingDependNode):
+                        continue
+                    for sg in out.outputs(type="shadingEngine"):
+                        shaders.add(out)
+                    _traverse(out)
+
+        for file_node in file_nodes:
+            _traverse(file_node)
+
+        return list(shaders)
+
+    @classmethod
+    def get_file_nodes(
+        cls,
+        materials: Optional[List[str]] = None,
+        raw: bool = False,
+        return_type: str = "fileNode",
+    ) -> list:
+        """Returns file node info in any column order based on return_type:
+        e.g. 'shader|shaderName|path|fileNode|fileNodeName'
+
+        Parameters:
+            materials (Optional[List[str]]): List of material names to filter file nodes by.
+            raw (bool): If True, returns relative paths instead of absolute paths.
+            return_type (str): Pipe-separated string defining the columns to return.
+                               Options: 'shader', 'shaderName', 'path', 'fileNode', 'fileNodeName'.
+        Returns:
+            list: List of tuples or single values based on return_type.
+                  Each tuple contains the requested columns in the specified order.
+        """
+        file_nodes = pm.ls(type="file")
+
+        # Filter by materials (optional)
+        if materials:
+            mat_objs = pm.ls(materials, materials=True)
+            filtered_nodes = []
+            for fn in file_nodes:
+                connected_mats = [c for c in fn.listConnections() if c in mat_objs]
+                if connected_mats:
+                    filtered_nodes.append(fn)
+            file_nodes = filtered_nodes
+
+        workspace_dir = pm.workspace(q=True, rd=True)
+        file_info = []
+
+        for file_node in file_nodes:
+            file_path = file_node.fileTextureName.get()
+            if raw and file_path.startswith(workspace_dir):
+                file_path_out = os.path.relpath(file_path, workspace_dir)
+            else:
+                file_path_out = file_path
+
+            shaders = cls.get_connected_shaders(file_node)
+            shader = shaders[0] if shaders else None
+            shader_name = shaders[0].name() if shader else ""
+
+            columns = return_type.split("|")
+            row = []
+            for col in columns:
+                if col == "shader":
+                    row.append(shader)
+                elif col == "shaderName":
+                    row.append(shader_name)
+                elif col == "path":
+                    row.append(file_path_out)
+                elif col == "fileNode":
+                    row.append(file_node)
+                elif col == "fileNodeName":
+                    row.append(file_node.name())
+                else:
+                    row.append("")
+            file_info.append(tuple(row) if len(row) > 1 else row[0])
+
+        return file_info
 
     @staticmethod
     def get_fav_mats():
@@ -270,26 +373,28 @@ class MatUtils(ptk.HelpMixin):
     def collect_material_paths(
         materials: Optional[List[str]] = None,
         attributes: Optional[List[str]] = None,
-        inc_material: bool = False,
+        inc_mat_name: bool = False,
         inc_path_type: bool = False,
+        resolve_full_path: bool = False,
     ) -> Union[List[str], List[Tuple[str, ...]]]:
         """Collects specified attributes file paths for given materials.
 
         Parameters:
             materials (Optional[List[str]]): List of material names.
-            attributes (Optional[List[str]]): List of attributes to collect file paths from. Defaults to texture files.
-            inc_material (bool): If True, include material name in the result.
+            attributes (Optional[List[str]]): List of attributes to collect file paths from.
+            inc_mat_name (bool): If True, include material name in the result.
             inc_path_type (bool): If True, include path type (Relative/Absolute) in the result.
+            resolve_full_path (bool): If True, return absolute full path instead of relative.
 
         Returns:
-            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing the requested information.
+            Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing requested info.
         """
-
-        materials = pm.ls(materials, mat=True) or pm.ls(mat=True)
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
-        project_sourceimages = EnvUtils.get_env_info("sourceimages")
+        project_sourceimages = os.path.abspath(EnvUtils.get_env_info("sourceimages"))
+        sourceimages_name = os.path.basename(project_sourceimages).replace("\\", "/")
 
         for material in materials:
             for attr in attributes:
@@ -300,25 +405,33 @@ class MatUtils(ptk.HelpMixin):
                         if not file_path:
                             continue
 
-                        # Ensure path is stored as Maya expects
                         file_path = file_path.replace("\\", "/")
+                        abs_file_path = (
+                            os.path.abspath(
+                                os.path.join(project_sourceimages, file_path)
+                            )
+                            if not os.path.isabs(file_path)
+                            else os.path.abspath(file_path)
+                        )
 
-                        # Determine if the path is relative or absolute
                         path_type = (
                             "Relative"
-                            if file_path.startswith(project_sourceimages)
+                            if abs_file_path.startswith(project_sourceimages)
                             else "Absolute"
                         )
-                        relative_path = (
-                            os.path.relpath(file_path, project_sourceimages).replace(
-                                "\\", "/"
-                            )
-                            if path_type == "Relative"
-                            else file_path
-                        )
 
-                        entry = (relative_path,)
-                        if inc_material:
+                        if path_type == "Relative":
+                            rel_path = os.path.relpath(
+                                abs_file_path, project_sourceimages
+                            ).replace("\\", "/")
+                            if not rel_path.startswith(sourceimages_name + "/"):
+                                rel_path = f"{sourceimages_name}/{rel_path}"
+                            path_out = abs_file_path if resolve_full_path else rel_path
+                        else:
+                            path_out = abs_file_path
+
+                        entry = (path_out,)
+                        if inc_mat_name:
                             entry = (material,) + entry
                         if inc_path_type:
                             entry = entry[:1] + (path_type,) + entry[1:]
@@ -382,7 +495,6 @@ class MatUtils(ptk.HelpMixin):
                 pm.warning(
                     f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"
                 )
-
         return remapped_nodes
 
     @classmethod
@@ -405,8 +517,8 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid directory: {new_dir}")
             return
 
-        materials = pm.ls(materials, mat=True) if materials else None
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+        textures = cls.collect_material_paths(materials=materials)
         textures = [t[0] if isinstance(t, tuple) else t for t in textures]
 
         if not textures:
@@ -419,65 +531,6 @@ class MatUtils(ptk.HelpMixin):
         if not silent:
             pm.displayInfo(
                 f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
-            )
-
-    @classmethod
-    @CoreUtils.undoable
-    def migrate_textures(
-        cls,
-        materials: Optional[List[str]] = None,
-        old_dir: Optional[str] = None,
-        new_dir: Optional[str] = None,
-        silent: bool = False,
-    ) -> None:
-        """Copies texture files from an old directory to a new one and remaps file nodes accordingly.
-
-        Parameters:
-            materials (Optional[List[str]]): List of material names to process. Defaults to all materials.
-            old_dir (Optional[str]): Source directory containing the original texture files.
-            new_dir (Optional[str]): Target directory to copy the texture files to.
-            silent (bool): If True, suppresses output messages.
-        """
-
-        for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
-            if not path or not os.path.exists(path) or not os.path.isdir(path):
-                pm.warning(f"{label} is invalid: {path}")
-                return
-
-        textures = cls.collect_material_paths(materials=materials, inc_material=False)
-        filenames = set(
-            os.path.basename(tex[0] if isinstance(tex, tuple) else tex)
-            for tex in textures
-            if tex
-        )
-
-        copied_files: Dict[str, str] = {}
-        copied_count = 0
-
-        for filename in filenames:
-            src_path = os.path.join(old_dir, filename)
-            if not os.path.isfile(src_path):
-                if not silent:
-                    pm.warning(f"// Skipped copy: {filename} not found in old_dir.")
-                continue
-
-            try:
-                copied_path = ptk.copy_file(src_path, new_dir, create_dir=True)
-                copied_files[filename] = copied_path
-                copied_count += 1
-                if not silent:
-                    pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
-            except Exception as e:
-                pm.warning(f"// Failed to copy {filename}: {e}")
-
-        if not silent:
-            pm.displayInfo(f"// Result: Copied {copied_count} textures.")
-
-        if copied_files:
-            remapped = cls._remap_file_nodes(
-                file_paths=[os.path.join(old_dir, fname) for fname in copied_files],
-                target_dir=new_dir,
-                silent=silent,
             )
 
     @staticmethod
@@ -517,7 +570,8 @@ class MatUtils(ptk.HelpMixin):
             filename = os.path.basename(path).lower()
             return os.path.splitext(filename)[0]
 
-        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+
         # Dictionary to store relevant material data (texture names or paths)
         material_data = {}
         for material in materials:
@@ -599,7 +653,7 @@ class MatUtils(ptk.HelpMixin):
             delete (bool): Whether to delete the duplicate materials after reassignment.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        if materials:  # Filter out invalid objects and warn about them
+        if materials is None:  # Filter out invalid objects and warn about them
             valid_objects = []
             for m in materials:
                 if pm.objExists(m):
@@ -685,6 +739,7 @@ class MatUtils(ptk.HelpMixin):
         log=False,
         refresh_viewport=False,
         refresh_hypershade=False,
+        texture_types: Optional[List[str]] = None,
     ):
         """Reloads textures connected to specified materials with inclusion/exclusion filters.
 
@@ -695,12 +750,14 @@ class MatUtils(ptk.HelpMixin):
             log (bool): Whether to log the textures being reloaded.
             refresh_viewport (bool): Whether to refresh the viewport.
             refresh_hypershade (bool): Whether to refresh the Hypershade panel.
+            texture_types (List[str]): List of texture types to filter by.
         """
-        materials = pm.ls(materials, mat=True) if materials else pm.ls(mat=True)
+        if texture_types is None:
+            texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
 
-        texture_types = ["file", "aiImage", "pxrTexture", "imagePlane"]
+        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+
         file_nodes = []
-
         for material in materials:
             for tex_type in texture_types:
                 file_nodes.extend(pm.listConnections(material, type=tex_type))
@@ -737,6 +794,167 @@ class MatUtils(ptk.HelpMixin):
             pm.refreshEditorTemplates()
             pm.mel.eval(
                 'hypershadePanelMenuCommand("hyperShadePanel1", "refreshAllSwatches");'
+            )
+
+    @classmethod
+    def move_texture_files(
+        cls,
+        found_files: List[Union[str, Tuple[str, str]]],
+        new_dir: str,
+        delete_old: bool = False,
+        create_dir: bool = True,
+    ) -> None:
+        """Move or copy found texture files to a new directory.
+
+        Parameters:
+            found_files (List): List of filepaths or (dir, filename) tuples.
+            new_dir (str): Target directory to move/copy textures to.
+            delete_old (bool): If True, delete original files after copying.
+            create_dir (bool): If True, create the destination directory if it doesn't exist.
+        """
+        if not found_files:
+            pm.warning("No texture files provided for moving.")
+            return
+
+        if not ptk.is_valid(new_dir, "dir") and create_dir:
+            ptk.FileUtils.create_dir(new_dir)
+
+        copied_count = 0
+
+        for entry in found_files:
+            if isinstance(entry, tuple):
+                dir_path, filename = entry
+                src_path = os.path.join(dir_path, filename).replace("\\", "/")
+            else:
+                src_path = entry.replace("\\", "/")
+                filename = os.path.basename(src_path)
+
+            if not os.path.isfile(src_path):
+                pm.warning(f"Source file does not exist: {src_path}")
+                continue
+
+            try:
+                copied_path = ptk.FileUtils.copy_file(
+                    src_path, destination=new_dir, overwrite=True, create_dir=create_dir
+                )
+                copied_count += 1
+                pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
+
+                if delete_old:
+                    os.remove(src_path)
+                    pm.displayInfo(f"// Deleted original: {src_path}")
+
+            except Exception as e:
+                pm.warning(f"// Failed to copy {src_path}: {e}")
+
+        pm.displayInfo(f"// Result: Copied {copied_count} texture(s).")
+
+    @classmethod
+    def find_texture_files(
+        cls,
+        objects: List[str],
+        source_dir: str,
+        recursive: bool = True,
+        return_dir: bool = False,
+        quiet: bool = False,
+    ) -> List[Union[str, Tuple[str, str]]]:
+        """Find texture files for given objects' materials inside source_dir.
+
+        Parameters:
+            objects (List[str]): List of object names to search textures for.
+            source_dir (str): Directory to search.
+            recursive (bool): If True, search subdirectories.
+            return_dir (bool): If True, return (dir, filename) tuples instead of filepaths.
+            quiet (bool): If False, print the found results in a readable format.
+
+        Returns:
+            List[str] or List[Tuple[str, str]]: Filepaths or (dir, filename) based on return_dir.
+        """
+        if not ptk.is_valid(source_dir, "dir"):
+            pm.warning(f"Invalid source directory: {source_dir}")
+            return []
+
+        if not objects:
+            pm.warning("No objects provided to find textures.")
+            return []
+
+        materials = cls.get_mats(objects)
+        if not materials:
+            pm.warning("No materials found for the given objects.")
+            return []
+
+        texture_paths = cls.collect_material_paths(materials=materials)
+        texture_filenames = set(
+            os.path.basename(p[0] if isinstance(p, tuple) else p)
+            for p in texture_paths
+            if p
+        )
+
+        all_files = ptk.FileUtils.get_dir_contents(
+            source_dir, content="filepath", recursive=recursive
+        )
+
+        filename_to_path = {os.path.basename(fp): fp for fp in all_files}
+
+        results = []
+        for tex_file in texture_filenames:
+            match = filename_to_path.get(tex_file)
+            if match:
+                dir_path = os.path.dirname(match).replace("\\", "/")
+                file_name = os.path.basename(match)
+                if return_dir:
+                    results.append((dir_path, file_name))
+                else:
+                    results.append(match.replace("\\", "/"))
+
+        if not quiet:
+            pm.displayInfo("\n[Texture Files Found]")
+            if return_dir:
+                max_dir_len = max(len(d) for d, _ in results) if results else 0
+                for dir_path, filename in results:
+                    pm.displayInfo(f"  {dir_path.ljust(max_dir_len)}  {filename}")
+            else:
+                for filepath in results:
+                    pm.displayInfo(f"  {filepath}")
+        return results
+
+    @classmethod
+    @CoreUtils.undoable
+    def migrate_textures(
+        cls,
+        materials: Optional[List[str]] = None,
+        old_dir: Optional[str] = None,
+        new_dir: Optional[str] = None,
+        silent: bool = False,
+        delete_old: bool = False,
+    ) -> None:
+        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files."""
+        for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
+            if not path or not os.path.exists(path) or not os.path.isdir(path):
+                pm.warning(f"{label} is invalid: {path}")
+                return
+
+        textures = cls.collect_material_paths(materials=materials)
+        found_files = [
+            (old_dir, os.path.basename(tex[0] if isinstance(tex, tuple) else tex))
+            for tex in textures
+            if tex
+        ]
+
+        cls.move_texture_files(
+            found_files=found_files,
+            new_dir=new_dir,
+            delete_old=delete_old,
+            create_dir=True,
+        )
+
+        if found_files:
+            cls._remap_file_nodes(
+                file_paths=[
+                    os.path.join(old_dir, filename) for _, filename in found_files
+                ],
+                target_dir=new_dir,
+                silent=silent,
             )
 
     @staticmethod
@@ -808,36 +1026,6 @@ class MatUtils(ptk.HelpMixin):
                 raise
 
         return QIcon(pixmap)
-
-    @staticmethod
-    def calculate_uv_padding(
-        map_size: int, normalize: bool = False, factor: int = 128
-    ) -> float:
-        """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
-        Optionally return the padding as a normalized value relative to the map size.
-
-        Parameters:
-        map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
-        normalize (bool): If True, returns the padding as a normalized value. Default is False.
-        factor (int): The factor by which to divide the map size to calculate the padding. Default is 128.
-
-        Returns:
-        float: The calculated padding in pixels or normalized units. Ensures that a 4K (4096 pixels) map gets exactly 32 pixels of padding.
-
-        Expected Output:
-        - For a 1024 pixel map: 8.0 pixels of padding or 0.0078125 if normalized
-        - For a 2048 pixel map: 16.0 pixels of padding or 0.0078125 if normalized
-        - For a 4096 pixel map: 32.0 pixels of padding or 0.0078125 if normalized
-        - For a 8192 pixel map: 64.0 pixels of padding or 0.0078125 if normalized
-
-        Example:
-        >>> calculate_uv_padding(4096, normalize=True)
-        0.0078125
-        """
-        padding = map_size / factor
-        if normalize:
-            return padding / map_size
-        return padding
 
 
 # -----------------------------------------------------------------------------

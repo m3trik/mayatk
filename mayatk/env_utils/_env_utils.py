@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import Dict, ClassVar, Optional, Any
+from typing import Dict, ClassVar, Optional, Union, Any
 
 try:
     import pymel.core as pm
@@ -63,6 +63,12 @@ class EnvUtils(ptk.HelpMixin):
             "loaded_plugins": lambda: pm.pluginInfo(q=True, listPlugins=True),
             "api_version": lambda: pm.about(api=True),
             "host_name": lambda: pm.about(hostName=True),
+            "batch_mode": lambda: pm.about(batch=True),
+            "build_dir": lambda: pm.about(buildDirectory=True),
+            "build_version": lambda: pm.about(buildVersion=True),
+            "build_varient": lambda: pm.about(buildVariant=True),
+            "api_version": lambda: pm.about(apiVersion=True),
+            "application": lambda: pm.about(application=True),
             "current_frame": lambda: pm.currentTime(q=True),
             "frame_range": lambda: (
                 pm.playbackOptions(q=True, min=True),
@@ -239,7 +245,7 @@ class EnvUtils(ptk.HelpMixin):
         # Extend file data with modification times and filter invalid or autosave files
         file_data = []
         for f in files:
-            if ptk.is_valid(f) and "Autosave" not in f:
+            if ptk.is_valid(f, "file") and "Autosave" not in f:
                 try:
                     mod_time = os.path.getmtime(f)
                     file_data.append((f, mod_time))
@@ -285,12 +291,11 @@ class EnvUtils(ptk.HelpMixin):
             get_recent_projects(format='timestamp') --> Returns all recent projects in timestamp format.
             get_recent_projects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
-        files = pm.optionVar(query="RecentProjectsList")
-        if not files:
+        dirs = pm.optionVar(query="RecentProjectsList")
+        if not dirs:
             return []
 
-        result = [ptk.format_path(f) for f in reversed(files) if ptk.is_valid(f)]
-
+        result = [ptk.format_path(d) for d in reversed(dirs) if ptk.is_valid(d, "dir")]
         if index is not None:
             try:
                 result = result[index]
@@ -397,28 +402,99 @@ class EnvUtils(ptk.HelpMixin):
 
     @staticmethod
     @ptk.filter_results
-    def get_workspace_scenes(full_path=True, recursive=False):
-        """Get a list of maya scene files from the current workspace directory.
+    def find_workspaces(
+        root_dir: str,
+        return_type: str = "dir",
+        ignore_empty: bool = True,
+    ) -> list:
+        """Recursively find Maya workspaces under a root directory.
+        A workspace is a folder containing 'workspace.mel'.
 
         Parameters:
-            full_path (bool): Return the full path instead of just the filename.
-            recursive (bool): Whether to return results from just the root directory.
+            root_dir (str): Folder to search from.
+            return_type (str): 'dir', 'dirname', 'dirname|dir', or 'dir|dirname'.
+            ignore_empty (bool): If True, only include workspaces that contain
+                                at least one .ma or .mb file inside the 'scenes/' folder.
 
         Returns:
-            (list)
+            list: Filtered results in the requested format.
         """
-        workspace_dir = str(pm.workspace(q=True, rd=1))  # get current project path.
+        from pathlib import Path
+
+        results = []
+
+        # Walk through the root directory
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            # Check if workspace.mel exists in the directory
+            if "workspace.mel" not in filenames:
+                continue
+
+            dirpath = ptk.format_path(dirpath)
+            dirname = os.path.basename(dirpath)
+
+            if ignore_empty:
+                scenes_path = Path(dirpath) / "scenes"
+
+                # Only check for Maya scene files in the 'scenes' folder
+                if scenes_path.is_dir():
+                    # Use rglob for more efficient recursive search for scene files
+                    scene_files = list(scenes_path.rglob("*.ma")) + list(
+                        scenes_path.rglob("*.mb")
+                    )
+
+                    # If Maya scene files are found, it's a valid workspace
+                    if scene_files:
+                        results.append((dirname, dirpath))
+                        continue  # Exit early after finding the first scene file
+
+            else:
+                results.append((dirname, dirpath))
+
+        # Handle return format (dir, dirname, or both)
+        if "|" in return_type:
+            a, b = return_type.split("|")
+            idx = {"dirname": 0, "dir": 1}
+            return [(r[idx[a]], r[idx[b]]) for r in results]
+
+        return [r[0] if return_type == "dirname" else r[1] for r in results]
+
+    @staticmethod
+    @ptk.filter_results
+    def get_workspace_scenes(
+        root_dir: Optional[str] = None,
+        full_path: bool = True,
+        recursive: bool = False,
+        omit_autosave: bool = True,
+        file_types=["*.ma", "*.mb"],
+    ) -> list[str]:
+        """Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
+
+        Parameters:
+            root_dir (Optional[str]): Directory to scan. Defaults to current workspace.
+            full_path (bool): If True, returns full paths; else returns file names.
+            recursive (bool): Whether to include subdirectories.
+            omit_autosave (bool): Exclude autosave files like name.0001.ma
+            file_types (list[str]): List of file extensions to include, e.g., ['*.ma', '*.mb'].
+
+        Returns:
+            list[str]: Maya scene file paths or names.
+        """
+        import re
+
+        root_dir = root_dir or str(pm.workspace(q=True, rd=True))
 
         files = ptk.get_dir_contents(
-            workspace_dir, "filepath", recursive=recursive, inc_files=("*.mb", "*.ma")
+            root_dir,
+            content="filepath" if full_path else "file",
+            recursive=recursive,
+            inc_files=file_types,
         )
-        # Replace any backslashes with forward slashes.
-        result = [ptk.format_path(f) for f in files]
 
-        if not full_path:
-            result = [f.split("\\")[-1] for f in result]
+        if omit_autosave:
+            autosave_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
+            files = [f for f in files if not autosave_regex.match(os.path.basename(f))]
 
-        return result
+        return [ptk.format_path(f) for f in files]
 
     @classmethod
     def find_workspace_using_path(

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Union, Optional
+from typing import List, Tuple, Dict, Union, Optional
 
 try:
     import pymel.core as pm
@@ -16,6 +16,93 @@ from mayatk.xform_utils import XformUtils
 
 class RigUtils(ptk.HelpMixin):
     """ """
+
+    @staticmethod
+    @CoreUtils.undoable
+    def create_helper(
+        name: str,
+        helper_type: str = "locator",
+        parent: Optional["pm.nt.Transform"] = None,
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        cleanup: bool = False,
+    ) -> Optional["pm.nt.Transform"]:
+        """Create a hidden helper object (e.g., locator, joint) with a consistent naming convention.
+        Optionally cleans up (deletes) the helper if it already exists and cleanup is True.
+
+        Parameters:
+            name (str): Helper name (should include "__" as per convention).
+            helper_type (str): Maya node type to create (e.g., "locator", "joint").
+            parent (pm.nt.Transform or None): Optional parent transform.
+            position (tuple): Position in world space.
+            cleanup (bool): If True, deletes existing helper with same name and returns None.
+
+        Returns:
+            pm.nt.Transform or None: The created or existing helper, or None if cleaned up.
+        """
+        if pm.objExists(name):
+            if cleanup:
+                pm.delete(name)
+                return None
+            return pm.PyNode(name)
+
+        if helper_type.lower() == "locator":
+            helper = pm.spaceLocator(n=name)
+        elif helper_type.lower() == "joint":
+            helper = pm.createNode("joint", n=name)
+        else:
+            helper = pm.createNode(helper_type, n=name)
+
+        if parent is not None:
+            helper.setParent(parent)
+        else:
+            helper.setParent(world=True)
+
+        helper.translate.set(position)
+        helper.visibility.set(0)
+
+        return helper
+
+    @staticmethod
+    @CoreUtils.undoable
+    def create_group(
+        objects=[],
+        name="",
+        zero_translation=False,
+        zero_rotation=False,
+        zero_scale=False,
+    ):
+        """Create a group containing any given objects.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to group.
+            name (str): Name the group.
+            zero_translation (bool): Freeze translation before parenting.
+            zero_rotation (bool): Freeze rotation before parenting.
+            zero_scale (bool): Freeze scale before parenting.
+
+        Returns:
+            (obj) the group.
+        """
+        grp = pm.group(empty=True, n=name)
+        try:
+            pm.parent(grp, objects)
+        except Exception as error:
+            print(
+                f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
+            )
+
+        if zero_translation:
+            for attr in ("tx", "ty", "tz"):
+                pm.setAttr(getattr(grp, attr), 0)  # pm.setAttr(node.translate, 0)
+        if zero_rotation:
+            for attr in ("rx", "ry", "rz"):
+                pm.setAttr(getattr(grp, attr), 0)
+        if zero_scale:
+            for attr in ("sx", "sy", "sz"):
+                pm.setAttr(getattr(grp, attr), 0)
+
+        pm.parent(grp, world=True)
+        return grp
 
     @staticmethod
     def create_locator(
@@ -59,130 +146,116 @@ class RigUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def create_locator_at_object(
         cls,
-        objects,
-        parent=False,
-        freeze_transforms=False,
-        bake_child_pivot=False,
-        grp_suffix="_GRP#",
-        loc_suffix="_LOC#",
-        obj_suffix="_GEO#",
-        strip_digits=False,
-        strip_suffix=False,
-        loc_scale=1,
-        lock_translate=False,
-        lock_rotation=False,
-        lock_scale=False,
-    ):
-        """Create locators with the same transforms as any selected object(s).
-        If there are vertices selected it will create a locator at the center of the selected vertices bounding box.
+        objects: Union[
+            str, "pm.nodetypes.Transform", List[Union[str, "pm.nodetypes.Transform"]]
+        ],
+        parent: bool = True,
+        freeze_object: bool = True,
+        freeze_locator: bool = True,
+        loc_scale: float = 1.0,
+        lock_translate: bool = False,
+        lock_rotation: bool = False,
+        lock_scale: bool = False,
+        grp_suffix: str = "_GRP",
+        loc_suffix: str = "_LOC",
+        obj_suffix: str = "_GEO",
+        strip_digits: bool = False,
+        strip_trailing_underscores: bool = True,
+    ) -> None:
+        """Rig object under a zeroed locator aligned to its d manip pivot.
 
         Parameters:
-            objects (str/obj/list): A list of objects, or an object name to create locators at.
-            parent (bool): Parent the object to the locator. (default=False)
-            freeze_transforms (bool): Freeze transforms on the locator. (default=True)
-            bake_child_pivot (bool): Bake pivot positions on the child object. (default=True)
-            grp_suffix (str): A string appended to the end of the created groups name. (default: '_GRP#')
-            loc_suffix (str): A string appended to the end of the created locators name. (default: '_LOC#')
-            obj_suffix (str): A string appended to the end of the existing objects name. (default: '_GEO#')
-            strip_digits (bool): Strip numeric characters from the string. If the resulting name is not unique, maya will append a trailing digit. (default=False)
-            strip_suffix (str): Strip any existing suffix. A suffix is defined by the last '_' (if one exists) and any chars trailing. (default=False)
-            loc_scale (float) = The scale of the locator. (default=1)
-            lock_translate (bool): Lock the translate values of the child object. (default=False)
-            lock_rotation (bool): Lock the rotation values of the child object. (default=False)
-            lock_scale (bool): Lock the scale values of the child object. (default=False)
-            remove (bool): Removes the locator and any child locks. (not valid with component selections) (default=False)
-
-        Example:
-            createLocatorAtSelection(strip='_GEO', suffix='', strip_digits=True, parent=True, lock_translate=True, lock_rotation=True)
+            objects (str/obj/list): Objects to create locator rigs for.
+            parent (bool): Whether to parent object under locator and locator under group.
+            freeze_object (bool): Freeze object transforms after setup.
+            freeze_locator (bool): Freeze locator transforms after alignment.
+            loc_scale (float): Scale of locator display.
+            lock_translate (bool): Lock object's translate attributes.
+            lock_rotation (bool): Lock object's rotate attributes.
+            lock_scale (bool): Lock object's scale attributes.
+            grp_suffix (str): Naming suffix for the created group. Default "_GRP".
+            loc_suffix (str): Naming suffix for the locator. Default "_LOC".
+            obj_suffix (str): Naming suffix for the renamed object. Default "_GEO".
+            strip_digits (bool): Whether to strip trailing digits before suffixing.
+            strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
         """
         import re
 
-        suffix_strip_regex = (
-            re.escape(grp_suffix).replace(r"\#", r"\d$"),
-            re.escape(loc_suffix).replace(r"\#", r"\d$"),
-            re.escape(obj_suffix).replace(r"\#", r"\d$"),
-        )
-
-        def format_name_with_suffix(base_name: str, o) -> str:
-            """Return the formatted name based on the base name and object's current type with the appropriate suffix."""
-            if NodeUtils.is_locator(o):
-                suffix = loc_suffix
-            elif NodeUtils.is_group(o):
-                suffix = grp_suffix
-            else:
-                suffix = obj_suffix
-
-            return ptk.format_suffix(
+        def format_name_with_suffix(base_name: str, suffix: str) -> str:
+            strip_tuple = (grp_suffix, loc_suffix, obj_suffix)
+            clean_name = ptk.format_suffix(
                 base_name,
-                suffix=suffix,
-                strip=suffix_strip_regex,
+                suffix="",
+                strip=strip_tuple,
                 strip_trailing_ints=strip_digits,
-                strip_trailing_alpha=strip_suffix,
             )
+            if strip_trailing_underscores:
+                clean_name = re.sub(r"_+$", "", clean_name)
+            result = f"{clean_name}{suffix}" if suffix else clean_name
+            if not result:
+                pm.warning(
+                    f"[create_locator_at_object] Skipping rename: "
+                    f"Attempted to rename '{base_name}' with suffix '{suffix}', "
+                    f"but this would result in an empty or invalid name. Using base name instead."
+                )
+                result = base_name
+            return result
 
-        for obj in pm.ls(objects, long=True, type="transform"):
-            base_name = obj.nodeName()  # Use the original object name as the base name
-            vertices = pm.filterExpand(obj, sm=31)  # returns a string list.
+        for obj in pm.ls(objects, long=True, type="transform", flatten=True):
+            orig_name = obj.nodeName()
+            if not orig_name:
+                orig_name = obj.name().split("|")[-1]
 
-            if freeze_transforms:
-                # Store the current pivot position
-                matrix = XformUtils.get_manip_pivot_matrix(obj)
-                pm.makeIdentity(obj, apply=True)
-                XformUtils.set_manip_pivot_matrix(obj, matrix)
+            # Strip suffixes from the original name once
+            base_name_stripped = format_name_with_suffix(orig_name, "")
 
-            if bake_child_pivot and not NodeUtils.is_group(obj):
+            mesh_shape = obj.getShape()
+            vertices = mesh_shape.vtx[:] if mesh_shape else None
+            orig_parent = pm.listRelatives(obj, parent=True)
+
+            if not NodeUtils.is_group(obj):
                 XformUtils.bake_pivot(obj, position=True, orientation=True)
 
+            matrix = XformUtils.get_manip_pivot_matrix(obj, ws=True)
+
+            loc = cls.create_locator(scale=loc_scale)
+            pm.xform(loc, matrix=matrix, ws=True)
+
+            if parent:
+                grp = pm.group(em=True)
+                pm.delete(pm.parentConstraint(loc, grp))
+                pm.parent(loc, grp)
+                pm.parent(obj, loc)
+
+                if freeze_locator:
+                    XformUtils.freeze_transforms(loc, normal=True)
+
+                if orig_parent:
+                    pm.parent(grp, orig_parent)
+
             if vertices:
-                objName = vertices[0].split(".")[0]
-                obj = pm.ls(objName)
+                pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
 
-                loc = cls.create_locator(scale=loc_scale)
+            # Freeze object after hierarchy is set up
+            if freeze_object:
+                XformUtils.freeze_transforms(obj, normal=True)
 
-                xmin, ymin, zmin, xmax, ymax, zmax = pm.exactWorldBoundingBox(vertices)
-                x, y, z = (
-                    (xmin + xmax) / 2,
-                    (ymin + ymax) / 2,
-                    (zmin + zmax) / 2,
-                )
-                pm.move(x, y, z, loc)
+            # Rename group, locator, and object using the clean base name
+            if parent:
+                pm.rename(grp, f"{base_name_stripped}{grp_suffix}")
+            pm.rename(loc, f"{base_name_stripped}{loc_suffix}")
+            pm.rename(obj, f"{base_name_stripped}{obj_suffix}")
 
-            else:  # Object
-                loc = cls.create_locator(scale=loc_scale)
-                tempConst = pm.parentConstraint(obj, loc, maintainOffset=False)
-                pm.delete(tempConst)
+            if parent:
+                XformUtils.freeze_transforms(grp, scale=True)
 
-            try:
-                if parent:
-                    origParent = pm.listRelatives(obj, parent=1)
-
-                    grp = cls.create_group(obj, zero_translation=1, zero_rotation=1)
-                    pm.rename(grp, format_name_with_suffix(base_name, grp))
-                    pm.parent(obj, loc)
-                    pm.parent(loc, grp)
-                    pm.parent(grp, origParent)
-
-                if freeze_transforms:  # freeze transforms one last time.
-                    # Assure attributes are unlocked.
-                    cls.set_attr_lock_state(
-                        obj, translate=False, rotate=False, scale=False
-                    )
-                    pm.makeIdentity(obj, apply=True, normal=1)
-                    pm.makeIdentity(loc, apply=True, normal=1)
-                    # 1=the normals on polygonal objects will be frozen. 2=the normals on polygonal objects will be frozen only if its a non-rigid transformation matrix.
-
-                pm.rename(loc, format_name_with_suffix(base_name, loc))
-                pm.rename(obj, format_name_with_suffix(base_name, obj))
-
-                cls.set_attr_lock_state(
-                    obj,
-                    translate=lock_translate,
-                    rotate=lock_rotation,
-                    scale=lock_scale,
-                )
-            except Exception as error:
-                pm.delete(loc)
-                raise (error)
+            cls.set_attr_lock_state(
+                obj,
+                translate=lock_translate,
+                rotate=lock_rotation,
+                scale=lock_scale,
+            )
+            pm.select(loc, replace=True)
 
     @classmethod
     @CoreUtils.undoable
@@ -235,152 +308,125 @@ class RigUtils(ptk.HelpMixin):
 
         return objects
 
-    @classmethod
-    @CoreUtils.undoable
-    def set_attr_lock_state(
-        cls, objects, translate=None, rotate=None, scale=None, **kwargs
-    ):
-        """Lock/Unlock any attribute for the given objects, by passing it into kwargs as <attr>=<value>.
-        A 'True' value locks the attribute, 'False' unlocks, while 'None' leaves the state unchanged.
+    @staticmethod
+    def get_attr_lock_state(objects, unlock: bool = False) -> dict:
+        """Returns lock state for standard transform attributes and optionally unlocks them.
 
         Parameters:
-            objects (str/obj/list): The object(s) to lock/unlock attributes of.
-            translate (bool): Lock/Unlock all translate x,y,z values at once.
-            rotate (bool): Lock/Unlock all rotate x,y,z values at once.
-            scale (bool): Lock/Unlock all scale x,y,z values at once.
+            objects (list): Maya transform nodes
+            unlock (bool): If True, unlocks the attributes after storing their state.
 
-        Example:
-            setAttrLockState(objects, translate=False, rotate=True)
+        Returns:
+            Dict[str, Dict[str, bool]]: {
+                "myObject": {
+                    "translate": True,
+                    "rotate": False,
+                    "scale": None,
+                    "tx": True, "ty": True, ...
+                }
+            }
         """
         objects = pm.ls(objects, transforms=True, long=True)
-
-        attrs_and_state = {
-            (
-                "tx",
-                "ty",
-                "tz",
-            ): translate,  # attributes and state. ex. ('tx','ty','tz'):False
-            ("rx", "ry", "rz"): rotate,
-            ("sx", "sy", "sz"): scale,
+        attr_groups = {
+            "translate": ("tx", "ty", "tz"),
+            "rotate": ("rx", "ry", "rz"),
+            "scale": ("sx", "sy", "sz"),
         }
 
-        attrs_and_state.update(kwargs)  # update the dict with any values from kwargs.
+        result = {}
 
         for obj in objects:
             try:
                 if NodeUtils.is_locator(obj):
                     obj = pm.listRelatives(obj, children=1, type="transform")[0]
             except IndexError:
-                return
+                continue
 
-            for attrs, state in attrs_and_state.items():
+            obj_state = {}
+
+            for group, attrs in attr_groups.items():
+                group_vals = []
+                for attr in attrs:
+                    try:
+                        full_attr = f"{obj}.{attr}"
+                        locked = pm.getAttr(full_attr, lock=True)
+                        obj_state[attr] = locked
+                        group_vals.append(locked)
+                        if unlock and locked:
+                            pm.setAttr(full_attr, lock=False)
+                    except Exception:
+                        obj_state[attr] = None
+                        group_vals.append(None)
+                # Set unified group state
+                if all(v is True for v in group_vals):
+                    obj_state[group] = True
+                elif all(v is False for v in group_vals):
+                    obj_state[group] = False
+                else:
+                    obj_state[group] = None
+
+            result[obj.name()] = obj_state
+
+        return result
+
+    @classmethod
+    @CoreUtils.undoable
+    def set_attr_lock_state(
+        cls,
+        objects,
+        lock_state: Optional[Dict[str, Dict[str, bool]]] = None,
+        translate: Optional[bool] = None,
+        rotate: Optional[bool] = None,
+        scale: Optional[bool] = None,
+        **kwargs,
+    ) -> None:
+        """
+        Restore lock state using saved per-axis info, or lock/unlock in bulk.
+        """
+        objects = pm.ls(objects, transforms=True, long=True)
+
+        for obj in objects:
+            try:
+                if NodeUtils.is_locator(obj):
+                    obj = pm.listRelatives(obj, children=1, type="transform")[0]
+            except (IndexError, TypeError):
+                continue
+
+            # Restore per-attribute lock state
+            if lock_state and obj.name() in lock_state:
+                state = lock_state[obj.name()]
+                for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
+                    lock_val = state.get(attr)
+                    if lock_val is not None:
+                        try:
+                            pm.setAttr(f"{obj}.{attr}", lock=lock_val)
+                        except Exception:
+                            pass
+                continue  # skip bulk lock logic if restoring from lock_state
+
+            # Bulk translate/rotate/scale lock
+            attr_map = {
+                ("tx", "ty", "tz"): translate,
+                ("rx", "ry", "rz"): rotate,
+                ("sx", "sy", "sz"): scale,
+            }
+            for attrs, state in attr_map.items():
                 if state is None:
                     continue
-                for a in ptk.make_iterable(attrs):
-                    pm.setAttr("{}.{}".format(obj, a), lock=state)
+                for attr in attrs:
+                    try:
+                        pm.setAttr(f"{obj}.{attr}", lock=state)
+                    except Exception:
+                        pass
 
-    @staticmethod
-    @CoreUtils.undoable
-    def create_group(
-        objects=[],
-        name="",
-        zero_translation=False,
-        zero_rotation=False,
-        zero_scale=False,
-    ):
-        """Create a group containing any given objects.
-
-        Parameters:
-            objects (str/obj/list): The object(s) to group.
-            name (str): Name the group.
-            zero_translation (bool): Freeze translation before parenting.
-            zero_rotation (bool): Freeze rotation before parenting.
-            zero_scale (bool): Freeze scale before parenting.
-
-        Returns:
-            (obj) the group.
-        """
-        grp = pm.group(empty=True, n=name)
-        try:
-            pm.parent(grp, objects)
-        except Exception as error:
-            print(
-                f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
-            )
-
-        if zero_translation:
-            for attr in ("tx", "ty", "tz"):
-                pm.setAttr(getattr(grp, attr), 0)  # pm.setAttr(node.translate, 0)
-        if zero_rotation:
-            for attr in ("rx", "ry", "rz"):
-                pm.setAttr(getattr(grp, attr), 0)
-        if zero_scale:
-            for attr in ("sx", "sy", "sz"):
-                pm.setAttr(getattr(grp, attr), 0)
-
-        pm.parent(grp, world=True)
-        return grp
-
-    @staticmethod
-    def constrain(
-        target, objects_to_constrain, constraint_type: str = "point", **kwargs
-    ) -> None:
-        """Constrain all selected objects to the specified target object in Maya.
-
-        Parameters:
-            target (str or PyNode): The target object to which the constraints will be applied.
-            objects_to_constrain (list): List of objects to be constrained to the target.
-            constraint_type (str): The type of constraint to apply. Options are 'point', 'orient', 'parent',
-                                   'scale', 'aim', or 'poleVector'. Default is 'point'.
-            **kwargs: Additional keyword arguments to be passed to the constraint functions.
-                      The 'maintainOffset' argument defaults to False if not provided.
-
-        Example:
-            # Point constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point')
-
-            # Point constraint with maintaining offset
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='point', maintainOffset=True)
-
-            # Orient constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='orient')
-
-            # Parent constraint with maintaining offset and additional options
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='parent', maintainOffset=True, skip=['rotateX', 'rotateY'])
-
-            # Scale constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='scale')
-
-            # Aim constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='aim', aimVector=[1, 0, 0], upVector=[0, 1, 0], worldUpType='scene')
-
-            # Pole vector constraint without maintaining offset (default behavior)
-            ConstraintUtils.constrain_to_last_selected(target, objects_to_constrain, constraint_type='poleVector')
-        """
-        if constraint_type in ["point", "orient", "parent", "scale"]:
-            kwargs.setdefault("maintainOffset", False)
-
-        for obj in objects_to_constrain:
-            if constraint_type == "point":
-                pm.pointConstraint(target, obj, **kwargs)
-            elif constraint_type == "orient":
-                pm.orientConstraint(target, obj, **kwargs)
-            elif constraint_type == "parent":
-                pm.parentConstraint(target, obj, **kwargs)
-            elif constraint_type == "scale":
-                pm.scaleConstraint(target, obj, **kwargs)
-            elif constraint_type == "aim":
-                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
-                pm.aimConstraint(target, obj, **kwargs)
-            elif constraint_type == "poleVector":
-                kwargs.pop("maintainOffset", None)  # Remove maintainOffset if present
-                pm.poleVectorConstraint(target, obj, **kwargs)
-            else:
-                pm.warning(f"Unsupported constraint type: {constraint_type}")
-
-        print(
-            f"Applied {constraint_type} constraint from '{target}' to {len(objects_to_constrain)} objects."
-        )
+            # Individual attribute locks from kwargs
+            for attr, state in kwargs.items():
+                if state is None:
+                    continue
+                try:
+                    pm.setAttr(f"{obj}.{attr}", lock=state)
+                except Exception:
+                    pass
 
     @classmethod
     @CoreUtils.undoable
@@ -508,73 +554,203 @@ class RigUtils(ptk.HelpMixin):
         lock_segment_attributes()
 
     @staticmethod
-    def setupConstraintOverride(
-        switchAttr, constraintNode, weightIndex, overrideValue=1.0
-    ):
-        """Sets up a node network so that when a given boolean switch attribute is on,
-        it overrides any keyed values on the specified constraint weight.
+    @CoreUtils.undoable
+    def create_switch_attr(
+        node: "pm.PyNode",
+        attr_name: str,
+        weighted: bool = False,
+        min_value: float = 0.0,
+        max_value: float = 1.0,
+    ) -> "pm.Attribute":
+        """Create a bool or float (weighted) attribute on the node if it doesn't exist.
 
         Parameters:
-            switchAttr (pm.Attribute): The boolean attribute used as a switch.
-            constraintNode (pm.nt.Constraint): The constraint node whose weight you want to override.
-            weightIndex (int): The index of the weight in the constraintNode's weight list to override.
-            overrideValue (float): The value to force when the switch is on.
+            node (pm.PyNode): Node to add the attribute to.
+            attr_name (str): Attribute name.
+            weighted (bool): If True, create float (0–1), else bool.
+            min_value (float): Min value for weighted attr.
+            max_value (float): Max value for weighted attr.
 
-        Example:
-            setupConstraintOverride(
-                switchAttr="SMALL_TOW_TRUCK_CTRL.rearTowSwitch",
-                constraintNode=pm.PyNode("C130J_TOWBAR_LOC_pointConstraint1"),
-                weightIndex=0,
-                overrideValue=1.0,
-            )
+        Returns:
+            pm.Attribute: The created or existing attribute.
         """
-        # Identify the weight attribute
-        weightAliasList = constraintNode.getWeightAliasList()
-        if weightIndex >= len(weightAliasList):
-            raise IndexError(
-                "weightIndex is out of range for this constraint's weight aliases."
-            )
-        weightAttr = weightAliasList[weightIndex]
+        if node.hasAttr(attr_name):
+            return node.attr(attr_name)
 
-        # Remove any existing keyframes on the constraint weight attribute
-        # so that it's purely driven by the upcoming node network.
-        pm.cutKey(weightAttr, clear=True)  # Remove any existing animation keys
-
-        # Create a keyable original weight attribute to store user-driven (keyed) values
-        origWeightAttrName = "origWeight{}".format(weightIndex)
-        if not constraintNode.hasAttr(origWeightAttrName):
+        if weighted:
             pm.addAttr(
-                constraintNode,
-                ln=origWeightAttrName,
+                node,
+                ln=attr_name,
                 at="double",
+                min=min_value,
+                max=max_value,
                 k=True,
-                dv=pm.getAttr(weightAttr),
+                dv=0,
             )
-        origWeightAttr = constraintNode.attr(origWeightAttrName)
+        else:
+            pm.addAttr(
+                node,
+                ln=attr_name,
+                at="bool",
+                k=True,
+                dv=0,
+            )
+        return node.attr(attr_name)
 
-        # Disconnect any incoming connections to the constraint weight
-        currentConnections = weightAttr.listConnections(plugs=True, s=True, d=False)
-        for conn in currentConnections:
-            pm.disconnectAttr(conn, weightAttr)
+    @classmethod
+    @CoreUtils.undoable
+    def connect_switch_to_constraint(
+        cls,
+        constraint_node: "pm.nt.Constraint",
+        constraint_targets: Optional[List["pm.nt.Transform"]] = None,
+        attr_name: str = "parent_switch",
+        overwrite_existing: bool = False,
+        node: Optional["pm.PyNode"] = None,
+        weighted: bool = False,
+        anchor: Optional[str] = None,
+    ) -> dict:
+        """
+        Create a space switch attribute to drive a constraint node.
+        - 1 target, no anchor: bool (on/off toggle)
+        - 2 targets: enum or float (blend if weighted)
+        - 3+ targets: enum (dropdown snap)
 
-        # Create a condition node to handle the switch
-        condNode = pm.createNode(
-            "condition", name=constraintNode.name() + "_overrideCondition"
-        )
-        condNode.operation.set(0)  # "Equal": True if firstTerm == secondTerm
-        condNode.firstTerm.set(1)  # We'll compare switchAttr to 1
+        Parameters:
+            constraint_node (pm.nt.Constraint): The constraint node to control.
+            constraint_targets (Optional[List[pm.nt.Transform]]): List of target transforms for the constraint. If None, auto-detected.
+            attr_name (str): Name of the switch attribute to create.
+            overwrite_existing (bool): If True, deletes and recreates the attribute if it exists.
+            node (Optional[pm.PyNode]): Node to add the switch attribute to. If None, derived from the driven object.
+            weighted (bool): If True, creates a float attribute for smooth blending (2 targets only).
+            anchor (Optional[str]): If given, creates a locator at origin as a neutral/anchor/world target with this name.
 
-        # Connect the switch attribute to secondTerm
-        pm.connectAttr(switchAttr, condNode.secondTerm, f=True)
+        Returns:
+            dict: Dictionary of created nodes and attributes for further processing.
+        """
+        if not constraint_node or not isinstance(constraint_node, pm.nt.Constraint):
+            raise TypeError(
+                "constraint_node must be a valid PyMEL constraint node (pm.nt.Constraint)."
+            )
 
-        # When switch is True, condition passes overrideValue
-        condNode.colorIfTrueR.set(overrideValue)
+        result = {}
+        # Target autodetect if not provided
+        if constraint_targets is None:
+            if hasattr(constraint_node, "getTargetList"):
+                constraint_targets = constraint_node.getTargetList()
+            else:
+                constraint_targets = [
+                    t
+                    for t in constraint_node.target.inputs()
+                    if isinstance(t, pm.nt.Transform)
+                ]
 
-        # When switch is False, pass through origWeightAttr
-        pm.connectAttr(origWeightAttr, condNode.colorIfFalseR, f=True)
+        # Check targets
+        if not constraint_targets or len(constraint_targets) < 1:
+            pm.warning("No constraint targets found or provided.")
+            return result
 
-        # Connect condition output to the constraint weight
-        pm.connectAttr(condNode.outColorR, weightAttr, f=True)
+        # Optionally add anchor as the last target
+        if anchor:
+            anchor_obj = cls.create_helper(
+                name=anchor,
+                helper_type="locator",
+                position=(0, 0, 0),
+            )
+            constraint_targets = list(constraint_targets) + [anchor_obj]
+            result["anchor_helper"] = anchor_obj
+
+        num_targets = len(constraint_targets)
+
+        if node is None:
+            try:
+                node = constraint_node.getOutputTransform()
+            except Exception:
+                driven = pm.listRelatives(
+                    constraint_node, type="transform", parent=True
+                )
+                node = driven[0] if driven else None
+        if node is None:
+            pm.warning("Could not determine node to add switch attribute to.")
+            return result
+
+        # Check for duplicate attribute, handle overwrite
+        if node.hasAttr(attr_name):
+            if overwrite_existing:
+                node.deleteAttr(attr_name)
+            else:
+                pm.warning(f"{node}.{attr_name} already exists.")
+                return result
+
+        weight_alias_list = constraint_node.getWeightAliasList()
+
+        # Ensure number of weights matches number of targets
+        if len(weight_alias_list) < num_targets:
+            pm.warning("Number of constraint weights does not match number of targets.")
+            return result
+
+        # Disconnect all inputs from weights
+        for weight_attr in weight_alias_list:
+            pm.cutKey(weight_attr, clear=True)
+            for conn in weight_attr.listConnections(plugs=True, s=True, d=False):
+                pm.disconnectAttr(conn, weight_attr)
+
+        # --- Single target, no anchor: simple bool toggle for constraint on/off ---
+        if num_targets == 1:
+            node.addAttr(attr_name, at="bool", k=True)
+            switch_attr = node.attr(attr_name)
+            pm.setAttr(switch_attr, 0)
+            result["switch_attr"] = switch_attr
+
+            weight_attr = weight_alias_list[0]
+            cond_name = f"{constraint_node.nodeName()}_{attr_name}_cond0"
+            cond_node = pm.createNode("condition", name=cond_name)
+            cond_node.operation.set(0)  # == compare
+            cond_node.firstTerm.set(1)
+            pm.connectAttr(switch_attr, cond_node.secondTerm, f=True)
+            cond_node.colorIfTrueR.set(1.0)
+            cond_node.colorIfFalseR.set(0.0)
+            pm.connectAttr(cond_node.outColorR, weight_attr, f=True)
+            result["condition_node"] = cond_node
+            return result
+
+        # --- Weighted float blend for 2 targets only ---
+        if weighted and num_targets == 2:
+            node.addAttr(attr_name, at="double", min=0.0, max=1.0, k=True)
+            switch_attr = node.attr(attr_name)
+            result["switch_attr"] = switch_attr
+            pm.setAttr(switch_attr, 0)
+            pm.connectAttr(switch_attr, weight_alias_list[0], f=True)
+            rev_name = f"{node.nodeName()}_{attr_name}_reverse"
+            if pm.objExists(rev_name):
+                rev_node = pm.PyNode(rev_name)
+            else:
+                rev_node = pm.createNode("reverse", name=rev_name)
+            pm.connectAttr(switch_attr, rev_node.inputX, f=True)
+            pm.connectAttr(rev_node.outputX, weight_alias_list[1], f=True)
+            result["reverse_node"] = rev_node
+            return result
+
+        # --- Enum dropdown for snap switching (2 or more targets) ---
+        enum_names = [t.nodeName() for t in constraint_targets]
+        enum_string = ":".join(enum_names)
+        node.addAttr(attr_name, at="enum", en=enum_string, k=True)
+        switch_attr = node.attr(attr_name)
+        pm.setAttr(switch_attr, 0)
+        result["switch_attr"] = switch_attr
+
+        # For each weight, create a condition node that checks if switch matches index
+        for i, weight_attr in enumerate(weight_alias_list[:num_targets]):
+            cond_name = f"{constraint_node.nodeName()}_{attr_name}_cond{i}"
+            cond_node = pm.createNode("condition", name=cond_name)
+            cond_node.operation.set(0)  # == compare
+            pm.setAttr(cond_node.firstTerm, i)
+            pm.connectAttr(switch_attr, cond_node.secondTerm, f=True)
+            pm.setAttr(cond_node.colorIfTrueR, 1.0)
+            pm.setAttr(cond_node.colorIfFalseR, 0.0)
+            pm.connectAttr(cond_node.outColorR, weight_attr, f=True)
+            result[f"condition_node_{i}"] = cond_node
+
+        return result
 
     @staticmethod
     def get_joint_chain_from_root(
@@ -673,6 +849,125 @@ class RigUtils(ptk.HelpMixin):
         )
 
         return new_joints
+
+    @classmethod
+    @CoreUtils.undoable
+    def rebind_skin_clusters(
+        cls,
+        meshes: Optional[List["pm.nt.Transform"]] = None,
+        temp_dir: Optional[str] = None,
+        inherits_transform: Optional[bool] = None,
+    ) -> None:
+        """Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.
+
+        Parameters:
+            meshes (List[pm.nt.Transform], optional): Mesh transform nodes to process. If None, all skinned meshes are used.
+            temp_dir (str, optional): Directory for exporting temporary weight files. Defaults to Maya temp.
+            inherits_transform (bool or None, optional):
+                - True: explicitly sets inheritsTransform = True
+                - False: explicitly sets inheritsTransform = False
+                - None: preserves the original inheritsTransform value
+        """
+        import os
+
+        if temp_dir is None:
+            temp_dir = os.path.join(
+                pm.internalVar(userTmpDir=True), "skin_rebind_weights"
+            )
+        os.makedirs(temp_dir, exist_ok=True)
+
+        mesh_shapes = (
+            pm.ls(type="mesh", noIntermediate=True)
+            if meshes is None
+            else [
+                m.getShape()
+                for m in meshes
+                if isinstance(m, pm.nt.Transform) and m.getShape()
+            ]
+        )
+
+        for shape in mesh_shapes:
+            try:
+                skin_clusters = pm.listHistory(shape, type="skinCluster")
+                if not skin_clusters:
+                    continue
+
+                skin_cluster = skin_clusters[0]
+                transform = shape.getParent()
+                transform_name = transform.nodeName()
+
+                print(f"Processing: {skin_cluster} on {transform_name}")
+
+                # Preserve inheritsTransform and unlock transform attrs
+                original_inherits = transform.inheritsTransform.get()
+                lock_state = cls.get_attr_lock_state(transform, unlock=True)
+
+                # Cache influences and bindPreMatrix
+                influences = pm.skinCluster(skin_cluster, query=True, influence=True)
+                bind_pre_matrices = {
+                    jnt: skin_cluster.bindPreMatrix[
+                        skin_cluster.indexForInfluenceObject(jnt)
+                    ].get()
+                    for jnt in influences
+                }
+
+                # Export weights
+                weight_file = os.path.join(temp_dir, f"{transform_name}_weights.xml")
+                pm.deformerWeights(
+                    os.path.basename(weight_file),
+                    export=True,
+                    deformer=skin_cluster,
+                    path=temp_dir,
+                    shape=shape,
+                )
+
+                # Delete original skinCluster
+                skin_cluster_name = skin_cluster.nodeName()
+                pm.delete(skin_cluster)
+
+                # Recreate skinCluster
+                new_skin_cluster = pm.skinCluster(
+                    influences,
+                    transform,
+                    toSelectedBones=True,
+                    bindMethod=0,
+                    skinMethod=0,
+                    normalizeWeights=1,
+                    name=skin_cluster_name,
+                )
+
+                # Restore bindPreMatrix
+                for jnt, mat in bind_pre_matrices.items():
+                    index = new_skin_cluster.indexForInfluenceObject(jnt)
+                    new_skin_cluster.bindPreMatrix[index].set(mat)
+
+                # Import weights
+                pm.deformerWeights(
+                    os.path.basename(weight_file),
+                    im=True,
+                    deformer=new_skin_cluster,
+                    method="index",
+                    path=temp_dir,
+                    shape=shape,
+                )
+
+                # Set or restore inheritsTransform
+                final_inherits = (
+                    original_inherits
+                    if inherits_transform is None
+                    else inherits_transform
+                )
+                transform.inheritsTransform.set(final_inherits)
+                transform.inheritsTransform.setKeyable(True)
+                transform.inheritsTransform.showInChannelBox(True)
+
+                # Restore transform lock state
+                cls.set_attr_lock_state(transform, **lock_state[transform.name()])
+
+                print(f"✔ Rebound: {transform_name}")
+
+            except Exception as e:
+                print(f"✘ Failed: {shape.name()} → {e}")
 
 
 # -----------------------------------------------------------------------------

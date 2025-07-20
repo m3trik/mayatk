@@ -45,45 +45,76 @@ class ColorUtils:
         """Applies color based on the attribute type specified, optionally overriding attribute locks."""
 
         def handle_attribute(
-            attribute: str,
+            attribute: pm.general.Attribute,
             value: Optional[Tuple[float, float, float]] = None,
             action: str = "set",
         ) -> None:
             """Handles attribute modification with optional lock override."""
-            locked = pm.getAttr(attribute, lock=True)
-            if locked and force:
-                pm.setAttr(attribute, lock=False)
-            if action == "set" and value is not None:
-                if isinstance(value, tuple) and attribute.endswith("Color"):
-                    pm.setAttr(attribute, *value, type="double3")
-                else:
-                    pm.setAttr(attribute, value)
-            if locked and force:
-                pm.setAttr(attribute, lock=True)
+            if not attribute.exists():
+                return
 
-        if attr_type == "outliner":
-            handle_attribute(f"{obj}.useOutlinerColor", 1)
-            handle_attribute(f"{obj}.outlinerColor", color)
-        elif attr_type == "vertex":
-            # Ensure the object has a mesh shape
-            shapes = pm.listRelatives(obj, shapes=True, type="mesh")
-            if not shapes:
-                print(f"Error: {obj} does not have a mesh shape.")
-                return
-            try:
-                pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
-            except RuntimeError as e:
-                print(f"Error applying vertex color to {obj}: {e}")
-        elif attr_type == "material":
-            cls.assign_material(obj, color)
-        elif attr_type == "wireframe":
-            # Ensure the object is not a material
-            if pm.nodeType(obj) == "lambert":
-                print(f"Error: {obj} is a material, not a mesh.")
-                return
-            handle_attribute(f"{obj}.overrideEnabled", 1)
-            handle_attribute(f"{obj}.overrideRGBColors", 1)
-            handle_attribute(f"{obj}.overrideColorRGB", color)
+            locked = attribute.get(lock=True)
+            if locked and force:
+                attribute.set(lock=False)
+
+            if action == "set" and value is not None:
+                if isinstance(value, tuple) and attribute.type() == "float3":
+                    attribute.set(value, type="double3")
+                else:
+                    attribute.set(value)
+
+            if locked and force:
+                attribute.set(lock=True)
+
+        try:
+            if attr_type == "outliner":
+                if obj.hasAttr("useOutlinerColor"):
+                    handle_attribute(obj.attr("useOutlinerColor"), 1)
+                else:
+                    pm.warning(f"{obj} has no attribute 'useOutlinerColor'.")
+
+                if obj.hasAttr("outlinerColor"):
+                    handle_attribute(obj.attr("outlinerColor"), color)
+                else:
+                    pm.warning(f"{obj} has no attribute 'outlinerColor'.")
+
+            elif attr_type == "vertex":
+                shapes = pm.listRelatives(obj, shapes=True, type="mesh")
+                if not shapes:
+                    pm.warning(
+                        f"{obj} does not have a mesh shape for vertex color assignment."
+                    )
+                    return
+                try:
+                    pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
+                except RuntimeError as e:
+                    pm.warning(f"Error applying vertex color to {obj}: {e}")
+
+            elif attr_type == "material":
+                cls.assign_material(obj, color)
+
+            elif attr_type == "wireframe":
+                if pm.nodeType(obj) == "lambert":
+                    pm.warning(f"{obj} is a material, not a mesh.")
+                    return
+
+                if obj.hasAttr("overrideEnabled"):
+                    handle_attribute(obj.attr("overrideEnabled"), 1)
+                else:
+                    pm.warning(f"{obj} has no attribute 'overrideEnabled'.")
+
+                if obj.hasAttr("overrideRGBColors"):
+                    handle_attribute(obj.attr("overrideRGBColors"), 1)
+                else:
+                    pm.warning(f"{obj} has no attribute 'overrideRGBColors'.")
+
+                if obj.hasAttr("overrideColorRGB"):
+                    handle_attribute(obj.attr("overrideColorRGB"), color)
+                else:
+                    pm.warning(f"{obj} has no attribute 'overrideColorRGB'.")
+
+        except Exception as e:
+            pm.warning(f"Color assignment failed on {obj}: {e}")
 
     @staticmethod
     def get_material_color(obj: object) -> Optional[Tuple[float, float, float]]:
@@ -98,14 +129,21 @@ class ColorUtils:
 
     @staticmethod
     def get_wireframe_color(
-        obj: object, normalize: bool = False
+        obj: object,
+        normalize: bool = False,
     ) -> Optional[Tuple[float, float, float]]:
         """Gets the wireframe color of the given object."""
-        if not pm.getAttr(f"{obj}.overrideEnabled"):
+        if not obj.hasAttr("overrideEnabled") or not obj.attr("overrideEnabled").get():
             return None
-        if not pm.getAttr(f"{obj}.overrideRGBColors"):
+        if (
+            not obj.hasAttr("overrideRGBColors")
+            or not obj.attr("overrideRGBColors").get()
+        ):
             return None
-        color = pm.getAttr(f"{obj}.overrideColorRGB")
+        if not obj.hasAttr("overrideColorRGB"):
+            return None
+
+        color = obj.attr("overrideColorRGB").get()
         if not normalize:
             color = tuple(int(c * 255) for c in color)
         return color
@@ -230,16 +268,21 @@ class ColorManager(ColorUtils):
         """Resets colors to default for given objects, with options to specify which color types to reset."""
         for obj in pm.ls(objects, long=True):
             if reset_outliner:
-                pm.setAttr(f"{obj}.useOutlinerColor", 0)
+                if obj.hasAttr("useOutlinerColor"):
+                    obj.attr("useOutlinerColor").set(0)
+                else:
+                    pm.warning(f"{obj} has no attribute 'useOutlinerColor'.")
+
             if reset_wireframe or reset_vertex:
-                pm.setAttr(f"{obj}.overrideEnabled", 0)
+                if obj.hasAttr("overrideEnabled"):
+                    obj.attr("overrideEnabled").set(0)
+                else:
+                    pm.warning(f"{obj} has no attribute 'overrideEnabled'.")
+
             if reset_material:
-                # Get all materials assigned to the object
                 mats = mat_utils.MatUtils.get_mats(obj)
-                # Assign the default Lambert material
                 mat_utils.MatUtils.assign_mat(obj, "lambert1")
                 for mat in mats:
-                    # Check if the material is assigned to other objects and optionally delete it
                     mat_utils.MatUtils.is_connected(mat, delete=True)
 
         if reset_vertex:

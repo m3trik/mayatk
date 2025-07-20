@@ -485,9 +485,19 @@ class StingrayArnoldShader:
                 created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
                 created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
 
-                # Combine the created roughness and metallic maps into a metallic smoothness map
+                # Save these images to disk and get their file paths
+                base_name = ptk.get_base_texture_name(specular_map[0])
+                out_dir = os.path.dirname(specular_map[0])
+
+                rough_path = os.path.join(out_dir, f"{base_name}_Roughness.png")
+                metal_path = os.path.join(out_dir, f"{base_name}_Metallic.png")
+
+                created_roughness_map.save(rough_path)
+                created_metallic_map.save(metal_path)
+
+                # Now you can combine using file paths:
                 combined_map = ptk.pack_smoothness_into_metallic(
-                    created_metallic_map, created_roughness_map, invert_alpha=True
+                    metal_path, rough_path, invert_alpha=True
                 )
 
                 # Remove individual metallic, roughness, smoothness maps and the newly created maps
@@ -620,29 +630,6 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.ui.txt001.setText(self.msg_intro)
         self.ui.progressBar.setValue(0)
         # self.init_header_menu()
-
-    # def init_header_menu(self):
-    #     """Configure header menu"""
-    #     self.ui.header.menu.setTitle("OPTIONS")
-    #     self.ui.header.menu.add(
-    #         self.sb.registered_widgets.PushButton,
-    #         setText="HDR Manager",
-    #         setObjectName="b002",
-    #     )
-
-    #     module = hdr_manager
-    #     slot_class = module.HdrManagerSlots
-
-    #     # Register and configure HDR Manager UI
-    #     self.sb.register("hdr_manager.ui", slot_class, base_dir=module)
-    #     ui = self.sb.hdr_manager
-    #     ui.set_attributes(WA_TranslucentBackground=True)
-    #     ui.set_flags(FramelessWindowHint=True, WindowStaysOnTopHint=True)
-    #     ui.set_style(theme="dark", style_class="translucentBgWithBorder")
-    #     ui.header.config_buttons(hide_button=True)
-
-    #     # Connect button click to show HDR Manager
-    #     self.ui.header.menu.b002.clicked.connect(lambda: ui.show(pos="cursor"))
 
     @property
     def mat_name(self) -> str:

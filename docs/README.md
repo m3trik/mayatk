@@ -1,12 +1,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.9.28-blue.svg)](https://pypi.org/project/mayatk/)
-[![CoreUtils Tests](https://img.shields.io/badge/CoreUtils-Passing-brightgreen.svg)](../test/core_utils_test.py#CoreUtilsTest)
+[![Version](https://img.shields.io/badge/Version-0.9.29-blue.svg)](https://pypi.org/project/mayatk/)
+<!-- [![CoreUtils Tests](https://img.shields.io/badge/CoreUtils-Passing-brightgreen.svg)](../test/core_utils_test.py#CoreUtilsTest)
 [![XformUtils Tests](https://img.shields.io/badge/XformUtils-Passing-brightgreen.svg)](../test/xform_utils_test.py#XformUtilsTest)
 [![EditUtils Tests](https://img.shields.io/badge/EditUtils-Passing-brightgreen.svg)](../test/edit_utils_test.py#EditUtilsTest)
 [![NodeUtils Tests](https://img.shields.io/badge/NodeUtils-Passing-brightgreen.svg)](../test/edit_utils_test.py#NodeUtilsTest)
 [![CamUtils Tests](https://img.shields.io/badge/CamUtils-Passing-brightgreen.svg)](../test/cam_utils_test.py#CamUtilsTest)
 [![MatUtils Tests](https://img.shields.io/badge/MatUtils-Passing-brightgreen.svg)](../test/mat_utils_test.py#MatUtilsTest)
-[![RigUtils Tests](https://img.shields.io/badge/RigUtils-Passing-brightgreen.svg)](../test/rig_utils_test.py#RigUtilsTest)
+[![RigUtils Tests](https://img.shields.io/badge/RigUtils-Passing-brightgreen.svg)](../test/rig_utils_test.py#RigUtilsTest) -->
 
 ### MAYATK (Maya Toolkit)
 

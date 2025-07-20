@@ -152,7 +152,9 @@ class CoreUtils(ptk.HelpMixin):
             wrap_control(modelPanelName, QtWidgets.QtWidget())
         """
         from qtpy import QtWidgets
-        from shiboken2 import wrapInstance
+
+        # import wrapInstance
+        from shiboken6 import wrapInstance
         from maya.OpenMayaUI import MQtUtil
 
         layout = QtWidgets.QVBoxLayout(container)

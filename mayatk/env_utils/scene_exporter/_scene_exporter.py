@@ -4,7 +4,6 @@ import os
 import re
 import ctypes
 import shutil
-import contextlib
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
@@ -15,438 +14,24 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.anim_utils import AnimUtils
 from mayatk.env_utils import EnvUtils
-from mayatk.mat_utils import MatUtils
-from mayatk.xform_utils import XformUtils
-from mayatk.node_utils import NodeUtils
 from mayatk.display_utils import DisplayUtils
-
-
-class SceneExporterTasksFactory:
-    """A factory class for managing and executing tasks in a scene export pipeline.
-
-    This class provides mechanisms for running tasks that set temporary states, perform checks,
-    or modify the environment during an export process. Tasks are run and, if applicable, reverted.
-
-    Tasks are categorized into two types:
-    1. `set_` prefixed tasks: These represent temporary state changes (e.g., setting workspace, units).
-    2. `check_` prefixed tasks: These are validation checks that ensure certain conditions are met
-       before the export proceeds. If a check method returns `False`, the export process will be aborted.
-    - Checks with a `False` value and that do not take arguments will be skipped.
-    """
-
-    def __init__(self, logger):
-        self.logger = logger
-
-    @contextlib.contextmanager
-    def _manage_context(self, tasks: Dict[str, Any]) -> Dict[str, Any]:
-        """Manage task states by setting them once and reverting after, returning task results."""
-        original_states = {}
-        task_results = {}
-        self.logger.info(f"Running {len(tasks)} tasks")
-
-        for index, (task_name, value) in enumerate(tasks.items(), start=1):
-            method = getattr(self, task_name, None)
-            if method:
-                self.logger.debug(f"Executing Task #{index}/{len(tasks)}: {task_name}")
-
-                # Handle state changes and reversions
-                revert_method_name = (
-                    f"revert_{task_name[4:]}" if task_name.startswith("set_") else None
-                )
-                revert_method = (
-                    getattr(self, revert_method_name, None)
-                    if revert_method_name
-                    else None
-                )
-
-                try:
-                    # Execute the task and log results centrally
-                    original_value = self._execute_task_method(method, task_name, value)
-                    task_results[task_name] = original_value
-
-                    # Store revert info if applicable
-                    if revert_method:
-                        original_states[revert_method_name] = original_value
-
-                except Exception as e:
-                    self.logger.error(f"Error during task {task_name}: {e}")
-                    raise
-            else:
-                self.logger.warning(f"Task {task_name} not found. Skipping.")
-
-        yield task_results
-
-        # Revert any changes made during tasks
-        for revert_method_name, original_value in reversed(original_states.items()):
-            revert_method = getattr(self, revert_method_name, None)
-            if revert_method:
-                try:
-                    revert_method(original_value)
-                    self.logger.debug(f"Reverted {revert_method_name}")
-                except Exception as e:
-                    self.logger.error(f"Error reverting {revert_method_name}: {e}")
-
-        self.logger.info("Task execution completed, states reverted.")
-
-    def _execute_task_method(self, method, task_name: str, value: Any):
-        """Execute the task method, handling logging centrally."""
-        try:
-            if value is not None:
-                return method(value)
-            return method()
-        except TypeError:
-            if task_name.startswith("check_") and value is False:
-                return None
-            return method()
-
-    def run_tasks(self, tasks: Dict[str, Any]) -> bool:
-        """Run tasks and checks, returning True if all pass, False if any checks fail."""
-        if not tasks:
-            self.logger.warning("No tasks provided to run.")
-            return True
-
-        all_checks_passed = True
-
-        with self._manage_context(tasks) as task_results:
-            for task_name, result in task_results.items():
-                if task_name.startswith("check_"):
-                    if result is False:
-                        self.logger.error(f"Check: {task_name} failed.")
-                        all_checks_passed = False
-                    else:
-                        self.logger.info(f"Check: {task_name} passed.")
-                else:
-                    self.logger.info(f"Task {task_name} completed.")
-
-        # Final summary log
-        if all_checks_passed:
-            self.logger.info("All tasks and checks completed successfully.")
-        else:
-            self.logger.info("Some checks failed.")
-
-        return all_checks_passed
-
-
-class SceneExporterTasks(SceneExporterTasksFactory):
-    def __init__(self, objects, logger):
-        super().__init__(logger)
-
-        self.objects = objects
-        self.logger = logger
-
-    def set_workspace(self):
-        """Manage temporary workspace change."""
-        original_workspace = pm.workspace(query=True, rootDirectory=True)
-        new_workspace = EnvUtils.find_workspace_using_path()
-        if new_workspace and new_workspace != original_workspace:
-            pm.workspace(new_workspace, openWorkspace=True)
-        return original_workspace
-
-    def revert_workspace(self, original_workspace):
-        """Revert to the original workspace."""
-        pm.workspace(original_workspace, openWorkspace=True)
-
-    def set_linear_unit(self, linear_unit):
-        """Manage temporary linear unit change."""
-        original_linear_unit = pm.currentUnit(query=True, linear=True)
-        if linear_unit:
-            pm.currentUnit(linear=linear_unit)
-        # Ensure that the original value is returned
-        self.logger.debug(f"Original linear unit: {original_linear_unit}")
-        return original_linear_unit
-
-    def revert_linear_unit(self, original_linear_unit):
-        """Revert to the original linear unit."""
-        pm.currentUnit(linear=original_linear_unit)
-
-    def convert_to_relative_paths(self):
-        """Convert absolute material paths to relative paths."""
-        self.logger.debug("Converting absolute paths to relative")
-        materials = MatUtils.filter_materials_by_objects(self.objects)
-        MatUtils.remap_texture_paths(materials)
-        self.logger.debug("Path conversion completed.")
-
-    def reassign_duplicate_materials(self):
-        """Reassign duplicate materials in the scene."""
-        self.logger.debug("Reassigning duplicate materials")
-        materials = MatUtils.filter_materials_by_objects(self.objects)
-        MatUtils.reassign_duplicate_materials(materials)
-        self.logger.debug("Reassignment completed.")
-
-    def delete_unused_materials(self):
-        """Delete unused materials from the scene."""
-        self.logger.debug("Deleting unused materials")
-        pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
-        self.logger.debug("Unused materials deleted.")
-
-    def delete_environment_nodes(self) -> None:
-        """Delete all environment file nodes from the scene."""
-        env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
-        file_nodes = pm.ls(type="file")
-
-        env_file_nodes = [
-            node
-            for node in file_nodes
-            if node.hasAttr("fileTextureName")
-            and any(
-                keyword in node.fileTextureName.get().lower()
-                for keyword in env_keywords
-            )
-        ]
-
-        if env_file_nodes:
-            pm.delete(env_file_nodes)
-            self.logger.info(
-                f"Deleted {len(env_file_nodes)} environment texture nodes."
-            )
-        else:
-            self.logger.info("No environment file nodes found.")
-
-    def set_bake_animation_range(self):
-        """Set the animation export range to the first and last keyframes of the specified objects if baking is enabled."""
-        # Check if baking animation is enabled
-        if not pm.mel.eval("FBXExportBakeComplexAnimation -q"):
-            self.logger.info(
-                "Baking complex animation is disabled. Skipping frame range setting."
-            )
-            return
-
-        # Gather all key times from the specified objects
-        all_key_times = [
-            time
-            for obj in pm.ls(self.objects)
-            for time in pm.keyframe(obj, query=True, timeChange=True) or []
-        ]
-
-        if not all_key_times:
-            self.logger.warning(
-                "No keyframes found in specified objects. Skipping frame range setting."
-            )
-            return
-
-        # Determine the first and last keyframes
-        first_key, last_key = min(all_key_times), max(all_key_times)
-        # Set the start and end frames for baking complex animation
-        pm.mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
-        pm.mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
-
-        self.logger.info(
-            f"Set animation range to start: {int(first_key)}, end: {int(last_key)}"
-        )
-
-    def check_root_default_transforms(self) -> bool:
-        """Check if all root group nodes have default transforms (translate, rotate, and scale)."""
-        root_nodes = pm.ls(self.objects, assemblies=True)
-        has_non_default_transforms = False
-        tolerance = 1e-5  # Small tolerance for floating-point comparisons
-
-        for node in root_nodes:
-            if not NodeUtils.is_group(node):
-                continue
-            # Check if translate, rotate, and scale attributes are at their default values
-            translate = node.translate.get()
-            rotate = node.rotate.get()
-            scale = node.scale.get()
-
-            # Assuming the expected defaults: translate and rotate should be (0, 0, 0), scale should be (1, 1, 1)
-            if (
-                not all(abs(val) < tolerance for val in translate)
-                or not all(abs(val) < tolerance for val in rotate)
-                or not all(abs(val - 1) < tolerance for val in scale)
-            ):
-
-                if not has_non_default_transforms:
-                    self.logger.error(
-                        "Root level group nodes found with non-default transforms:"
-                    )
-                    has_non_default_transforms = True
-
-                self.logger.error(
-                    f"\tNode: {node}, Translate: {translate}, Rotate: {rotate}, Scale: {scale}"
-                )
-
-        if has_non_default_transforms:
-            return False
-
-        self.logger.debug("check_root_default_transforms passed")
-        return True
-
-    def check_absolute_paths(self) -> bool:
-        """Check if any absolute material paths are present in the scene."""
-        all_relative = True
-        materials = MatUtils.filter_materials_by_objects(self.objects)
-        material_paths = MatUtils.collect_material_paths(
-            materials,
-            inc_material=True,
-            inc_path_type=True,
-            nested_as_unit=True,
-        )
-        for mat, typ, pth in material_paths:
-            if typ == "Absolute":
-                if all_relative:
-                    all_relative = False
-                    self.logger.error("Absolute path(s) found:")
-                self.logger.error(f"\t{typ} path - {mat.name()} - {pth}")
-        if not all_relative:
-            return False
-        return True
-
-    def check_duplicate_materials(self) -> bool:
-        """Check if any duplicate materials are present in the scene."""
-        materials = MatUtils.filter_materials_by_objects(self.objects)
-        duplicate_mapping = MatUtils.find_materials_with_duplicate_textures(materials)
-        if duplicate_mapping:
-            for original, duplicates in duplicate_mapping.items():
-                for duplicate in duplicates:
-                    self.logger.error(f"\tDuplicate: {duplicate} -> {original}")
-            return False
-        return True
-
-    def check_referenced_objects(self) -> bool:
-        """Check if any referenced objects are present in the scene."""
-        referenced_objects = pm.ls(self.objects, references=True)
-        if referenced_objects:
-            for ref in referenced_objects:
-                self.logger.error(f"\t{ref}")
-            return False
-        return True
-
-    def check_hidden_objects_with_keys(self) -> bool:
-        """Check if any hidden objects with visibility keys set to False are present in the scene."""
-        hidden_geometry = [
-            node
-            for node in AnimUtils.filter_objects_with_keys(keys="visibility")
-            if not node.visibility.get()
-        ]
-        if hidden_geometry:
-            self.logger.error(
-                "Hidden geometry with visibility keys set to False found:"
-            )
-            for geom in hidden_geometry:
-                self.logger.error(f"\t{geom}")
-            return False
-        self.logger.debug("check_hidden_objects_with_keys passed")
-        return True
-
-    def check_framerate(self, target_framerate: Optional[str]) -> bool:
-        """Check if the scene's current framerate matches the target framerate."""
-        if target_framerate:
-            current_time_unit = pm.currentUnit(query=True, time=True)
-            if current_time_unit != target_framerate:
-                return False
-            self.logger.debug(
-                f"Framerate check passed: Scene framerate matches the target framerate ({target_framerate})."
-            )
-        return True
-
-    def check_objects_below_floor(self) -> bool:
-        """Check if any object's geometry is below the floor plane (Y=0)."""
-        # Use the general method to check objects against this plane with boolean return type
-        objects_below_threshold = XformUtils.check_objects_against_plane(
-            self.objects,
-            plane_point=(0, 0, 0),
-            plane_normal=(0, 1, 0),
-            return_type="bool",
-        )
-        # Log results
-        has_objects_below = False
-        for obj, is_below in objects_below_threshold:
-            if is_below:
-                if not has_objects_below:
-                    self.logger.error(
-                        "Objects with geometry below the floor threshold found:"
-                    )
-                    has_objects_below = True
-                self.logger.error(f"\tObject: {obj} - Below Floor: {is_below}")
-
-        if has_objects_below:
-            return False
-
-        self.logger.debug("check_objects_below_floor passed")
-        return True
-
-    def check_and_delete_visibility_keys(self) -> bool:
-        """Check for objects with visibility keys, show them if hidden, and delete the visibility keys."""
-        modified_objects = []
-        visibility_keys_found = False
-
-        for obj in AnimUtils.filter_objects_with_keys(keys="visibility"):
-            visibility_keys_found = True
-            # Check if the object is currently hidden
-            if not obj.visibility.get():
-                obj.visibility.set(True)  # Show the object
-                modified_objects.append(obj)
-
-            # Delete visibility keys
-            pm.cutKey(obj, attribute="visibility")
-            self.logger.info(f"Visibility keys deleted for object: {obj}")
-
-        if modified_objects:
-            self.logger.info("Hidden objects with visibility keys found and shown:")
-            for obj in modified_objects:
-                self.logger.info(f"\tObject: {obj} was hidden and is now shown")
-            self.logger.debug(
-                "check_and_delete_visibility_keys found hidden objects and made them visible."
-            )
-            return False
-
-        if visibility_keys_found:
-            self.logger.debug(
-                "check_and_delete_visibility_keys passed - visibility keys deleted."
-            )
-            return True
-
-        self.logger.debug(
-            "check_and_delete_visibility_keys passed - no visibility keys found."
-        )
-        return True
-
-    def check_untied_keyframes(self) -> bool:
-        """Check if there are any untied keyframes on the specified objects."""
-        untied_keyframes_found = False
-
-        for obj in self.objects:
-            keyed_attrs = pm.keyframe(obj, query=True, name=True)
-            if keyed_attrs:
-                all_keyframes = pm.keyframe(obj, query=True, timeChange=True)
-                if not all_keyframes:
-                    continue
-
-                start_frame, end_frame = min(all_keyframes), max(all_keyframes)
-
-                for attr in keyed_attrs:
-                    # Check if keyframes are tied at start and end
-                    start_key = pm.keyframe(
-                        attr, time=(start_frame,), query=True, timeChange=True
-                    )
-                    end_key = pm.keyframe(
-                        attr, time=(end_frame,), query=True, timeChange=True
-                    )
-
-                    if not start_key or not end_key:
-                        if not untied_keyframes_found:
-                            untied_keyframes_found = True
-                            self.logger.error("Untied keyframes found on attributes:")
-                        self.logger.error(f"\t{attr} on {obj}")
-
-        if not untied_keyframes_found:
-            self.logger.debug("All keyframes are tied.")
-        return not untied_keyframes_found
-
-    def tie_all_keyframes(self):
-        """Use AnimUtils to tie all keyframes for the specified objects."""
-        self.logger.info("Tying keyframes for all objects.")
-        AnimUtils.tie_keyframes(self.objects, absolute=True)
-        self.logger.info("Keyframes have been tied.")
+from mayatk.env_utils.scene_exporter import task_manager
 
 
 class SceneExporter(ptk.LoggingMixin):
+    def __init__(
+        self, log_level: str = "WARNING", log_handler: Optional[object] = None
+    ):
+        """ """
+        self._setup_logging(log_level, log_handler)
+
+        self.task_manager = task_manager.TaskManager(self.logger)
+        self.logger.debug("Task manager initialized in SceneExporter.")
+
     def _setup_logging(self, log_level: str, log_handler: Optional[object]) -> None:
         """Setup logging configuration."""
         self.logger.setLevel(log_level)
-        self.logger.propagate = True
         if log_handler:
             self.logger.addHandler(log_handler)
 
@@ -459,22 +44,26 @@ class SceneExporter(ptk.LoggingMixin):
     def _initialize_objects(
         self, objects: Optional[Union[List[str], Callable]]
     ) -> List:
-        """Initialize objects for the scene."""
+        """Initialize objects for the scene, including all descendants that will be exported."""
         if objects is None:
-            self.logger.debug("No objects specified; defaulting to all scene objects.")
-            objects = pm.ls(transforms=True)
+            self.logger.debug(
+                "No objects provided. Defaulting to all transforms in the scene."
+            )
+            objects = pm.selected()
         elif callable(objects):
-            self.logger.debug("Initializing objects using a callable function.")
+            self.logger.debug(
+                "Callable provided for objects. Resolving objects dynamically."
+            )
             objects = objects()
         else:
-            self.logger.debug("Initializing objects using provided list or query.")
+            self.logger.debug("Static list or query provided for objects. Validating.")
 
-        initialized_objects = pm.ls(objects)
+        objs = pm.ls(objects, long=True, flatten=True)
+        if hasattr(self, "task_manager"):
+            self.task_manager.objects = objs
 
-        # Log only the total count of initialized objects
-        self.logger.info(f"Initialized {len(initialized_objects)} objects for export.")
-
-        return initialized_objects
+        self.logger.info(f"{len(objs)} object(s) prepared for export.")
+        return objs
 
     def perform_export(
         self,
@@ -509,17 +98,16 @@ class SceneExporter(ptk.LoggingMixin):
 
         # Generate the export path
         self.export_path = self.generate_export_path()
-        self.logger.info(f"Generated export path: {self.export_path}")
+        self.logger.debug(f"Generated export path: {self.export_path}")
 
         if self.create_log_file:
             self._setup_file_logging()
 
         # Initialize objects
-        self.objects = self._initialize_objects(objects)
-
-        # Log task manager initialization
-        self.logger.debug("Initializing tasks manager in SceneExporter.")
-        self.tasks_manager = SceneExporterTasks(self.objects, self.logger)
+        initialized_objs = self._initialize_objects(objects)
+        if not initialized_objs:
+            self.logger.error("Export aborted: No objects available for export.")
+            return False
 
         # Apply preset before running tasks
         if self.preset_file:
@@ -527,21 +115,19 @@ class SceneExporter(ptk.LoggingMixin):
 
         # Run tasks and checks
         if tasks:
-            tasks_successful = self.tasks_manager.run_tasks(tasks)
+            tasks_successful = self.task_manager.run_tasks(tasks)
             if not tasks_successful:  # If any tasks failed, return them
-                self.logger.error("Aborting export due to task or check failure.")
                 return False
 
         # Select objects to export
         if export_visible:
-            pm.select(self.tasks_manager.objects, replace=True)
+            pm.select(self.task_manager.objects, replace=True)
             self.logger.info(
-                f"Selected {len(self.tasks_manager.objects)} objects for export."
+                f"Selected {len(self.task_manager.objects)} objects for export."
             )
 
         if not pm.selected():
-            pm.warning("No objects to export.")
-            self.logger.warning("No objects to export.")
+            self.logger.error("No objects to export.")
             return False
 
         # Perform the actual export
@@ -568,10 +154,23 @@ class SceneExporter(ptk.LoggingMixin):
         return os.path.join(self.export_dir, f"{export_name}.fbx")
 
     def format_export_name(self, name: str) -> str:
-        """Format the export name using a regex if provided."""
+        """Format the export name using a regex pattern and replacement (e.g. 'pattern->replace')."""
         if self.name_regex:
-            pattern, replacement = self.name_regex.split("->")
-            return re.sub(pattern, replacement, name)
+            # Try to find a delimiter
+            for delim in ("->", "=>", "|"):
+                if delim in self.name_regex:
+                    pattern, replacement = self.name_regex.split(delim, 1)
+                    break
+            else:
+                pattern, replacement = self.name_regex, ""
+            # Strip whitespace and apply
+            pattern = pattern.strip()
+            replacement = replacement.strip()
+            try:
+                return re.sub(pattern, replacement, name)
+            except re.error as e:
+                self.logger.error(f"Invalid regex pattern: {pattern}. Error: {e}")
+                return name
         return name
 
     def generate_log_file_path(self, export_path: str) -> str:
@@ -679,10 +278,11 @@ class SceneExporter(ptk.LoggingMixin):
 
 class SceneExporterSlots(SceneExporter):
     def __init__(self, **kwargs):
+        """Initialize the SceneExporterSlots class."""
+        super().__init__()
+
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.scene_exporter
-
-        self.logger.setup_logging_redirect(self.ui.txt003)
 
         self.ui.txt001.setText("")  # Output Name
         self.ui.txt003.setText("")  # Log Output
@@ -691,6 +291,9 @@ class SceneExporterSlots(SceneExporter):
         self.ui.b009.setEnabled(False)
         self.ui.b009.setChecked(False)
         self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
+
+        self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
+        self.logger.setup_logging_redirect(self.ui.txt003)
 
     @property
     def workspace(self) -> Optional[str]:
@@ -702,8 +305,8 @@ class SceneExporterSlots(SceneExporter):
     @property
     def presets(self) -> Dict[str, Optional[str]]:
         """Return available presets, using cached values if the preset directory has not changed."""
-        # Retrieve the preset directory using restore_settings
-        preset_dir = self.ui.restore_settings("preset_dir")
+        # Retrieve the preset directory using settings
+        preset_dir = self.ui.settings.value("preset_dir")
         last_checked_dir = getattr(self, "_preset_dir_last_checked", None)
 
         # Only refresh the cached presets if the preset directory changes
@@ -735,8 +338,9 @@ class SceneExporterSlots(SceneExporter):
 
     def cmb000_init(self, widget) -> None:
         """Init Preset"""
-        widget.refresh = True
         if not widget.is_initialized:
+            widget.restore_state = True  # Enable state restore
+            widget.refresh_on_show = True  # Call this method on show
             widget.menu.add(
                 "QPushButton",
                 setToolTip="Set the preset directory.",
@@ -804,211 +408,108 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             "QLineEdit",
-            setToolTip="Regex pattern for formatting the output name.",
-            setText=r"_module->",
+            setToolTip=(
+                "Regex pattern for formatting the output name.\n\n"
+                "Format:  PATTERN->REPLACEMENT\n"
+                "Examples:\n"
+                "  _bar.*->       Remove '_bar' and everything after\n"
+                "  (foo|bar)->baz    Replace 'foo' or 'bar' with 'baz'\n"
+                "Use standard Python regular expressions. If no '->', everything matching PATTERN is removed."
+            ),
             setPlaceholderText="RegEx",
             setObjectName="txt002",
         )
 
+    @staticmethod
+    def auto_object_name(task_name: str) -> str:
+        """Auto-generate unique widget object names based on task name."""
+        return task_name.replace("_", "").lower()
+
     def b000_init(self, widget) -> None:
-        """Init Export Settings"""
+        """Auto-generate Export Settings UI from task definitions."""
         widget.menu.setTitle("EXPORT SETTINGS:")
         widget.menu.mode = "popup"
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Export all visible objects regardless of the current selection.\nIf unchecked, only the selected objects will be exported.",
-            setText="Export All Visible Objects",
-            setObjectName="chk012",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for duplicate materials.",
-            setText="Check For Duplicate Materials.",
-            setObjectName="chk001",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Reassign any duplicate materials to a single material.",
-            setText="Reassign Duplicate Materials",
-            setObjectName="chk009",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Delete unassigned material nodes.",
-            setText="Delete Unused Materials",
-            setObjectName="chk008",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",
-            setText="Delete Environment Nodes",
-            setObjectName="chk015",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Delete visibility keys from the exported objects.\nIf the object is hidden, it will be set to visible.",
-            setText="Delete Visibility Keys",
-            setObjectName="chk013",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for hidden geometry with visibility keys set to False.",
-            setText="Check For Hidden Keyed Geometry",
-            setObjectName="chk010",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for referenced objects.",
-            setText="Check For Referenced Objects.",
-            setObjectName="chk002",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for default transforms on root group nodes.\nTranslate, rotate, and scale should be (0, 0, 0) and (1, 1, 1) respectively.",
-            setText="Check Root Default Transforms",
-            setObjectName="chk016",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for objects with a bounding box having a negative Y value.",
-            setText="Check For Objects Below Floor.",
-            setObjectName="chk011",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for absolute paths.",
-            setText="Check For Absolute Paths.",
-            setObjectName="chk003",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Convert absolute paths to relative paths.",
-            setText="Convert To Relative Paths",
-            setObjectName="chk007",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Determine the workspace directory from the scene path.",
-            setText="Auto Set Workspace",
-            setObjectName="chk006",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Check for untied keyframes on the specified objects.",
-            setText="Check For Untied Keyframes",
-            setObjectName="chk017",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Tie all keyframes on the specified objects.",
-            setText="Tie All Keyframes",
-            setObjectName="chk018",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
-            setText="Auto Set Bake Animation Range",
-            setObjectName="chk014",
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setToolTip="Temporary linear unit to be used during export.",
-            setObjectName="cmb001",
-        )
-        items = ptk.insert_into_dict(EnvUtils.SCENE_UNIT_VALUES, "OFF", None)
-        items = {f"Override Linear Unit: {key}": value for key, value in items.items()}
-        widget.menu.cmb001.add(items)
-        widget.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setToolTip="Temporary time unit to be used during export.",
-            setObjectName="cmb002",
-        )
-        inverted_values = {
-            f"{value} fps": key for key, value in AnimUtils.FRAME_RATE_VALUES.items()
-        }
-        items = ptk.insert_into_dict(inverted_values, "OFF", None)
-        items = {f"Check Time Unit: {key}": value for key, value in items.items()}
-        widget.menu.cmb002.add(items)
-        widget.menu.add(
-            "QCheckBox",
-            setToolTip="Export a log file along with the fbx.",
-            setText="Create Log File",
-            setObjectName="chk005",
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setToolTip="Set the log level.",
-            setObjectName="cmb003",
-        )
-        items = {
-            "Log Level: DEBUG": 10,  # DEBUG
-            "Log Level: INFO": 20,  # INFO
-            "Log Level: WARNING": 30,  # WARNING
-            "Log Level: ERROR": 40,  # ERROR
-        }
-        widget.menu.cmb003.add(items)
-        widget.menu.cmb003.currentIndexChanged.connect(
-            lambda: self.logger.setLevel(widget.menu.cmb003.currentData())
-        )
+
+        for task_name, params in self.task_manager.definitions.items():
+            widget_type = params.pop("widget_type", "QCheckBox")
+            object_name = self.auto_object_name(task_name)
+
+            # Dynamically resolve the widget class
+            widget_class = getattr(self.sb.QtWidgets, widget_type, None)
+            if widget_class is None:
+                widget_class = getattr(self.sb.registered_widgets, widget_type, None)
+                if widget_class is None:
+                    raise ValueError(f"Unknown widget type: {widget_type}")
+
+            # Create the widget
+            created_widget = widget.menu.add(widget_class)
+
+            self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
     def b001(self) -> None:
-        """Export"""
+        """Export."""
         self.ui.txt003.clear()
+        task_params = {}
 
-        # Prepare task and check parameters
-        task_params = {
-            "set_workspace": self.ui.chk006.isChecked(),
-            "set_linear_unit": self.ui.cmb001.currentData(),
-            "check_framerate": self.ui.cmb002.currentData(),
-            "set_bake_animation_range": self.ui.chk014.isChecked(),
-            "delete_environment_nodes": self.ui.chk015.isChecked(),
-            "delete_unused_materials": self.ui.chk008.isChecked(),
-            "convert_to_relative_paths": self.ui.chk007.isChecked(),
-            "check_absolute_paths": self.ui.chk003.isChecked(),
-            "reassign_duplicate_materials": self.ui.chk009.isChecked(),
-            "check_duplicate_materials": self.ui.chk001.isChecked(),
-            "check_referenced_objects": self.ui.chk002.isChecked(),
-            "check_and_delete_visibility_keys": self.ui.chk013.isChecked(),
-            "check_hidden_objects_with_keys": self.ui.chk010.isChecked(),
-            "tie_all_keyframes": self.ui.chk018.isChecked(),
-            "check_untied_keyframes": self.ui.chk017.isChecked(),
-            "check_root_default_transforms": self.ui.chk016.isChecked(),
-            "check_objects_below_floor": self.ui.chk011.isChecked(),
-        }
+        for task_name, params in self.task_manager.definitions.items():
+            widget_type = params.get("widget_type", "QCheckBox")
+            object_name = params.get("object_name", self.auto_object_name(task_name))
+            value_method = params.get("value_method")
 
-        if self.ui.b009.isChecked():  # Override checks
+            widget = getattr(self.ui, object_name, None)
+
+            if not value_method:
+                value_method = (
+                    "isChecked" if widget_type == "QCheckBox" else "currentData"
+                )
+
+            if widget and hasattr(widget, value_method):
+                value = getattr(widget, value_method)()
+                task_params[task_name] = value
+
+        override = self.ui.b009.isChecked()
+
+        # Filter tasks
+        if override:
+            # Only run tasks, no checks
             task_params = {
-                k: v for k, v in task_params.items() if not k.startswith("check_")
+                k: v for k, v in task_params.items() if not k.startswith("check_") and v
             }
+        else:
+            # Run both tasks and checks, but only if checked
+            task_params = {k: v for k, v in task_params.items() if v}
+
         self.logger.debug(f"Task parameters: {task_params}")
+
+        export_visible = task_params.pop("export_visible_objects", True)
+        create_log_file = task_params.pop("create_log_file", False)
+        log_level = task_params.pop("set_log_level", "WARNING")
 
         objects_to_export = lambda: (
             DisplayUtils.get_visible_geometry(
                 consider_templated_visible=False, inherit_parent_visibility=True
             )
-            if self.ui.chk012.isChecked()
+            if export_visible
             else pm.selected()
         )
 
-        # Call export with parameters and tasks/checks
         export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset_file=self.ui.cmb000.currentData(),
-            export_visible=self.ui.chk012.isChecked(),
+            export_visible=export_visible,
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),
-            create_log_file=self.ui.chk005.isChecked(),
-            log_level=self.ui.cmb003.currentData(),
-            tasks=task_params,  # Task-related parameters
+            create_log_file=create_log_file,
+            log_level=log_level,
+            tasks=task_params,
         )
+
         self.ui.b009.setChecked(False)
         self.ui.b009.setEnabled(not export_successful)
 
-        # Get the current output directory from the UI
         output_dir = self.ui.txt000.text()
-        # Save the output directory
         self.save_output_dir(output_dir)
 
     def b002(self) -> None:
@@ -1021,7 +522,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b003(self) -> None:
         """Add Preset."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -1039,7 +540,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b004(self) -> None:
         """Remove Preset."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -1048,10 +549,10 @@ class SceneExporterSlots(SceneExporter):
             preset_file = os.path.join(preset_dir, preset)
             if os.path.exists(preset_file):
                 os.remove(preset_file)
-                self.logger.info(f"Preset deleted: {preset_file}")
+                self.logger.success(f"Preset deleted: {preset_file}")
                 self.ui.cmb000.init_slot()
             else:
-                self.logger.warning(f"Preset file does not exist: {preset_file}")
+                self.logger.error(f"Preset file does not exist: {preset_file}")
 
     def b005(self) -> None:
         """Set Preset Directory."""
@@ -1071,7 +572,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b007(self) -> None:
         """Open Preset Directory."""
-        preset_dir = self.ui.restore_settings("preset_dir")
+        preset_dir = self.ui.settings.value("preset_dir")
         if preset_dir and os.path.exists(preset_dir):
             os.startfile(preset_dir)
         else:
@@ -1100,7 +601,7 @@ class SceneExporterSlots(SceneExporter):
         if selected_dir and os.path.exists(selected_dir):
             self.ui.txt000.setText(selected_dir)
         else:
-            self.logger.warning(f"Selected directory does not exist: {selected_dir}")
+            self.logger.error(f"Selected directory does not exist: {selected_dir}")
 
     def get_recent_output_dirs(self) -> List[str]:
         """Utility method to load recent output directories from QSettings"""

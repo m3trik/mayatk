@@ -13,7 +13,7 @@ from mayatk.core_utils import CoreUtils
 
 
 class AnimUtils(ptk.HelpMixin):
-    """ """
+    """For help on this class use: AnimUtils.help()"""
 
     # Map frame rate types to their numerical values
     FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
@@ -25,6 +25,265 @@ class AnimUtils(ptk.HelpMixin):
         "palf": 50,
         "ntscf": 60,
     }
+
+    @staticmethod
+    def objects_to_curves(
+        objects: Union["pm.PyNode", str, List[Union["pm.PyNode", str]]],
+        recursive: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Converts objects into a list of animation curves.
+        Optionally recurses through the objects to find animation curves on children.
+        Ensures no duplicates are returned.
+
+        Parameters:
+            objects: Single object, string, or list of objects (can be keyed objects or curves).
+            recursive: Whether to recursively search through children of objects for curves.
+
+        Returns:
+            A list of unique animation curves.
+        """
+        # Use pm.ls to handle various forms of input (single object, string, list)
+        objects = pm.ls(objects, flatten=True)
+        anim_curves = set()  # Use a set to ensure no duplicates
+
+        for obj in objects:
+            # Early return if obj doesn't exist
+            if not pm.objExists(obj):
+                continue
+
+            # If the object is an animCurve, add it directly
+            if pm.nodeType(obj).startswith("animCurve"):
+                anim_curves.add(obj)
+            else:  # Otherwise, list connections for animCurves of the object
+                connected_curves = pm.listConnections(
+                    obj, type="animCurve", s=True, d=False
+                )
+                if connected_curves:
+                    anim_curves.update(connected_curves)
+
+                # If recursive, look through all descendants for animation curves
+                if recursive:
+                    descendants = (
+                        pm.listRelatives(obj, allDescendents=True, type="transform")
+                        or []
+                    )
+                    for desc in descendants:
+                        connected_curves = pm.listConnections(
+                            desc, type="animCurve", s=True, d=False
+                        )
+                        if connected_curves:
+                            anim_curves.update(connected_curves)
+
+        # Return the results as a list, preserving the unique set of animCurves
+        return list(anim_curves)
+
+    @classmethod
+    def get_static_curves(
+        cls,
+        objects: List["pm.PyNode"],
+        value_tolerance: float = 1e-5,
+        recursive: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Detects static curves (curves with constant values).
+
+        Parameters:
+            objects: List of PyNodes (curves or objects).
+            value_tolerance: The value tolerance to consider for static curves (difference between keyframe values).
+            recursive: Whether to recursively search through children of objects for curves.
+
+        Returns:
+            A list of static curves.
+        """
+        from math import isclose
+
+        curves = cls.objects_to_curves(objects, recursive=recursive)
+        static_curves = []
+
+        for curve in curves:
+            values = pm.keyframe(curve, query=True, valueChange=True)
+            if not values or len(values) <= 1:
+                continue
+
+            # Check if the curve is static (all values are the same)
+            if all(isclose(v, values[0], abs_tol=value_tolerance) for v in values):
+                static_curves.append(curve)
+
+        return static_curves
+
+    @classmethod
+    @CoreUtils.undoable
+    def get_redundant_flat_keys(
+        cls,
+        objects: List["pm.PyNode"],
+        value_tolerance: float = 1e-5,
+        remove: bool = False,
+        recursive: bool = False,
+    ) -> List[Tuple[float, float]]:
+        """Detects redundant flat keys in curves and optionally deletes them.
+
+        Parameters:
+            objects: List of PyNodes (curves or objects).
+            value_tolerance: The value tolerance to consider for redundant flat keys.
+            remove: If True, the redundant keys are deleted.
+            recursive: Whether to recursively search through children of objects for curves.
+
+        Returns:
+            A list of redundant key ranges as tuples (start_time, end_time).
+        """
+        import numpy as np
+
+        curves = cls.objects_to_curves(objects, recursive=recursive)
+        redundant = []
+
+        for curve in curves:
+            times = pm.keyframe(curve, query=True, timeChange=True) or []
+            if len(times) < 3:
+                continue
+
+            values = np.array([curve.evaluate(t) for t in times])
+            remove_indices = []
+            # Find internal flat segments (at least three consecutive identical values)
+            i = 1
+            while i < len(values) - 1:
+                if (
+                    abs(values[i] - values[i - 1]) < value_tolerance
+                    and abs(values[i] - values[i + 1]) < value_tolerance
+                ):
+                    # Is it a flat run? Only remove if the values before and after are the same
+                    start = i - 1
+                    end = i + 1
+                    while (
+                        end < len(values)
+                        and abs(values[end] - values[start]) < value_tolerance
+                    ):
+                        end += 1
+                    # Only remove internal keys, not the segment endpoints
+                    remove_indices.extend(list(range(start + 1, end - 1)))
+                    i = end
+                else:
+                    i += 1
+            # Remove keys at the identified times
+            removed_times = []
+            if remove and remove_indices:
+                for idx in sorted(set(remove_indices)):
+                    pm.cutKey(curve, time=(times[idx], times[idx]), option="keys")
+                    removed_times.append(times[idx])
+            if remove_indices:
+                redundant.append((curve, [times[idx] for idx in remove_indices]))
+
+        return redundant
+
+    @classmethod
+    def simplify_curve(
+        cls,
+        objects: List["pm.PyNode"],
+        value_tolerance: float = 1e-5,
+        time_tolerance: float = 1e-5,
+        recursive: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Simplifies curves by removing unnecessary keyframes.
+
+        Parameters:
+            objects: List of PyNodes (curves or objects).
+            value_tolerance: The value tolerance for simplification.
+            time_tolerance: The time tolerance for simplification.
+            recursive: Whether to recursively search through children of objects for curves.
+
+        Returns:
+            A list of simplified curves.
+        """
+        curves = cls.objects_to_curves(objects, recursive=recursive)
+        simplified_curves = []
+
+        for curve in curves:
+            plugs = pm.listConnections(
+                curve, plugs=True, source=False, destination=True
+            )
+            if plugs and pm.objExists(plugs[0].node()):
+                pm.simplify(
+                    plugs[0],
+                    valueTolerance=value_tolerance,
+                    timeTolerance=time_tolerance,
+                )
+                simplified_curves.append(curve)
+
+        return simplified_curves
+
+    @classmethod
+    @CoreUtils.undoable
+    def optimize_keys(
+        cls,
+        objects: Union[str, "pm.PyNode", List[Union[str, "pm.PyNode"]]],
+        value_tolerance: float = 0.001,
+        time_tolerance: float = 0.001,
+        remove_flat_keys: bool = True,
+        remove_static_curves: bool = True,
+        simplify_keys: bool = False,
+        recursive: bool = True,
+        quiet: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Optimize animation keys for the given objects by removing static curves,
+        redundant flat keys, and simplifying curves.
+
+        Parameters:
+            objects (str, PyNode, or list): The objects to optimize.
+            value_tolerance (float): Tolerance for value comparison.
+            time_tolerance (float): Tolerance for time comparison.
+            remove_flat_keys (bool): Whether to remove redundant flat keys.
+            remove_static_curves (bool): Whether to remove static curves.
+            simplify_keys (bool): Whether to simplify curves.
+            recursive (bool): Whether to search through children of objects.
+            quiet (bool): If True, suppress output messages.
+
+        Returns:
+            list: A list of modified curves.
+        """
+        modified = []
+        static_curves_deleted = 0
+        flat_keys_deleted = 0
+        simplified_curves = 0
+
+        # Convert the input objects into curves (avoid duplicates)
+        targets = pm.ls(objects, flatten=True)
+        anim_curves = cls.objects_to_curves(targets, recursive=recursive)
+
+        if not quiet:
+            print(f"[optimize] Processing {len(anim_curves)} curves...")
+
+        # Phase 1: Remove static curves (if remove_static_curves is True)
+        if remove_static_curves:
+            static_curves = cls.get_static_curves(
+                anim_curves, value_tolerance=value_tolerance
+            )
+            static_curves_deleted += len(static_curves)
+            for curve in static_curves:
+                anim_curves.remove(curve)  # Remove deleted curve from anim_curves
+                pm.delete(curve)
+
+        # Phase 2: Remove redundant flat keys (if remove_flat_keys is True)
+        if remove_flat_keys:
+            redundant_keys_to_delete = cls.get_redundant_flat_keys(
+                anim_curves, value_tolerance=value_tolerance, remove=True
+            )
+            flat_keys_deleted += len(redundant_keys_to_delete)
+
+        # Phase 3: Simplify curves (if simplify_keys is True)
+        if simplify_keys:
+            cls.simplify_curve(
+                anim_curves,
+                value_tolerance=value_tolerance,
+                time_tolerance=time_tolerance,
+            )
+            simplified_curves += len(anim_curves)
+
+        modified.extend(anim_curves)
+
+        if not quiet:
+            print(f"[optimize] → {static_curves_deleted} static curves deleted")
+            print(f"[optimize] → {flat_keys_deleted} flat keys removed")
+            print(f"[optimize] → {simplified_curves} curves simplified")
+
+        return modified
 
     @staticmethod
     def get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]:
@@ -57,19 +316,19 @@ class AnimUtils(ptk.HelpMixin):
         """Formats and returns a user-friendly frame rate description based on the internal key.
 
         Parameters:
-        key (str): The internal frame rate key.
+            key (str): The internal frame rate key.
 
         Returns:
-        str: A formatted frame rate string for display.
+            str: A formatted frame rate string for display.
         """
-        value = cls.FRAME_RATE_VALUES.get(key, 0)
-        if value == 0:
+        value = cls.FRAME_RATE_VALUES.get(key, None)
+        if value is None:
             return "Unknown Frame Rate"
         else:
             return f"{value} fps {key.upper()}"
 
     @staticmethod
-    def setCurrentFrame(time=1, update=True, relative=False):
+    def set_current_frame(time=1, update=True, relative=False):
         """Set the current frame on the timeslider.
 
         Parameters:
@@ -78,7 +337,7 @@ class AnimUtils(ptk.HelpMixin):
         relative (bool): If True; the frame will be moved relative to
                     it's current position using the frame value as a move amount.
         Example:
-            setCurrentFrame(24, relative=True, update=1)
+            set_current_frame(24, relative=True, update=1)
         """
         currentTime = 0
         if relative:
@@ -95,7 +354,7 @@ class AnimUtils(ptk.HelpMixin):
             objects (list): The objects to set the keyframes on.
             **kwargs: Attribute/value pairs and optionally 'target_times'.
                       If 'target_times' is not provided, the current Maya time is used.
-        Usage:
+        Example:
             set_keys_for_attributes(objects, translateX=5, translateY=10)
             set_keys_for_attributes(objects, translateX=5, target_times=[10, 15, 20])
         """
@@ -211,6 +470,75 @@ class AnimUtils(ptk.HelpMixin):
 
             if key == adjusted_time and not preserve_keys:
                 pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
+
+    @staticmethod
+    def add_intermediate_keys(
+        objects: Union[str, "pm.nt.Transform", List[Union[str, "pm.nt.Transform"]]],
+        start: int,
+        end: int,
+        percent: Optional[float] = None,
+        include_flat: bool = False,
+    ) -> None:
+        """Keys selected or animated attributes on given object(s) between `start` and `end`.
+        If attributes are selected in the channel box, only those will be keyed.
+
+        Parameters:
+            objects (str/list): One or more objects to key.
+            start (int): Start frame.
+            end (int): End frame.
+            percent (float): Optional percent (0–100) of frames to key, evenly distributed.
+            include_flat (bool): If False, skips keys where value doesn't vary across time.
+        """
+        from math import isclose
+
+        targets = pm.ls(objects, flatten=True)
+        attrs = pm.channelBox("mainChannelBox", q=True, selectedMainAttributes=True)
+        if not attrs:
+            attrs = set()
+            for obj in targets:
+                for plug in obj.listAttr(keyable=True, scalar=True):
+                    if plug.isConnected():
+                        attrs.add(plug.attrName())
+            attrs = list(attrs)
+
+        if not attrs:
+            pm.warning("No keyable or connected attributes found.")
+            return
+
+        frames = list(range(start + 1, end))
+        if percent is not None:
+            count = max(1, int(len(frames) * (percent / 100.0)))
+            step = max(1, len(frames) // count)
+            frames = frames[::step]
+
+        frame_values = {}
+        for frame in frames:
+            pm.currentTime(frame, edit=True)
+            frame_values[frame] = {}
+            for obj in targets:
+                obj_data = frame_values[frame].setdefault(obj, {})
+                for attr in attrs:
+                    plug = obj.attr(attr)
+                    if plug.isConnected() and plug.isKeyable():
+                        obj_data[attr] = plug.get()
+
+        for frame, obj_data in frame_values.items():
+            pm.currentTime(frame, edit=True)
+            for obj, attr_values in obj_data.items():
+                for attr, value in attr_values.items():
+                    plug = obj.attr(attr)
+                    if not include_flat:
+                        try:
+                            val_prev = plug.get(time=frame - 1)
+                            val_next = plug.get(time=frame + 1)
+                            if isclose(value, val_prev, abs_tol=1e-6) and isclose(
+                                value, val_next, abs_tol=1e-6
+                            ):
+                                continue
+                        except Exception:
+                            continue
+                    plug.set(value)
+                    plug.setKey()
 
     @staticmethod
     @CoreUtils.undoable

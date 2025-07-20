@@ -12,6 +12,7 @@ import pythontk as ptk
 from mayatk.core_utils import CoreUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.edit_utils import EditUtils
+from mayatk.mat_utils import MatUtils
 from mayatk.display_utils import DisplayUtils
 from mayatk.ui_utils import UiUtils
 
@@ -684,8 +685,13 @@ class EditMacros:
     @CoreUtils.selected
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
-    def m_combine(objects):
-        """Combine multiple meshes"""
+    def m_combine(objects, allow_multiple_mats: bool = True):
+        """Combine multiple meshes.
+
+        Parameters:
+            objects (list): List of mesh objects to combine.
+            allow_multiple_materials (bool): If False, abort if selected objects use different materials.
+        """
         if not objects or len(objects) < 2:
             pm.inViewMessage(
                 statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
@@ -693,6 +699,14 @@ class EditMacros:
                 position="topCenter",
             )
             return None
+
+        if not allow_multiple_mats:
+            all_mats = MatUtils.get_mats(objects)
+            if len(set(all_mats)) > 1:
+                pm.warning(
+                    "Cannot combine: selected objects do not share the same material."
+                )
+                return None
 
         combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
         combined_mesh = pm.rename(combined_mesh, objects[0].name())
@@ -891,10 +905,11 @@ class EditMacros:
     @CoreUtils.selected
     def m_group(objects) -> None:
         """Group selected object(s)."""
+        objects = pm.ls(objects, objectsOnly=True)
         if objects:
             grp = pm.group(objects)
             pm.xform(grp, centerPivots=True)
-            pm.rename(grp, objects[0])
+            pm.rename(grp, objects[0].name())
         else:  # If nothing selected, create empty group.
             pm.group(empty=True, name="null")
 
@@ -927,6 +942,22 @@ class SelectionMacros:
         """Set face selection mask."""
         pm.selectMode(component=True)
         pm.selectType(facet=True)
+
+    @staticmethod
+    def m_invert_selection() -> None:
+        """Invert the current selection of geometry or components."""
+        objects = pm.ls(selection=True, flatten=True)
+
+        if not objects:
+            pm.warning("No valid objects selected to invert.")
+            return
+
+        first = objects[0]
+
+        if isinstance(first, (pm.MeshVertex, pm.MeshEdge, pm.MeshFace)):
+            EditUtils.invert_components(select=True)
+        else:
+            EditUtils.invert_geometry(select=True)
 
     @staticmethod
     @CoreUtils.selected

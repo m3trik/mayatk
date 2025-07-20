@@ -350,8 +350,9 @@ class ShaderTemplatesSlots:
 
     def cmb002_init(self, widget):
         """Initialize the ComboBox for shader templates."""
-        widget.refresh = True
         if not widget.is_initialized:
+            widget.restore_state = True  # Enable state restore
+            widget.refresh_on_show = True  # Call this method on show
             widget.menu.mode = "context"
             widget.menu.setTitle("Template Options")
             widget.menu.add(
