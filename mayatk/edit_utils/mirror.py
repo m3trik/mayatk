@@ -12,7 +12,6 @@ from mayatk.edit_utils import EditUtils
 class MirrorSlots:
     def __init__(self, **kwargs):
         # Initialize the switchboard and UI here
-        print("[MirrorSlots] Initializing MirrorSlots", self)
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.mirror
 
