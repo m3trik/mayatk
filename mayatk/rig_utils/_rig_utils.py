@@ -854,7 +854,7 @@ class RigUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def rebind_skin_clusters(
         cls,
-        meshes: Optional[List[pm.nt.Transform]] = None,
+        meshes: Optional[List["pm.nt.Transform"]] = None,
         temp_dir: Optional[str] = None,
         inherits_transform: Optional[bool] = None,
     ) -> None:

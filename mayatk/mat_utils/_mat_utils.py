@@ -99,8 +99,10 @@ class MatUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_connected_shaders(
-        file_nodes: Union[str, pm.nt.DependNode, List[Union[str, pm.nt.DependNode]]],
-    ) -> List[pm.nt.ShadingDependNode]:
+        file_nodes: Union[
+            str, "pm.nt.DependNode", List[Union[str, "pm.nt.DependNode"]]
+        ],
+    ) -> List["pm.nt.ShadingDependNode"]:
         """Return surface shaders connected to one or more file nodes, ignoring intermediates."""
         file_nodes = pm.ls(file_nodes, flatten=True)
         visited = set()

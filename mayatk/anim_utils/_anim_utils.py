@@ -473,7 +473,7 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     def add_intermediate_keys(
-        objects: Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]],
+        objects: Union[str, "pm.nt.Transform", List[Union[str, "pm.nt.Transform"]]],
         start: int,
         end: int,
         percent: Optional[float] = None,

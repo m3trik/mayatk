@@ -295,7 +295,7 @@ class UvUtils(ptk.HelpMixin):
             pm.delete(target_name, ch=True)  # Clean up history on target
 
     @staticmethod
-    def reorder_uv_sets(obj: pm.nt.Transform, new_order: list[str]) -> None:
+    def reorder_uv_sets(obj: "pm.nt.Transform", new_order: list[str]) -> None:
         """Reorder UV sets of the given object to match the specified new order.
         This method will raise a ValueError if the new order does not match the existing UV sets.
 
