@@ -610,24 +610,33 @@ class SceneExporterSlots(SceneExporter):
         return [i for i in prev_output_dirs if not i == "/"][-10:]
 
     def save_output_dir(self, output_dir: str) -> None:
-        """Utility method to save the output directory to QSettings"""
+        """Save the output directory to QSettings, ensuring no duplicates and normalized paths."""
         if output_dir:
+            output_dir = ptk.format_path(output_dir)
             prev_output_dirs = self.ui.settings.value("prev_output_dirs", [])
+            normalized_prev_dirs = ptk.format_path(prev_output_dirs)
+            # print(f"Saving output directory: {output_dir}")
+            # print(f"Previous directories: {normalized_prev_dirs}")
+            # Remove duplicates while preserving order
+            unique_dirs = []
+            seen = set()
+            for d in normalized_prev_dirs:
+                # print(f"Checking directory: {d}")
+                if d not in seen:
+                    # print(f"Adding unique directory: {d}")
+                    seen.add(d)
+                    unique_dirs.append(d)
 
-            # Add new directory if it's not already in the list
-            if output_dir not in prev_output_dirs:
-                prev_output_dirs.append(output_dir)
+            if output_dir in unique_dirs:
+                unique_dirs.remove(output_dir)
+            unique_dirs.append(output_dir)
+            # print(f"Unique directories after adding: {unique_dirs}")
+            unique_dirs = unique_dirs[-10:]
+            self.ui.settings.setValue("prev_output_dirs", unique_dirs)
 
-            # Keep only the last 10 directories
-            prev_output_dirs = prev_output_dirs[-10:]
-
-            # Save the updated list
-            self.ui.settings.setValue("prev_output_dirs", prev_output_dirs)
             # Optionally update the ComboBox
             self.ui.txt000.menu.cmb004.clear()
-            self.ui.txt000.menu.cmb004.add(
-                prev_output_dirs, header="Recent Output Dirs:"
-            )
+            self.ui.txt000.menu.cmb004.add(unique_dirs, header="Recent Output Dirs:")
 
 
 # -----------------------------------------------------------------------------
