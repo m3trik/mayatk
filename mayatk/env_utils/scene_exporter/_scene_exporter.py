@@ -420,11 +420,6 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    @staticmethod
-    def auto_object_name(task_name: str) -> str:
-        """Auto-generate unique widget object names based on task name."""
-        return task_name.replace("_", "").lower()
-
     def b000_init(self, widget) -> None:
         """Auto-generate Export Settings UI from task definitions."""
         widget.menu.setTitle("EXPORT SETTINGS:")
@@ -432,7 +427,7 @@ class SceneExporterSlots(SceneExporter):
 
         for task_name, params in self.task_manager.definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
-            object_name = self.auto_object_name(task_name)
+            object_name = self.sb.convert_to_legal_name(task_name)
 
             # Dynamically resolve the widget class
             widget_class = getattr(self.sb.QtWidgets, widget_type, None)
@@ -453,7 +448,9 @@ class SceneExporterSlots(SceneExporter):
 
         for task_name, params in self.task_manager.definitions.items():
             widget_type = params.get("widget_type", "QCheckBox")
-            object_name = params.get("object_name", self.auto_object_name(task_name))
+            object_name = params.get(
+                "object_name", self.sb.convert_to_legal_name(task_name)
+            )
             value_method = params.get("value_method")
 
             widget = getattr(self.ui, object_name, None)
@@ -470,13 +467,11 @@ class SceneExporterSlots(SceneExporter):
         override = self.ui.b009.isChecked()
 
         # Filter tasks
-        if override:
-            # Only run tasks, no checks
+        if override:  # Only run tasks, no checks
             task_params = {
                 k: v for k, v in task_params.items() if not k.startswith("check_") and v
             }
-        else:
-            # Run both tasks and checks, but only if checked
+        else:  # Run both tasks and checks, but only if checked
             task_params = {k: v for k, v in task_params.items() if v}
 
         self.logger.debug(f"Task parameters: {task_params}")
