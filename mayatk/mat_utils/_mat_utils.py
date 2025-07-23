@@ -67,8 +67,7 @@ class MatUtils(ptk.HelpMixin):
         as_dict: bool = False,
         **filter_kwargs,
     ):
-        """
-        Retrieves all materials from the current scene, with flexible name/type filtering.
+        """Retrieves all materials from the current scene, with flexible name/type filtering.
 
         Parameters:
             inc, exc: Inclusion/exclusion patterns (applies to names).

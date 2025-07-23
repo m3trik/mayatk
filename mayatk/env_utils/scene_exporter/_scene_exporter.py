@@ -420,11 +420,6 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    @staticmethod
-    def auto_object_name(task_name: str) -> str:
-        """Auto-generate unique widget object names based on task name."""
-        return task_name.replace("_", "").lower()
-
     def b000_init(self, widget) -> None:
         """Auto-generate Export Settings UI from task definitions."""
         widget.menu.setTitle("EXPORT SETTINGS:")
@@ -432,7 +427,7 @@ class SceneExporterSlots(SceneExporter):
 
         for task_name, params in self.task_manager.definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
-            object_name = self.auto_object_name(task_name)
+            object_name = self.sb.convert_to_legal_name(task_name)
 
             # Dynamically resolve the widget class
             widget_class = getattr(self.sb.QtWidgets, widget_type, None)
@@ -453,7 +448,9 @@ class SceneExporterSlots(SceneExporter):
 
         for task_name, params in self.task_manager.definitions.items():
             widget_type = params.get("widget_type", "QCheckBox")
-            object_name = params.get("object_name", self.auto_object_name(task_name))
+            object_name = params.get(
+                "object_name", self.sb.convert_to_legal_name(task_name)
+            )
             value_method = params.get("value_method")
 
             widget = getattr(self.ui, object_name, None)
@@ -470,13 +467,11 @@ class SceneExporterSlots(SceneExporter):
         override = self.ui.b009.isChecked()
 
         # Filter tasks
-        if override:
-            # Only run tasks, no checks
+        if override:  # Only run tasks, no checks
             task_params = {
                 k: v for k, v in task_params.items() if not k.startswith("check_") and v
             }
-        else:
-            # Run both tasks and checks, but only if checked
+        else:  # Run both tasks and checks, but only if checked
             task_params = {k: v for k, v in task_params.items() if v}
 
         self.logger.debug(f"Task parameters: {task_params}")
@@ -610,24 +605,33 @@ class SceneExporterSlots(SceneExporter):
         return [i for i in prev_output_dirs if not i == "/"][-10:]
 
     def save_output_dir(self, output_dir: str) -> None:
-        """Utility method to save the output directory to QSettings"""
+        """Save the output directory to QSettings, ensuring no duplicates and normalized paths."""
         if output_dir:
+            output_dir = ptk.format_path(output_dir)
             prev_output_dirs = self.ui.settings.value("prev_output_dirs", [])
+            normalized_prev_dirs = ptk.format_path(prev_output_dirs)
+            # print(f"Saving output directory: {output_dir}")
+            # print(f"Previous directories: {normalized_prev_dirs}")
+            # Remove duplicates while preserving order
+            unique_dirs = []
+            seen = set()
+            for d in normalized_prev_dirs:
+                # print(f"Checking directory: {d}")
+                if d not in seen:
+                    # print(f"Adding unique directory: {d}")
+                    seen.add(d)
+                    unique_dirs.append(d)
 
-            # Add new directory if it's not already in the list
-            if output_dir not in prev_output_dirs:
-                prev_output_dirs.append(output_dir)
+            if output_dir in unique_dirs:
+                unique_dirs.remove(output_dir)
+            unique_dirs.append(output_dir)
+            # print(f"Unique directories after adding: {unique_dirs}")
+            unique_dirs = unique_dirs[-10:]
+            self.ui.settings.setValue("prev_output_dirs", unique_dirs)
 
-            # Keep only the last 10 directories
-            prev_output_dirs = prev_output_dirs[-10:]
-
-            # Save the updated list
-            self.ui.settings.setValue("prev_output_dirs", prev_output_dirs)
             # Optionally update the ComboBox
             self.ui.txt000.menu.cmb004.clear()
-            self.ui.txt000.menu.cmb004.add(
-                prev_output_dirs, header="Recent Output Dirs:"
-            )
+            self.ui.txt000.menu.cmb004.add(unique_dirs, header="Recent Output Dirs:")
 
 
 # -----------------------------------------------------------------------------
