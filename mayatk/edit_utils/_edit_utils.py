@@ -347,13 +347,14 @@ class EditUtils(ptk.HelpMixin):
         cls,
         objects,
         axis: str = "x",
-        pivot: Union[str, tuple] = "object",  # Fix: Use Union[str, tuple]
+        pivot: Union[str, tuple] = "object",
         mergeMode: int = -1,
         uninstance: bool = False,
         **kwargs,
     ):
         """Mirror geometry across a given axis.
 
+        Parameters:
             objects (obj): The objects to mirror.
             axis (str): The axis to mirror across. Accepts:
                 - 'x', '-x', 'y', '-y', 'z', '-z'
@@ -374,12 +375,12 @@ class EditUtils(ptk.HelpMixin):
         kwargs["worldSpace"] = True  # Always force world space to avoid inconsistencies
 
         axis_mapping = {
-            "x": (0, 0),  # Mirror across X-axis, positive direction
-            "-x": (0, 1),  # Mirror across X-axis, negative direction
-            "y": (1, 0),  # Mirror across Y-axis, positive direction
-            "-y": (1, 1),  # Mirror across Y-axis, negative direction
-            "z": (2, 0),  # Mirror across Z-axis, positive direction
-            "-z": (2, 1),  # Mirror across Z-axis, negative direction
+            "x": (0, 0),
+            "-x": (0, 1),
+            "y": (1, 0),
+            "-y": (1, 1),
+            "z": (2, 0),
+            "-z": (2, 1),
         }
 
         if axis not in axis_mapping:
@@ -401,47 +402,84 @@ class EditUtils(ptk.HelpMixin):
             # Compute pivot position
             pivot_point = XformUtils.get_operation_axis_pos(obj, pivot)
 
-            # Adjust pivot when mirroring in negative space
-            if axis_direction == 1:  # Mirroring in negative direction
+            if axis_direction == 1:
                 center = XformUtils.get_bounding_box(obj, "center")
                 pivot_point[axis_val] = 2 * center[axis_val] - pivot_point[axis_val]
 
             kwargs["pivot"] = tuple(pivot_point)
 
-            # Handle custom separate mode
             custom_separate = mergeMode == -1
-            kwargs["mergeMode"] = (
-                0 if custom_separate else mergeMode
-            )  # Use 0 for built-in separate if custom mode is requested
+            kwargs["mergeMode"] = 0 if custom_separate else mergeMode
 
             try:
-                mirror_shape = pm.polyMirrorFace(obj, **kwargs)[0]
-                mirror_node = mirror_shape.getParent()
+                mirror_node = pm.PyNode(pm.polyMirrorFace(obj, **kwargs)[0])
+
             except Exception as e:
-                pm.warning(f"Mirror operation failed for {obj}: {e}")
+                pm.warning(f"[Mirror] polyMirrorFace operation failed for {obj}: {e}")
                 continue
 
-            if custom_separate:  # Custom separate logic
-                try:
-                    sep_nodes = pm.polySeparate(mirror_node, uss=True, inp=True)
-                    if len(sep_nodes) >= 2:
-                        orig_obj, new_obj = sep_nodes[:2]
-                        sep_node = sep_nodes[-1]
-                    pm.connectAttr(
-                        mirror_node.firstNewFace, sep_node.startFace, force=True
-                    )
-                    pm.connectAttr(
-                        mirror_node.lastNewFace, sep_node.endFace, force=True
-                    )
-                    pm.rename(new_obj, orig_obj.name())
-                    parent = pm.listRelatives(orig_obj, parent=True, path=True)
-                    if parent:
-                        pm.parent(new_obj, parent[0])
-                except Exception as e:
-                    pm.warning(f"Mirror separation failed: {e}")
+            if custom_separate:
+                cls.separate_mirrored_mesh(mirror_node)
 
             results.append(mirror_node)
         return ptk.format_return(results, objects)
+
+    @staticmethod
+    def separate_mirrored_mesh(
+        mirror_node: "pm.nt.PolyMirrorFace",
+    ) -> Optional["pm.nt.Transform"]:
+        """Separate mirrored geometry and clean up hierarchy, history, and parenting.
+
+        Parameters:
+            mirror_node (pm.nt.PolyMirrorFace): The polyMirrorFace node for face connection.
+
+        Returns:
+            The cleaned, renamed transform (or None on failure).
+        """
+        # Get the transform node for the mirror operation
+        mirror_transform = NodeUtils.get_transform_node(mirror_node)
+        if not mirror_transform:
+            pm.warning(f"[Mirror] No transform node found for {mirror_node}.")
+            return None
+        try:
+            sep_nodes = pm.polySeparate(mirror_transform, uss=True, inp=True)
+            if len(sep_nodes) >= 2:
+                orig_obj, new_obj = sep_nodes[:2]
+                sep_node = sep_nodes[-1]
+                pm.connectAttr(mirror_node.firstNewFace, sep_node.startFace, force=True)
+                pm.connectAttr(mirror_node.lastNewFace, sep_node.endFace, force=True)
+
+            parent = mirror_transform.getParent()
+            temp_parent = orig_obj.getParent()
+            temp_parent.rename(f"{temp_parent.nodeName()}__TMP")
+
+            # Parent both objects
+            for node in [orig_obj, new_obj]:
+                pm.parent(node, parent or None)
+
+            # Center pivot
+            center = XformUtils.get_bounding_box(
+                [orig_obj, new_obj], "center", world_space=True
+            )
+            pm.xform(new_obj, piv=center, ws=True)
+
+            # Cleanup
+            for obj in [temp_parent, orig_obj, new_obj]:
+                try:
+                    pm.delete(obj, constructionHistory=True)
+                except Exception as e:
+                    pass
+
+            # Rename to match original object
+            pm.rename(new_obj, orig_obj.nodeName())
+            print(f"new_obj: {new_obj}, orig_obj: {orig_obj}")
+            return new_obj
+
+        except Exception as e:
+            pm.warning(
+                f"[Separate] polySeparate operation failed for {mirror_transform}: {e}"
+            )
+            return None
 
     @classmethod
     def clean_geometry(
