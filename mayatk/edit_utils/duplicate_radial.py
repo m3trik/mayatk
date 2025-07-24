@@ -19,7 +19,7 @@ class DuplicateRadial(ptk.LoggingMixin):
 
     @staticmethod
     def duplicate_radial(
-        objects: List[pm.PyNode],
+        objects: List["pm.PyNode"],
         num_copies: int,
         start_angle: float = 0,
         end_angle: float = 360,
@@ -35,7 +35,7 @@ class DuplicateRadial(ptk.LoggingMixin):
         instance: bool = False,
         combine: bool = False,
         suffix: bool = True,
-    ) -> Dict[pm.PyNode, List[pm.PyNode]]:
+    ) -> Dict["pm.PyNode", List["pm.PyNode"]]:
         """Duplicate objects in a radial pattern.
 
         Parameters:
@@ -66,7 +66,7 @@ class DuplicateRadial(ptk.LoggingMixin):
         originals_to_copies = {}
 
         for node in objects:
-            print(f"\n--- Processing node: {node} ---")
+            print(f"\n[duplicate radial] Processing node: {node} ..")
 
             driven_group, driven_node, pivot_pos = (
                 DuplicateRadial._prepare_driven_group(
@@ -98,17 +98,19 @@ class DuplicateRadial(ptk.LoggingMixin):
                 )
 
             originals_to_copies[node] = finalized
-            print(f"[{node}] Created {len(finalized)} total instances")
+            print(
+                f"[duplicate radial] [{node}] Created {len(finalized)} total instances"
+            )
 
         return originals_to_copies
 
-    @staticmethod
     def _finalize_output(
-        node: pm.PyNode,
-        copies: List[pm.PyNode],
+        self,
+        node: "pm.PyNode",
+        copies: List["pm.PyNode"],
         keep_original: bool,
         combine: bool,
-    ) -> List[pm.PyNode]:
+    ) -> List["pm.PyNode"]:
         if combine:
             combined = pm.polyUnite(copies, ch=False, mergeUVSets=True)[0]
             combined = pm.rename(combined, f"{node}_radialCombined")
@@ -117,7 +119,7 @@ class DuplicateRadial(ptk.LoggingMixin):
                     combined, shapes=True, noIntermediate=True, type="transform"
                 )
             )
-            print(f"Combined all instances into: {combined}")
+            self.logger.debug(f"Combined all instances into: {combined}")
             return [combined]
 
         clean_copies = []
@@ -131,50 +133,48 @@ class DuplicateRadial(ptk.LoggingMixin):
 
         group_name = f"{node}_radialGroup"
         container_group = pm.group(clean_copies, name=group_name)
-        print(f"Grouped all instances under: {container_group}")
+        self.logger.debug(f"Grouped all instances under: {container_group}")
 
         return clean_copies
 
-    @staticmethod
-    def _cleanup_original(node: pm.PyNode, keep_original: bool) -> None:
+    def _cleanup_original(self, node: pm.PyNode, keep_original: bool) -> None:
         if not keep_original:
-            print(f"Deleting original node: {node}")
+            self.logger.debug(f"Deleting original node: {node}")
             pm.delete(node)
 
     @classmethod
     def _prepare_driven_group(
-        cls,
-        node: pm.PyNode,
+        self,
+        node: "pm.PyNode",
         rotate: Tuple[float, float, float],
         scale: Tuple[float, float, float],
         translate: Tuple[float, float, float],
         offset: Tuple[float, float, float],
         pivot: Union[str, Tuple[float, float, float]],
         instance: bool = False,
-    ) -> Tuple[pm.PyNode, pm.PyNode, Tuple[float, float, float]]:
+    ) -> Tuple["pm.PyNode", "pm.PyNode", Tuple[float, float, float]]:
         driven_node = pm.duplicate(node, rr=True, instanceLeaf=instance)[0]
-        print(f"[{node}] Duplicated original → driven node: {driven_node}")
+        self.logger.debug(f"[{node}] Duplicated original → driven node: {driven_node}")
 
-        cls._apply_initial_transformations(driven_node, rotate, scale, translate)
+        self._apply_initial_transformations(driven_node, rotate, scale, translate)
 
         pivot_pos = XformUtils.get_operation_axis_pos(driven_node, pivot)
-        print(f"[{driven_node}] Rotation pivot (world-space): {pivot_pos}")
+        self.logger.debug(f"[{driven_node}] Rotation pivot (world-space): {pivot_pos}")
 
         group_node = pm.group(em=True)
         pm.xform(group_node, ws=True, t=(0, 0, 0))
 
         pivot_offset_pos = [pivot_pos[i] + offset[i] for i in range(3)]
-        print(f"Setting rotate and scale pivot to: {pivot_offset_pos}")
+        self.logger.debug(f"Setting rotate and scale pivot to: {pivot_offset_pos}")
         pm.xform(group_node, ws=True, rp=pivot_offset_pos, sp=pivot_offset_pos)
 
         pm.parent(driven_node, group_node)
-        print(f"[{driven_node}] Wrapped in group: {group_node}")
+        self.logger.debug(f"[{driven_node}] Wrapped in group: {group_node}")
 
         return group_node, driven_node, pivot_pos
 
-    @staticmethod
     def _validate_inputs(
-        rotate_axis: str, weight_bias: float, weight_curve: float
+        self, rotate_axis: str, weight_bias: float, weight_curve: float
     ) -> None:
         if rotate_axis not in ["x", "y", "z"]:
             raise ValueError("Invalid rotation axis, expected 'x', 'y', or 'z'")
@@ -183,59 +183,65 @@ class DuplicateRadial(ptk.LoggingMixin):
         if not (0.0 <= weight_curve <= 1.0):
             raise ValueError("weight_curve must be between 0.0 and 1.0")
 
-    @staticmethod
     def _calculate_final_pivot_matrix(
-        manip_pivot_matrix: "pm.datatypes.Matrix", offset: Tuple[float, float, float]
+        self,
+        manip_pivot_matrix: "pm.datatypes.Matrix",
+        offset: Tuple[float, float, float],
     ) -> "pm.datatypes.Matrix":
         offset_matrix = pm.datatypes.TransformationMatrix()
         offset_matrix.translate = pm.datatypes.Vector(offset)
         final_pivot_matrix = manip_pivot_matrix * offset_matrix.asMatrix()
-        print(f"Offset matrix: {offset_matrix}")
+        self.logger.debug(f"Offset matrix: {offset_matrix}")
         return final_pivot_matrix
 
-    @staticmethod
     def _apply_initial_transformations(
+        self,
         node: "pm.PyNode",
         rotate: Tuple[float, float, float],
         scale: Tuple[float, float, float],
         translate: Tuple[float, float, float],
     ) -> None:
-        print(f"Applying initial rotation to {node}: {rotate}")
+        self.logger.debug(f"Applying initial rotation to {node}: {rotate}")
         pm.rotate(node, rotate, r=True)
-        print(f"Applying scale to {node}: {scale}")
+        self.logger.debug(f"Applying scale to {node}: {scale}")
         pm.scale(node, scale, relative=True)
-        print(f"Applying translation to {node}: {translate}")
+        self.logger.debug(f"Applying translation to {node}: {translate}")
         pm.move(node, translate, relative=True)
 
-    @staticmethod
-    def _create_group_node(node: "pm.PyNode") -> "pm.PyNode":
+    def _create_group_node(self, node: "pm.PyNode") -> "pm.PyNode":
         # Check the parent of the node
         parent_node = node.getParent()
 
         # Debug statement to show parent info
-        print(f"Parent node for {node}: {parent_node}")
+        self.logger.debug(f"Parent node for {node}: {parent_node}")
 
         # Create a group node for the given object
         group_node = pm.group(node, absolute=True)
 
         # If the group node's parent is itself, skip parenting
         if group_node == parent_node:
-            print(f"{group_node} is already correctly parented, no action needed.")
+            self.logger.debug(
+                f"{group_node} is already correctly parented, no action needed."
+            )
         else:
             # Ensure parent_node is not None and group_node is not already under the parent_node
             if parent_node:
                 try:
                     pm.parent(group_node, parent_node)
-                    print(f"Parenting {group_node} under {parent_node}")
+                    self.logger.debug(f"Parenting {group_node} under {parent_node}")
                 except Exception as e:
-                    print(f"Failed to parent {group_node} under {parent_node}: {e}")
+                    self.logger.debug(
+                        f"Failed to parent {group_node} under {parent_node}: {e}"
+                    )
             else:
-                print(f"{node} has no valid parent node, skipping parenting operation.")
+                self.logger.debug(
+                    f"{node} has no valid parent node, skipping parenting operation."
+                )
 
         return group_node
 
-    @staticmethod
     def _create_and_transform_instances(
+        self,
         group_node: "pm.PyNode",
         num_copies: int,
         rotate_axis: str,
@@ -244,6 +250,7 @@ class DuplicateRadial(ptk.LoggingMixin):
         translate: Tuple[float, float, float],
         weight_bias: float,
         weight_curve: float,
+        instance: bool,  # <-- add this parameter
     ) -> List["pm.PyNode"]:
         rotation_index = {"x": 0, "y": 1, "z": 2}[rotate_axis]
         total_rotation = end_angle - start_angle
@@ -251,10 +258,15 @@ class DuplicateRadial(ptk.LoggingMixin):
         copies = []
 
         for i in range(num_copies):
-            copy_group = pm.instance(group_node, leaf=True)[0]
+            if instance:
+                copy_group = pm.instance(group_node, leaf=True)[0]
+            else:
+                copy_group = pm.duplicate(group_node, rr=True)[0]
             copy = copy_group.getChildren()[0]
             copies.append(copy)
-            print(f"Creating instance {i}: {copy}")
+            self.logger.debug(
+                f"Creating {'instance' if instance else 'duplicate'} {i}: {copy}"
+            )
 
             x = i / (num_copies - 1) if num_copies > 1 else 0.0
             curve_value = (
@@ -266,15 +278,17 @@ class DuplicateRadial(ptk.LoggingMixin):
             f_x = (1 - weight_factor) * x + weight_factor * curve_value
             current_rotation = [0, 0, 0]
             current_rotation[rotation_index] = start_angle + total_rotation * f_x
-            print(f"Rotation factor for instance {i}: {f_x}")
-            print(f"Applying rotation to instance {i}: {current_rotation}")
+            self.logger.debug(f"Rotation factor for instance {i}: {f_x}")
+            self.logger.debug(f"Applying rotation to instance {i}: {current_rotation}")
             pm.rotate(copy_group, current_rotation, r=True, os=True, fo=True)
 
             t = [translate[j] * f_x for j in range(3)]
-            print(f"Applying translation to instance {i}: {t}")
+            self.logger.debug(f"Applying translation to instance {i}: {t}")
             pm.move(copy_group, t)
             DisplayUtils.add_to_isolation_set(copy)
-            print(f"Instance {i} added to isolation set: {copy}")
+            self.logger.debug(
+                f"{'Instance' if instance else 'Duplicate'} {i} added to isolation set: {copy}"
+            )
 
         return copies
 
@@ -283,6 +297,9 @@ class DuplicateRadialSlots:
     def __init__(self, **kwargs):
         self.sb = kwargs.get("switchboard")
         self.ui = self.sb.loaded_ui.duplicate_radial
+
+        self.logger.setLevel(kwargs.get("log_level", "WARNING"))
+        self.logger.set_log_prefix(f"[duplicate radial] ")
 
         self.preview = core_utils.preview.Preview(
             self,

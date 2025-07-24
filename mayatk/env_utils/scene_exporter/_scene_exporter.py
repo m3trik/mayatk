@@ -292,6 +292,7 @@ class SceneExporterSlots(SceneExporter):
         self.ui.b009.setChecked(False)
         self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
 
+        self.logger.hide_logger_name(False)  # Hide the logger name in output
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt003)
 
