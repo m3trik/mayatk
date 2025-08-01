@@ -141,7 +141,38 @@ class SceneExporter(ptk.LoggingMixin):
             if self.create_log_file:
                 self.close_file_handlers()
 
-        return True  # Indicate that all tasks passed and export completed
+        # After successful export, gather detailed info
+        export_info = {
+            "output_file": os.path.basename(self.export_path),
+            "export_duration": time.time() - start_time,
+            "objects_exported": (
+                len(objects) if hasattr(self, "objects") and self.objects else 0
+            ),
+        }
+
+        # Add file size if export was successful
+        if os.path.exists(self.export_path):
+            file_size = os.path.getsize(self.export_path)
+            if file_size > 1024 * 1024:  # > 1MB
+                export_info["file_size"] = f"{file_size / (1024*1024):.2f} MB"
+            else:
+                export_info["file_size"] = f"{file_size / 1024:.2f} KB"
+
+        # Add frame range if animation export
+        if hasattr(self, "_animation_range") and self._animation_range:
+            export_info["frame_range"] = self._animation_range
+
+        # Add preset info
+        if preset_file:
+            preset_name = os.path.splitext(os.path.basename(preset_file))[0]
+            export_info["preset_used"] = preset_name
+
+        # Run tasks with export info
+        success = self.task_manager._execute_tasks_and_checks(
+            task_params, check_params, export_info
+        )
+
+        return success
 
     def generate_export_path(self) -> str:
         """Generate the full export file path."""
@@ -277,6 +308,14 @@ class SceneExporter(ptk.LoggingMixin):
 
 
 class SceneExporterSlots(SceneExporter):
+
+    _log_level_options: Dict[str, Any] = {
+        "Log Level: DEBUG": 10,
+        "Log Level: INFO": 20,
+        "Log Level: WARNING": 30,
+        "Log Level: ERROR": 40,
+    }
+
     def __init__(self, **kwargs):
         """Initialize the SceneExporterSlots class."""
         super().__init__()
@@ -337,6 +376,25 @@ class SceneExporterSlots(SceneExporter):
         # Return the cached presets
         return getattr(self, "_cached_presets", {"None": None})
 
+    def header_init(self, widget):
+        """Initialize the header widget."""
+        # Add a button to open the hypershade editor.
+        widget.menu.setTitle("Settings:")
+        widget.menu.add(
+            "QCheckBox",
+            setText="Create Log File",
+            setObjectName="b011",
+            setChecked=False,
+            setToolTip="Export a log file along with the fbx.",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.ComboBox,
+            setObjectName="cmb001",
+            add=self._log_level_options,
+            setCurrentIndex=1,  # Default to INFO
+            setToolTip="Set the log level.",
+        )
+
     def cmb000_init(self, widget) -> None:
         """Init Preset"""
         if not widget.is_initialized:
@@ -372,7 +430,33 @@ class SceneExporterSlots(SceneExporter):
                 setText="Edit Preset",
                 setObjectName="b008",
             )
+
+        # Store current selection before refresh
+        current_data = widget.currentData() if widget.count() > 0 else None
+        current_text = widget.currentText() if widget.count() > 0 else ""
+
+        # Refresh the preset data
         widget.add(self.presets, clear=True)
+
+        # Restore previous selection if it still exists
+        if current_data and current_data in self.presets.values():
+            # Find the text key for the preset path
+            for text, path in self.presets.items():
+                if path == current_data:
+                    widget.setCurrentText(text)
+                    self.logger.debug(f"Restored preset selection: {text}")
+                    break
+        elif current_text and current_text in self.presets:
+            widget.setCurrentText(current_text)
+            self.logger.debug(f"Restored preset selection by text: {current_text}")
+
+    def cmb004(self, index, widget) -> None:
+        """Update the output directory based on the selected recent directory."""
+        selected_dir = widget.items[index]
+        if selected_dir and os.path.exists(selected_dir):
+            self.ui.txt000.setText(selected_dir)
+        else:
+            self.logger.error(f"Selected directory does not exist: {selected_dir}")
 
     def txt000_init(self, widget) -> None:
         """Init Output Directory"""
@@ -380,7 +464,7 @@ class SceneExporterSlots(SceneExporter):
             "QPushButton",
             setToolTip="Set the output directory.",
             setText="Set Output Directory",
-            setObjectName="b002",
+            setObjectName="b010",
         )
         widget.menu.add(
             "QPushButton",
@@ -421,12 +505,12 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    def b000_init(self, widget) -> None:
+    def b001_init(self, widget) -> None:
         """Auto-generate Export Settings UI from task definitions."""
-        widget.menu.setTitle("EXPORT SETTINGS:")
+        widget.menu.setTitle("TASKS:")
         widget.menu.mode = "popup"
 
-        for task_name, params in self.task_manager.definitions.items():
+        for task_name, params in self.task_manager.task_definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
             object_name = self.sb.convert_to_legal_name(task_name)
 
@@ -442,12 +526,35 @@ class SceneExporterSlots(SceneExporter):
 
             self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
-    def b001(self) -> None:
+    def b002_init(self, widget) -> None:
+        """Auto-generate Check Settings UI from check definitions."""
+        widget.menu.setTitle("VALIDATION CHECKS:")
+        widget.menu.mode = "popup"
+
+        for check_name, params in self.task_manager.check_definitions.items():
+            widget_type = params.pop("widget_type", "QCheckBox")
+            object_name = self.sb.convert_to_legal_name(check_name)
+
+            # Dynamically resolve the widget class
+            widget_class = getattr(self.sb.QtWidgets, widget_type, None)
+            if widget_class is None:
+                widget_class = getattr(self.sb.registered_widgets, widget_type, None)
+                if widget_class is None:
+                    raise ValueError(f"Unknown widget type: {widget_type}")
+
+            # Create the widget
+            created_widget = widget.menu.add(widget_class)
+
+            self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
+
+    def b000(self) -> None:
         """Export."""
         self.ui.txt003.clear()
         task_params = {}
+        check_params = {}
 
-        for task_name, params in self.task_manager.definitions.items():
+        # Collect task parameters
+        for task_name, params in self.task_manager.task_definitions.items():
             widget_type = params.get("widget_type", "QCheckBox")
             object_name = params.get(
                 "object_name", self.sb.convert_to_legal_name(task_name)
@@ -465,21 +572,41 @@ class SceneExporterSlots(SceneExporter):
                 value = getattr(widget, value_method)()
                 task_params[task_name] = value
 
+        # Collect check parameters
+        for check_name, params in self.task_manager.check_definitions.items():
+            widget_type = params.get("widget_type", "QCheckBox")
+            object_name = params.get(
+                "object_name", self.sb.convert_to_legal_name(check_name)
+            )
+            value_method = params.get("value_method")
+
+            widget = getattr(self.ui, object_name, None)
+
+            if not value_method:
+                value_method = (
+                    "isChecked" if widget_type == "QCheckBox" else "currentData"
+                )
+
+            if widget and hasattr(widget, value_method):
+                value = getattr(widget, value_method)()
+                check_params[check_name] = value
+
         override = self.ui.b009.isChecked()
 
-        # Filter tasks
-        if override:  # Only run tasks, no checks
-            task_params = {
-                k: v for k, v in task_params.items() if not k.startswith("check_") and v
-            }
+        # Filter parameters based on override
+        if override:  # Only run tasks, skip checks
+            task_params = {k: v for k, v in task_params.items() if v}
+            check_params = {}  # Skip all checks
         else:  # Run both tasks and checks, but only if checked
             task_params = {k: v for k, v in task_params.items() if v}
+            check_params = {k: v for k, v in check_params.items() if v}
 
+        # Combine for logging
+        all_params = {**task_params, **check_params}
         self.logger.debug(f"Task parameters: {task_params}")
+        self.logger.debug(f"Check parameters: {check_params}")
 
         export_visible = task_params.pop("export_visible_objects", True)
-        create_log_file = task_params.pop("create_log_file", False)
-        log_level = task_params.pop("set_log_level", "WARNING")
 
         objects_to_export = lambda: (
             DisplayUtils.get_visible_geometry(
@@ -497,9 +624,9 @@ class SceneExporterSlots(SceneExporter):
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),
-            create_log_file=create_log_file,
-            log_level=log_level,
-            tasks=task_params,
+            create_log_file=self.ui.b011.isChecked(),
+            log_level=self.ui.cmb001.currentData(),
+            tasks={**task_params, **check_params},  # Pass both to perform_export
         )
 
         self.ui.b009.setChecked(False)
@@ -508,7 +635,7 @@ class SceneExporterSlots(SceneExporter):
         output_dir = self.ui.txt000.text()
         self.save_output_dir(output_dir)
 
-    def b002(self) -> None:
+    def b010(self) -> None:
         """Set Output Directory"""
         output_dir = self.sb.dir_dialog(
             title="Select an output directory:", start_dir=self.workspace
@@ -590,14 +717,6 @@ class SceneExporterSlots(SceneExporter):
                 pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
             except Exception as e:
                 self.logger.error(f"Failed to open the FBX export preset editor: {e}")
-
-    def cmb004(self, index, widget) -> None:
-        """Update the output directory based on the selected recent directory."""
-        selected_dir = widget.items[index]
-        if selected_dir and os.path.exists(selected_dir):
-            self.ui.txt000.setText(selected_dir)
-        else:
-            self.logger.error(f"Selected directory does not exist: {selected_dir}")
 
     def get_recent_output_dirs(self) -> List[str]:
         """Utility method to load recent output directories from QSettings"""
