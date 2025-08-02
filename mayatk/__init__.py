@@ -44,52 +44,66 @@ IMPORTED_MODULES = {}
 MODULE_TO_PARENT = {}
 
 
-def build_dictionaries(included_modules=None, included_classes=None):
+# Optimization 2: More efficient method detection
+def _add_class_methods(class_obj, module_name, class_name):
+    """Helper function to add class methods to the method dictionaries."""
+    # Use __dict__ for faster iteration on user-defined methods
+    for method_name in class_obj.__dict__:
+        method = getattr(class_obj, method_name)
+        if callable(method) and not method_name.startswith("_"):
+            METHOD_TO_MODULE[method_name] = (module_name, class_name)
+            CLASS_METHOD_TO_MODULE[method_name] = (module_name, class_name)
+
+
+def build_dictionaries(include=None):
     base_path = os.path.dirname(__file__)
     base_package = __name__
 
     if base_package == "__main__":
         raise EnvironmentError("build_dictionaries cannot be run as a script.")
 
-    included_classes = included_classes or {}
+    include = include or {}
+
+    # Pre-compute nested module paths for efficiency
+    nested_paths = {
+        f"{base_package}.{key}": (key, classes)
+        for key, classes in include.items()
+        if "." in key
+    }
 
     for importer, modname, ispkg in pkgutil.walk_packages(
         path=[base_path], prefix=base_package + "."
     ):
         module_name_component = modname.split(".")[-1]
 
-        # If included_modules is defined, register the entire module
-        if included_modules and module_name_component in included_modules:
-            try:
-                module = importlib.import_module(modname)
-            except ImportError as e:
-                print(f"Failed to import module {modname}: {e}")
-                continue
+        # Check direct match first (most common case)
+        if module_name_component in include:
+            classes_to_include = include[module_name_component]
+        # Check pre-computed nested paths
+        elif modname in nested_paths:
+            _, classes_to_include = nested_paths[modname]
+        else:
+            continue
 
+        try:
+            module = importlib.import_module(modname)
+        except ImportError as e:
+            print(f"Failed to import module {modname}: {e}")
+            continue
+
+        # Handle wildcard - expose all classes
+        if "*" in classes_to_include:
             for name, obj in inspect.getmembers(module, inspect.isclass):
                 if obj.__module__ == modname:
                     CLASS_TO_MODULE[name] = modname
-                    method_members = inspect.getmembers(
-                        obj,
-                        lambda member: inspect.isfunction(member)
-                        or inspect.ismethod(member),
-                    )
-                    for method_name, _ in method_members:
-                        METHOD_TO_MODULE[method_name] = (modname, name)
-                        CLASS_METHOD_TO_MODULE[method_name] = (modname, name)
-
-        # If a class from this module is in included_classes, add only that class
-        elif module_name_component in included_classes:
-            try:
-                module = importlib.import_module(modname)
-            except ImportError as e:
-                print(f"Failed to import module {modname}: {e}")
-                continue
-
-            for class_name in included_classes[module_name_component]:
+                    _add_class_methods(obj, modname, name)
+        else:
+            # Handle specific class names
+            for class_name in classes_to_include:
                 obj = getattr(module, class_name, None)
                 if obj and inspect.isclass(obj) and obj.__module__ == modname:
                     CLASS_TO_MODULE[class_name] = modname
+                    _add_class_methods(obj, modname, class_name)
 
 
 def import_module(module_name):
@@ -125,31 +139,36 @@ def __getattr__(name):
 
 
 # --------------------------------------------------------------------------------------------
-# Classes and methods from these modules will be exposed at package level.
-included_modules = [
-    "_anim_utils",
-    "_cam_utils",
-    "_core_utils",
-    "_display_utils",
-    "_edit_utils",
-    "_env_utils",
-    "_mat_utils",
-    "_node_utils",
-    "_rig_utils",
-    "_ui_utils",
-    "_uv_utils",
-    "_xform_utils",
-]
-# These modules are not included in the package, but their classes will be exposed at package level.
-included_classes = {
+# Unified include dictionary supporting both simple modules and nested module paths
+include = {
+    # Legacy modules - expose all classes using wildcard
+    "_anim_utils": ["*"],
+    "_cam_utils": ["*"],
+    "_core_utils": ["*"],
+    "_display_utils": ["*"],
+    "_edit_utils": ["*"],
+    "_env_utils": ["*"],
+    "_mat_utils": ["*"],
+    "_node_utils": ["*"],
+    "_rig_utils": ["*"],
+    "_ui_utils": ["*"],
+    "_uv_utils": ["*"],
+    "_xform_utils": ["*"],
+    # Specific classes from modules
     "components": ["Components"],
     "macros": ["Macros"],
     "maya_menu_handler": ["MayaMenuHandler"],
     "naming": ["Naming"],
     "ui_manager": ["UiManager"],
+    # Add hierarchy manager support (these will now work!):
+    "env_utils.hierarchy_manager.manager": ["HierarchyManager"],
+    "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],
+    "env_utils.hierarchy_manager.swapper": ["ObjectSwapper"],
+    # Examples of wildcard usage:
+    # "some_module": ["*"],  # Expose all classes from some_module
 }
 
-build_dictionaries(included_modules=included_modules, included_classes=included_classes)
+build_dictionaries(include=include)
 
 # --------------------------------------------------------------------------------------------
 # Notes

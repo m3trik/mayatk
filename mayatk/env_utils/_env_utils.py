@@ -9,9 +9,6 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# From this package:
-from mayatk.core_utils import CoreUtils
-
 
 class EnvUtils(ptk.HelpMixin):
     """ """
