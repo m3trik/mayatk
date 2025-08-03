@@ -1,21 +1,16 @@
 # !/usr/bin/python
 # coding=utf-8
-import tempfile
 from pathlib import Path
-from typing import Union, Optional, Dict, List
-import pymel.core as pm
+from typing import Union, Optional, Dict, List, Any
 import pythontk as ptk
+import pymel.core as pm
 
-from pythontk.str_utils import FuzzyMatcher
-from mayatk.mat_utils.material_preserver import MaterialPreserver
+# From this package
+from mayatk.env_utils.temp_import import TempImport
 
 
 class ObjectSwapper(ptk.LoggingMixin):
     """Handles pushing/pulling objects between Maya scenes without modifying source scene."""
-
-    # Constants
-    TEMP_NAMESPACE_PREFIX = "temp_ref_"
-    DRY_RUN_NAMESPACE = "dry_run_temp"
 
     def __init__(
         self,
@@ -26,15 +21,14 @@ class ObjectSwapper(ptk.LoggingMixin):
         self.dry_run = dry_run
         self.fuzzy_matching = fuzzy_matching
         self.backup_dir = None
-        self.source_objects: Dict[str, pm.nt.Transform] = {}
-        self.temp_namespace = "cross_scene_temp"
+        self.source_objects: Dict[str, Any] = {}
 
-        # Initialize material preserver
-        self.material_preserver = MaterialPreserver()
+        # Initialize import manager
+        self.import_manager = TempImport(dry_run=dry_run, fuzzy_matching=fuzzy_matching)
 
     def push_objects_to_scene(
         self,
-        target_objects: Union[List[str], List[pm.PyNode], str, pm.PyNode],
+        target_objects: Union[List[str], List[Any], str, Any],
         target_scene_file: Union[str, Path],
         backup: bool = True,
     ) -> bool:
@@ -59,7 +53,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             return False
 
         try:
-            temp_export_file = self._export_objects_to_temp(object_names)
+            temp_export_file = self.import_manager.export_objects_to_temp(object_names)
             if not temp_export_file:
                 return False
 
@@ -83,7 +77,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
     def pull_objects_from_scene(
         self,
-        target_objects: Union[List[str], List[pm.PyNode], str, pm.PyNode],
+        target_objects: Union[List[str], List[Any], str, Any],
         source_scene_file: Union[str, Path],
         backup: bool = True,
     ) -> bool:
@@ -154,31 +148,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
         return True
 
-    @staticmethod
-    def _clean_namespace_name(namespaced_name: str) -> str:
-        """Extract clean name without namespace prefix."""
-        return namespaced_name.split(":")[-1]
-
-    def _create_unique_reference_namespace(self) -> str:
-        """Create a unique namespace for referencing."""
-        import time
-
-        return f"{self.TEMP_NAMESPACE_PREFIX}{int(time.time())}"
-
-    def _safely_remove_reference(self, reference_node) -> None:
-        """Safely remove a Maya reference."""
-        try:
-            ref_filename = pm.referenceQuery(reference_node, filename=True)
-            import maya.mel as mel
-
-            mel.eval(f'file -removeReference "{ref_filename}";')
-            self.logger.debug("Removed temporary reference")
-        except Exception as ref_error:
-            self.logger.warning(f"Could not remove reference: {ref_error}")
-
-    def _handle_existing_object_replacement(
-        self, clean_name: str
-    ) -> Optional[pm.PyNode]:
+    def _handle_existing_object_replacement(self, clean_name: str) -> Optional[Any]:
         """Handle replacement of existing objects, returning parent info."""
         if pm.objExists(clean_name):
             self.logger.info(f"Object '{clean_name}' already exists - will replace it")
@@ -188,121 +158,6 @@ class ObjectSwapper(ptk.LoggingMixin):
             self.logger.debug(f"Deleted existing object: {clean_name}")
             return parent
         return None
-
-    def _find_objects_in_namespace(
-        self, namespace: str, target_objects: List[str]
-    ) -> List:
-        """Find objects in the specified namespace (works for both reference and import)."""
-        try:
-            # Get all transform nodes in the namespace
-            if namespace:
-                nodes = pm.ls(f"{namespace}:*", type="transform")
-            else:
-                nodes = pm.ls(type="transform")
-
-            available_transforms = {}
-            for node in nodes:
-                base_name = self._clean_namespace_name(node.nodeName())
-                available_transforms[base_name] = node
-
-            found_objects = []
-            target_set = set(target_objects)
-
-            # First pass: exact matches
-            for target_name in target_objects:
-                if target_name in available_transforms:
-                    found_objects.append(available_transforms[target_name])
-
-            # Second pass: fuzzy matching for unmatched targets
-            if self.fuzzy_matching:
-                found_names = [
-                    self._clean_namespace_name(obj.nodeName()) for obj in found_objects
-                ]
-                unmatched_targets = target_set - set(found_names)
-                available_names = list(available_transforms.keys())
-
-                for target_name in unmatched_targets:
-                    match_result = FuzzyMatcher.find_best_match(
-                        target_name, available_names
-                    )
-                    if match_result:
-                        best_match, score = match_result
-                        found_objects.append(available_transforms[best_match])
-                        self.logger.info(
-                            f"Fuzzy match: '{target_name}' -> '{best_match}' (score: {score:.2f})"
-                        )
-
-            return found_objects
-
-        except Exception as e:
-            self.logger.error(f"Failed to find objects in namespace {namespace}: {e}")
-            return []
-
-    def _duplicate_object_with_materials(
-        self, obj, clean_name: str
-    ) -> Optional[pm.PyNode]:
-        """Duplicate a referenced object while preserving materials."""
-        # Get material assignments before duplication using MaterialPreserver
-        original_material_assignments = (
-            self.material_preserver.collect_material_assignments(obj)
-        )
-
-        # Duplicate the referenced object
-        duplicated_nodes = pm.duplicate(
-            obj,
-            name=clean_name,
-            parentOnly=False,
-            inputConnections=True,
-            returnRootsOnly=True,
-        )
-
-        if not duplicated_nodes:
-            self.logger.warning(f"Failed to duplicate object: {obj.nodeName()}")
-            return None
-
-        duplicated_obj = duplicated_nodes[0]
-
-        # Ensure clean name
-        if duplicated_obj.nodeName() != clean_name:
-            duplicated_obj.rename(clean_name)
-
-        # Handle materials using MaterialPreserver
-        self.material_preserver.apply_materials_to_object(
-            duplicated_obj, original_material_assignments
-        )
-
-        return duplicated_obj
-
-    def _export_objects_to_temp(self, target_objects: List[str]) -> Optional[Path]:
-        """Export objects to temporary file using pm.ls() for robust object handling."""
-        try:
-            # pm.ls() handles the input normalization automatically
-            objects_to_export = pm.ls(target_objects, type="transform")
-
-            if not objects_to_export:
-                self.logger.error("No valid transform objects to export")
-                return None
-
-            temp_dir = Path(tempfile.mkdtemp(prefix="maya_cross_scene_"))
-            temp_file = temp_dir / "exported_objects.ma"
-
-            if self.dry_run:
-                self.logger.notice(
-                    f"[DRY-RUN] Would export {len(objects_to_export)} objects to {temp_file}"
-                )
-                return temp_file
-
-            pm.select(objects_to_export)
-            pm.exportSelected(str(temp_file), type="mayaAscii", force=True)
-
-            self.logger.info(
-                f"Exported {len(objects_to_export)} objects to temporary file"
-            )
-            return temp_file
-
-        except Exception as e:
-            self.logger.error(f"Failed to export objects to temp file: {e}")
-            return None
 
     def _import_to_target_scene(
         self, temp_file: Path, target_scene: Path, backup: bool
@@ -325,8 +180,12 @@ class ObjectSwapper(ptk.LoggingMixin):
             pm.openFile(str(target_scene), force=True)
             self.logger.info(f"Opened target scene: {target_scene}")
 
-            # Import the objects
-            imported_nodes = pm.importFile(str(temp_file), returnNewNodes=True)
+            # Import the objects with options to reduce warnings
+            imported_nodes = pm.importFile(
+                str(temp_file),
+                returnNewNodes=True,
+                preserveReferences=False,  # Don't preserve external references
+            )
 
             if imported_nodes:
                 self.logger.success(
@@ -349,47 +208,360 @@ class ObjectSwapper(ptk.LoggingMixin):
     def _import_source_objects(
         self, source_file: Path, target_objects: List[str]
     ) -> bool:
-        """Import objects from source scene using reference and duplicate method."""
+        """Import objects from source scene using import method to avoid reference warnings."""
         try:
             self.logger.info(f"Importing from: {source_file}")
 
             if self.dry_run:
-                return self._dry_run_analysis(source_file, target_objects)
-
-            # Create reference and find objects
-            reference_namespace = self._create_unique_reference_namespace()
-            reference_node = pm.createReference(
-                str(source_file), namespace=reference_namespace
-            )
-            self.logger.debug(
-                f"Created reference with namespace: {reference_namespace}"
-            )
-
-            found_objects = self._find_objects_in_reference(
-                reference_namespace, target_objects
-            )
-
-            if not found_objects:
-                self.logger.warning("No matching objects found in source scene")
-                self._safely_remove_reference(reference_node)
+                # Use analysis import for dry run
+                imported_nodes = self.import_manager.import_for_analysis(source_file)
+                if imported_nodes:
+                    found_objects = self.import_manager.find_objects_in_namespace(
+                        None, target_objects  # No namespace for analysis import
+                    )
+                    self.logger.info(
+                        f"[DRY-RUN] Would find {len(found_objects)} matching objects"
+                    )
+                    return len(found_objects) > 0
                 return False
 
-            # Process the found objects
-            success = self._process_found_objects(found_objects, reference_node)
+            # Import objects and get import information
+            import_info = self.import_manager.import_with_namespace(
+                source_file, "import_"
+            )
 
-            # Cleanup reference
-            self._safely_remove_reference(reference_node)
+            if not import_info:
+                self.logger.error("Failed to import source file")
+                return False
 
-            return success
+            temp_namespace = import_info["namespace"]
+            imported_transforms = import_info["transforms"]
+
+            try:
+                self.logger.debug(
+                    f"Imported {len(imported_transforms)} transform nodes total"
+                )
+
+                if not imported_transforms:
+                    self.logger.warning("No transform nodes found in imported file")
+                    return False
+
+                # Show sample of what was imported for debugging
+                sample_names = [node.nodeName() for node in imported_transforms[:5]]
+                sample_clean_names = [
+                    self.import_manager._clean_namespace_name(node.nodeName())
+                    for node in imported_transforms[:5]
+                ]
+                self.logger.debug(f"Sample imported transform names: {sample_names}")
+                self.logger.debug(f"Sample clean names: {sample_clean_names}")
+
+                # Find matching objects among imported transforms
+                found_objects = []
+                # Track fuzzy matches for proper renaming
+                fuzzy_match_map = {}  # Maps imported_node -> target_name
+
+                for target_name in target_objects:
+                    # First try exact match - compare clean names (without namespace)
+                    matching_nodes = [
+                        node
+                        for node in imported_transforms
+                        if self.import_manager._clean_namespace_name(node.nodeName())
+                        == target_name
+                    ]
+                    if matching_nodes:
+                        found_objects.extend(matching_nodes)
+                        continue
+
+                    # Try fuzzy matching if enabled
+                    if self.import_manager.fuzzy_matching:
+                        # Get clean names for fuzzy matching
+                        import_names = [
+                            self.import_manager._clean_namespace_name(node.nodeName())
+                            for node in imported_transforms
+                        ]
+                        matches = ptk.FuzzyMatcher.find_all_matches(
+                            [target_name], import_names, score_threshold=0.7
+                        )
+
+                        # Try each match in order of score (best first)
+                        matched_successfully = False
+                        if target_name in matches:
+                            # If there are multiple matches, try them in order
+                            # Create a list of potential matches - start with the best one
+                            potential_matches = [
+                                (matches[target_name][0], matches[target_name][1])
+                            ]
+
+                            # Try to get additional matches if supported
+                            try:
+                                all_matches = ptk.FuzzyMatcher.find_all_matches(
+                                    [target_name],
+                                    import_names,
+                                    score_threshold=0.6,
+                                    return_all=True,
+                                )
+                                if target_name in all_matches and isinstance(
+                                    all_matches[target_name], list
+                                ):
+                                    potential_matches = all_matches[target_name]
+                            except (TypeError, AttributeError):
+                                # Fallback if return_all parameter not supported
+                                self.logger.debug(
+                                    "Using single best match (return_all not supported)"
+                                )
+
+                            self.logger.debug(
+                                f"Trying {len(potential_matches)} potential matches for {target_name}"
+                            )
+
+                            for matched_name, score in potential_matches:
+                                self.logger.debug(
+                                    f"  Evaluating match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                                )
+
+                                # Find the actual node that corresponds to the matched clean name
+                                try:
+                                    matching_node = next(
+                                        node
+                                        for node in imported_transforms
+                                        if self.import_manager._clean_namespace_name(
+                                            node.nodeName()
+                                        )
+                                        == matched_name
+                                    )
+                                except StopIteration:
+                                    self.logger.debug(
+                                        f"  No node found for match '{matched_name}', trying next..."
+                                    )
+                                    continue  # Try next match
+
+                                # ENHANCED FUZZY MATCHING: Generic approach
+                                # If fuzzy match found a container, search inside for better matches
+                                geometry_found = False
+                                better_match_found = False
+
+                                # Check if the matched object has children that might be better matches
+                                if hasattr(matching_node, "getChildren"):
+                                    try:
+                                        # Function to recursively search for better matches inside containers
+                                        def find_better_match_recursive(
+                                            node, target_name, depth=0, max_depth=3
+                                        ):
+                                            if depth > max_depth:
+                                                return None, False
+
+                                            children = node.getChildren()
+                                            for child in children:
+                                                child_clean_name = self.import_manager._clean_namespace_name(
+                                                    child.nodeName()
+                                                )
+
+                                                # Check if this child is a better match than the parent
+                                                child_has_shapes = (
+                                                    bool(child.getShapes())
+                                                    if hasattr(child, "getShapes")
+                                                    else False
+                                                )
+
+                                                # Calculate match quality - exact name match gets highest priority
+                                                is_exact_match = (
+                                                    child_clean_name == target_name
+                                                )
+                                                is_better_match = False
+
+                                                if is_exact_match:
+                                                    # Exact name match - this is definitely better
+                                                    is_better_match = True
+                                                    self.logger.debug(
+                                                        f"  Found exact name match: {child_clean_name}"
+                                                    )
+                                                elif (
+                                                    child_has_shapes
+                                                    and target_name in child_clean_name
+                                                ):
+                                                    # Child has geometry and similar name - likely better than empty container
+                                                    is_better_match = True
+                                                    self.logger.debug(
+                                                        f"  Found geometry match: {child_clean_name} (has shapes)"
+                                                    )
+                                                elif (
+                                                    len(child_clean_name)
+                                                    > len(matched_name)
+                                                    and target_name in child_clean_name
+                                                ):
+                                                    # Child has more specific/longer name that contains target - might be better
+                                                    is_better_match = True
+                                                    self.logger.debug(
+                                                        f"  Found more specific match: {child_clean_name}"
+                                                    )
+
+                                                self.logger.debug(
+                                                    f"  Checking child: {child_clean_name}, has_shapes: {child_has_shapes}, is_better: {is_better_match}"
+                                                )
+
+                                                if is_better_match:
+                                                    return child, child_has_shapes
+
+                                                # If this child doesn't match but has children, search recursively
+                                                if child.getChildren():
+                                                    (
+                                                        recursive_result,
+                                                        recursive_has_shapes,
+                                                    ) = find_better_match_recursive(
+                                                        child,
+                                                        target_name,
+                                                        depth + 1,
+                                                        max_depth,
+                                                    )
+                                                    if recursive_result:
+                                                        return (
+                                                            recursive_result,
+                                                            recursive_has_shapes,
+                                                        )
+
+                                            return None, False
+
+                                        # Search for better matches inside the container
+                                        self.logger.debug(
+                                            f"Searching inside container '{matched_name}' for better match for '{target_name}'"
+                                        )
+
+                                        better_child, child_has_shapes = (
+                                            find_better_match_recursive(
+                                                matching_node, target_name
+                                            )
+                                        )
+
+                                        if better_child:
+                                            # Found a better match inside the container
+                                            original_matched_name = matched_name
+                                            matching_node = better_child
+                                            matched_name = self.import_manager._clean_namespace_name(
+                                                better_child.nodeName()
+                                            )
+                                            score = 0.95  # High score for exact match found inside container
+                                            better_match_found = True
+                                            geometry_found = child_has_shapes
+
+                                            self.logger.info(
+                                                f"Found better match inside container: '{original_matched_name}' -> '{matched_name}' (has_shapes: {child_has_shapes})"
+                                            )
+                                        else:
+                                            self.logger.debug(
+                                                f"No better match found inside container '{matched_name}'"
+                                            )
+
+                                    except Exception as search_error:
+                                        self.logger.debug(
+                                            f"Could not search inside container: {search_error}"
+                                        )
+
+                                # Decide whether to use this match
+                                should_use_match = True
+
+                                # If we searched inside a container but found no better match,
+                                # we might want to be more cautious about using the container itself
+                                container_has_shapes = (
+                                    bool(matching_node.getShapes())
+                                    if hasattr(matching_node, "getShapes")
+                                    else False
+                                )
+
+                                # Only skip the match if:
+                                # 1. We searched inside a container (has children)
+                                # 2. Found no better match inside
+                                # 3. The container itself has no geometry/content
+                                # 4. The match quality isn't very high
+                                if (
+                                    hasattr(matching_node, "getChildren")
+                                    and matching_node.getChildren()
+                                    and not better_match_found
+                                    and not container_has_shapes
+                                    and score < 0.9
+                                ):
+                                    should_use_match = False
+                                    self.logger.warning(
+                                        f"Skipping low-quality container match: '{target_name}' -> '{matched_name}' (score: {score:.2f}, empty container)"
+                                    )
+
+                                if should_use_match:
+                                    found_objects.append(matching_node)
+                                    # Store the fuzzy match mapping
+                                    fuzzy_match_map[matching_node] = target_name
+                                    self.logger.info(
+                                        f"Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                                    )
+                                    matched_successfully = True
+                                    break  # Found a good match, stop trying alternatives
+                                else:
+                                    # Continue to try next potential match
+                                    continue
+
+                            if not matched_successfully:
+                                self.logger.warning(
+                                    f"No suitable fuzzy match found for {target_name} (tried {len(potential_matches)} options)"
+                                )
+
+                if not found_objects:
+                    self.logger.warning("No matching objects found in imported scene")
+                    # Additional debug info
+                    self.logger.debug(f"Looking for: {target_objects}")
+                    available_clean_names = [
+                        self.import_manager._clean_namespace_name(node.nodeName())
+                        for node in imported_transforms[:10]
+                    ]
+                    self.logger.debug(f"Available clean names: {available_clean_names}")
+
+                    # Clean up the entire import since we're not using any objects
+                    self.import_manager.cleanup_import(
+                        temp_namespace, imported_transforms
+                    )
+
+                    return False
+
+                # Process the found objects and clean up import
+                success = self._process_found_objects_with_cleanup(
+                    found_objects, temp_namespace, imported_transforms, fuzzy_match_map
+                )
+
+                return success
+
+            except Exception as e:
+                # Only clean up unused imported objects on error - but be very careful
+                if "imported_transforms" in locals() and "found_objects" in locals():
+                    try:
+                        # Only delete objects that are definitely not being used
+                        remaining_objects = []
+                        for obj in imported_transforms:
+                            # Skip if it's one of our found objects
+                            if obj in found_objects:
+                                continue
+                            # Skip if object no longer exists (might have been processed)
+                            if not pm.objExists(obj):
+                                continue
+                            # Only add to cleanup list if it's really unused
+                            remaining_objects.append(obj)
+
+                        if remaining_objects:
+                            pm.delete(remaining_objects)
+                            self.logger.debug(
+                                f"Cleaned up {len(remaining_objects)} unused objects after error"
+                            )
+                    except Exception as cleanup_error:
+                        self.logger.debug(f"Error during cleanup: {cleanup_error}")
+
+                # Clean up namespace properly
+                self.import_manager.cleanup_import(temp_namespace)
+
+                raise e
 
         except Exception as e:
             self.logger.error(f"Failed to import source objects: {e}")
-            # Try to clean up reference if it exists
-            if "reference_node" in locals():
-                self._safely_remove_reference(reference_node)
             return False
 
-    def _process_found_objects(self, found_objects: List, reference_node) -> bool:
+    def _process_found_objects(
+        self, found_objects: List, fuzzy_match_map: Dict = None
+    ) -> bool:
         """Process found objects by duplicating them with materials and hierarchy."""
         self.logger.info(f"Found {len(found_objects)} matching objects:")
         for obj in found_objects:
@@ -398,52 +570,370 @@ class ObjectSwapper(ptk.LoggingMixin):
         nodes_before = len(pm.ls())
 
         # Collect parent info for objects that will be replaced
-        parent_info = self._collect_parent_info(found_objects)
+        parent_info = self._collect_parent_info(found_objects, fuzzy_match_map or {})
 
         # Duplicate all objects with materials
-        imported_objects = self._duplicate_all_objects(found_objects, parent_info)
+        imported_objects = self._process_all_objects(
+            found_objects, parent_info, fuzzy_match_map or {}
+        )
 
         # Verify cleanup and log results
         self._verify_import_results(imported_objects, nodes_before)
 
         return len(imported_objects) > 0
 
+    def _process_found_objects_with_cleanup(
+        self,
+        found_objects: List,
+        namespace: str,
+        imported_objects: List = None,
+        fuzzy_match_map: Dict = None,
+    ) -> bool:
+        """Process found objects and immediately clean up import to prevent issues."""
+        self.logger.info(f"Found {len(found_objects)} matching objects:")
+        for obj in found_objects:
+            self.logger.info(f"  - {obj.nodeName()}")
+
+        nodes_before = len(pm.ls())
+
+        # Collect parent info for objects that will be replaced
+        parent_info = self._collect_parent_info(found_objects, fuzzy_match_map or {})
+
+        # Process all objects with materials
+        processed_objects = self._process_all_objects(
+            found_objects, parent_info, fuzzy_match_map or {}
+        )
+
+        # Clean up remaining imported objects that weren't processed
+        remaining_objects = []
+        if imported_objects:
+            remaining_objects = [
+                obj
+                for obj in imported_objects
+                if obj not in found_objects and pm.objExists(obj)
+            ]
+            if remaining_objects:
+                pm.delete(remaining_objects)
+                self.logger.debug(
+                    f"Cleaned up {len(remaining_objects)} unused imported objects"
+                )
+
+        # EXPERIMENTAL FIX: Completely skip namespace cleanup to prevent empty transforms
+        # The namespace and any unused objects will be cleaned up when Maya closes or scene changes
+        # This preserves our processed objects with their content intact
+        self.logger.debug(
+            f"Skipping namespace cleanup for {namespace} to preserve object content"
+        )
+
+        # Just remove from tracking without deleting namespace content
+        if (
+            hasattr(self.import_manager, "_active_namespaces")
+            and namespace in self.import_manager._active_namespaces
+        ):
+            self.import_manager._active_namespaces.remove(namespace)
+            self.logger.debug(f"Removed {namespace} from tracking without cleanup")
+
+        # Verify cleanup and log results
+        self._verify_import_results(processed_objects, nodes_before)
+
+        return len(processed_objects) > 0
+
     def _collect_parent_info(
-        self, found_objects: List
-    ) -> Dict[str, Optional[pm.PyNode]]:
+        self, found_objects: List, fuzzy_match_map: Dict
+    ) -> Dict[str, Optional[Any]]:
         """Collect parent information for objects that will be replaced."""
         parent_info = {}
         for obj in found_objects:
-            clean_name = self._clean_namespace_name(obj.nodeName())
-            parent = self._handle_existing_object_replacement(clean_name)
-            if parent:
-                parent_info[clean_name] = parent
-        return parent_info
+            try:
+                # Verify the found object still exists before any operations
+                if not pm.objExists(obj):
+                    self.logger.warning(
+                        f"Found object {obj} no longer exists, skipping"
+                    )
+                    continue
 
-    def _duplicate_all_objects(self, found_objects: List, parent_info: Dict) -> List:
-        """Duplicate all found objects with materials and hierarchy restoration."""
-        imported_objects = []
-
-        for obj in found_objects:
-            clean_name = self._clean_namespace_name(obj.nodeName())
-            duplicated_obj = self._duplicate_object_with_materials(obj, clean_name)
-
-            if duplicated_obj:
-                # Restore parent hierarchy
-                if clean_name in parent_info and parent_info[clean_name]:
-                    pm.parent(duplicated_obj, parent_info[clean_name])
+                # Get the clean name - use fuzzy match target if available
+                if obj in fuzzy_match_map:
+                    clean_name = fuzzy_match_map[obj]
                     self.logger.debug(
-                        f"Parented {clean_name} to {parent_info[clean_name].nodeName()}"
+                        f"Processing fuzzy match: imported='{obj.nodeName()}' -> target_name='{clean_name}'"
+                    )
+                else:
+                    clean_name = self.import_manager._clean_namespace_name(
+                        obj.nodeName()
+                    )
+                    self.logger.debug(
+                        f"Processing exact match: imported='{obj.nodeName()}' -> target_name='{clean_name}'"
                     )
 
-                imported_objects.append(duplicated_obj)
-                self.logger.debug(
-                    f"Duplicated with materials: {obj.nodeName()} -> {clean_name}"
-                )
-            else:
-                self.logger.warning(f"Failed to duplicate object: {obj.nodeName()}")
+                # Check if this imported object is different from any existing object with the same name
+                if pm.objExists(clean_name):
+                    # Try to create PyNode safely - handle non-unique names
+                    try:
+                        existing_obj = pm.PyNode(clean_name)
 
-        return imported_objects
+                        # Use a more reliable comparison - check if they are actually different objects
+                        try:
+                            # Double-check both objects still exist before comparison
+                            if not pm.objExists(obj) or not pm.objExists(existing_obj):
+                                self.logger.debug(
+                                    f"One of the objects no longer exists during comparison"
+                                )
+                                continue
+
+                            # Get full DAG paths for comparison - use more defensive approach
+                            obj_path = None
+                            existing_path = None
+
+                            try:
+                                obj_path = (
+                                    obj.fullPath()
+                                    if hasattr(obj, "fullPath")
+                                    else str(obj)
+                                )
+                            except:
+                                obj_path = str(obj)
+
+                            try:
+                                existing_path = (
+                                    existing_obj.fullPath()
+                                    if hasattr(existing_obj, "fullPath")
+                                    else str(existing_obj)
+                                )
+                            except:
+                                existing_path = str(existing_obj)
+
+                            # Check if they are actually different objects by comparing node names and full paths
+                            # For fuzzy matching, we should always replace since the names are different
+                            objects_are_different = False
+
+                            # If the imported object has a different name than the target clean name,
+                            # it's definitely a different object (fuzzy match case)
+                            if obj.nodeName() != clean_name:
+                                objects_are_different = True
+                                self.logger.debug(
+                                    f"Objects are different: imported='{obj.nodeName()}' vs existing='{clean_name}'"
+                                )
+                            # Otherwise check paths
+                            elif (
+                                obj_path != existing_path and obj_path and existing_path
+                            ):
+                                objects_are_different = True
+                                self.logger.debug(
+                                    f"Objects have different paths: imported='{obj_path}' vs existing='{existing_path}'"
+                                )
+
+                            if objects_are_different:
+                                self.logger.info(
+                                    f"Object '{clean_name}' already exists - will replace it"
+                                )
+
+                                # Get parent before deletion
+                                parent = None
+                                try:
+                                    parent = existing_obj.getParent()
+                                except:
+                                    pass
+
+                                # Delete the existing object safely
+                                try:
+                                    pm.delete(existing_obj)
+                                    self.logger.debug(
+                                        f"Deleted existing object: {clean_name}"
+                                    )
+                                    if parent:
+                                        parent_info[clean_name] = parent
+                                except Exception as del_error:
+                                    self.logger.debug(
+                                        f"Could not delete existing object: {del_error}"
+                                    )
+                            else:
+                                self.logger.debug(
+                                    f"Found object {clean_name} appears to be the same as existing - no replacement needed"
+                                )
+                        except Exception as comp_error:
+                            # If comparison fails, be conservative and don't delete anything
+                            self.logger.debug(
+                                f"Could not compare objects safely: {comp_error}"
+                            )
+
+                    except Exception as pynode_error:
+                        self.logger.debug(
+                            f"Could not create PyNode for '{clean_name}': {pynode_error}"
+                        )
+                        # If we can't safely reference the existing object, we'll proceed with caution
+                        # The rename operation in _process_all_objects will handle any conflicts
+                        self.logger.debug(
+                            f"Will proceed with processing {clean_name} - rename operation will handle conflicts"
+                        )
+
+                else:
+                    self.logger.debug(
+                        f"No existing object named {clean_name} to replace"
+                    )
+
+            except Exception as e:
+                self.logger.warning(f"Error collecting parent info for {obj}: {e}")
+                continue
+
+        return parent_info
+
+    def _process_all_objects(
+        self, found_objects: List, parent_info: Dict, fuzzy_match_map: Dict
+    ) -> List:
+        """Process imported objects - rename them and restore hierarchy if needed."""
+        processed_objects = []
+
+        for obj in found_objects:
+            try:
+                # Verify object still exists before processing (more robust check)
+                try:
+                    if not pm.objExists(obj):
+                        self.logger.warning(f"Object {obj} no longer exists, skipping")
+                        continue
+                    # Additional check - try to access the object's node name
+                    obj.nodeName()
+                except Exception as exist_check:
+                    self.logger.warning(
+                        f"Object {obj} is not accessible, skipping: {exist_check}"
+                    )
+                    continue
+
+                # Get the target name - use fuzzy match target if available
+                if obj in fuzzy_match_map:
+                    clean_name = fuzzy_match_map[obj]
+                    self.logger.debug(
+                        f"Processing fuzzy match for rename: '{obj.nodeName()}' -> '{clean_name}'"
+                    )
+                else:
+                    clean_name = self.import_manager._clean_namespace_name(
+                        obj.nodeName()
+                    )
+                    self.logger.debug(
+                        f"Processing exact match for rename: '{obj.nodeName()}' -> '{clean_name}'"
+                    )
+
+                # Check if there's an existing object with the same clean name that we need to replace
+                existing_obj_to_replace = None
+                if pm.objExists(clean_name):
+                    try:
+                        # Try to get the existing object
+                        potential_existing = pm.PyNode(clean_name)
+                        # Check if it's different from our imported object
+                        if potential_existing != obj:
+                            existing_obj_to_replace = potential_existing
+                            self.logger.info(
+                                f"Found existing object '{clean_name}' that will be replaced"
+                            )
+                    except Exception as check_error:
+                        # If we can't check reliably, list all objects with this name
+                        all_matching = pm.ls(clean_name)
+                        if len(all_matching) > 1:
+                            # Find the one that's not our imported object
+                            for potential in all_matching:
+                                if potential != obj:
+                                    existing_obj_to_replace = potential
+                                    self.logger.info(
+                                        f"Found existing object '{clean_name}' to replace (resolved from multiple matches)"
+                                    )
+                                    break
+
+                # If we found an existing object to replace, delete it first
+                if existing_obj_to_replace:
+                    try:
+                        # Get parent info before deletion
+                        parent = None
+                        try:
+                            parent = existing_obj_to_replace.getParent()
+                        except:
+                            pass
+
+                        # Delete the existing object
+                        pm.delete(existing_obj_to_replace)
+                        self.logger.info(f"Deleted existing object: {clean_name}")
+
+                        # Store parent info for later use
+                        if parent and clean_name not in parent_info:
+                            parent_info[clean_name] = parent
+
+                    except Exception as delete_error:
+                        self.logger.warning(
+                            f"Could not delete existing object {clean_name}: {delete_error}"
+                        )
+
+                # Now ensure our imported object has the correct clean name
+                if obj.nodeName() != clean_name:
+                    try:
+                        # The imported object needs to be renamed to the target name
+                        original_name = obj.nodeName()
+
+                        # CRITICAL FIX: Use a more reliable method to move objects out of namespace
+                        # Instead of relying on rename, use parent to root and then rename
+                        if ":" in original_name:
+                            # Object is in a namespace - use parent to move to root namespace first
+                            try:
+                                # Get current parent (if any) before moving to root
+                                current_parent = obj.getParent()
+
+                                # Move to world (root namespace) to ensure it's out of import namespace
+                                pm.parent(obj, world=True)
+                                self.logger.debug(
+                                    f"Moved object to root namespace: '{original_name}'"
+                                )
+
+                                # Store the original parent for later restoration if needed
+                                if current_parent and clean_name not in parent_info:
+                                    parent_info[clean_name] = current_parent
+
+                            except Exception as parent_error:
+                                self.logger.debug(
+                                    f"Could not parent to world: {parent_error}"
+                                )
+
+                        # Now rename the object (it should be safely in root namespace)
+                        obj.rename(clean_name)
+                        final_name = obj.nodeName()
+
+                        if final_name != clean_name:
+                            self.logger.info(
+                                f"Renamed imported object '{original_name}' to: {final_name} (Maya resolved naming conflict)"
+                            )
+                        else:
+                            self.logger.info(
+                                f"Renamed imported object '{original_name}' to: {clean_name}"
+                            )
+                    except Exception as rename_error:
+                        self.logger.warning(
+                            f"Could not rename object {obj} from '{obj.nodeName()}' to '{clean_name}': {rename_error}"
+                        )
+                        # Continue processing even if rename fails
+                else:
+                    self.logger.debug(f"Object already has correct name: {clean_name}")
+
+                # Materials are automatically preserved during import - no additional handling needed
+                self.logger.debug(
+                    f"Materials automatically preserved for {obj.nodeName()}"
+                )
+
+                # Restore parent hierarchy if needed
+                if clean_name in parent_info and parent_info[clean_name]:
+                    try:
+                        pm.parent(obj, parent_info[clean_name])
+                        self.logger.debug(
+                            f"Parented {clean_name} to {parent_info[clean_name].nodeName()}"
+                        )
+                    except Exception as parent_error:
+                        self.logger.debug(
+                            f"Could not restore parent for {clean_name}: {parent_error}"
+                        )
+
+                processed_objects.append(obj)
+                self.logger.debug(f"Processed imported object: {clean_name}")
+
+            except Exception as e:
+                self.logger.warning(f"Failed to process object {obj}: {e}")
+
+        return processed_objects
 
     def _verify_import_results(self, imported_objects: List, nodes_before: int) -> None:
         """Verify and log import results."""
@@ -463,40 +953,22 @@ class ObjectSwapper(ptk.LoggingMixin):
     def _dry_run_analysis(self, source_file: Path, target_objects: List[str]) -> bool:
         """Analyze what would be imported in dry-run mode."""
         try:
-            # Clean up any existing temp namespace
-            if pm.namespace(exists=self.DRY_RUN_NAMESPACE):
-                pm.namespace(
-                    removeNamespace=self.DRY_RUN_NAMESPACE, deleteNamespaceContent=True
-                )
-
-            pm.namespace(add=self.DRY_RUN_NAMESPACE)
-
-            # Import for analysis
-            imported_nodes = pm.importFile(
-                str(source_file),
-                namespace=self.DRY_RUN_NAMESPACE,
-                returnNewNodes=True,
-            )
+            imported_nodes = self.import_manager.import_for_analysis(source_file)
 
             if imported_nodes:
-                # Update namespace name if Maya changed it
-                first_node_name = imported_nodes[0].nodeName()
-                if ":" in first_node_name:
-                    actual_namespace = first_node_name.split(":")[0]
-                else:
-                    actual_namespace = self.DRY_RUN_NAMESPACE
-
                 # Find matching objects
-                found_objects = self._find_objects_in_namespace("", target_objects)
+                found_objects = self.import_manager.find_objects_in_namespace(
+                    "", target_objects
+                )
 
                 for obj in found_objects:
-                    clean_name = self._clean_namespace_name(obj.nodeName())
+                    clean_name = self.import_manager._clean_namespace_name(
+                        obj.nodeName()
+                    )
                     self.logger.notice(f"[DRY-RUN] Would pull: {clean_name}")
 
                 # Clean up analysis import
-                pm.namespace(
-                    removeNamespace=actual_namespace, deleteNamespaceContent=True
-                )
+                self.import_manager.cleanup_analysis_namespace()
                 return len(found_objects) > 0
 
             return False
@@ -504,12 +976,6 @@ class ObjectSwapper(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Dry-run analysis failed: {e}")
             return False
-
-    def _find_objects_in_reference(
-        self, reference_namespace: str, target_objects: List[str]
-    ) -> List:
-        """Find objects in the referenced namespace."""
-        return self._find_objects_in_namespace(reference_namespace, target_objects)
 
     def _create_backup(self):
         """Create backup of current scene."""
@@ -536,28 +1002,6 @@ class ObjectSwapper(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Failed to create backup: {e}")
 
-    def push_selected_objects(
-        self, target_scene_file: Union[str, Path], backup: bool = True
-    ) -> bool:
-        """Convenience method to push currently selected objects."""
-        selected = pm.selected(type="transform")
-        if not selected:
-            self.logger.warning("No transform nodes selected")
-            return False
-
-        target_objects = [obj.nodeName() for obj in selected]
-        self.logger.info(f"Pushing {len(target_objects)} selected objects")
-
-        return self.push_objects_to_scene(target_objects, target_scene_file, backup)
-
-
-def push_selected_objects(
-    target_scene_file: Union[str, Path], backup: bool = True, **kwargs
-) -> bool:
-    """Push selected objects to target scene file."""
-    swapper = ObjectSwapper(**kwargs)
-    return swapper.push_selected_objects(target_scene_file, backup)
-
 
 def pull_objects_from_scene(
     object_names: List[str],
@@ -579,11 +1023,8 @@ if __name__ == "__main__":
 
     objs = pm.selected(type="transform")
 
-    # Push selected objects to another scene (no modification of current scene)
-    # push_selected_objects(path, dry_run=True)
-
     # Pull specific objects from another scene into current scene with comprehensive material handling
-    pull_objects_from_scene(objs, path, dry_run=False)
+    pull_objects_from_scene(objs, path, fuzzy_matching=True, dry_run=False)
 
 
 # --------------------------------------------------------------------------------------------
@@ -597,7 +1038,7 @@ if __name__ == "__main__":
 # - Creates automatic backups
 # - Handles namespace conflicts
 # - Provides detailed logging
-# - Comprehensive material preservation using MaterialPreserver class
-# - Shader utilities integration with ShaderAttributeMap and MatUtils
-# - Supports all shader types and intelligent material network preservation
+# - Automatic material preservation through Maya ASCII import
+# - Supports all shader types and material networks
+# - Intelligent object replacement with hierarchy preservation
 # --------------------------------------------------------------------------------------------

@@ -6,10 +6,6 @@ from pathlib import Path
 import pythontk as ptk
 import pymel.core as pm
 
-# Import from pythontk for general utilities
-from pythontk.str_utils import FuzzyMatcher
-from pythontk.core_utils import HierarchyDiffResult
-
 
 class HierarchyMapBuilder:
     """Handles building hierarchy path maps for Maya transforms."""
@@ -174,7 +170,7 @@ class HierarchyManager(ptk.LoggingMixin):
         self._target_map = HierarchyMapBuilder.build_path_map(self.target_root)
 
         # Analyze differences
-        result = HierarchyDiffResult()
+        result = ptk.HierarchyDiff()
         self._find_missing_and_extra(result)
         self._find_reparented(result)
         if self.fuzzy_matching:
@@ -217,7 +213,7 @@ class HierarchyManager(ptk.LoggingMixin):
     def _find_fuzzy_matches(self, result):
         """Find fuzzy matches for trailing digits using pythontk FuzzyMatcher."""
         fuzzy_matches, paths_to_remove_from_missing, paths_to_remove_from_extra = (
-            FuzzyMatcher.find_trailing_digit_matches(result.missing, result.extra)
+            ptk.FuzzyMatcher.find_trailing_digit_matches(result.missing, result.extra)
         )
 
         # Remove matched items from missing/extra lists
