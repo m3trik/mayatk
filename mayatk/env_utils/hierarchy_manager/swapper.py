@@ -16,10 +16,12 @@ class ObjectSwapper(ptk.LoggingMixin):
         self,
         dry_run: bool = True,
         fuzzy_matching: bool = True,
+        skip_cleanup: bool = False,  # NEW: Option to skip all cleanup
     ):
         super().__init__()
         self.dry_run = dry_run
         self.fuzzy_matching = fuzzy_matching
+        self.skip_cleanup = skip_cleanup  # NEW: Store cleanup preference
         self.backup_dir = None
         self.source_objects: Dict[str, Any] = {}
 
@@ -213,17 +215,8 @@ class ObjectSwapper(ptk.LoggingMixin):
             self.logger.info(f"Importing from: {source_file}")
 
             if self.dry_run:
-                # Use analysis import for dry run
-                imported_nodes = self.import_manager.import_for_analysis(source_file)
-                if imported_nodes:
-                    found_objects = self.import_manager.find_objects_in_namespace(
-                        None, target_objects  # No namespace for analysis import
-                    )
-                    self.logger.info(
-                        f"[DRY-RUN] Would find {len(found_objects)} matching objects"
-                    )
-                    return len(found_objects) > 0
-                return False
+                # Use enhanced analysis for dry run that matches the real fuzzy matching logic
+                return self._dry_run_analysis(source_file, target_objects)
 
             # Import objects and get import information
             import_info = self.import_manager.import_with_namespace(
@@ -271,6 +264,29 @@ class ObjectSwapper(ptk.LoggingMixin):
                     if matching_nodes:
                         found_objects.extend(matching_nodes)
                         continue
+
+                    # Debug: Show available objects that contain the target name
+                    available_containing_target = [
+                        self.import_manager._clean_namespace_name(node.nodeName())
+                        for node in imported_transforms
+                        if target_name
+                        in self.import_manager._clean_namespace_name(node.nodeName())
+                    ]
+                    if available_containing_target:
+                        self.logger.debug(
+                            f"Objects containing '{target_name}': {available_containing_target[:10]}"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"No objects found containing '{target_name}'"
+                        )
+
+                    # Show a sample of all available objects for context
+                    sample_objects = [
+                        self.import_manager._clean_namespace_name(node.nodeName())
+                        for node in imported_transforms[:20]
+                    ]
+                    self.logger.debug(f"Sample available objects: {sample_objects}")
 
                     # Try fuzzy matching if enabled
                     if self.import_manager.fuzzy_matching:
@@ -606,7 +622,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
         # Clean up remaining imported objects that weren't processed
         remaining_objects = []
-        if imported_objects:
+        if imported_objects and not self.skip_cleanup:
             remaining_objects = [
                 obj
                 for obj in imported_objects
@@ -617,12 +633,25 @@ class ObjectSwapper(ptk.LoggingMixin):
                 self.logger.debug(
                     f"Cleaned up {len(remaining_objects)} unused imported objects"
                 )
+        elif self.skip_cleanup:
+            self.logger.info(
+                "[CLEANUP] Skipping cleanup of unused imported objects (skip_cleanup=True)"
+            )
 
         # EXPERIMENTAL FIX: Completely skip namespace cleanup to prevent empty transforms
         # The namespace and any unused objects will be cleaned up when Maya closes or scene changes
         # This preserves our processed objects with their content intact
+        if self.skip_cleanup:
+            self.logger.info(
+                f"[CLEANUP] Skipping ALL cleanup for {namespace} (skip_cleanup=True)"
+            )
+        else:
+            self.logger.info(
+                f"[CLEANUP] Skipping namespace cleanup for {namespace} to preserve object content"
+            )
+
         self.logger.debug(
-            f"Skipping namespace cleanup for {namespace} to preserve object content"
+            f"[CLEANUP] Processed objects: {[obj.nodeName() for obj in processed_objects if pm.objExists(obj)]}"
         )
 
         # Just remove from tracking without deleting namespace content
@@ -631,7 +660,9 @@ class ObjectSwapper(ptk.LoggingMixin):
             and namespace in self.import_manager._active_namespaces
         ):
             self.import_manager._active_namespaces.remove(namespace)
-            self.logger.debug(f"Removed {namespace} from tracking without cleanup")
+            self.logger.info(
+                f"[CLEANUP] Removed {namespace} from tracking without cleanup"
+            )
 
         # Verify cleanup and log results
         self._verify_import_results(processed_objects, nodes_before)
@@ -951,31 +982,378 @@ class ObjectSwapper(ptk.LoggingMixin):
             self.logger.error("No objects were successfully imported")
 
     def _dry_run_analysis(self, source_file: Path, target_objects: List[str]) -> bool:
-        """Analyze what would be imported in dry-run mode."""
+        """Analyze what would be imported in dry-run mode using enhanced fuzzy matching."""
+        imported_transforms = None
         try:
-            imported_nodes = self.import_manager.import_for_analysis(source_file)
+            imported_transforms = self.import_manager.import_for_analysis(source_file)
 
-            if imported_nodes:
-                # Find matching objects
-                found_objects = self.import_manager.find_objects_in_namespace(
-                    "", target_objects
+            if not imported_transforms:
+                self.logger.warning("[DRY-RUN] No transforms found in source file")
+                return False
+
+            self.logger.debug(
+                f"[DRY-RUN] Imported {len(imported_transforms)} transform nodes for analysis"
+            )
+
+            # Apply the same enhanced fuzzy matching logic as the real import
+            found_objects = []
+            fuzzy_match_map = {}
+
+            for target_name in target_objects:
+                # First try exact match
+                matching_nodes = [
+                    node
+                    for node in imported_transforms
+                    if self.import_manager._clean_namespace_name(node.nodeName())
+                    == target_name
+                ]
+                if matching_nodes:
+                    found_objects.extend(matching_nodes)
+                    self.logger.notice(f"[DRY-RUN] Exact match found: {target_name}")
+                    continue
+
+                # Debug: Show available objects that contain the target name
+                available_containing_target = [
+                    self.import_manager._clean_namespace_name(node.nodeName())
+                    for node in imported_transforms
+                    if target_name
+                    in self.import_manager._clean_namespace_name(node.nodeName())
+                ]
+                if available_containing_target:
+                    self.logger.debug(
+                        f"[DRY-RUN] Objects containing '{target_name}': {available_containing_target[:10]}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"[DRY-RUN] No objects found containing '{target_name}'"
+                    )
+
+                # Show a sample of all available objects for context
+                sample_objects = [
+                    self.import_manager._clean_namespace_name(node.nodeName())
+                    for node in imported_transforms[:20]
+                ]
+                self.logger.debug(
+                    f"[DRY-RUN] Sample available objects: {sample_objects}"
                 )
 
+                # Try fuzzy matching if enabled
+                if self.import_manager.fuzzy_matching:
+                    import_names = [
+                        self.import_manager._clean_namespace_name(node.nodeName())
+                        for node in imported_transforms
+                    ]
+                    matches = ptk.FuzzyMatcher.find_all_matches(
+                        [target_name], import_names, score_threshold=0.7
+                    )
+
+                    matched_successfully = False
+                    if target_name in matches:
+                        # Get potential matches
+                        potential_matches = [
+                            (matches[target_name][0], matches[target_name][1])
+                        ]
+
+                        try:
+                            all_matches = ptk.FuzzyMatcher.find_all_matches(
+                                [target_name],
+                                import_names,
+                                score_threshold=0.6,
+                                return_all=True,
+                            )
+                            if target_name in all_matches and isinstance(
+                                all_matches[target_name], list
+                            ):
+                                potential_matches = all_matches[target_name]
+                        except (TypeError, AttributeError):
+                            pass
+
+                        self.logger.debug(
+                            f"[DRY-RUN] Trying {len(potential_matches)} potential matches for {target_name}"
+                        )
+
+                        for matched_name, score in potential_matches:
+                            self.logger.debug(
+                                f"[DRY-RUN] Evaluating match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                            )
+
+                            # Find the actual node
+                            try:
+                                matching_node = next(
+                                    node
+                                    for node in imported_transforms
+                                    if self.import_manager._clean_namespace_name(
+                                        node.nodeName()
+                                    )
+                                    == matched_name
+                                )
+                            except StopIteration:
+                                continue
+
+                            # Apply the same container search logic for dry run
+                            better_match_found = False
+                            if hasattr(matching_node, "getChildren"):
+                                try:
+
+                                    def find_better_match_recursive(
+                                        node, target_name, depth=0, max_depth=3
+                                    ):
+                                        if depth > max_depth:
+                                            return None, False
+
+                                        children = node.getChildren()
+                                        for child in children:
+                                            child_clean_name = self.import_manager._clean_namespace_name(
+                                                child.nodeName()
+                                            )
+                                            child_has_shapes = (
+                                                bool(child.getShapes())
+                                                if hasattr(child, "getShapes")
+                                                else False
+                                            )
+
+                                            # Calculate match quality - exact name match gets highest priority
+                                            is_exact_match = (
+                                                child_clean_name == target_name
+                                            )
+                                            is_better_match = False
+
+                                            if is_exact_match:
+                                                # Exact name match - this is definitely better
+                                                is_better_match = True
+                                                self.logger.debug(
+                                                    f"[DRY-RUN] Found exact name match: {child_clean_name}"
+                                                )
+                                            elif (
+                                                child_has_shapes
+                                                and target_name in child_clean_name
+                                            ):
+                                                # Child has geometry and similar name - likely better than empty container
+                                                is_better_match = True
+                                                self.logger.debug(
+                                                    f"[DRY-RUN] Found geometry match: {child_clean_name} (has shapes)"
+                                                )
+                                            elif (
+                                                len(child_clean_name)
+                                                > len(matched_name)
+                                                and target_name in child_clean_name
+                                            ):
+                                                # Child has more specific/longer name that contains target - might be better
+                                                is_better_match = True
+                                                self.logger.debug(
+                                                    f"[DRY-RUN] Found more specific match: {child_clean_name}"
+                                                )
+
+                                            self.logger.debug(
+                                                f"[DRY-RUN] Checking child: {child_clean_name}, has_shapes: {child_has_shapes}, is_better: {is_better_match}"
+                                            )
+
+                                            if is_better_match:
+                                                return child, child_has_shapes
+
+                                            # If this child doesn't match but has children, search recursively
+                                            if child.getChildren():
+                                                (
+                                                    recursive_result,
+                                                    recursive_has_shapes,
+                                                ) = find_better_match_recursive(
+                                                    child,
+                                                    target_name,
+                                                    depth + 1,
+                                                    max_depth,
+                                                )
+                                                if recursive_result:
+                                                    return (
+                                                        recursive_result,
+                                                        recursive_has_shapes,
+                                                    )
+
+                                        return None, False
+
+                                    better_child, child_has_shapes = (
+                                        find_better_match_recursive(
+                                            matching_node, target_name
+                                        )
+                                    )
+
+                                    if better_child:
+                                        original_matched_name = matched_name
+                                        matching_node = better_child
+                                        matched_name = (
+                                            self.import_manager._clean_namespace_name(
+                                                better_child.nodeName()
+                                            )
+                                        )
+                                        score = 0.95
+                                        better_match_found = True
+                                        self.logger.notice(
+                                            f"[DRY-RUN] Found better match inside container: '{original_matched_name}' -> '{matched_name}'"
+                                        )
+
+                                except Exception as search_error:
+                                    self.logger.debug(
+                                        f"[DRY-RUN] Could not search inside container: {search_error}"
+                                    )
+
+                            # Apply the same quality assessment
+                            should_use_match = True
+                            container_has_shapes = (
+                                bool(matching_node.getShapes())
+                                if hasattr(matching_node, "getShapes")
+                                else False
+                            )
+
+                            if (
+                                hasattr(matching_node, "getChildren")
+                                and matching_node.getChildren()
+                                and not better_match_found
+                                and not container_has_shapes
+                                and score < 0.9
+                            ):
+                                should_use_match = False
+                                self.logger.debug(
+                                    f"[DRY-RUN] Skipping low-quality container match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                                )
+
+                            if should_use_match:
+                                found_objects.append(matching_node)
+                                fuzzy_match_map[matching_node] = target_name
+                                self.logger.notice(
+                                    f"[DRY-RUN] Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                                )
+                                matched_successfully = True
+                                break
+
+                        if not matched_successfully:
+                            self.logger.warning(
+                                f"[DRY-RUN] No suitable fuzzy match found for {target_name}"
+                            )
+
+            # Report results
+            if found_objects:
+                self.logger.info(
+                    f"[DRY-RUN] Would find {len(found_objects)} matching objects:"
+                )
                 for obj in found_objects:
-                    clean_name = self.import_manager._clean_namespace_name(
+                    # Show the actual object name that would be pulled, not the target name
+                    actual_name = self.import_manager._clean_namespace_name(
                         obj.nodeName()
                     )
-                    self.logger.notice(f"[DRY-RUN] Would pull: {clean_name}")
+                    target_name = fuzzy_match_map.get(obj, actual_name)
+                    self.logger.notice(
+                        f"[DRY-RUN] Would pull: {actual_name} (for target: {target_name})"
+                    )
+            else:
+                self.logger.warning("[DRY-RUN] No matching objects found")
 
-                # Clean up analysis import
-                self.import_manager.cleanup_analysis_namespace()
-                return len(found_objects) > 0
-
-            return False
+            return len(found_objects) > 0
 
         except Exception as e:
             self.logger.error(f"Dry-run analysis failed: {e}")
             return False
+        finally:
+            # CRITICAL: Always cleanup analysis import regardless of dry_run flag
+            # The analysis namespace contains real imported objects that must be removed
+            if imported_transforms:
+                try:
+                    self.logger.debug("[DRY-RUN] Forcing cleanup of analysis namespace")
+
+                    # Step 1: Delete all imported objects explicitly first
+                    objects_to_delete = []
+                    for obj in imported_transforms:
+                        if pm.objExists(obj):
+                            objects_to_delete.append(obj)
+
+                    if objects_to_delete:
+                        try:
+                            pm.delete(objects_to_delete)
+                            self.logger.debug(
+                                f"[DRY-RUN] Deleted {len(objects_to_delete)} imported objects"
+                            )
+                        except Exception as delete_error:
+                            self.logger.debug(
+                                f"[DRY-RUN] Error deleting objects: {delete_error}"
+                            )
+
+                    # Step 2: Remove the namespace completely
+                    namespace = self.import_manager.DRY_RUN_NAMESPACE
+                    if pm.namespace(exists=namespace):
+                        try:
+                            # Force remove namespace with all content
+                            pm.namespace(
+                                removeNamespace=namespace, deleteNamespaceContent=True
+                            )
+                            self.logger.debug(
+                                f"[DRY-RUN] Removed namespace: {namespace}"
+                            )
+                        except Exception as ns_error:
+                            self.logger.debug(
+                                f"[DRY-RUN] Error removing namespace: {ns_error}"
+                            )
+                            # Try alternative cleanup approach
+                            try:
+                                # Get all objects in the namespace and delete them manually
+                                all_ns_objects = pm.ls(f"{namespace}:*")
+                                if all_ns_objects:
+                                    pm.delete(all_ns_objects)
+                                    self.logger.debug(
+                                        f"[DRY-RUN] Manually deleted {len(all_ns_objects)} namespace objects"
+                                    )
+
+                                # Now try to remove the empty namespace
+                                if pm.namespace(exists=namespace):
+                                    pm.namespace(removeNamespace=namespace)
+                                    self.logger.debug(
+                                        f"[DRY-RUN] Removed empty namespace: {namespace}"
+                                    )
+                            except Exception as manual_error:
+                                self.logger.warning(
+                                    f"[DRY-RUN] Manual cleanup failed: {manual_error}"
+                                )
+
+                    # Step 3: Verify cleanup was successful
+                    remaining_objects = (
+                        pm.ls(f"{namespace}:*")
+                        if pm.namespace(exists=namespace)
+                        else []
+                    )
+                    if remaining_objects:
+                        self.logger.warning(
+                            f"[DRY-RUN] Warning: {len(remaining_objects)} objects still remain in {namespace}"
+                        )
+                        # Try one more aggressive cleanup
+                        try:
+                            pm.delete(remaining_objects)
+                            if pm.namespace(exists=namespace):
+                                pm.namespace(removeNamespace=namespace)
+                            self.logger.debug(
+                                "[DRY-RUN] Final aggressive cleanup completed"
+                            )
+                        except:
+                            self.logger.error(
+                                f"[DRY-RUN] FAILED TO CLEAN UP: {len(remaining_objects)} objects remain in {namespace}"
+                            )
+                    else:
+                        self.logger.debug(
+                            f"[DRY-RUN] Cleanup successful - no objects remain"
+                        )
+
+                except Exception as cleanup_error:
+                    self.logger.warning(f"[DRY-RUN] Cleanup failed: {cleanup_error}")
+                    # As a last resort, try to list what's still there
+                    try:
+                        namespace = self.import_manager.DRY_RUN_NAMESPACE
+                        remaining = (
+                            pm.ls(f"{namespace}:*")
+                            if pm.namespace(exists=namespace)
+                            else []
+                        )
+                        if remaining:
+                            self.logger.error(
+                                f"[DRY-RUN] OBJECTS STILL REMAIN: {len(remaining)} objects in {namespace}"
+                            )
+                    except:
+                        pass
 
     def _create_backup(self):
         """Create backup of current scene."""
@@ -1024,7 +1402,9 @@ if __name__ == "__main__":
     objs = pm.selected(type="transform")
 
     # Pull specific objects from another scene into current scene with comprehensive material handling
-    pull_objects_from_scene(objs, path, fuzzy_matching=True, dry_run=False)
+    pull_objects_from_scene(
+        objs, path, fuzzy_matching=True, dry_run=0, skip_cleanup=False
+    )
 
 
 # --------------------------------------------------------------------------------------------
