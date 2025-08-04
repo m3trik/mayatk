@@ -10,18 +10,21 @@ from mayatk.env_utils.temp_import import TempImport
 
 
 class ObjectSwapper(ptk.LoggingMixin):
-    """Handles pushing/pulling objects between Maya scenes without modifying source scene."""
+    """Handles pushing/pulling objects between Maya scenes without modifying source scene.
+
+    Parameters:
+        dry_run: If True, perform analysis without making changes
+        fuzzy_matching: If True, allow fuzzy name matching when exact matches fail
+    """
 
     def __init__(
         self,
         dry_run: bool = True,
         fuzzy_matching: bool = True,
-        skip_cleanup: bool = False,  # NEW: Option to skip all cleanup
     ):
         super().__init__()
         self.dry_run = dry_run
         self.fuzzy_matching = fuzzy_matching
-        self.skip_cleanup = skip_cleanup  # NEW: Store cleanup preference
         self.backup_dir = None
         self.source_objects: Dict[str, Any] = {}
 
@@ -290,6 +293,15 @@ class ObjectSwapper(ptk.LoggingMixin):
 
                     # Try fuzzy matching if enabled
                     if self.import_manager.fuzzy_matching:
+                        # Standard behavior: Skip fuzzy matching when target already exists in current scene
+                        # This prevents pulling the wrong object when user specifies an exact name
+                        if pm.objExists(target_name):
+                            self.logger.warning(
+                                f"Skipping fuzzy match for '{target_name}' - object already exists in current scene. "
+                                f"Use exact name matching only to avoid pulling wrong object."
+                            )
+                            continue
+
                         # Get clean names for fuzzy matching
                         import_names = [
                             self.import_manager._clean_namespace_name(node.nodeName())
@@ -620,38 +632,46 @@ class ObjectSwapper(ptk.LoggingMixin):
             found_objects, parent_info, fuzzy_match_map or {}
         )
 
-        # Clean up remaining imported objects that weren't processed
-        remaining_objects = []
-        if imported_objects and not self.skip_cleanup:
-            remaining_objects = [
-                obj
-                for obj in imported_objects
-                if obj not in found_objects and pm.objExists(obj)
-            ]
+        # FIXED: Smart cleanup that preserves hierarchy
+        if imported_objects:
+            # Get all objects that should be preserved (processed objects + their parents)
+            objects_to_preserve = set()
+
+            for obj in processed_objects:
+                if pm.objExists(obj):
+                    objects_to_preserve.add(obj)
+                    # Add all parents up the hierarchy
+                    current = obj
+                    while True:
+                        try:
+                            parent = current.getParent()
+                            if parent and parent not in objects_to_preserve:
+                                objects_to_preserve.add(parent)
+                                current = parent
+                            else:
+                                break
+                        except:
+                            break
+
+            # Only delete imported objects that are NOT in the preserve list
+            remaining_objects = []
+            for obj in imported_objects:
+                if (
+                    obj not in found_objects
+                    and obj not in objects_to_preserve
+                    and pm.objExists(obj)
+                ):
+                    remaining_objects.append(obj)
+
             if remaining_objects:
                 pm.delete(remaining_objects)
                 self.logger.debug(
-                    f"Cleaned up {len(remaining_objects)} unused imported objects"
+                    f"Cleaned up {len(remaining_objects)} unused imported objects (preserved {len(objects_to_preserve)} hierarchy objects)"
                 )
-        elif self.skip_cleanup:
-            self.logger.info(
-                "[CLEANUP] Skipping cleanup of unused imported objects (skip_cleanup=True)"
-            )
 
-        # EXPERIMENTAL FIX: Completely skip namespace cleanup to prevent empty transforms
-        # The namespace and any unused objects will be cleaned up when Maya closes or scene changes
-        # This preserves our processed objects with their content intact
-        if self.skip_cleanup:
-            self.logger.info(
-                f"[CLEANUP] Skipping ALL cleanup for {namespace} (skip_cleanup=True)"
-            )
-        else:
-            self.logger.info(
-                f"[CLEANUP] Skipping namespace cleanup for {namespace} to preserve object content"
-            )
-
-        self.logger.debug(
-            f"[CLEANUP] Processed objects: {[obj.nodeName() for obj in processed_objects if pm.objExists(obj)]}"
+        # Skip namespace cleanup to preserve object content
+        self.logger.info(
+            f"[CLEANUP] Skipping namespace cleanup for {namespace} to preserve object content"
         )
 
         # Just remove from tracking without deleting namespace content
@@ -1039,6 +1059,15 @@ class ObjectSwapper(ptk.LoggingMixin):
 
                 # Try fuzzy matching if enabled
                 if self.import_manager.fuzzy_matching:
+                    # Standard behavior: Skip fuzzy matching when target already exists in current scene
+                    # This prevents pulling the wrong object when user specifies an exact name
+                    if pm.objExists(target_name):
+                        self.logger.warning(
+                            f"[DRY-RUN] Skipping fuzzy match for '{target_name}' - object already exists in current scene. "
+                            f"Use exact name matching only to avoid pulling wrong object."
+                        )
+                        continue
+
                     import_names = [
                         self.import_manager._clean_namespace_name(node.nodeName())
                         for node in imported_transforms
@@ -1402,9 +1431,7 @@ if __name__ == "__main__":
     objs = pm.selected(type="transform")
 
     # Pull specific objects from another scene into current scene with comprehensive material handling
-    pull_objects_from_scene(
-        objs, path, fuzzy_matching=True, dry_run=0, skip_cleanup=False
-    )
+    pull_objects_from_scene(objs, path, fuzzy_matching=True, dry_run=0)
 
 
 # --------------------------------------------------------------------------------------------
