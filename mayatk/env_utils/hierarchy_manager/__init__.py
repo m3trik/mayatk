@@ -1,32 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
+from mayatk.env_utils.hierarchy_manager.manager import HierarchyManager
+from mayatk.env_utils.hierarchy_manager.swapper import ObjectSwapper
 
-# Try to import the classes, but handle failures gracefully
-try:
-    from mayatk.env_utils.hierarchy_manager.manager import HierarchyManager
-
-    HIERARCHY_MANAGER_AVAILABLE = True
-except ImportError as e:
-    HierarchyManager = None
-    HIERARCHY_MANAGER_AVAILABLE = False
-
-try:
-    from mayatk.env_utils.hierarchy_manager.swapper import ObjectSwapper
-
-    OBJECT_SWAPPER_AVAILABLE = True
-except ImportError as e:
-    ObjectSwapper = None
-    OBJECT_SWAPPER_AVAILABLE = False
 
 # --------------------------------------------------------------------------------------------
 
 # Make sure these are available when the module is inspected
-__all__ = [
-    "HierarchyManager",
-    "ObjectSwapper",
-    "HIERARCHY_MANAGER_AVAILABLE",
-    "OBJECT_SWAPPER_AVAILABLE",
-]
+__all__ = ["HierarchyManager", "ObjectSwapper"]
 
 # --------------------------------------------------------------------------------------------
 # Notes
