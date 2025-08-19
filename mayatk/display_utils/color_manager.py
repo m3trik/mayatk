@@ -309,8 +309,8 @@ class ColorManager(ColorUtils):
 
 
 class ColorManagerSlots(ColorManager):
-    def __init__(self, *args, **kwargs):
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.color_manager
 
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")

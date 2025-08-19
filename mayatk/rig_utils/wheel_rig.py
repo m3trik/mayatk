@@ -150,9 +150,9 @@ class WheelRig(ptk.LoggingMixin):
 
 
 class WheelRigSlots:
-    def __init__(self, **kwargs):
-        self.sb = kwargs.get("switchboard")
-        self.ui = self.sb.loaded_ui.wheel_rig
+    def __init__(self, switchboard):
+        self.sb = switchboard
+        self.ui = self.sb.loaded_ui.wheel_rig_slots
 
         # 1) update placeholder right away
         self._selection_job = pm.scriptJob(

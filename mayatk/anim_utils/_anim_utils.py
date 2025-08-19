@@ -140,8 +140,14 @@ class AnimUtils(ptk.HelpMixin):
             if len(times) < 3:
                 continue
 
-            values = np.array([curve.evaluate(t) for t in times])
+            # Use actual keyframe values instead of curve.evaluate() to avoid interpolation issues
+            values = pm.keyframe(curve, query=True, valueChange=True) or []
+            if len(values) != len(times):
+                continue  # Safety check
+
+            values = np.array(values)
             remove_indices = []
+
             # Find internal flat segments (at least three consecutive identical values)
             i = 1
             while i < len(values) - 1:
@@ -149,25 +155,34 @@ class AnimUtils(ptk.HelpMixin):
                     abs(values[i] - values[i - 1]) < value_tolerance
                     and abs(values[i] - values[i + 1]) < value_tolerance
                 ):
-                    # Is it a flat run? Only remove if the values before and after are the same
+                    # Found a potential flat segment, find its full extent
                     start = i - 1
                     end = i + 1
+
+                    # Extend the flat segment as far as possible
                     while (
                         end < len(values)
                         and abs(values[end] - values[start]) < value_tolerance
                     ):
                         end += 1
-                    # Only remove internal keys, not the segment endpoints
-                    remove_indices.extend(list(range(start + 1, end - 1)))
+
+                    # Only remove internal keys if we have at least 3 consecutive identical values
+                    # and preserve the first and last key of the flat segment
+                    if end - start >= 3:  # At least 3 keys in the flat segment
+                        remove_indices.extend(list(range(start + 1, end - 1)))
+
                     i = end
                 else:
                     i += 1
+
             # Remove keys at the identified times
             removed_times = []
             if remove and remove_indices:
-                for idx in sorted(set(remove_indices)):
+                # Remove in reverse order to avoid index shifting issues
+                for idx in sorted(set(remove_indices), reverse=True):
                     pm.cutKey(curve, time=(times[idx], times[idx]), option="keys")
                     removed_times.append(times[idx])
+
             if remove_indices:
                 redundant.append((curve, [times[idx] for idx in remove_indices]))
 
@@ -265,7 +280,7 @@ class AnimUtils(ptk.HelpMixin):
             redundant_keys_to_delete = cls.get_redundant_flat_keys(
                 anim_curves, value_tolerance=value_tolerance, remove=True
             )
-            flat_keys_deleted += len(redundant_keys_to_delete)
+            flat_keys_deleted += sum(len(keys) for _, keys in redundant_keys_to_delete)
 
         # Phase 3: Simplify curves (if simplify_keys is True)
         if simplify_keys:
@@ -344,6 +359,167 @@ class AnimUtils(ptk.HelpMixin):
             currentTime = pm.currentTime(query=True)
 
         pm.currentTime(currentTime + time, edit=True, update=update)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def move_keys_to_frame(
+        objects=None,
+        frame=None,
+        time_range=None,
+        only_move_selected=False,
+        retain_spacing=False,
+    ):
+        """Move keyframes to the given frame with comprehensive control options.
+
+        Parameters:
+            objects (list, optional): Objects to move keys for. If None, uses selection.
+            frame (int or float, optional): The frame to move keys to.
+                                                   If None, uses the current time.
+            time_range (tuple, optional): (start_frame, end_frame) to limit which keys to move.
+                                         If None, moves all/only_move_selected keys.
+            only_move_selected (bool): If True, only moves only_move_selected keys. If False, moves all keys
+                                 in the specified time range.
+            retain_spacing (bool): If True, maintains relative spacing between objects.
+                                   If False, moves each object's first key to the target frame.
+        Returns:
+            bool: True if keys were moved successfully, False otherwise.
+        """
+        # Get target frame (use current time if not specified)
+        if frame is None:
+            frame = pm.currentTime(query=True)
+
+        # Get objects to work with
+        if objects is None:
+            objects = pm.selected()
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return False
+
+        objects = pm.ls(objects)  # Ensure we have PyMel objects
+
+        # If working with selected keys, validate there are selected keys
+        if only_move_selected:
+            all_active_key_times = pm.keyframe(query=True, sl=True, tc=True)
+            if not all_active_key_times:
+                pm.warning("No keyframes selected.")
+                return False
+
+        keys_moved = 0
+
+        # If maintaining spacing, calculate the global offset from the earliest key across all objects
+        global_offset = None
+        if retain_spacing:
+            earliest_key_time = None
+
+            # Find the earliest key across all objects
+            for obj in objects:
+                if only_move_selected:
+                    keys = pm.keyframe(obj, query=True, name=True, sl=True)
+                    for node in keys:
+                        if time_range:
+                            active_key_times = pm.keyframe(
+                                node, query=True, sl=True, tc=True, time=time_range
+                            )
+                        else:
+                            active_key_times = pm.keyframe(
+                                node, query=True, sl=True, tc=True
+                            )
+
+                        if active_key_times:
+                            obj_earliest = min(active_key_times)
+                            if (
+                                earliest_key_time is None
+                                or obj_earliest < earliest_key_time
+                            ):
+                                earliest_key_time = obj_earliest
+                else:
+                    if time_range:
+                        keys = pm.keyframe(
+                            obj, query=True, timeChange=True, time=time_range
+                        )
+                    else:
+                        keys = pm.keyframe(obj, query=True, timeChange=True)
+
+                    if keys:
+                        obj_earliest = min(keys)
+                        if (
+                            earliest_key_time is None
+                            or obj_earliest < earliest_key_time
+                        ):
+                            earliest_key_time = obj_earliest
+
+            if earliest_key_time is not None:
+                global_offset = frame - earliest_key_time
+
+        for obj in objects:
+            # Get keyframes based on selection preference and time range
+            if only_move_selected:
+                # Use AnimUtils pattern for selected keys
+                keys = pm.keyframe(obj, query=True, name=True, sl=True)
+                for node in keys:
+                    if time_range:
+                        active_key_times = pm.keyframe(
+                            node, query=True, sl=True, tc=True, time=time_range
+                        )
+                    else:
+                        active_key_times = pm.keyframe(
+                            node, query=True, sl=True, tc=True
+                        )
+
+                    if active_key_times:
+                        # Calculate offset - use global offset if maintaining spacing
+                        if retain_spacing and global_offset is not None:
+                            offset = global_offset
+                        else:
+                            first_key_time = min(active_key_times)
+                            offset = frame - first_key_time
+
+                        # Move keys using AnimUtils pattern
+                        pm.keyframe(
+                            node,
+                            edit=True,
+                            time=(min(active_key_times), max(active_key_times)),
+                            relative=True,
+                            timeChange=offset,
+                        )
+                        keys_moved += len(active_key_times)
+            else:
+                # Handle all keys in time range
+                if time_range:
+                    keys = pm.keyframe(
+                        obj, query=True, timeChange=True, time=time_range
+                    )
+                else:
+                    keys = pm.keyframe(obj, query=True, timeChange=True)
+
+                if keys:
+                    # Calculate offset - use global offset if maintaining spacing
+                    if retain_spacing and global_offset is not None:
+                        offset = global_offset
+                    else:
+                        first_key_time = min(keys)
+                        offset = frame - first_key_time
+
+                    # Move the keys using moveKey
+                    if time_range:
+                        pm.moveKey(obj, time=time_range, timeSlice=offset)
+                    else:
+                        pm.moveKey(obj, timeSlice=offset)
+
+                    keys_moved += len(keys)
+
+        if keys_moved > 0:
+            selection_type = "selected" if only_move_selected else "all"
+            range_info = f" in range {time_range}" if time_range else ""
+            spacing_info = " (maintaining relative spacing)" if retain_spacing else ""
+            pm.displayInfo(
+                f"Moved {keys_moved} {selection_type} keys to frame {frame}{range_info}{spacing_info}"
+            )
+            return True
+        else:
+            pm.warning("No keyframes found to move.")
+            return False
 
     @staticmethod
     @CoreUtils.undoable

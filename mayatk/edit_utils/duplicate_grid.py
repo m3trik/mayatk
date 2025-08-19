@@ -74,8 +74,8 @@ class DuplicateGrid:
 
 
 class DuplicateGridSlots:
-    def __init__(self, **kwargs):
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_grid
 
         self.preview = preview.Preview(

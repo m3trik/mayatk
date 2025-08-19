@@ -1,9 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from mayatk.edit_utils._edit_utils import *
-from mayatk.edit_utils.selection import *
-from mayatk.edit_utils.naming import *
+from mayatk.edit_utils.naming._naming import *
+from mayatk.edit_utils.naming.naming_slots import NamingSlots
+
+__all__ = ["NamingSlots"]
 
 # --------------------------------------------------------------------------------------------
 

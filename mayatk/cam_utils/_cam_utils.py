@@ -181,6 +181,107 @@ class CamUtils(ptk.HelpMixin):
             if far_clip is not None:
                 pm.setAttr(f"{cam}.farClipPlane", far_clip)
 
+    @staticmethod
+    def _get_default_camera(camera_name):
+        """Get the default Maya camera by name, regardless of grouping or naming.
+
+        Parameters:
+            camera_name (str): The base name of the camera ('top', 'front', 'side', 'persp')
+
+        Returns:
+            str or None: The actual camera name to use with lookThru, or None if not found
+        """
+        # Get all startup cameras in the scene
+        try:
+            all_cameras = pm.ls(type="camera")
+            startup_cameras = []
+
+            for cam in all_cameras:
+                try:
+                    # Check if this is a startup camera
+                    if pm.camera(cam, q=True, startupCamera=True):
+                        startup_cameras.append(cam)
+                except:
+                    continue
+
+            # Find the camera that matches our desired view
+            camera_map = {
+                "top": ["top", "topShape"],
+                "front": ["front", "frontShape"],
+                "side": ["side", "sideShape"],
+                "persp": ["persp", "perspShape"],
+            }
+
+            search_names = camera_map.get(camera_name, [camera_name])
+
+            # Look for matching startup camera
+            for cam in startup_cameras:
+                cam_name = str(cam)
+                transform = cam.getParent() if hasattr(cam, "getParent") else None
+                transform_name = str(transform) if transform else ""
+
+                # Check if camera shape or transform matches our search names
+                for search_name in search_names:
+                    if (
+                        search_name in cam_name.lower()
+                        or search_name in transform_name.lower()
+                        or cam_name.endswith(search_name)
+                        or transform_name.endswith(search_name)
+                    ):
+                        # Return the shape name for lookThru (preferred)
+                        return str(cam)
+
+            # If no startup camera found, try by name existence
+            for search_name in search_names:
+                if pm.objExists(search_name):
+                    return search_name
+
+        except Exception as e:
+            print(f"Error finding default camera {camera_name}: {e}")
+
+        return None
+
+    @classmethod
+    def switch_viewport_camera(cls, camera_name):
+        """Unified method to switch to a camera, creating custom ones if needed.
+
+        Parameters:
+            camera_name (str): Name of the camera to switch to
+        """
+        # Camera configuration - simplified approach
+        camera_config = {
+            # Custom cameras (create if missing)
+            "back": {"default": False, "view_set": "back"},
+            "left": {"default": False, "view_set": "leftSide"},
+            "bottom": {"default": False, "view_set": "bottom"},
+        }
+
+        # Check if it's a custom camera
+        config = camera_config.get(camera_name)
+
+        if config and not config["default"]:
+            # Handle custom cameras (create if missing)
+            if pm.objExists(camera_name):
+                pm.lookThru(camera_name)
+            else:
+                # Create the custom camera
+                cam, camShape = pm.camera()
+                pm.rename(cam, camera_name)
+                pm.lookThru(camera_name)
+                pm.hide(camera_name)
+
+                # Apply view setting if specified
+                view_set = config.get("view_set")
+                if view_set:
+                    pm.viewSet(**{view_set: 1})
+        else:
+            # Handle default Maya cameras
+            default_cam = cls._get_default_camera(camera_name)
+            if default_cam:
+                pm.lookThru(default_cam)
+            else:
+                print(f"Warning: Default camera '{camera_name}' not found in scene")
+
 
 # --------------------------------------------------------------------------------------------
 

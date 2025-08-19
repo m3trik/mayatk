@@ -51,30 +51,45 @@ class _TaskDataMixin:
 class _TaskActionsMixin(_TaskDataMixin):
     """ """
 
-    def set_workspace(self):
+    def set_workspace(self, enable=True):
         """Manage temporary workspace change."""
         original_workspace = pm.workspace(query=True, rootDirectory=True)
-        new_workspace = EnvUtils.find_workspace_using_path()
-        if new_workspace and new_workspace != original_workspace:
-            pm.workspace(new_workspace, openWorkspace=True)
+
+        if enable:
+            new_workspace = EnvUtils.find_workspace_using_path()
+            if new_workspace and new_workspace != original_workspace:
+                pm.workspace(new_workspace, openWorkspace=True)
+                self.logger.debug(
+                    f"Changed workspace from {original_workspace} to {new_workspace}"
+                )
+            else:
+                self.logger.debug("Workspace change not needed or workspace not found")
+
         return original_workspace
 
     def revert_workspace(self, original_workspace):
         """Revert to the original workspace."""
         pm.workspace(original_workspace, openWorkspace=True)
+        self.logger.debug(f"Reverted workspace to: {original_workspace}")
 
     def set_linear_unit(self, linear_unit):
         """Manage temporary linear unit change."""
         original_linear_unit = pm.currentUnit(query=True, linear=True)
-        if linear_unit:
+
+        if linear_unit and linear_unit != "OFF":
             pm.currentUnit(linear=linear_unit)
-        # Ensure that the original value is returned
-        self.logger.debug(f"Original linear unit: {original_linear_unit}")
+            self.logger.debug(
+                f"Changed linear unit from {original_linear_unit} to {linear_unit}"
+            )
+        else:
+            self.logger.debug(f"Linear unit change skipped (value: {linear_unit})")
+
         return original_linear_unit
 
     def revert_linear_unit(self, original_linear_unit):
         """Revert to the original linear unit."""
         pm.currentUnit(linear=original_linear_unit)
+        self.logger.debug(f"Reverted linear unit to: {original_linear_unit}")
 
     def convert_to_relative_paths(self):
         """Convert absolute material paths to relative paths."""
@@ -261,7 +276,8 @@ class _TaskChecksMixin(_TaskDataMixin):
     def check_referenced_objects(self) -> tuple:
         """Check if any referenced objects are present in the scene."""
         log_messages = []
-        referenced_objects = pm.ls(self.objects, references=True)
+        # Check all referenced objects in the scene, not just the selected objects
+        referenced_objects = pm.ls(references=True)
 
         if referenced_objects:
             for ref in referenced_objects:
@@ -409,13 +425,6 @@ class _TaskChecksMixin(_TaskDataMixin):
 class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     """Contains all task-related UI definitions for the Scene Exporter."""
 
-    _log_level_options: Dict[str, Any] = {
-        "Log Level: DEBUG": 10,
-        "Log Level: INFO": 20,
-        "Log Level: WARNING": 30,
-        "Log Level: ERROR": 40,
-    }
-
     _frame_rate_options: Dict[str, Any] = {
         f"Check Scene FPS: {v}": k
         for k, v in ptk.insert_into_dict(
@@ -437,7 +446,7 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
         self.objects = None
 
     @property
-    def definitions(self) -> Dict[str, Dict[str, Any]]:
+    def task_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the task definitions for the UI."""
         return {
             "export_visible_objects": {
@@ -457,11 +466,6 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Linear unit to be used during export.",
                 "add": self._scene_unit_options,
             },
-            "check_framerate": {
-                "widget_type": "ComboBox",
-                "setToolTip": "Check the scene framerate against the target framerate.",
-                "add": self._frame_rate_options,
-            },
             "delete_env_nodes": {
                 "widget_type": "QCheckBox",
                 "setText": "Delete Environment Nodes",
@@ -474,16 +478,57 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Delete unassigned material nodes.",
                 "setChecked": True,
             },
-            "check_duplicate_locator_names": {
-                "widget_type": "QCheckBox",
-                "setText": "Check For Duplicate Locator Names",
-                "setToolTip": "Check for duplicate locator names.",
-                "setChecked": True,
-            },
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
                 "setText": "Reassign Duplicate Materials",
                 "setToolTip": "Reassign any duplicate materials to a single material.",
+                "setChecked": True,
+            },
+            "convert_to_relative_paths": {
+                "widget_type": "QCheckBox",
+                "setText": "Convert To Relative Paths",
+                "setToolTip": "Convert absolute paths to relative paths.",
+                "setChecked": True,
+            },
+            "tie_all_keyframes": {
+                "widget_type": "QCheckBox",
+                "setText": "Tie All Keyframes",
+                "setToolTip": "Tie all keyframes on the specified objects.",
+                "setChecked": False,
+            },
+            "check_and_delete_visibility_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Delete Visibility Keys",
+                "setToolTip": "Delete visibility keys from the exported objects.",
+                "setChecked": True,
+            },
+            "optimize_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Optimize Keys",
+                "setToolTip": "Optimize animation keys by removing redundant keys.",
+                "setChecked": True,
+            },
+            "set_bake_animation_range": {
+                "widget_type": "QCheckBox",
+                "setText": "Auto Set Bake Animation Range",
+                "setToolTip": "Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
+                "setChecked": True,
+            },
+        }
+
+    @property
+    def check_definitions(self) -> Dict[str, Dict[str, Any]]:
+        """Return the check definitions for the UI."""
+        return {
+            "check_framerate": {
+                "widget_type": "ComboBox",
+                "setToolTip": "Check the scene framerate against the target framerate.",
+                "add": self._frame_rate_options,
+            },
+            "check_duplicate_locator_names": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Duplicate Locator Names",
+                "setToolTip": "Check for duplicate locator names.",
                 "setChecked": True,
             },
             "check_duplicate_materials": {
@@ -522,23 +567,11 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Check for objects with a bounding box having a negative Y value.",
                 "setChecked": True,
             },
-            "convert_to_relative_paths": {
-                "widget_type": "QCheckBox",
-                "setText": "Convert To Relative Paths",
-                "setToolTip": "Convert absolute paths to relative paths.",
-                "setChecked": True,
-            },
             "check_absolute_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Absolute Paths.",
                 "setToolTip": "Check for absolute paths.",
                 "setChecked": True,
-            },
-            "tie_all_keyframes": {
-                "widget_type": "QCheckBox",
-                "setText": "Tie All Keyframes",
-                "setToolTip": "Tie all keyframes on the specified objects.",
-                "setChecked": False,
             },
             "check_untied_keyframes": {
                 "widget_type": "QCheckBox",
@@ -546,37 +579,12 @@ class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin)
                 "setToolTip": "Check for untied keyframes on the specified objects.",
                 "setChecked": True,
             },
-            "check_and_delete_visibility_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Delete Visibility Keys",
-                "setToolTip": "Delete visibility keys from the exported objects.",
-                "setChecked": True,
-            },
-            "optimize_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Optimize Keys",
-                "setToolTip": "Optimize animation keys by removing redundant keys.",
-                "setChecked": True,
-            },
-            "set_bake_animation_range": {
-                "widget_type": "QCheckBox",
-                "setText": "Auto Set Bake Animation Range",
-                "setToolTip": "Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
-                "setChecked": True,
-            },
-            "create_log_file": {
-                "widget_type": "QCheckBox",
-                "setText": "Create Log File",
-                "setToolTip": "Export a log file along with the fbx.",
-                "setChecked": False,
-            },
-            "set_log_level": {
-                "widget_type": "ComboBox",
-                "setToolTip": "Set the log level.",
-                "add": self._log_level_options,
-                "setCurrentText": "Log Level: INFO",
-            },
         }
+
+    @property
+    def definitions(self) -> Dict[str, Dict[str, Any]]:
+        """Return all definitions combined for backward compatibility."""
+        return {**self.task_definitions, **self.check_definitions}
 
 
 # -----------------------------------------------------------------------------

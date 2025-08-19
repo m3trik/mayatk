@@ -113,8 +113,8 @@ class DuplicateLinear:
 
 
 class DuplicateLinearSlots:
-    def __init__(self, **kwargs):
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_linear
 
         self.preview = preview.Preview(

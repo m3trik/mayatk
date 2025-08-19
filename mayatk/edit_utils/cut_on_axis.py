@@ -44,9 +44,8 @@ class CutOnAxis:
 
 
 class CutOnAxisSlots:
-    def __init__(self, **kwargs):
-        # Initialize the switchboard and UI here
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.cut_on_axis
 
         self.preview = preview.Preview(
