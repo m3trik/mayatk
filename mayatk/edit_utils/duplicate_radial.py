@@ -294,11 +294,11 @@ class DuplicateRadial(ptk.LoggingMixin):
 
 
 class DuplicateRadialSlots:
-    def __init__(self, **kwargs):
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard, log_level="WARNING"):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_radial
 
-        self.logger.setLevel(kwargs.get("log_level", "WARNING"))
+        self.logger.setLevel(log_level)
         self.logger.set_log_prefix(f"[duplicate radial] ")
 
         self.preview = core_utils.preview.Preview(

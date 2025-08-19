@@ -396,22 +396,20 @@ class DynamicPipe:
 
 
 class DynamicPipeSlots:
-    def __init__(self, **kwargs):
-        # Initialize the switchboard and UI here
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.dynamic_pipe
 
         self.pipe = None
 
-    def b000(self, widget):
+    def b000(self):
+        """Create Dynamic Pipe"""
         pm.undoInfo(openChunk=True)
         locators = pm.ls(orderedSelection=True, exactType="transform")
         self.pipe = DynamicPipe(locators)
         segments_to_loft = list(range(len(self.pipe.circles) - 1))
         self.pipe.create_pipe_geometry(segments_to_loft)
         pm.undoInfo(closeChunk=True)
-
-    def b001(self, widget): ...
 
 
 # -----------------------------------------------------------------------------

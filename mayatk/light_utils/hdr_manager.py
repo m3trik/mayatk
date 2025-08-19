@@ -78,11 +78,12 @@ class HdrManager:
 
 
 class HdrManagerSlots(HdrManager):
-    def __init__(self, **kwargs):
+    def __init__(self, switchboard):
         super().__init__()
 
-        self.sb = kwargs.get("switchboard")
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.hdr_manager
+
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
 

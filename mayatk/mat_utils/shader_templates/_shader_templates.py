@@ -325,9 +325,10 @@ class QTextEditLogger(logging.Handler):
 
 
 class ShaderTemplatesSlots:
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard, log_level="WARNING"):
+        super().__init__()
+
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.shader_templates
 
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
@@ -335,10 +336,10 @@ class ShaderTemplatesSlots:
         self.image_files = None
 
         # Setup logging
-        self.log = logging.getLogger("ShaderTemplateManager")
-        self.log.setLevel(logging.DEBUG)
+        self.logger = logging.getLogger("ShaderTemplateManager")
+        self.logger.setLevel(log_level)
         log_handler = QTextEditLogger(self.ui.txt001)
-        self.log.addHandler(log_handler)
+        self.logger.addHandler(log_handler)
 
         # Load plugins
         EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin

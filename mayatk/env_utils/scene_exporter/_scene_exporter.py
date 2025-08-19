@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import re
+import time
 import ctypes
 import shutil
 from datetime import datetime
@@ -316,11 +317,8 @@ class SceneExporterSlots(SceneExporter):
         "Log Level: ERROR": 40,
     }
 
-    def __init__(self, **kwargs):
-        """Initialize the SceneExporterSlots class."""
-        super().__init__()
-
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard, log_level="WARNING"):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.scene_exporter
 
         self.ui.txt001.setText("")  # Output Name
@@ -331,6 +329,7 @@ class SceneExporterSlots(SceneExporter):
         self.ui.b009.setChecked(False)
         self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
 
+        self.logger.setLevel(log_level)
         self.logger.hide_logger_name(False)  # Hide the logger name in output
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt003)

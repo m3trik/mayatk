@@ -226,10 +226,10 @@ class ExplodedView:
 class ExplodedViewSlots(ExplodedView):
     """Exploded View Slots"""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, switchboard):
+        super().__init__()
 
-        self.sb = kwargs.get("switchboard")
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.exploded_view
 
     def b000(self):

@@ -117,6 +117,25 @@ class AssemblyManager:
 
 
 class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
+    """Manages Maya scene references with support for selectable and reference-only modes.
+
+    Features:
+    - Add/remove references with namespace management
+    - Import references into the scene
+    - Update references from source files
+    - Convert references to assemblies
+    - Control reference selectability (selectable vs reference-only)
+
+    Reference Modes:
+    - Selectable: References can be selected and modified in the viewport
+    - Reference-Only: References are visible but cannot be selected (display-only)
+
+    Usage:
+    - Hold Ctrl while selecting files to add them as reference-only
+    - Use context menu or keyboard shortcuts to toggle reference modes
+    - Press 'T' to toggle selectability of selected references
+    """
+
     def __init__(self):
         self._filter_text = ""
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
@@ -206,7 +225,239 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         """Sanitize the namespace by replacing or removing illegal characters."""
         return re.sub(r"[^a-zA-Z0-9_]", "_", namespace)
 
-    def add_reference(self, namespace: str, file_path: str) -> bool:
+    def set_reference_mode(self, reference, reference_only: bool = True) -> bool:
+        """Set a reference to be reference-only (non-selectable) or selectable.
+
+        Parameters:
+            reference: The reference object (FileReference or reference node name)
+            reference_only (bool): If True, makes reference non-selectable. If False, makes it selectable.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            # Get the reference node if we have a FileReference object
+            if hasattr(reference, "_refNode"):
+                ref_node = reference._refNode
+            elif isinstance(reference, str):
+                # Assume it's a reference node name
+                ref_node = pm.PyNode(reference)
+            else:
+                ref_node = reference
+
+            # Set the reference display mode
+            # In Maya, setting the reference node's "displayLayerMode" affects selectability
+            if reference_only:
+                # Make reference non-selectable by setting display layer to reference mode
+                ref_node.referenceFlag.set(True)
+                # Also disable selection for all referenced objects
+                referenced_nodes = pm.referenceQuery(ref_node, nodes=True, dagPath=True)
+                if referenced_nodes:
+                    for node_name in referenced_nodes:
+                        try:
+                            node = pm.PyNode(node_name)
+                            if hasattr(node, "overrideEnabled") and hasattr(
+                                node, "overrideDisplayType"
+                            ):
+                                node.overrideEnabled.set(True)
+                                node.overrideDisplayType.set(
+                                    2
+                                )  # Reference display type
+                        except (pm.MayaNodeError, AttributeError):
+                            # Skip nodes that don't support override attributes
+                            continue
+                self.logger.info(f"Set reference {ref_node} to reference-only mode")
+            else:
+                # Make reference selectable
+                ref_node.referenceFlag.set(False)
+                # Enable selection for all referenced objects
+                referenced_nodes = pm.referenceQuery(ref_node, nodes=True, dagPath=True)
+                if referenced_nodes:
+                    for node_name in referenced_nodes:
+                        try:
+                            node = pm.PyNode(node_name)
+                            if hasattr(node, "overrideEnabled"):
+                                node.overrideEnabled.set(False)
+                        except (pm.MayaNodeError, AttributeError):
+                            # Skip nodes that don't support override attributes
+                            continue
+                self.logger.info(f"Set reference {ref_node} to selectable mode")
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to set reference mode: {str(e)}")
+            pm.displayError(f"Failed to set reference mode: {str(e)}")
+            return False
+
+    def toggle_reference_selectability(self, namespace: str = None) -> bool:
+        """Toggle the selectability of a reference by namespace.
+
+        Parameters:
+            namespace (str): The namespace of the reference to toggle. If None, toggles all references.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            references_to_toggle = []
+
+            if namespace is None:
+                # Toggle all references
+                references_to_toggle = self.current_references
+            else:
+                # Find reference by namespace
+                for ref in self.current_references:
+                    if ref.namespace == namespace:
+                        references_to_toggle.append(ref)
+                        break
+
+            if not references_to_toggle:
+                self.logger.warning(f"No references found for namespace: {namespace}")
+                return False
+
+            for ref in references_to_toggle:
+                # Check current state - if referenceFlag is True, it's currently reference-only
+                current_reference_only = ref._refNode.referenceFlag.get()
+                # Toggle the state
+                self.set_reference_mode(ref, reference_only=not current_reference_only)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to toggle reference selectability: {str(e)}")
+            pm.displayError(f"Failed to toggle reference selectability: {str(e)}")
+            return False
+
+    def get_reference_info(self, namespace: str = None) -> dict:
+        """Get detailed information about references and their selectability status.
+
+        Parameters:
+            namespace (str, optional): Specific namespace to query. If None, returns info for all references.
+
+        Returns:
+            dict: Reference information including selectability status
+        """
+        reference_info = {}
+
+        references = self.current_references
+        if namespace:
+            references = [ref for ref in references if ref.namespace == namespace]
+
+        for ref in references:
+            try:
+                is_reference_only = ref._refNode.referenceFlag.get()
+                reference_info[ref.namespace] = {
+                    "path": ref.path,
+                    "namespace": ref.namespace,
+                    "reference_only": is_reference_only,
+                    "status": "Reference-Only" if is_reference_only else "Selectable",
+                }
+            except (AttributeError, pm.MayaNodeError) as e:
+                reference_info[ref.namespace] = {
+                    "path": ref.path,
+                    "namespace": ref.namespace,
+                    "reference_only": False,
+                    "status": "Unknown",
+                    "error": str(e),
+                }
+
+        return reference_info
+
+    def print_reference_status(self):
+        """Print the current status of all references to the console."""
+        ref_info = self.get_reference_info()
+
+        if not ref_info:
+            print("No references found in the current scene.")
+            return
+
+        print("\n=== Reference Status ===")
+        for namespace, info in ref_info.items():
+            status = info.get("status", "Unknown")
+            path = info.get("path", "Unknown")
+            print(f"Namespace: {namespace}")
+            print(f"  Status: {status}")
+            print(f"  Path: {path}")
+            if "error" in info:
+                print(f"  Error: {info['error']}")
+            print()
+
+    def set_all_references_mode(self, reference_only: bool = True) -> bool:
+        """Set all references to reference-only or selectable mode.
+
+        Parameters:
+            reference_only (bool): If True, makes all references non-selectable. If False, makes them selectable.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            for ref in self.current_references:
+                self.set_reference_mode(ref, reference_only=reference_only)
+
+            mode_str = "reference-only" if reference_only else "selectable"
+            self.logger.info(f"Set all references to {mode_str} mode")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to set all references mode: {str(e)}")
+            pm.displayError(f"Failed to set all references mode: {str(e)}")
+            return False
+
+    def re_reference_as_mode(self, namespace: str, reference_only: bool = True) -> bool:
+        """Re-reference an existing reference with a specific selectability mode.
+
+        This method removes and re-adds a reference to change its selectability mode,
+        useful when you want to change an existing selectable reference to reference-only or vice versa.
+
+        Parameters:
+            namespace (str): The namespace of the reference to re-reference
+            reference_only (bool): If True, re-reference as reference-only. If False, as selectable.
+
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            # Find the reference by namespace
+            target_ref = None
+            for ref in self.current_references:
+                if ref.namespace == namespace:
+                    target_ref = ref
+                    break
+
+            if not target_ref:
+                self.logger.warning(f"No reference found with namespace: {namespace}")
+                return False
+
+            # Store the file path
+            file_path = target_ref.path
+
+            # Remove the existing reference
+            target_ref.remove()
+            self.logger.info(f"Removed existing reference: {namespace}")
+
+            # Re-add the reference with the new mode
+            success = self.add_reference(
+                namespace, file_path, reference_only=reference_only
+            )
+
+            if success:
+                mode_str = "reference-only" if reference_only else "selectable"
+                self.logger.info(f"Re-referenced {namespace} as {mode_str}")
+            else:
+                self.logger.error(f"Failed to re-reference {namespace}")
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"Failed to re-reference {namespace}: {str(e)}")
+            pm.displayError(f"Failed to re-reference {namespace}: {str(e)}")
+            return False
+
+    def add_reference(
+        self, namespace: str, file_path: str, reference_only: bool = False
+    ) -> bool:
         # Ensure the file exists before proceeding
         if not os.path.exists(file_path):
             file_not_found_error_msg = f"File not found: {file_path}"
@@ -249,6 +500,11 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
                     f"Failed to create reference for {file_path}. Reference object or its _refNode attribute is None."
                 )
             assert ref._refNode.type() == "reference"
+
+            # Set reference to reference-only mode if requested
+            if reference_only:
+                self.set_reference_mode(ref, reference_only=True)
+
             return True
         except AssertionError:
             pm.displayError(
@@ -354,9 +610,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         return wrapper
 
-    def format_table_item(
-        self, item: "QtWidgets.QTableWidgetItem", file_path: str
-    ) -> None:
+    def format_table_item(self, item, file_path: str) -> None:
         """Apply coloring based on whether the file is the current scene or a reference."""
         norm_fp = os.path.normpath(file_path)
         current_scene = os.path.normpath(pm.sceneName()) if pm.sceneName() else ""
@@ -369,12 +623,57 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self._referenced_paths = referenced_paths  # cache for this update
 
         color = "#FFFFFF"  # default
+        style = ""
+
         if norm_fp == current_scene:
             color = "#3C8D3C"  # green
         elif norm_fp in referenced_paths:
-            color = "#B49B5C"  # gold/brown
+            # Check if this reference is in reference-only mode
+            ref_is_reference_only = False
+            for ref in self.current_references:
+                if os.path.normpath(ref.path) == norm_fp:
+                    try:
+                        ref_is_reference_only = ref._refNode.referenceFlag.get()
+                    except (AttributeError, pm.MayaNodeError):
+                        ref_is_reference_only = False
+                    break
+
+            if ref_is_reference_only:
+                color = "#8A6914"  # darker brown for reference-only
+                style = "font-style: italic;"  # italic text for reference-only
+            else:
+                color = "#B49B5C"  # gold/brown for normal references
 
         item.setForeground(self.sb.QtGui.QBrush(self.sb.QtGui.QColor(color)))
+
+        # Apply styling if needed
+        if style:
+            font = item.font()
+            font.setItalic(True)
+            item.setFont(font)
+        else:
+            font = item.font()
+            font.setItalic(False)
+            item.setFont(font)
+
+        # Update tooltip to show reference status
+        if norm_fp in referenced_paths:
+            for ref in self.current_references:
+                if os.path.normpath(ref.path) == norm_fp:
+                    try:
+                        ref_is_reference_only = ref._refNode.referenceFlag.get()
+                        status = (
+                            "Reference-Only (Non-selectable)"
+                            if ref_is_reference_only
+                            else "Reference (Selectable)"
+                        )
+                        item.setToolTip(f"{file_path}\nStatus: {status}")
+                    except (AttributeError, pm.MayaNodeError):
+                        item.setToolTip(f"{file_path}\nStatus: Reference")
+                    break
+        else:
+            item.setToolTip(file_path)
+
         self.logger.debug(f"Formatted table item for {file_path} with color {color}")
 
     def handle_item_selection(self):
@@ -408,7 +707,13 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug(
                 f"Adding reference for namespace: {namespace}, file_path: {file_path}"
             )
-            success = self.add_reference(namespace, file_path)
+            # Check if Ctrl key is held for reference-only mode
+            modifiers = self.sb.QtWidgets.QApplication.keyboardModifiers()
+            reference_only = modifiers == self.sb.QtCore.Qt.ControlModifier
+
+            success = self.add_reference(
+                namespace, file_path, reference_only=reference_only
+            )
             if not success:
                 for item in selected_items:
                     if item.text() == namespace:
@@ -579,6 +884,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self.refresh_file_list()
         self.logger.info("Unlinked all references and refreshed file list.")
 
+    @block_table_selection_method
     def convert_to_assembly(self):
         self.logger.debug("Convert to assembly operation triggered.")
         user_choice = self.sb.message_box(
@@ -593,12 +899,78 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
             self.logger.debug("Convert to assembly operation cancelled by user.")
 
+    @block_table_selection_method
+    def set_references_selectable(self):
+        """Set all current references to selectable mode."""
+        self.logger.debug("Setting all references to selectable mode.")
+        success = self.set_all_references_mode(reference_only=False)
+        if success:
+            self.sb.message_box("<b>All references set to selectable mode.</b>")
+            self.refresh_file_list()
+        else:
+            self.sb.message_box("<b>Failed to set references to selectable mode.</b>")
+
+    @block_table_selection_method
+    def set_references_reference_only(self):
+        """Set all current references to reference-only mode."""
+        self.logger.debug("Setting all references to reference-only mode.")
+        success = self.set_all_references_mode(reference_only=True)
+        if success:
+            self.sb.message_box("<b>All references set to reference-only mode.</b>")
+            self.refresh_file_list()
+        else:
+            self.sb.message_box(
+                "<b>Failed to set references to reference-only mode.</b>"
+            )
+
+    @block_table_selection_method
+    def toggle_selected_reference_selectability(self):
+        """Toggle selectability of currently selected references in the table."""
+        t = self.ui.tbl000
+        selected_items = [
+            t.item(idx.row(), 0)
+            for idx in t.selectedIndexes()
+            if idx.column() == 0 and t.item(idx.row(), 0)
+        ]
+
+        if not selected_items:
+            self.sb.message_box("<b>No references selected to toggle.</b>")
+            return
+
+        selected_namespaces = {item.text() for item in selected_items}
+        current_namespaces = {ref.namespace for ref in self.current_references}
+
+        # Only toggle references that are actually loaded
+        namespaces_to_toggle = selected_namespaces & current_namespaces
+
+        if not namespaces_to_toggle:
+            self.sb.message_box("<b>Selected items are not currently referenced.</b>")
+            return
+
+        self.logger.debug(
+            f"Toggling selectability for namespaces: {namespaces_to_toggle}"
+        )
+
+        success_count = 0
+        for namespace in namespaces_to_toggle:
+            if self.toggle_reference_selectability(namespace):
+                success_count += 1
+
+        if success_count > 0:
+            self.sb.message_box(
+                f"<b>Toggled selectability for {success_count} reference(s).</b>"
+            )
+            self.refresh_file_list()
+        else:
+            self.sb.message_box("<b>Failed to toggle reference selectability.</b>")
+
 
 class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
-    def __init__(self, log_level="DEBUG", **kwargs):
+    def __init__(self, switchboard, log_level="DEBUG"):
         super().__init__()
         self.logger.setLevel(log_level)
-        self.sb = kwargs.get("switchboard")
+
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.reference_manager
 
         self.controller = ReferenceManagerController(self)
@@ -610,6 +982,20 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.ui.b004.clicked.connect(
             lambda: self.controller.refresh_file_list(invalidate=True)
         )
+
+        # Add new buttons for reference selectability control
+        # These would need to be added to the UI file, but we'll assume they exist
+        # b006: Set all references to selectable
+        # b007: Set all references to reference-only
+        # b008: Toggle selected reference selectability
+        if hasattr(self.ui, "b006"):
+            self.ui.b006.clicked.connect(self.controller.set_references_selectable)
+        if hasattr(self.ui, "b007"):
+            self.ui.b007.clicked.connect(self.controller.set_references_reference_only)
+        if hasattr(self.ui, "b008"):
+            self.ui.b008.clicked.connect(
+                self.controller.toggle_selected_reference_selectability
+            )
 
         self.script_job = pm.scriptJob(
             event=["SceneOpened", self.controller.refresh_file_list]
@@ -632,7 +1018,50 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setAlternatingRowColors(True)
             widget.setWordWrap(False)
             widget.itemSelectionChanged.connect(self.controller.handle_item_selection)
-            self.logger.debug("tbl000 table widget initialized.")
+
+            # Add context menu for reference mode control
+            widget.setContextMenuPolicy(self.sb.QtCore.Qt.CustomContextMenu)
+            widget.customContextMenuRequested.connect(self.show_table_context_menu)
+
+            # Add keyboard shortcuts
+            toggle_shortcut = self.sb.QtWidgets.QShortcut(
+                self.sb.QtGui.QKeySequence("T"), widget
+            )
+            toggle_shortcut.activated.connect(
+                self.controller.toggle_selected_reference_selectability
+            )
+
+            self.logger.debug(
+                "tbl000 table widget initialized with context menu and shortcuts."
+            )
+
+    def show_table_context_menu(self, position):
+        """Show context menu for table operations."""
+        t = self.ui.tbl000
+        if t.itemAt(position) is None:
+            return
+
+        menu = self.sb.QtWidgets.QMenu()
+
+        # Add reference mode actions
+        selectable_action = menu.addAction("Set All References Selectable")
+        selectable_action.triggered.connect(self.controller.set_references_selectable)
+
+        reference_only_action = menu.addAction("Set All References Reference-Only")
+        reference_only_action.triggered.connect(
+            self.controller.set_references_reference_only
+        )
+
+        menu.addSeparator()
+
+        toggle_action = menu.addAction("Toggle Selected Reference Selectability")
+        toggle_action.triggered.connect(
+            self.controller.toggle_selected_reference_selectability
+        )
+
+        # Show the menu
+        global_pos = t.mapToGlobal(position)
+        menu.exec_(global_pos)
 
     def txt000_init(self, widget):
         """Initialize the text input for the current working directory."""
@@ -655,6 +1084,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setObjectName="chk000",
                 setChecked=True,
                 setToolTip="Also search sub-folders.",
+            )
+
+            # Add help text for new functionality
+            help_text = (
+                "Reference Manager Controls:\n"
+                "• Hold Ctrl while selecting files to add as reference-only (non-selectable)\n"
+                "• Right-click table for reference mode options\n"
+                "• Press 'T' to toggle selectability of selected references\n"
+                "• Reference-only items appear in italic with darker brown color"
+            )
+
+            widget.menu.add(
+                "QLabel",
+                setText="Help",
+                setObjectName="lbl_help",
+                setToolTip=help_text,
+                setWordWrap=True,
             )
             widget.textChanged.connect(
                 lambda text: self.sb.defer_with_timer(
@@ -718,6 +1164,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Set dir to current workspace."""
         self.logger.debug("b001 set to current workspace clicked.")
         self.ui.txt000.setText(self.controller.current_workspace)
+
+    def b006(self):
+        """Set all references to selectable mode."""
+        self.logger.debug("b006 set all references selectable clicked.")
+        self.controller.set_references_selectable()
+
+    def b007(self):
+        """Set all references to reference-only mode."""
+        self.logger.debug("b007 set all references reference-only clicked.")
+        self.controller.set_references_reference_only()
+
+    def b008(self):
+        """Toggle selectability of selected references."""
+        self.logger.debug("b008 toggle selected reference selectability clicked.")
+        self.controller.toggle_selected_reference_selectability()
 
 
 # -----------------------------------------------------------------------------

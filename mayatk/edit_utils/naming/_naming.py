@@ -44,11 +44,12 @@ class Naming(ptk.HelpMixin):
                     chars* - replace prefix.
                     chars** - append prefix.
             fltr (str): Filter to apply on object names using wildcards or regular expressions:
-                    chars - exact match.
-                    *chars* - contains chars.
-                    *chars - ends with chars.
-                    chars* - starts with chars.
-                    chars|chars - matches any of the specified patterns.
+                    chars - exact match (e.g., 'Cube' matches only 'Cube').
+                    *chars* - contains chars (e.g., '*Cube*' matches 'pCube1', 'nurbsCube', etc.).
+                    *chars - ends with chars (e.g., '*Cube' matches 'polyCube', 'nurbsCube').
+                    chars* - starts with chars (e.g., 'Cube*' matches 'Cube1', 'CubeGroup').
+                    chars|chars - matches any of the specified patterns (e.g., 'Cube|Sphere').
+                    "" (empty) - matches all objects when used with formatting patterns.
             regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
             ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
             retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
@@ -57,22 +58,57 @@ class Naming(ptk.HelpMixin):
             None: Objects are renamed in the scene directly.
 
         Example:
-            rename('Cube', '*001', regex=True) # Replace suffix on objects containing 'Cube' in their name, e.g., 'polyCube' becomes 'polyCube001'.
-            rename('Cube', '**001', regex=True) # Append '001' to names of objects containing 'Cube', e.g., 'polyCube1' becomes 'polyCube1001'.
-            rename('Cube', '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
+            rename(['pCube1'], '*001', '*Cube*') # Matches objects containing 'Cube', replaces suffix: 'pCube1' becomes 'pCube001'.
+            rename(['pCube1'], '**001', '*Cube*') # Matches objects containing 'Cube', appends suffix: 'pCube1' becomes 'pCube1001'.
+            rename(['polyCube'], 'newName', 'Cube') # Exact match required: 'polyCube' won't match, 'Cube' would match.
+            rename(['pCube1'], '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
         """
         objects = pm.ls(objects, flatten=True)
         long_names = [obj.name() for obj in objects]
         short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
 
-        names = ptk.find_str_and_format(
-            short_names,
-            to,
-            fltr,
-            regex=regex,
-            ignore_case=ignore_case,
-            return_orig_strings=True,
-        )
+        # Handle empty filter case which causes crashes
+        if not fltr:
+            # When no filter is provided, apply formatting to all objects
+            names = []
+            for name in short_names:
+                try:
+                    formatted = ptk.find_str_and_format(
+                        [name],
+                        to,
+                        "*",
+                        regex=regex,
+                        ignore_case=ignore_case,
+                        return_orig_strings=True,
+                    )
+                    if formatted:
+                        names.extend(formatted)
+                except Exception:
+                    # Fallback: simple append for basic patterns
+                    if to.startswith("**"):
+                        new_name = name + to[2:]
+                    elif to.startswith("*"):
+                        new_name = name + to[1:]
+                    else:
+                        new_name = to
+                    names.append((name, new_name))
+        else:
+            try:
+                names = ptk.find_str_and_format(
+                    short_names,
+                    to,
+                    fltr,
+                    regex=regex,
+                    ignore_case=ignore_case,
+                    return_orig_strings=True,
+                )
+            except Exception as e:
+                print(f"// Error in find_str_and_format: {e}")
+                print(f"// Filter: '{fltr}', Pattern: '{to}'")
+                print(
+                    f"// Try using wildcard patterns like '*{fltr}*' for partial matches"
+                )
+                return
 
         count = 0
         for oldName, newName in names:
@@ -295,9 +331,10 @@ class Naming(ptk.HelpMixin):
         if custom_suffixes:
             default_map.update(custom_suffixes)
 
-        common_strips = set(default_map.values())
+        # Get all suffixes for potential stripping
+        all_suffixes = set(default_map.values())
         if strip:
-            common_strips.update(ptk.make_iterable(strip))
+            all_suffixes.update(ptk.make_iterable(strip))
 
         objects = pm.ls(objects, flatten=True)
         name_pairs = []
@@ -306,19 +343,35 @@ class Naming(ptk.HelpMixin):
             short_name = obj.shortName().split("|")[-1]
             # Use NodeUtils for object type resolution
             typ = NodeUtils.get_type(obj)
-            suffix = default_map.get(typ, "")
-            if not suffix:
+            target_suffix = default_map.get(typ, "")
+            if not target_suffix:
                 # fallback to nodeType-based detection if needed
                 node_type = obj.nodeType()
-                suffix = default_map.get(node_type, "")
+                target_suffix = default_map.get(node_type, "")
 
-            new_name = ptk.format_suffix(
-                short_name,
-                suffix=suffix,
-                strip=list(common_strips),
-                strip_trailing_ints=strip_trailing_ints,
-                strip_trailing_alpha=False,
-            )
+            # Strip wrong suffixes from the END of the name only
+            wrong_suffixes = [s for s in all_suffixes if s != target_suffix]
+            base_name = short_name
+            for wrong_suffix in wrong_suffixes:
+                if base_name.endswith(wrong_suffix):
+                    base_name = base_name[: -len(wrong_suffix)]
+                    break  # Only strip one suffix to avoid over-stripping
+
+            # Apply strip_trailing_ints if specified
+            if strip_trailing_ints:
+                base_name = ptk.format_suffix(
+                    base_name,
+                    suffix="",
+                    strip_trailing_ints=True,
+                    strip_trailing_alpha=False,
+                )
+
+            # Only add target suffix if not already present
+            if target_suffix and not base_name.endswith(target_suffix):
+                new_name = base_name + target_suffix
+            else:
+                new_name = base_name
+
             name_pairs.append((obj, new_name))
 
         for obj, new_name in name_pairs:

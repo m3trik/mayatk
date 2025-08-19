@@ -285,34 +285,6 @@ class ObjectSwapper(ptk.LoggingMixin):
         """Extract clean name without namespace prefix."""
         return namespaced_name.split(":")[-1]
 
-    def push_objects_to_scene(
-        self,
-        target_objects: Union[List[str], List[Any], str, Any],
-        target_scene_file: Union[str, Path],
-        backup: bool = True,
-    ) -> bool:
-        """Push objects from current scene to target scene."""
-        # Normalize inputs
-        objects = self._normalize_object_list(target_objects)
-        scene_file = Path(target_scene_file)
-
-        # Validate inputs
-        if not self.validation_manager.validate_inputs(objects, scene_file, "Push"):
-            return False
-
-        self.logger.info(f"Pushing {len(objects)} objects to {scene_file}")
-
-        if self.dry_run:
-            self.logger.notice("[DRY-RUN] Push operation analysis complete")
-            return True
-
-        # Export objects to temp file then import to target scene
-        temp_file = self.import_manager.export_objects_to_temp(objects)
-        if not temp_file:
-            return False
-
-        return self.import_manager.import_to_target_scene(temp_file, scene_file, backup)
-
     def pull_objects_from_scene(
         self,
         target_objects: Union[List[str], List[Any], str, Any],
@@ -472,7 +444,8 @@ if __name__ == "__main__":
     # Example usage:
     # file = "C5_AFT_COMP_ASSEMBLY.fbx"
     file = "C5_AFT_COMP_ASSEMBLY_module.ma"
-    path = f"O:\\Dropbox (Moth+Flame)\\Moth+Flame Dropbox\\Ryan Simpson\\_tests\\hierarchy_test\\{file}"
+    # path = f"O:\\Dropbox (Moth+Flame)\\Moth+Flame Dropbox\\Ryan Simpson\\_tests\\hierarchy_test\\{file}"
+    path = f"O:\\Dropbox (Moth+Flame)\\Moth+Flame Dropbox\\Moth+Flame Team Folder\\PRODUCTION\\AF\\C-5M\\PRODUCTION\\Maya\\Horizontal_Stab\\scenes\\modules\\C5_AFT_COMP_ASSEMBLY\\{file}"
 
     objs = pm.selected(type="transform")
 

@@ -54,6 +54,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "edit_utils/dynamic_pipe.ui",
             "slot": "edit_utils.dynamic_pipe.DynamicPipeSlots",
         },
+        "hierarchy_manager": {
+            "ui": "env_utils/hierarchy_manager/hierarchy_manager.ui",
+            "slot": "env_utils.hierarchy_manager.HierarchyManagerSlots",
+        },
         "exploded_view": {
             "ui": "display_utils/exploded_view.ui",
             "slot": "display_utils.exploded_view.ExplodedViewSlots",
@@ -65,6 +69,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         "mirror": {
             "ui": "edit_utils/mirror.ui",
             "slot": "edit_utils.mirror.MirrorSlots",
+        },
+        "naming": {
+            "ui": "edit_utils/naming/naming.ui",
+            "slot": "edit_utils.naming.NamingSlots",
         },
         "reference_manager": {
             "ui": "env_utils/reference_manager.ui",

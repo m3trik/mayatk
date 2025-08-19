@@ -20,8 +20,8 @@ class Bridge:
 
 
 class BridgeSlots:
-    def __init__(self, **kwargs):
-        self.sb = kwargs.get("switchboard")
+    def __init__(self, switchboard):
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.bridge
 
         self.preview = preview.Preview(

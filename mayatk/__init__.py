@@ -160,6 +160,8 @@ include = {
     "maya_menu_handler": ["MayaMenuHandler"],
     "naming": ["Naming"],
     "ui_manager": ["UiManager"],
+    # Selection utilities
+    "edit_utils.selection": ["Selection"],
     # Add hierarchy manager support (these will now work!):
     "env_utils.hierarchy_manager.manager": ["HierarchyManager"],
     "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],

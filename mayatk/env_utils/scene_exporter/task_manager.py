@@ -276,7 +276,8 @@ class _TaskChecksMixin(_TaskDataMixin):
     def check_referenced_objects(self) -> tuple:
         """Check if any referenced objects are present in the scene."""
         log_messages = []
-        referenced_objects = pm.ls(self.objects, references=True)
+        # Check all referenced objects in the scene, not just the selected objects
+        referenced_objects = pm.ls(references=True)
 
         if referenced_objects:
             for ref in referenced_objects:

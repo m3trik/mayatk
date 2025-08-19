@@ -618,11 +618,12 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
     """
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
-    def __init__(self, **kwargs):
+    def __init__(self, switchboard):
         super().__init__()
 
-        self.sb = kwargs.get("switchboard")
+        self.sb = switchboard
         self.ui = self.sb.loaded_ui.stingray_arnold_shader
+
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
