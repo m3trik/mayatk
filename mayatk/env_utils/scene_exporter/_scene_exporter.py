@@ -5,6 +5,7 @@ import re
 import time
 import ctypes
 import shutil
+import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
@@ -17,7 +18,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.env_utils import EnvUtils
 from mayatk.display_utils import DisplayUtils
-from mayatk.env_utils.scene_exporter import task_manager
+from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
 
 class SceneExporter(ptk.LoggingMixin):
@@ -27,7 +28,7 @@ class SceneExporter(ptk.LoggingMixin):
         """ """
         self._setup_logging(log_level, log_handler)
 
-        self.task_manager = task_manager.TaskManager(self.logger)
+        self.task_manager = TaskManager(self.logger)
         self.logger.debug("Task manager initialized in SceneExporter.")
 
     def _setup_logging(self, log_level: str, log_handler: Optional[object]) -> None:
@@ -83,6 +84,7 @@ class SceneExporter(ptk.LoggingMixin):
         tasks: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, bool]]:
         """Perform the export operation, including initialization and task management."""
+        start_time = time.time()  # Track export duration
         self.logger.info("Starting export process ...")
 
         # Set export configuration
@@ -168,6 +170,16 @@ class SceneExporter(ptk.LoggingMixin):
             preset_name = os.path.splitext(os.path.basename(preset_file))[0]
             export_info["preset_used"] = preset_name
 
+        # Separate tasks into task_params and check_params
+        task_params = {}
+        check_params = {}
+        if tasks:
+            for key, value in tasks.items():
+                if key in self.task_manager.task_definitions:
+                    task_params[key] = value
+                elif key in self.task_manager.check_definitions:
+                    check_params[key] = value
+
         # Run tasks with export info
         success = self.task_manager._execute_tasks_and_checks(
             task_params, check_params, export_info
@@ -212,12 +224,12 @@ class SceneExporter(ptk.LoggingMixin):
 
     def setup_file_logging(self, log_file_path: str):
         """Setup file logging to log actions during export."""
-        file_handler = self.logging.FileHandler(log_file_path)
+        file_handler = logging.FileHandler(log_file_path)
         file_handler.setFormatter(
-            self.logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         )
         self.file_handler = file_handler
-        root_logger = self.logging.getLogger(self.__class__.__name__)
+        root_logger = logging.getLogger(self.__class__.__name__)
         root_logger.addHandler(self.file_handler)
         self.logger.debug(f"File logging setup complete. Log file: {log_file_path}")
 
@@ -226,10 +238,10 @@ class SceneExporter(ptk.LoggingMixin):
 
     def close_file_handlers(self):
         """Close and remove file handlers after logging is complete."""
-        root_logger = self.logging.getLogger(self.__class__.__name__)
+        root_logger = logging.getLogger(self.__class__.__name__)
         handlers = root_logger.handlers[:]
         for handler in handlers:
-            if isinstance(handler, self.logging.FileHandler):
+            if isinstance(handler, logging.FileHandler):
                 handler.close()
                 root_logger.removeHandler(handler)
                 self.logger.debug("File handler closed and removed.")
@@ -318,6 +330,9 @@ class SceneExporterSlots(SceneExporter):
     }
 
     def __init__(self, switchboard, log_level="WARNING"):
+        # Initialize the parent SceneExporter class first
+        super().__init__(log_level=log_level)
+
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.scene_exporter
 
@@ -378,7 +393,7 @@ class SceneExporterSlots(SceneExporter):
     def header_init(self, widget):
         """Initialize the header widget."""
         # Add a button to open the hypershade editor.
-        widget.menu.setTitle("Settings:")
+        widget.menu.setTitle("Global Settings:")
         widget.menu.add(
             "QCheckBox",
             setText="Create Log File",

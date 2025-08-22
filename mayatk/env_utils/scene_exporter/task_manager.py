@@ -15,7 +15,7 @@ from mayatk.env_utils import EnvUtils
 from mayatk.mat_utils import MatUtils
 from mayatk.xform_utils import XformUtils
 from mayatk.node_utils import NodeUtils
-from mayatk.env_utils.scene_exporter import task_factory
+from mayatk.env_utils.scene_exporter.task_factory import TaskFactory
 
 
 class _TaskDataMixin:
@@ -290,7 +290,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check if the scene's current framerate matches the target framerate."""
         if not self._has_keyframes:
             self.logger.debug("No keyframes found. Skipping framerate check.")
-            return True
+            return True, []
 
         log_messages = []
 
@@ -361,7 +361,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check if there are any visibility keys on the specified objects and delete them."""
         if not self._has_keyframes:
             self.logger.debug("No keyframes found. Skipping visibility key check.")
-            return True
+            return True, []
 
         log_messages = []
         visibility_keys_found = False
@@ -388,7 +388,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check if there are any untied keyframes on the specified objects."""
         if not self._has_keyframes:
             self.logger.debug("No keyframes found. Skipping untied keyframe check.")
-            return True
+            return True, []
 
         log_messages = []
         untied_keyframes_found = False
@@ -422,7 +422,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         return True, log_messages  # All checks passed, no untied keyframes
 
 
-class TaskManager(task_factory.TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
+class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     """Contains all task-related UI definitions for the Scene Exporter."""
 
     _frame_rate_options: Dict[str, Any] = {

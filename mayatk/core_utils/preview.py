@@ -126,11 +126,27 @@ class Preview:
         self.finalize_func = finalize_func
 
         # Use weak reference to prevent memory leaks
+        self.window = None
         try:
-            self.window = weakref.ref(self.create_button.window())
-        except Exception:
+            if hasattr(self.create_button, "window") and self.create_button.window():
+                self.window = weakref.ref(self.create_button.window())
+            elif (
+                hasattr(self.preview_checkbox, "window")
+                and self.preview_checkbox.window()
+            ):
+                self.window = weakref.ref(self.preview_checkbox.window())
+            else:
+                # Try to find a parent window by walking up the widget hierarchy
+                widget = self.create_button.parent()
+                while widget and not isinstance(
+                    widget, type(self.create_button.window())
+                ):
+                    widget = widget.parent()
+                if widget:
+                    self.window = weakref.ref(widget)
+        except Exception as e:
             self.window = None
-            self.logger.warning("Could not create weak reference to window")
+            self.logger.warning(f"Could not create weak reference to window: {e}")
 
         # Setup UI connections
         self._setup_ui_connections()
@@ -173,6 +189,16 @@ class Preview:
         try:
             # Remove from class tracking
             Preview._instances.discard(self)
+
+            # Remove event filter if it was installed
+            window = self.window() if self.window else None
+            if window:
+                try:
+                    window.removeEventFilter(self)
+                except Exception as e:
+                    self.logger.debug(
+                        f"Event filter removal failed (may not have been installed): {e}"
+                    )
 
             # Kill scriptJob if it exists
             if self.script_job is not None:
@@ -218,22 +244,64 @@ class Preview:
 
         window = self.window() if self.window else None
         if window:
+            # First try to connect to custom on_show/on_hide signals
+            signals_connected = False
             try:
                 if hasattr(window, "on_show"):
                     window.on_show.connect(self.conditionally_enable)
+                    signals_connected = True
                 if hasattr(window, "on_hide"):
                     window.on_hide.connect(self.conditionally_disable)
             except Exception as e:
-                self.logger.warning(f"Failed to setup window show/hide behavior: {e}")
+                self.logger.warning(
+                    f"Failed to setup custom window show/hide signals: {e}"
+                )
+
+            # If custom signals aren't available, install event filter as fallback
+            if not signals_connected and (enable_on_show or disable_on_hide):
+                try:
+                    window.installEventFilter(self)
+                    self.logger.debug(
+                        "Installed event filter for window show/hide behavior"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Failed to install event filter: {e}")
+        else:
+            self.logger.warning("Could not get window reference for show/hide behavior")
+
+    def eventFilter(self, obj, event):
+        """Handle window show/hide events when custom signals aren't available."""
+        try:
+            # Check if this is a show event
+            if event.type() == 17:  # QEvent.Show
+                if self.enable_on_show and not self.is_enabled:
+                    # Use a small delay to ensure window is fully shown
+                    try:
+                        from PySide2.QtCore import QTimer
+
+                        QTimer.singleShot(50, self.conditionally_enable)
+                    except ImportError:
+                        # Fallback if PySide2 not available
+                        self.conditionally_enable()
+
+            # Check if this is a hide event
+            elif event.type() == 18:  # QEvent.Hide
+                if self.disable_on_hide and self.is_enabled:
+                    self.conditionally_disable()
+        except Exception as e:
+            self.logger.warning(f"Error in eventFilter: {e}")
+
+        # Always return False to let the event continue processing
+        return False
 
     def conditionally_enable(self) -> None:
         """Enable preview if configured to do so on window show."""
-        if self.enable_on_show and not self.is_enabled:
+        if self.enable_on_show:
             self.enable()
 
     def conditionally_disable(self) -> None:
         """Disable preview if configured to do so on window hide."""
-        if self.disable_on_hide and self.is_enabled:
+        if self.disable_on_hide:
             self.disable()
 
     def toggle(self, state: bool) -> None:
@@ -267,9 +335,6 @@ class Preview:
     @safe_operation
     def enable(self) -> None:
         """Enables the preview and sets up the initial state."""
-        if self.is_enabled:
-            return  # Already enabled
-
         # Store previous undo state
         self.prev_undo_state = pm.undoInfo(q=True, state=True)
         pm.undoInfo(state=True)
@@ -277,33 +342,26 @@ class Preview:
 
         try:
             selected_items = pm.selected()
-            if not selected_items:
+            if selected_items:
+                # Convert components to strings for hashing
+                self.operated_objects.update(str(item) for item in selected_items)
+                self.needs_undo = False  # Set to False when enabling for the first time
+
+                # Update UI state
+                self.preview_checkbox.blockSignals(True)
+                self.preview_checkbox.setChecked(True)
+                self.preview_checkbox.blockSignals(False)
+                self.create_button.setEnabled(True)
+
+                # Mark as enabled before refresh to prevent recursion
+                self.is_enabled = True
+
+                # Perform initial operation
+                self.refresh()
+                self.operation_performed = True
+            else:
                 self.message_func("No objects selected.")
                 self.disable()
-                return
-
-            # Validate objects before proceeding
-            if not self.validate_operation(selected_items):
-                self.message_func("Selected objects are not valid for this operation.")
-                self.disable()
-                return
-
-            # Convert components to strings for hashing
-            self.operated_objects.update(str(item) for item in selected_items)
-            self.needs_undo = False  # Set to False when enabling for the first time
-
-            # Update UI state
-            self.preview_checkbox.blockSignals(True)
-            self.preview_checkbox.setChecked(True)
-            self.preview_checkbox.blockSignals(False)
-            self.create_button.setEnabled(True)
-
-            # Mark as enabled before refresh to prevent recursion
-            self.is_enabled = True
-
-            # Perform initial operation
-            self.refresh()
-            self.operation_performed = True
 
         except Exception as e:
             self.logger.exception(f"Exception in enable: {e}")
@@ -313,134 +371,58 @@ class Preview:
     @safe_operation
     def disable(self) -> None:
         """Disables the preview and reverts to the initial state."""
-        if not self.is_enabled:
-            return  # Already disabled
+        self.undo_if_needed()
+        pm.undoInfo(closeChunk=True)
 
+        if self.prev_undo_state is not None:
+            pm.undoInfo(state=self.prev_undo_state)
+
+        self.operated_objects.clear()
+        self.preview_checkbox.setChecked(False)
+        self.create_button.setEnabled(False)
         self.is_enabled = False
-
-        try:
-            # Undo any changes
-            self.undo_if_needed()
-
-            # Close undo chunk
-            try:
-                pm.undoInfo(closeChunk=True)
-            except RuntimeError:
-                pass  # Chunk might already be closed
-
-            # Restore previous undo state
-            if self.prev_undo_state is not None:
-                pm.undoInfo(state=self.prev_undo_state)
-                self.prev_undo_state = None
-
-            # Clear state
-            self.operated_objects.clear()
-
-            # Update UI
-            self.preview_checkbox.blockSignals(True)
-            self.preview_checkbox.setChecked(False)
-            self.preview_checkbox.blockSignals(False)
-            self.create_button.setEnabled(False)
-
-        except Exception as e:
-            self.logger.exception(f"Exception in disable: {e}")
 
     def undo_if_needed(self) -> None:
         """Executes undo operation if required."""
-        if not self.needs_undo:
-            return
-
-        self.internal_undo_triggered = True
-        try:
+        if self.needs_undo:
+            self.internal_undo_triggered = True
             pm.undoInfo(closeChunk=True)
-            pm.undo()
-        except RuntimeError as e:
-            self.logger.warning(f"Undo operation failed: {e}")
-        finally:
             try:
-                pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+                pm.undo()
             except RuntimeError:
-                pass  # Chunk might already be open
+                pass
+            finally:
+                pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+
             self.needs_undo = False
 
-    @safe_operation
-    def refresh(self, *args) -> None:
+    def refresh(self, *args):
         """Refreshes the preview to reflect any changes."""
-        if not self.preview_checkbox.isChecked() or not self.is_enabled:
+        if not self.preview_checkbox.isChecked():
             return
-
         self.is_refreshing = True
-
+        self.undo_if_needed()
+        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
         try:
-            # Report progress if callback available
-            if self.progress_callback:
-                self.progress_callback("Refreshing preview...")
-
-            # Undo previous operation
-            self.undo_if_needed()
-
-            # Start new operation chunk
-            pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
-
             # Convert strings back to PyMel objects for operation
             operated_objects = pm.ls(self.operated_objects, flatten=True)
-
-            if not operated_objects:
-                self.logger.warning("No valid objects found for operation")
-                return
-
-            # Validate objects before operation
-            if not self.validate_operation(operated_objects):
-                self.message_func("Objects are no longer valid for this operation.")
-                return
-
-            # Perform the operation
             self.operation_instance.perform_operation(operated_objects)
 
-            # Add the operated objects to the isolation set if one exists
+            # Add the operated objects to the isolation set if one exists.
             _display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
-
-            # Mark that undo is needed for next refresh/disable
-            self.needs_undo = True
-
-            # Report completion if callback available
-            if self.progress_callback:
-                self.progress_callback("Preview refreshed")
-
         except Exception as e:
             self.logger.exception(f"Exception during operation: {e}")
-            self.message_func(f"Preview operation failed: {str(e)}")
         finally:
-            try:
-                pm.undoInfo(closeChunk=True)
-            except RuntimeError:
-                pass  # Chunk might already be closed
-            self.is_refreshing = False
+            pm.undoInfo(closeChunk=True)
+        self.needs_undo = True  # Set to True once the operation has been performed
+        self.is_refreshing = False
 
-    @safe_operation
-    def finalize_changes(self) -> None:
+    def finalize_changes(self):
         """Finalizes the preview changes and calls the finalize_func if provided."""
-        if not self.is_enabled:
-            return
-
-        try:
-            # Mark that we don't need undo since we're finalizing
-            self.needs_undo = False
-
-            # Disable the preview which will close the undo chunk
-            self.disable()
-
-            # Call finalize function if provided
-            if self.finalize_func:
-                try:
-                    self.finalize_func()
-                except Exception as e:
-                    self.logger.error(f"Finalize function failed: {e}")
-                    self.message_func(f"Finalization failed: {str(e)}")
-
-        except Exception as e:
-            self.logger.exception(f"Exception in finalize_changes: {e}")
-            self.message_func(f"Failed to finalize changes: {str(e)}")
+        self.needs_undo = False
+        self.disable()
+        if self.finalize_func:
+            self.finalize_func()
 
     # Properties for external access to state
     @property
