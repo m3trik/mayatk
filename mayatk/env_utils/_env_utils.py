@@ -403,6 +403,7 @@ class EnvUtils(ptk.HelpMixin):
         root_dir: str,
         return_type: str = "dir",
         ignore_empty: bool = True,
+        recursive: bool = True,
     ) -> list:
         """Recursively find Maya workspaces under a root directory.
         A workspace is a folder containing 'workspace.mel'.
@@ -412,6 +413,8 @@ class EnvUtils(ptk.HelpMixin):
             return_type (str): 'dir', 'dirname', 'dirname|dir', or 'dir|dirname'.
             ignore_empty (bool): If True, only include workspaces that contain
                                 at least one .ma or .mb file inside the 'scenes/' folder.
+            recursive (bool): If True, search recursively for scene files within workspaces
+                             for validation. If False, only look in the direct 'scenes/' folder.
 
         Returns:
             list: Filtered results in the requested format.
@@ -434,10 +437,17 @@ class EnvUtils(ptk.HelpMixin):
 
                 # Only check for Maya scene files in the 'scenes' folder
                 if scenes_path.is_dir():
-                    # Use rglob for more efficient recursive search for scene files
-                    scene_files = list(scenes_path.rglob("*.ma")) + list(
-                        scenes_path.rglob("*.mb")
-                    )
+                    # Search for scene files based on recursive setting
+                    if recursive:
+                        # Use rglob for recursive search for scene files
+                        scene_files = list(scenes_path.rglob("*.ma")) + list(
+                            scenes_path.rglob("*.mb")
+                        )
+                    else:
+                        # Use glob for non-recursive search (direct files only)
+                        scene_files = list(scenes_path.glob("*.ma")) + list(
+                            scenes_path.glob("*.mb")
+                        )
 
                     # If Maya scene files are found, it's a valid workspace
                     if scene_files:

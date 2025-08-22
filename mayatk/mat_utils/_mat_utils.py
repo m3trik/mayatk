@@ -442,7 +442,7 @@ class MatUtils(ptk.HelpMixin):
         return material_paths
 
     @staticmethod
-    def _remap_file_nodes(
+    def remap_file_nodes(
         file_paths: List[str], target_dir: str, silent: bool = False
     ) -> List["pm.nt.File"]:
         """Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimages.
@@ -524,7 +524,7 @@ class MatUtils(ptk.HelpMixin):
             pm.warning("No valid texture paths found.")
             return
 
-        remapped_nodes = cls._remap_file_nodes(
+        remapped_nodes = cls.remap_file_nodes(
             file_paths=textures, target_dir=new_dir, silent=silent
         )
         if not silent:
@@ -948,7 +948,7 @@ class MatUtils(ptk.HelpMixin):
         )
 
         if found_files:
-            cls._remap_file_nodes(
+            cls.remap_file_nodes(
                 file_paths=[
                     os.path.join(old_dir, filename) for _, filename in found_files
                 ],
