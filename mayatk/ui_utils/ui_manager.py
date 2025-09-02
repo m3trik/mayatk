@@ -106,7 +106,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         """
         self.logger.setLevel(log_level)
 
-        self.sb = switchboard or Switchboard(**kwargs)
+        # Filter out singleton_key from kwargs before creating Switchboard
+        sb_kwargs = {k: v for k, v in kwargs.items() if k != "singleton_key"}
+        self.sb = switchboard or Switchboard(**sb_kwargs)
         # Register the mayatk root directory once
         self.sb.register(ui_location=self.root_dir, slot_location=self.root_dir)
 
@@ -121,10 +123,12 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         """Return the root directory of the mayatk package."""
         return os.path.dirname(sys.modules["mayatk"].__file__)
 
-    def get(self, name: str, **kwargs) -> "QtWidgets.QMainWindow":
+    def get(self, name: str, reload: bool = False, **kwargs) -> "QtWidgets.QMainWindow":
         """Retrieve or load a UI or Maya menu by name using the internal registry."""
         # print(f"[UiManager.get] Loading UI: {name}")
-        if name in self.sb.loaded_ui:
+
+        # If reload is requested, skip the cache and force reload
+        if not reload and name in self.sb.loaded_ui:
             # print(f"[UiManager.get] Returning cached UI: {name}")
             return self.sb.loaded_ui[name]
 
@@ -132,7 +136,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         if name in ui_utils.maya_menu_handler.MayaMenuHandler.MENU_MAPPING:
             return self._load_maya_ui(menu_key=name, **kwargs)
 
-        return self._load_ui(name, **kwargs)
+        return self._load_ui(name, reload=reload, **kwargs)
 
     def _load_ui(
         self, name: str, reload: bool = False, **kwargs
@@ -161,9 +165,20 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             # print(
             #     f"[UiManager._load_ui] Attempting to get UI via Switchboard: {ui_name}"
             # )
+            # If reloading, remove from cache first to force recreation
+            if reload and ui_name in self.sb.loaded_ui:
+                # print(f"[UiManager._load_ui] Removing cached UI for reload: {ui_name}")
+                del self.sb.loaded_ui[ui_name]
+
             return self.sb.get_ui(ui_name)
         except AttributeError:
             # print(f"[UiManager._load_ui] UI not found in loaded_ui, registering...")
+            # Force re-registration if reloading
+            if reload:
+                # Clear any existing registration to ensure fresh reload
+                # print(f"[UiManager._load_ui] Force re-registering for reload: {ui_name}")
+                pass  # Switchboard handles re-registration automatically
+
             self.sb.register(ui_path, slot_class, base_dir=slot_class, validate=2)
             ui = self.sb.get_ui(ui_name)
             # print(f"[UiManager._load_ui] UI created and registered: {ui_name}")

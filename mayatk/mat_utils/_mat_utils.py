@@ -17,6 +17,21 @@ from mayatk.env_utils import EnvUtils
 
 class MatUtils(ptk.HelpMixin):
     @staticmethod
+    def _create_standard_shader():
+        """Get the preferred material type, preferring standardSurface over lambert if available.
+
+        Returns:
+            str: The preferred material type ('standardSurface' or 'lambert').
+        """
+        try:  # Test if standardSurface is available by trying to create one
+            test_mat = pm.shadingNode("standardSurface", asShader=True)
+            pm.delete(test_mat)  # Clean up immediately
+            return "standardSurface"
+        except Exception:
+            # Fall back to lambert if standardSurface is not available or if Maya is not available
+            return "lambert"
+
+    @staticmethod
     def get_mats(objs=None) -> List[str]:
         """Returns the set of materials assigned to a given list of objects or components.
 
@@ -27,11 +42,11 @@ class MatUtils(ptk.HelpMixin):
             list: Materials assigned to the objects or components (duplicates removed).
         """
         if objs is None:
-            objs = pm.ls(selection=True, objectsOnly=True)
+            objs = pm.ls(selection=True)
         if not objs:
             return []
 
-        target_objs = pm.ls(objs, objectsOnly=True)
+        target_objs = pm.ls(objs)
         mats = set()
 
         for obj in target_objs:
@@ -44,6 +59,14 @@ class MatUtils(ptk.HelpMixin):
                 if not shading_grps:
                     pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=True)
                     mats.update(pm.ls(pm.selected(), materials=True))
+                else:  # Get materials from the shading groups
+                    for sg in shading_grps:
+                        mats.update(
+                            pm.ls(
+                                pm.listConnections(sg.surfaceShader),
+                                materials=True,
+                            )
+                        )
             else:
                 shape = obj.getShape() if hasattr(obj, "getShape") else None
                 if shape:
@@ -51,7 +74,7 @@ class MatUtils(ptk.HelpMixin):
                     for sg in shading_grps:
                         mats.update(
                             pm.ls(
-                                pm.listConnections(f"{sg}.surfaceShader"),
+                                pm.listConnections(sg.surfaceShader),
                                 materials=True,
                             )
                         )
@@ -239,10 +262,11 @@ class MatUtils(ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def create_mat(mat_type, prefix="", name=""):
-        """Creates a material based on the provided type or a random Lambert material if 'mat_type' is 'random'.
+        """Creates a material based on the provided type or a random material if 'mat_type' is 'random'.
+        Prefers standardSurface over lambert when available.
 
         Parameters:
-            mat_type (str): The type of the material, e.g. 'lambert', 'blinn', or 'random' for a random Lambert material.
+            mat_type (str): The type of the material, e.g. 'lambert', 'blinn', 'standardSurface', or 'random' for a random material.
             prefix (str, optional): An optional prefix to append to the material name. Defaults to "".
             name (str, optional): The name of the material. Defaults to "".
 
@@ -252,15 +276,23 @@ class MatUtils(ptk.HelpMixin):
         import random
 
         if mat_type == "random":
+            # Use preferred material type (standardSurface if available, otherwise lambert)
+            preferred_type = MatUtils._create_standard_shader()
             rgb = [
                 random.randint(0, 255) for _ in range(3)
             ]  # Generate a list containing 3 values between 0-255
             name = "{}{}_{}_{}_{}".format(
                 prefix, name, str(rgb[0]), str(rgb[1]), str(rgb[2])
             )
-            mat = pm.shadingNode("lambert", asShader=True, name=name)
+            mat = pm.shadingNode(preferred_type, asShader=True, name=name)
             convertedRGB = [round(float(v) / 255, 3) for v in rgb]
-            pm.setAttr(name + ".color", convertedRGB)
+            # Set color attribute (works for both lambert and standardSurface)
+            color_attr = (
+                f"{name}.baseColor"
+                if preferred_type == "standardSurface"
+                else f"{name}.color"
+            )
+            pm.setAttr(color_attr, convertedRGB)
         else:
             name = prefix + name if name else mat_type
             mat = pm.shadingNode(mat_type, asShader=True, name=name)
@@ -271,6 +303,7 @@ class MatUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def assign_mat(objects, mat_name):
         """Assigns a material to a list of objects or components.
+        If the material doesn't exist, creates a new one using the preferred material type.
 
         Parameters:
             objects (str/obj/list): The objects or components to assign the material to.
@@ -282,7 +315,9 @@ class MatUtils(ptk.HelpMixin):
         try:  # Retrieve or create material
             mat = pm.PyNode(mat_name)
         except pm.MayaNodeError:
-            mat = pm.shadingNode("lambert", name=mat_name, asShader=True)
+            # Use preferred material type (standardSurface if available, otherwise lambert)
+            preferred_type = MatUtils._create_standard_shader()
+            mat = pm.shadingNode(preferred_type, name=mat_name, asShader=True)
 
         # Check if the material has a shading engine, otherwise create one
         shading_groups = mat.listConnections(type="shadingEngine")
@@ -345,10 +380,13 @@ class MatUtils(ptk.HelpMixin):
             for member in members:
                 # Check if the member is a face component directly
                 if isinstance(member, pm.MeshFace):
+                    transform_node = member.node().getParent()
+                    # Filter by objects if specified
+                    if objects and transform_node not in transform_nodes:
+                        continue
                     if not shell:
                         objs_with_material.append(member)
                     else:
-                        transform_node = member.node().getParent()
                         if transform_node not in objs_with_material:
                             objs_with_material.append(transform_node)
                 else:
@@ -997,6 +1035,7 @@ class MatUtils(ptk.HelpMixin):
         fallback_to_blank: bool = True,
     ) -> object:
         """Get an icon with a color fill matching the given material's RGB value.
+        Supports both lambert and standardSurface materials.
 
         Parameters:
             mat (obj)(str): The material or the material's name.
@@ -1011,10 +1050,18 @@ class MatUtils(ptk.HelpMixin):
         try:
             # get the string name if a mat object is given.
             matName = mat.name() if not isinstance(mat, str) else mat
+
+            # Determine the correct color attribute based on material type
+            mat_type = pm.nodeType(matName)
+            if mat_type == "standardSurface":
+                color_attr = "baseColor"
+            else:
+                color_attr = "color"
+
             # convert from 0-1 to 0-255 value and then to an integer
-            r = int(pm.getAttr(f"{matName}.colorR") * 255)
-            g = int(pm.getAttr(f"{matName}.colorG") * 255)
-            b = int(pm.getAttr(f"{matName}.colorB") * 255)
+            r = int(pm.getAttr(f"{matName}.{color_attr}R") * 255)
+            g = int(pm.getAttr(f"{matName}.{color_attr}G") * 255)
+            b = int(pm.getAttr(f"{matName}.{color_attr}B") * 255)
             pixmap = QPixmap(size[0], size[1])
             pixmap.fill(QColor.fromRgb(r, g, b))
         except Exception:

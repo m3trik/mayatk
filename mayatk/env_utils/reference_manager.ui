@@ -109,7 +109,7 @@
           </widget>
          </item>
          <item>
-          <widget class="QLineEdit" name="txt001">
+          <widget class="LineEdit" name="txt001">
            <property name="toolTip">
             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter text to filter the file list.&lt;/p&gt;&lt;p&gt;'text*' matches files starting with 'text', &lt;/p&gt;&lt;p&gt;'*text*' matches files containing 'text', &lt;/p&gt;&lt;p&gt;'*text' matches files ending with 'text', &lt;/p&gt;&lt;p&gt;?text' matches any file with a character followed by 'text'.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
@@ -251,9 +251,9 @@
    <header>uitk.widgets.header.Header.h</header>
   </customwidget>
   <customwidget>
-   <class>TableWidget</class>
-   <extends>QTableWidget</extends>
-   <header>uitk.widgets.tableWidget.TableWidget.h</header>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
   <customwidget>
    <class>LineEdit</class>
@@ -261,9 +261,9 @@
    <header>widgets.lineedit.h</header>
   </customwidget>
   <customwidget>
-   <class>ComboBox</class>
-   <extends>QComboBox</extends>
-   <header>uitk.widgets.comboBox.ComboBox.h</header>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.tableWidget.TableWidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

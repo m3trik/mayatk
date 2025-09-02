@@ -170,22 +170,8 @@ class SceneExporter(ptk.LoggingMixin):
             preset_name = os.path.splitext(os.path.basename(preset_file))[0]
             export_info["preset_used"] = preset_name
 
-        # Separate tasks into task_params and check_params
-        task_params = {}
-        check_params = {}
-        if tasks:
-            for key, value in tasks.items():
-                if key in self.task_manager.task_definitions:
-                    task_params[key] = value
-                elif key in self.task_manager.check_definitions:
-                    check_params[key] = value
-
-        # Run tasks with export info
-        success = self.task_manager._execute_tasks_and_checks(
-            task_params, check_params, export_info
-        )
-
-        return success
+        # Return True since tasks already ran successfully before export
+        return True
 
     def generate_export_path(self) -> str:
         """Generate the full export file path."""
