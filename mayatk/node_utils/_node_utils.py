@@ -812,7 +812,7 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     @core_utils.CoreUtils.undoable
-    def instance(
+    def replace_with_instances(
         cls,
         objects=None,
         append="",
@@ -820,6 +820,23 @@ class NodeUtils(ptk.HelpMixin):
         center_pivot=True,
         delete_history=True,
     ):
+        """Replace target objects with instances of the source object.
+
+        Takes the first object in the selection as the source and replaces all
+        subsequent objects with instances of that source object. The instances
+        inherit the transform and hierarchy of the replaced objects.
+
+        Parameters:
+            objects (list): List of objects where first is source, rest are targets.
+                           If None, uses current selection.
+            append (str): String to append to instance names.
+            freeze_transforms (bool): Whether to freeze transforms before instancing.
+            center_pivot (bool): Whether to center pivot before instancing.
+            delete_history (bool): Whether to delete history before instancing.
+
+        Returns:
+            list: The newly created instance objects.
+        """
         from mayatk import XformUtils
 
         objects = pm.ls(objects) or pm.ls(orderedSelection=True)
@@ -857,6 +874,21 @@ class NodeUtils(ptk.HelpMixin):
 
         pm.select(new_instances)
         return new_instances
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        """Deprecated: Use replace_with_instances instead.
+
+        This method is kept for backward compatibility.
+        """
+        import warnings
+
+        warnings.warn(
+            "NodeUtils.instance() is deprecated. Use NodeUtils.replace_with_instances() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.replace_with_instances(*args, **kwargs)
 
     @classmethod
     def uninstance(cls, objects):

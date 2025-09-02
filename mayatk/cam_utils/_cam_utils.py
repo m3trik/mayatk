@@ -247,7 +247,13 @@ class CamUtils(ptk.HelpMixin):
 
         Parameters:
             camera_name (str): Name of the camera to switch to
+
+        Returns:
+            str or None: The camera that was switched to, or None if switching failed
         """
+        # Store initial selection to restore later
+        initial_selection = pm.ls(selection=True)
+
         # Camera configuration - simplified approach
         camera_config = {
             # Custom cameras (create if missing)
@@ -258,17 +264,20 @@ class CamUtils(ptk.HelpMixin):
 
         # Check if it's a custom camera
         config = camera_config.get(camera_name)
+        camera_used = None
 
         if config and not config["default"]:
             # Handle custom cameras (create if missing)
             if pm.objExists(camera_name):
                 pm.lookThru(camera_name)
+                camera_used = camera_name
             else:
                 # Create the custom camera
                 cam, camShape = pm.camera()
                 pm.rename(cam, camera_name)
                 pm.lookThru(camera_name)
                 pm.hide(camera_name)
+                camera_used = camera_name
 
                 # Apply view setting if specified
                 view_set = config.get("view_set")
@@ -279,8 +288,17 @@ class CamUtils(ptk.HelpMixin):
             default_cam = cls._get_default_camera(camera_name)
             if default_cam:
                 pm.lookThru(default_cam)
+                camera_used = default_cam
             else:
                 print(f"Warning: Default camera '{camera_name}' not found in scene")
+
+        # Restore initial selection
+        if initial_selection:
+            pm.select(initial_selection)
+        else:
+            pm.select(clear=True)
+
+        return camera_used
 
 
 # --------------------------------------------------------------------------------------------

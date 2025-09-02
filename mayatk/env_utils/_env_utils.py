@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import sys
 from typing import Dict, ClassVar, Optional, Union, Any
 
 try:
@@ -658,6 +659,83 @@ class EnvUtils(ptk.HelpMixin):
             print(f"Scene successfully exported as FBX to {file_path}")
         except Exception as e:
             print(f"Failed to export scene as FBX: {str(e)}")
+
+    @staticmethod
+    def sanitize_namespace(namespace: str) -> str:
+        """Sanitize the namespace by replacing or removing illegal characters.
+
+        Parameters:
+            namespace (str): The namespace string to sanitize
+
+        Returns:
+            str: Sanitized namespace containing only valid characters
+        """
+        import re
+
+        return re.sub(r"[^a-zA-Z0-9_]", "_", namespace)
+
+    @staticmethod
+    def resolve_file_path_in_workspaces(
+        selected_file: str, workspace_files: dict
+    ) -> Optional[str]:
+        """Resolve a file name to its full path by searching in workspace files.
+
+        Parameters:
+            selected_file (str): The file name to resolve
+            workspace_files (dict): Dictionary mapping workspace paths to file lists
+
+        Returns:
+            Optional[str]: Full file path if found, None otherwise
+        """
+        return next(
+            (
+                fp
+                for files in workspace_files.values()
+                for fp in files
+                if os.path.basename(fp) == selected_file
+            ),
+            None,
+        )
+
+    @classmethod
+    def get_workspace_file_cache(cls, workspaces: list, recursive: bool = True) -> dict:
+        """Build a cache of workspace files for multiple workspaces.
+
+        Parameters:
+            workspaces (list): List of (dirname, workspace_path) tuples
+            recursive (bool): Whether to search recursively for scene files
+
+        Returns:
+            dict: Dictionary mapping workspace paths to their scene file lists
+        """
+        workspace_files = {}
+
+        for _, ws_path in workspaces:
+            if os.path.isdir(ws_path):
+                scenes = cls.get_workspace_scenes(
+                    root_dir=ws_path,
+                    full_path=True,
+                    recursive=recursive,
+                    omit_autosave=True,
+                )
+                workspace_files[ws_path] = scenes
+
+        return workspace_files
+
+    @staticmethod
+    def matches_autosave_pattern(filename: str) -> bool:
+        """Check if a file matches the Maya autosave pattern.
+
+        Parameters:
+            filename (str): The filename to check
+
+        Returns:
+            bool: True if the file matches autosave pattern, False otherwise
+        """
+        import re
+
+        autosave_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
+        return bool(autosave_regex.match(filename))
 
 
 # -----------------------------------------------------------------------------

@@ -11,8 +11,9 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# From this package:
+# from this package:
 from mayatk.env_utils import EnvUtils
+from mayatk.env_utils.workspace_manager import WorkspaceManager
 
 
 class AssemblyManager:
@@ -115,8 +116,8 @@ class AssemblyManager:
                 print(f"Failed to create assembly definition for {file_path}")
 
 
-class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
-    """Manages Maya scene references with support for selectable and reference-only modes.
+class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
+    """Core Maya scene reference management functionality.
 
     Features:
     - Add/remove references with namespace management
@@ -129,31 +130,14 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
     - Selectable: References can be selected and modified in the viewport
     - Reference-Only: References are visible but cannot be selected (display-only)
 
-    Usage:
-    - Hold Ctrl while selecting files to add them as reference-only
-    - Use context menu or keyboard shortcuts to toggle reference modes
-    - Press 'T' to toggle selectability of selected references
+    This class provides the core Maya reference functionality without any UI dependencies.
+    For UI integration, use ReferenceManagerController and ReferenceManagerSlots.
     """
 
     def __init__(self):
+        super().__init__()
         self._filter_text = ""
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
-
-    @property
-    def current_workspace(self):
-        return pm.workspace(q=True, rd=True)
-
-    @property
-    def current_working_dir(self):
-        if not hasattr(self, "_current_working_dir"):
-            self._current_working_dir = self.current_workspace
-        return self._current_working_dir
-
-    @current_working_dir.setter
-    def current_working_dir(self, value):  # Corrected setter name here
-        if os.path.isdir(value):
-            self._current_working_dir = value
-            self.invalidate_workspace_files()
 
     @property
     def current_references(self):
@@ -162,85 +146,53 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
         """
         return pm.system.listReferences()
 
-    @property
-    def recursive_search(self):
-        if not hasattr(self, "_recursive_search"):
-            self._recursive_search = True  # Default value
-        return self._recursive_search
-
-    @recursive_search.setter
-    def recursive_search(self, value):
-        self._recursive_search = value
-        self.invalidate_workspace_files()  # Invalidate cache when recursive_search changes
-
-    @property
-    def workspace_files(self) -> dict[str, list[str]]:
-        """Return the cached workspace file dictionary, rebuilding if needed."""
-        if not hasattr(self, "_workspace_files") or self._workspace_files is None:
-            self.invalidate_workspace_files()
-        return self._workspace_files
-
-    def find_available_workspaces(self, root_dir: str = None) -> list:
-        """Find all available workspaces under the given root directory.
-
-        Args:
-            root_dir: Directory to search in. If None, uses current_working_dir.
-
-        Returns:
-            List of (dirname, path) tuples for found workspaces.
-        """
-        if root_dir is None:
-            root_dir = self.current_working_dir
-
-        if not root_dir or not os.path.isdir(root_dir):
-            return []
-
-        return EnvUtils.find_workspaces(
-            root_dir,
-            return_type="dirname|dir",
-            ignore_empty=True,
-            recursive=self.recursive_search,
-        )
-
-    def invalidate_workspace_files(self):
-        self.logger.debug(f"Scanning for workspaces under: {self.current_working_dir}")
-        self._workspace_files = {}
-
-        workspaces = self.find_available_workspaces()
-
-        if not workspaces:
-            self.logger.warning("No valid workspaces found.")
-
-        for _, ws_path in workspaces:
-            if os.path.isdir(ws_path):
-                scenes = EnvUtils.get_workspace_scenes(
-                    root_dir=ws_path,
-                    full_path=True,
-                    recursive=self.recursive_search,
-                    omit_autosave=True,
-                )
-                self.logger.debug(f"Workspace '{ws_path}' has {len(scenes)} scene(s).")
-                self._workspace_files[ws_path] = scenes
-
-    def resolve_file_path(self, selected_file: str) -> Optional[str]:
-        return next(
-            (
-                fp
-                for files in self.workspace_files.values()
-                for fp in files
-                if os.path.basename(fp) == selected_file
-            ),
-            None,
-        )
-
     def _matches_prefilter_regex(self, filename):
         """Check if a file is an auto-save file based on its name."""
         return bool(self.prefilter_regex.match(filename))
 
+    def _extract_strip_pattern(self, filter_text: str) -> str:
+        """Extract the core pattern to strip from wildcard filter text.
+
+        For example:
+        - '*_v001*' -> '_v001'
+        - 'character_*' -> 'character_'
+        - '*' -> '' (empty string)
+        - 'literal_text' -> 'literal_text'
+        - 'test_*_rig' -> 'test_' and '_rig' (but we'll take the longest contiguous part)
+        """
+        if not filter_text:
+            return ""
+
+        # Remove leading and trailing wildcards to get the core pattern
+        pattern = filter_text
+
+        # If pattern is just wildcards, return empty string
+        if pattern.replace("*", "").replace("?", "") == "":
+            return ""
+
+        # Remove leading wildcards
+        while pattern.startswith("*") or pattern.startswith("?"):
+            pattern = pattern[1:]
+
+        # Remove trailing wildcards
+        while pattern.endswith("*") or pattern.endswith("?"):
+            pattern = pattern[:-1]
+
+        # If there are still wildcards in the middle, take the longest contiguous part
+        if "*" in pattern or "?" in pattern:
+            # Split by wildcards and find the longest part
+            parts = [part for part in pattern.replace("?", "*").split("*") if part]
+            if parts:
+                pattern = max(parts, key=len)
+            else:
+                pattern = ""
+
+        return pattern
+
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
         """Sanitize the namespace by replacing or removing illegal characters."""
-        return re.sub(r"[^a-zA-Z0-9_]", "_", namespace)
+        return EnvUtils.sanitize_namespace(namespace)
 
     def set_reference_mode(self, reference=None, reference_only: bool = True) -> bool:
         """Set reference(s) to be reference-only (non-selectable) or selectable.
@@ -599,6 +551,27 @@ class ReferenceManager(ptk.HelpMixin, ptk.LoggingMixin):
 
 
 class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
+    """Controller that bridges Maya reference functionality with UI interactions.
+
+    This class extends ReferenceManager with UI-specific logic including:
+    - Table widget management and item formatting
+    - File selection and reference synchronization
+    - Directory and workspace management
+    - UI state management and signal blocking
+    - Item editing and rename functionality
+
+    UI Integration:
+    - Manages table selection sync with Maya references
+    - Handles file filtering and display name stripping
+    - Controls workspace combo box updates
+    - Manages current scene file highlighting and disabling
+
+    Usage:
+    - Select files in the table to add them as references
+    - Context menu provides reference-only mode options
+    - Double-click file names to rename display text
+    """
+
     def __init__(self, slot, log_level="WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -609,23 +582,35 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         self._last_dir_valid = None
         self._updating_directory = False  # Flag to prevent cascading UI events
+        self._editing_item = None  # Track which item is being edited
         self.logger.debug("ReferenceManagerController initialized.")
 
     @property
     def current_working_dir(self):
-        if not hasattr(self, "_current_working_dir"):
-            self._current_working_dir = self.current_workspace
-        self.logger.debug(f"Getting current_working_dir: {self._current_working_dir}")
-        return self._current_working_dir
+        # Use the parent class implementation but add logging
+        working_dir = super().current_working_dir
+        self.logger.debug(f"Getting current_working_dir: {working_dir}")
+        return working_dir
 
     @current_working_dir.setter
     def current_working_dir(self, value):
         self.logger.debug(f"Setting current_working_dir to: {value}")
-        if os.path.isdir(value):
-            old_value = getattr(self, "_current_working_dir", None)
-            self._current_working_dir = value
 
-            # Only invalidate and refresh if the directory actually changed
+        # Validate directory first
+        if not os.path.isdir(value):
+            self.logger.warning(
+                f"Invalid directory set as current_working_dir: {value}"
+            )
+            # Still set it for consistency, but it will be corrected by the parent property getter
+            self._current_working_dir = value
+            return
+
+        old_value = getattr(self, "_current_working_dir", None)
+
+        # Use parent class setter logic
+        if os.path.isdir(value):
+            self._current_working_dir = value
+            # Only invalidate if the directory actually changed
             if old_value != value:
                 self.logger.debug(
                     f"Directory changed from {old_value} to {value}, invalidating workspace files"
@@ -635,12 +620,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 # Let the calling code handle the refresh timing
             else:
                 self.logger.debug("Directory unchanged, no invalidation needed")
-        else:
-            self.logger.warning(
-                f"Invalid directory set as current_working_dir: {value}"
-            )
-            # Still set it even if invalid to maintain consistency
-            self._current_working_dir = value
 
     def block_table_selection_method(method):
         @wraps(method)
@@ -655,6 +634,41 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 self.logger.debug(f"Unblocking signals for method: {method.__name__}")
 
         return wrapper
+
+    def prepare_item_for_edit(self, item):
+        """Prepare an item for editing by showing the full filename."""
+        if item.column() != 0:
+            return
+
+        # Store the current editing item
+        self._editing_item = item
+
+        # Get the full filename for editing
+        full_filename = item.data(self.sb.QtCore.Qt.UserRole + 1)
+        if full_filename:
+            item.setText(full_filename)
+            self.logger.debug(
+                f"Prepared item for edit with full filename: {full_filename}"
+            )
+
+    def restore_item_display(self, item):
+        """Restore the item to its display name after editing."""
+        if item.column() != 0:
+            return
+
+        # Clear the editing item tracker
+        if self._editing_item == item:
+            self._editing_item = None
+
+        # Restore the display name
+        display_name = item.data(self.sb.QtCore.Qt.UserRole + 2)
+        if display_name:
+            item.setText(display_name)
+            self.logger.debug(f"Restored item display name: {display_name}")
+
+    def is_item_being_edited(self, item):
+        """Check if an item is currently being edited."""
+        return self._editing_item == item
 
     def format_table_item(self, item, file_path: str) -> None:
         """Apply enable/disable state based on whether the file is the current scene."""
@@ -746,13 +760,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug(
                 f"Adding reference for namespace: {namespace}, file_path: {file_path}"
             )
-            # Check if Ctrl key is held for reference-only mode
-            modifiers = self.sb.QtWidgets.QApplication.keyboardModifiers()
-            reference_only = modifiers == self.sb.QtCore.Qt.ControlModifier
-
-            success = self.add_reference(
-                namespace, file_path, reference_only=reference_only
-            )
+            # Add references as selectable by default
+            success = self.add_reference(namespace, file_path, reference_only=False)
             if not success:
                 for item in selected_items:
                     if item.text() == namespace:
@@ -971,7 +980,14 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         file_list = self.workspace_files.get(workspace_path, [])
 
         filter_text = self.ui.txt001.text().strip()
-        if filter_text:
+
+        # Check if filtering is enabled via checkbox
+        filter_enabled = getattr(self.ui, "chk_filter_enable", None)
+        filter_enabled = (
+            filter_enabled.isChecked() if filter_enabled else True
+        )  # Default to True if checkbox doesn't exist
+
+        if filter_text and filter_enabled:
             self.logger.debug(f"Filtering file list with filter: {filter_text}")
             file_list = ptk.filter_list(file_list, inc=filter_text, basename_only=True)
 
@@ -981,6 +997,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug(f"Found {len(file_list)} scenes to populate in table.")
 
         file_names = [os.path.basename(f) for f in file_list]
+
+        # Check if name stripping is enabled via checkbox
+        strip_enabled = getattr(self.ui, "chk_strip_names", None)
+        strip_enabled = (
+            strip_enabled.isChecked() if strip_enabled else False
+        )  # Default to False if checkbox doesn't exist
+
+        if filter_text and strip_enabled:
+            # Strip the filter text from display names
+            # Handle wildcard patterns by extracting the core pattern
+            strip_pattern = self._extract_strip_pattern(filter_text)
+            file_names = [name.replace(strip_pattern, "") for name in file_names]
+            self.logger.debug(f"Stripped '{strip_pattern}' from file names for display")
+
         self.logger.debug(f"Updating table with {len(file_names)} files.")
         self.update_table(file_names, file_list)
 
@@ -1007,12 +1037,24 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             item = t.item(row, 0)
             if not item:
+                # Get the full filename without stripping for rename functionality
+                full_filename = os.path.basename(file_path)
                 item = self.sb.QtWidgets.QTableWidgetItem(scene_name)
                 item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
                 t.setItem(row, 0, item)
 
+                # Store both the full file path and the full filename for rename functionality
+                item.setData(self.sb.QtCore.Qt.UserRole, file_path)  # Full file path
+                item.setData(
+                    self.sb.QtCore.Qt.UserRole + 1, full_filename
+                )  # Full filename for rename
+                item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)  # Display name
+
             item.setText(scene_name)
+            # Update data attributes
             item.setData(self.sb.QtCore.Qt.UserRole, file_path)
+            item.setData(self.sb.QtCore.Qt.UserRole + 1, os.path.basename(file_path))
+            item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
 
             self.format_table_item(item, file_path)
 
@@ -1078,6 +1120,26 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
 
 class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
+    """UI event handlers and widget initialization for the Reference Manager interface.
+
+    This class handles pure UI interactions including:
+    - Widget initialization and setup (tables, buttons, checkboxes)
+    - Event slot connections and signal handling
+    - User input processing (text changes, button clicks, selections)
+    - Menu and context menu setup
+    - UI state synchronization during initialization
+
+    Widget Responsibilities:
+    - txt000: Root directory input with browse and workspace options
+    - txt001: File filter input with enable/strip options
+    - cmb000: Workspace selection dropdown
+    - tbl000: File table with reference selection and context menu
+    - Various buttons and checkboxes for reference operations
+
+    The slots class maintains no business logic - it purely routes UI events
+    to the appropriate controller methods.
+    """
+
     def __init__(self, switchboard, log_level="DEBUG"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -1132,57 +1194,82 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if not widget.is_initialized:
             widget.setColumnCount(2)
             widget.setHorizontalHeaderLabels(["Files", "Open"])
-            widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.DoubleClicked)
+            # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
+            widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
             widget.verticalHeader().setVisible(False)
             widget.setAlternatingRowColors(True)
             widget.setWordWrap(False)
+
+            # Connect double-click FIRST to ensure it gets priority
+            widget.itemDoubleClicked.connect(self.tbl000_item_double_clicked)
+
+            # Then connect other signals
             widget.itemSelectionChanged.connect(self.controller.handle_item_selection)
 
             # Add context menu for reference mode operations
             widget.menu.setTitle("Reference Options:")
             widget.menu.add(
                 "QPushButton",
-                setText="Toggle Reference Mode",
-                setObjectName="btn_toggle_mode",
-                setToolTip="Toggle between selectable and reference-only mode for selected references (Hotkey: T)",
-            )
-            widget.menu.add(
-                "QPushButton",
                 setText="Set to Reference-Only",
                 setObjectName="btn_set_ref_only",
                 setToolTip="Set selected references to reference-only (non-selectable) mode",
             )
-            widget.menu.add(
-                "QPushButton",
-                setText="Set to Selectable",
-                setObjectName="btn_set_selectable",
-                setToolTip="Set selected references to selectable mode",
-            )
 
-            # Add keyboard shortcut for toggling reference mode
-            shortcut = self.sb.QtWidgets.QShortcut(
-                self.sb.QtGui.QKeySequence("T"), widget
-            )
-            shortcut.activated.connect(self.tbl000_toggle_reference_mode)
+            # Connect item delegate signals for rename functionality
+            widget.itemChanged.connect(self.tbl000_item_changed)
+            widget.itemDelegate().closeEditor.connect(self.tbl000_editor_closed)
 
             self.logger.debug(
-                "tbl000 table widget initialized with context menu and shortcuts."
+                "tbl000 table widget initialized with context menu and rename functionality."
             )
 
-    def tbl000_toggle_reference_mode(self):
-        """Toggle reference mode for selected references."""
-        selected_namespaces = self._get_selected_reference_namespaces()
-        if not selected_namespaces:
-            self.sb.message_box("No references selected.")
+    def tbl000_item_double_clicked(self, item):
+        """Handle double-click to prepare item for editing."""
+        self.logger.debug(
+            f"Double-click detected on item: {item.text() if item else 'None'}"
+        )
+
+        if item and item.column() == 0:  # Only handle the filename column
+            self.logger.debug(f"Starting edit for item: {item.text()}")
+
+            # Prepare the item for editing (show full filename)
+            self.controller.prepare_item_for_edit(item)
+
+            # Manually start editing since we disabled automatic edit triggers
+            table = self.ui.tbl000
+            table.editItem(item)
+
+    def tbl000_item_changed(self, item):
+        """Handle item changes when user renames a file."""
+        if item.column() != 0:  # Only handle the filename column
             return
 
-        for namespace in selected_namespaces:
-            self.controller.toggle_reference_selectability(namespace)
+        # Only process if this item is being edited
+        if not self.controller.is_item_being_edited(item):
+            return
 
-        # Refresh to update visual styling
-        self.controller.refresh_file_list()
+        new_name = item.text().strip()
+        if not new_name:
+            # If empty, restore the original display name
+            self.controller.restore_item_display(item)
+            return
+
+        # For now, just update the display name
+        # In a real implementation, you might want to rename the actual file
+        self.logger.info(f"File renamed to: {new_name}")
+
+        # Update the stored display name
+        item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
+
+    def tbl000_editor_closed(self, editor, hint):
+        """Handle when the rename editor is closed."""
+        # Get the item that was being edited
+        current_item = self.ui.tbl000.currentItem()
+        if current_item and current_item.column() == 0:
+            # Restore the display name (either original or newly edited)
+            self.controller.restore_item_display(current_item)
 
     def _get_selected_reference_namespaces(self):
         """Get namespaces of selected items that are current references."""
@@ -1204,10 +1291,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
         return selected_namespaces
 
-    def btn_toggle_mode(self):
-        """Handle toggle mode button click."""
-        self.tbl000_toggle_reference_mode()
-
     def btn_set_ref_only(self):
         """Set selected references to reference-only mode."""
         selected_namespaces = self._get_selected_reference_namespaces()
@@ -1220,23 +1303,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             for ref in self.controller.current_references:
                 if ref.namespace == namespace:
                     self.controller.set_reference_mode(ref, reference_only=True)
-                    break
-
-        # Refresh to update visual styling
-        self.controller.refresh_file_list()
-
-    def btn_set_selectable(self):
-        """Set selected references to selectable mode."""
-        selected_namespaces = self._get_selected_reference_namespaces()
-        if not selected_namespaces:
-            self.sb.message_box("No references selected.")
-            return
-
-        for namespace in selected_namespaces:
-            # Find the reference by namespace
-            for ref in self.controller.current_references:
-                if ref.namespace == namespace:
-                    self.controller.set_reference_mode(ref, reference_only=False)
                     break
 
         # Refresh to update visual styling
@@ -1268,25 +1334,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setChecked=True,
                 setToolTip="Also search sub-folders.",
             )
-
-            # Add help text for new functionality
-            help_text = (
-                "Reference Manager Controls:\n"
-                "• Current scene file (green) is disabled to prevent self-referencing\n"
-                "• Hold Ctrl while selecting files to add as reference-only (non-selectable)\n"
-                "• Referenced files appear selected and are colored gold/brown\n"
-                "• Reference-only items appear in italic with darker brown color\n"
-                "• Right-click table for reference mode options\n"
-                "• Press 'T' to toggle selectability of selected references"
-            )
-
-            widget.menu.add(
-                "QLabel",
-                setText="Help",
-                setObjectName="lbl_help",
-                setToolTip=help_text,
-                setWordWrap=True,
-            )
             widget.textChanged.connect(
                 lambda text: self.sb.defer_with_timer(
                     lambda: self.controller.update_current_dir(text), ms=500
@@ -1295,6 +1342,28 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             self.logger.debug("txt000 text input initialized.")
 
         self.controller.update_current_dir()
+
+    def txt001_init(self, widget):
+        """Initialize the filter text input with filtering options."""
+        if not widget.is_initialized:
+            widget.menu.add(
+                "QCheckBox",
+                setText="Enable Filter",
+                setObjectName="chk_filter_enable",
+                setChecked=True,
+                setToolTip="Filter the file list by the text entered above.",
+            )
+            widget.menu.add(
+                "QCheckBox",
+                setText="Strip From Names",
+                setObjectName="chk_strip_names",
+                setChecked=False,
+                setToolTip="Remove the filter text from displayed file names (cosmetic only).",
+            )
+
+            self.logger.debug(
+                "txt001 filter text input initialized with filter options."
+            )
 
     def txt001(self, text):
         """Handle the filter text input."""
@@ -1445,6 +1514,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def chk001(self, checked):
         """Set all references to reference-only mode."""
         self.controller.set_reference_mode(reference_only=checked)
+
+    def chk_filter_enable(self, checked):
+        """Handle the filter enable checkbox."""
+        self.logger.debug(f"Filter enable checkbox changed: {checked}")
+        # Refresh the file list when filter enable state changes
+        self.controller.refresh_file_list(invalidate=False)
+
+    def chk_strip_names(self, checked):
+        """Handle the strip names checkbox."""
+        self.logger.debug(f"Strip names checkbox changed: {checked}")
+        # Refresh the file list when strip names state changes
+        self.controller.refresh_file_list(invalidate=False)
 
     def b000(self):
         """Browse for a root directory."""
