@@ -350,6 +350,7 @@ class EditUtils(ptk.HelpMixin):
         pivot: Union[str, tuple] = "object",
         mergeMode: int = -1,
         uninstance: bool = False,
+        use_object_axes: bool = True,
         **kwargs,
     ):
         """Mirror geometry across a given axis.
@@ -366,13 +367,14 @@ class EditUtils(ptk.HelpMixin):
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
             uninstance (bool): If True, uninstances the object before mirroring.
+            use_object_axes (bool): If True, uses object's local axes for mirror direction.
+                If False, uses world axes (legacy behavior).
             kwargs: Additional arguments for polyMirrorFace.
 
         Returns:
             (obj or list) The mirrored object's transform node or list of transform nodes.
         """
         kwargs["ch"] = True  # Ensure construction history
-        kwargs["worldSpace"] = True  # Always force world space to avoid inconsistencies
 
         axis_mapping = {
             "x": (0, 0),
@@ -389,8 +391,6 @@ class EditUtils(ptk.HelpMixin):
             )
 
         axis_val, axis_direction = axis_mapping[axis]
-        kwargs["axis"] = axis_val
-        kwargs["axisDirection"] = axis_direction
 
         original_objects = pm.ls(objects, type="transform", flatten=True)
         results = []
@@ -399,14 +399,48 @@ class EditUtils(ptk.HelpMixin):
             if uninstance:
                 NodeUtils.uninstance(obj)
 
-            # Compute pivot position
-            pivot_point = XformUtils.get_operation_axis_pos(obj, pivot)
+            if use_object_axes:
+                # Use object-space mirroring with polyMirrorFace in object space
+                kwargs["worldSpace"] = False  # Use object space for local axes
 
-            if axis_direction == 1:
-                center = XformUtils.get_bounding_box(obj, "center")
-                pivot_point[axis_val] = 2 * center[axis_val] - pivot_point[axis_val]
+                # For object space, we need to calculate the mirror plane in object space
+                # The axis and axisDirection are used directly since we're in object space
+                kwargs["axis"] = axis_val
+                kwargs["axisDirection"] = axis_direction
 
-            kwargs["pivot"] = tuple(pivot_point)
+                # Compute pivot position in object space
+                if pivot == "object" or pivot == 1:
+                    # Object pivot (rotate pivot) in object space is at the origin
+                    pivot_point = [0.0, 0.0, 0.0]
+                elif pivot == "manip":
+                    # Manipulation pivot (scale pivot) needs to be calculated in object space
+                    world_manip_pivot = XformUtils.get_operation_axis_pos(obj, "manip")
+                    obj_matrix = pm.PyNode(obj).getMatrix(worldSpace=True)
+                    pivot_point = list(
+                        pm.dt.Point(world_manip_pivot) * obj_matrix.inverse()
+                    )
+                else:
+                    # For other pivot types, we need to transform to object space
+                    world_pivot = XformUtils.get_operation_axis_pos(obj, pivot)
+                    obj_matrix = pm.PyNode(obj).getMatrix(worldSpace=True)
+                    pivot_point = list(pm.dt.Point(world_pivot) * obj_matrix.inverse())
+
+                kwargs["pivot"] = tuple(pivot_point)
+
+            else:
+                # Use world-space mirroring (legacy behavior)
+                kwargs["worldSpace"] = True
+                kwargs["axis"] = axis_val
+                kwargs["axisDirection"] = axis_direction
+
+                # Compute pivot position in world space
+                pivot_point = XformUtils.get_operation_axis_pos(obj, pivot)
+
+                if axis_direction == 1:
+                    center = XformUtils.get_bounding_box(obj, "center")
+                    pivot_point[axis_val] = 2 * center[axis_val] - pivot_point[axis_val]
+
+                kwargs["pivot"] = tuple(pivot_point)
 
             custom_separate = mergeMode == -1
             kwargs["mergeMode"] = 0 if custom_separate else mergeMode

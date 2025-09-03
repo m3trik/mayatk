@@ -436,6 +436,7 @@ class XformUtils(ptk.HelpMixin):
                 - `0` or `"boundingBox"` → Uses bounding box properties.
                 - `1` or `"object"` → Uses the object's rotate pivot.
                 - `2` or `"world"` → Uses world origin `(0,0,0)`.
+                - `"manip"` → Uses the manipulation pivot (scale pivot).
                 - `"center"` → Uses bounding box center.
                 - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
                 - `"baked"` → Uses the baked (original) rotate pivot in world space.
@@ -461,6 +462,11 @@ class XformUtils(ptk.HelpMixin):
         if pivot in {1, "object"}:
             obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
             return float(obj_pivot_ws[axis_index])
+
+        # Manipulation pivot (scale pivot in world space)
+        if pivot == "manip":
+            manip_pivot_ws = pm.xform(node, q=True, ws=True, sp=True)
+            return float(manip_pivot_ws[axis_index])
 
         # Baked pivot (local-space rotate pivot transformed to world space)
         if pivot == "baked":

@@ -3,5 +3,5 @@ PyYAML==6.0.2
 qtpy
 shiboken6==6.9.1
 pymel
-pythontk==0.7.29
-uitk==1.0.30
+pythontk==0.7.30
+uitk==1.0.31

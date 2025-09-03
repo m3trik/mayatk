@@ -372,6 +372,37 @@
            </property>
           </widget>
          </item>
+         <item row="8" column="0" colspan="2">
+          <widget class="QCheckBox" name="chk001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Clean up child curves and deformer history when using curve bridge type.</string>
+           </property>
+           <property name="text">
+            <string>Cleanup</string>
+           </property>
+           <property name="iconSize">
+            <size>
+             <width>18</width>
+             <height>18</height>
+            </size>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
          <item row="2" column="0" colspan="2">
           <widget class="ComboBox" name="cmb000">
            <property name="minimumSize">

@@ -20,7 +20,7 @@ class MirrorSlots:
 
         # Connect sliders and checkboxes to preview refresh function
         self.sb.connect_multi(
-            self.ui, "cmb000-1", "currentIndexChanged", self.preview.refresh
+            self.ui, "cmb000-2", "currentIndexChanged", self.preview.refresh
         )
         self.sb.connect_multi(self.ui, "chk001-5", "clicked", self.preview.refresh)
 
@@ -36,6 +36,9 @@ class MirrorSlots:
             pivot_index, axis
         )  # Dynamically resolve correct pivot
 
+        # Get axis mode from new UI control (default to object axes)
+        use_object_axes = self.ui.cmb002.currentIndex() == 0
+
         mergeMode = (
             self.ui.cmb001.currentIndex() - 1
         )  # Adjust mergeMode to match Method signature (-1 for correct mapping)
@@ -45,6 +48,7 @@ class MirrorSlots:
             "pivot": pivot,
             "mergeMode": mergeMode,
             "uninstance": self.ui.chk005.isChecked(),  # Uninstance objects before mirroring
+            "use_object_axes": use_object_axes,  # New parameter for axis mode
         }
 
         EditUtils.mirror(objects, **kwargs)
@@ -61,13 +65,14 @@ class MirrorSlots:
         }
 
         pivot_mapping = {
-            0: "object",
-            1: "world",
-            2: "center",
-            3: axis_mapping.get(axis, "xmax"),
+            0: "manip",  # Manipulation pivot (scale pivot)
+            1: "object",  # Object pivot (rotate pivot)
+            2: "world",  # World origin
+            3: "center",  # Bounding box center
+            4: axis_mapping.get(axis, "xmax"),  # Bounding box border
         }
 
-        return pivot_mapping.get(pivot_index, "object")
+        return pivot_mapping.get(pivot_index, "manip")
 
 
 # -----------------------------------------------------------------------------
