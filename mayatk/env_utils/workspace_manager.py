@@ -19,6 +19,7 @@ class WorkspaceManager(ptk.HelpMixin):
     def __init__(self):
         self._workspace_files = None
         self._recursive_search = True
+        self._ignore_empty_workspaces = True
         self._current_working_dir = None
 
     @property
@@ -94,6 +95,17 @@ class WorkspaceManager(ptk.HelpMixin):
         self.invalidate_workspace_files()
 
     @property
+    def ignore_empty_workspaces(self):
+        """Whether to ignore empty workspaces when searching."""
+        return self._ignore_empty_workspaces
+
+    @ignore_empty_workspaces.setter
+    def ignore_empty_workspaces(self, value):
+        """Set ignore empty workspaces and invalidate cache."""
+        self._ignore_empty_workspaces = value
+        self.invalidate_workspace_files()
+
+    @property
     def workspace_files(self) -> dict[str, list[str]]:
         """Get cached workspace file dictionary, rebuilding if needed."""
         if not hasattr(self, "_workspace_files") or self._workspace_files is None:
@@ -118,7 +130,7 @@ class WorkspaceManager(ptk.HelpMixin):
         return EnvUtils.find_workspaces(
             root_dir,
             return_type="dirname|dir",
-            ignore_empty=True,
+            ignore_empty=self.ignore_empty_workspaces,
             recursive=self.recursive_search,
         )
 

@@ -1334,6 +1334,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setChecked=True,
                 setToolTip="Also search sub-folders.",
             )
+            widget.menu.add(
+                "QCheckBox",
+                setText="Ignore Empty Workspaces",
+                setObjectName="chk_ignore_empty",
+                setChecked=True,
+                setToolTip="Skip workspaces that contain no scene files.",
+            )
             widget.textChanged.connect(
                 lambda text: self.sb.defer_with_timer(
                     lambda: self.controller.update_current_dir(text), ms=500
@@ -1508,6 +1515,53 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller.recursive_search = checked_bool
 
         self.logger.debug("chk000 recursive search changed, updating workspace combo")
+        # Use the centralized workspace combo update method
+        self.controller._update_workspace_combo()
+
+    def chk_ignore_empty(self, checked):
+        """Handle the ignore empty workspaces toggle."""
+        # Skip processing during initialization or directory updates to prevent unwanted triggers
+        if getattr(self, "_initializing", False):
+            self.logger.debug(
+                "chk_ignore_empty called during initialization - ignoring"
+            )
+            return
+
+        if getattr(self.controller, "_updating_directory", False):
+            self.logger.debug(
+                "chk_ignore_empty called during directory update - ignoring"
+            )
+            return
+
+        self.logger.debug(
+            f"chk_ignore_empty ignore empty workspaces toggled: {checked} (type: {type(checked)})"
+        )
+
+        # Convert Qt checkbox state to boolean
+        # Qt.Unchecked = 0, Qt.PartiallyChecked = 1, Qt.Checked = 2
+        if isinstance(checked, int):
+            checked_bool = checked == 2  # Qt.Checked
+        else:
+            checked_bool = bool(checked)
+
+        old_ignore_empty = self.controller.ignore_empty_workspaces
+
+        self.logger.debug(
+            f"chk_ignore_empty old_ignore_empty: {old_ignore_empty}, new_ignore_empty: {checked_bool}"
+        )
+
+        # Don't process if the value hasn't actually changed (avoid UI triggering loops)
+        if old_ignore_empty == checked_bool:
+            self.logger.debug(
+                "chk_ignore_empty ignore empty workspaces unchanged, no refresh needed"
+            )
+            return
+
+        self.controller.ignore_empty_workspaces = checked_bool
+
+        self.logger.debug(
+            "chk_ignore_empty ignore empty workspaces changed, updating workspace combo"
+        )
         # Use the centralized workspace combo update method
         self.controller._update_workspace_combo()
 
