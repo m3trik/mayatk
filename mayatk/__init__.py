@@ -135,6 +135,20 @@ def __getattr__(name):
         parent_module = import_module(MODULE_TO_PARENT[name])
         return get_attribute_from_module(parent_module, name)
     else:
+        # Resilient fallback for well-known symbols that might not be pre-registered
+        # due to import-time errors during dictionary build (avoids brittle crashes).
+        FALLBACKS = {
+            # UI Manager lives in nested path
+            "UiManager": "mayatk.ui_utils.ui_manager",
+            # Maya menu handler lives in nested path
+            "MayaMenuHandler": "mayatk.ui_utils.maya_menu_handler",
+        }
+        if name in FALLBACKS:
+            module = import_module(FALLBACKS[name])
+            attr = getattr(module, name)
+            # Cache for subsequent lookups
+            CLASS_TO_MODULE[name] = FALLBACKS[name]
+            return attr
         raise AttributeError(f"module {__package__} has no attribute '{name}'")
 
 
@@ -157,11 +171,13 @@ include = {
     # Specific classes from modules
     "components": ["Components"],
     "macros": ["Macros"],
-    "maya_menu_handler": ["MayaMenuHandler"],
+    # Nested ui_utils mappings (explicit for clarity and robustness)
+    "ui_utils.maya_menu_handler": ["MayaMenuHandler"],
     "naming": ["Naming"],
-    "ui_manager": ["UiManager"],
+    "ui_utils.ui_manager": ["UiManager"],
     # Selection utilities
     "edit_utils.selection": ["Selection"],
+    "edit_utils.primitives": ["Primitives"],
     # Add hierarchy manager support (these will now work!):
     "env_utils.hierarchy_manager.manager": ["HierarchyManager"],
     "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],

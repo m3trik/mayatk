@@ -519,6 +519,10 @@ class EnvUtils(ptk.HelpMixin):
         if scene_path is None:
             scene_path = cls.get_env_info("scene_path")
 
+        # Handle case where scene_path might be empty or None
+        if not scene_path or not os.path.isabs(scene_path):
+            return None
+
         dir_path = os.path.dirname(scene_path)
         while dir_path:
             potential_workspace = os.path.join(dir_path, "workspace.mel")

@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 from typing import Optional, Dict, Any, List
+import re
 
 try:
     import pymel.core as pm
@@ -175,6 +176,70 @@ class _TaskActionsMixin(_TaskDataMixin):
 
 class _TaskChecksMixin(_TaskDataMixin):
     """ """
+
+    _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
+
+    def check_geometry_lod_suffix(self) -> tuple:
+        """Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+
+        Notes:
+            - This check is informational. It returns True regardless, and lists any matches.
+            - Suffix examples matched: '_LOD', '_LOD0', '_LOD1', '_LOD02', etc. (case-insensitive)
+        """
+        messages: List[str] = []
+
+        if not self.objects:
+            return True, messages
+
+        matches = []
+        for obj in self.objects:
+            try:
+                if NodeUtils.is_geometry(obj):
+                    name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
+                    if self._LOD_SUFFIX_REGEX.search(name):
+                        matches.append(name)
+            except Exception:
+                # Be resilient to unexpected object types
+                continue
+
+        if matches:
+            messages.append("Geometry with LOD suffix detected (informational):")
+            for n in sorted(set(matches)):
+                messages.append(f"  - {n}")
+
+        return True, messages
+
+    def check_top_level_group_temp(self) -> tuple:
+        """Fail if any top-level group (assembly) is named 'temp' (case-insensitive).
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        log_messages: List[str] = []
+        offenders: List[str] = []
+
+        # Consider only assemblies (top-level DAG nodes)
+        root_nodes = pm.ls(self.objects, assemblies=True) if self.objects else []
+        for node in root_nodes:
+            try:
+                if NodeUtils.is_group(node):
+                    name = node.nodeName() if hasattr(node, "nodeName") else str(node)
+                    if name.lower() == "temp":
+                        offenders.append(name)
+            except Exception:
+                continue
+
+        if offenders:
+            log_messages.append("Top-level group(s) named 'temp' found:")
+            for n in sorted(set(offenders)):
+                log_messages.append(f"  - {n}")
+            # Treat as a failure so it blocks export until renamed
+            return False, log_messages
+
+        return True, log_messages
 
     def check_root_default_transforms(self) -> tuple:
         """Check if all root group nodes have default transforms."""
@@ -520,6 +585,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     def check_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the check definitions for the UI."""
         return {
+            "check_top_level_group_temp": {
+                "widget_type": "QCheckBox",
+                "setText": "Check Top-level Group Named 'temp'",
+                "setToolTip": "Fail if any top-level group (assembly) is named 'temp' (case-insensitive).",
+                "setChecked": True,
+            },
+            "check_geometry_lod_suffix": {
+                "widget_type": "QCheckBox",
+                "setText": "Check Geometry LOD Suffix (_LODx)",
+                "setToolTip": "Detect geometry named with LOD suffixes ending in '_LOD' or '_LOD' followed by digits (e.g., _LOD, _LOD1, _LOD02). This is informational.",
+                "setChecked": True,
+            },
             "check_framerate": {
                 "widget_type": "ComboBox",
                 "setToolTip": "Check the scene framerate against the target framerate.",

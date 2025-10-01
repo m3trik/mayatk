@@ -637,7 +637,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
     def prepare_item_for_edit(self, item):
         """Prepare an item for editing by showing the full filename."""
-        if item.column() != 0:
+        if item.column() != 1:  # Files column is now at index 1
             return
 
         # Store the current editing item
@@ -653,7 +653,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
     def restore_item_display(self, item):
         """Restore the item to its display name after editing."""
-        if item.column() != 0:
+        if item.column() != 1:  # Files column is now at index 1
             return
 
         # Clear the editing item tracker
@@ -704,9 +704,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     def handle_item_selection(self):
         t = self.ui.tbl000
         selected_items = [
-            t.item(idx.row(), 0)
+            t.item(idx.row(), 1)  # Files column is now at index 1
             for idx in t.selectedIndexes()
-            if idx.column() == 0 and t.item(idx.row(), 0)
+            if idx.column() == 1
+            and t.item(idx.row(), 1)  # Files column is now at index 1
         ]
 
         # Filter out disabled items (current scene) from selection data
@@ -791,7 +792,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             )
 
             for row in range(t.rowCount()):
-                item = t.item(row, 0)
+                item = t.item(row, 1)  # Files column is now at index 1
                 if item:
                     file_path = item.data(self.sb.QtCore.Qt.UserRole)
                     norm_fp = os.path.normpath(file_path) if file_path else ""
@@ -1018,14 +1019,16 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     def update_table(self, file_names, file_list):
         t = self.ui.tbl000
         existing = {
-            t.item(row, 0).text(): row for row in range(t.rowCount()) if t.item(row, 0)
+            t.item(row, 1).text(): row
+            for row in range(t.rowCount())
+            if t.item(row, 1)  # Files column is now at index 1
         }
 
         to_remove = [row for name, row in existing.items() if name not in file_names]
         self.logger.debug(f"Rows to remove: {to_remove}")
         for row in reversed(sorted(to_remove)):
-            if t.cellWidget(row, 1):
-                t.removeCellWidget(row, 1)
+            if t.cellWidget(row, 0):  # Open button is now at index 0
+                t.removeCellWidget(row, 0)
             t.removeRow(row)
 
         for idx, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
@@ -1035,13 +1038,13 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 row = t.rowCount()
                 t.insertRow(row)
 
-            item = t.item(row, 0)
+            item = t.item(row, 1)  # Files column is now at index 1
             if not item:
                 # Get the full filename without stripping for rename functionality
                 full_filename = os.path.basename(file_path)
                 item = self.sb.QtWidgets.QTableWidgetItem(scene_name)
                 item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
-                t.setItem(row, 0, item)
+                t.setItem(row, 1, item)  # Files column is now at index 1
 
                 # Store both the full file path and the full filename for rename functionality
                 item.setData(self.sb.QtCore.Qt.UserRole, file_path)  # Full file path
@@ -1058,23 +1061,68 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             self.format_table_item(item, file_path)
 
-            if not t.cellWidget(row, 1):
+            # Always ensure button exists and has correct file path
+            btn_open = t.cellWidget(row, 0)
+            if not btn_open:
                 btn_open = self.sb.QtWidgets.QPushButton("Open")
-                btn_open.clicked.connect(partial(self.open_scene, file_path))
-                t.setCellWidget(row, 1, btn_open)
+                t.setCellWidget(row, 0, btn_open)
+
+            # Always reconnect with current file path (disconnect any existing connections first)
+            try:
+                btn_open.clicked.disconnect()
+            except (TypeError, RuntimeError):
+                # No connections to disconnect or button is invalid
+                pass
+            btn_open.clicked.connect(partial(self.open_scene, file_path))
 
         # Apply table formatting
         t.apply_formatting()
-        t.stretch_column_to_fill(0)
+        t.stretch_column_to_fill(1)  # Stretch the Files column (now at index 1)
 
-    def open_scene(self, file_path: str):
-        self.logger.debug(f"Attempting to open scene: {file_path}")
-        if os.path.exists(file_path):
-            pm.openFile(file_path, force=True)
-            self.logger.info(f"Opened scene: {file_path}")
-        else:
+    def open_scene(self, file_path: str, set_workspace: bool = True):
+        """Open a scene file, optionally setting the workspace to match the file.
+
+        Parameters:
+            file_path (str): Path to the scene file to open
+            set_workspace (bool): If True, sets the Maya workspace to the workspace
+                                containing the opened file. Default is True.
+        """
+        self.logger.debug(f"Opening scene: {file_path}")
+
+        if not os.path.exists(file_path):
             self.slot.logger.error(f"Scene file not found: {file_path}")
             self.sb.message_box(f"Scene file not found:<br>{file_path}")
+            return False
+
+        try:
+            pm.openFile(file_path, force=True)
+            self.logger.info(f"Opened scene: {file_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to open scene: {e}")
+            self.sb.message_box(
+                f"Failed to open scene:<br>{file_path}<br><br>Error:<br>{e}"
+            )
+            return False
+
+        # Set workspace based on the opened file's location
+        if set_workspace:
+            try:
+                new_workspace = EnvUtils.find_workspace_using_path(file_path)
+                if new_workspace:
+                    current_workspace = pm.workspace(q=True, rd=True)
+                    if os.path.normpath(current_workspace) != os.path.normpath(
+                        new_workspace
+                    ):
+                        pm.workspace(new_workspace, openWorkspace=True)
+                        self.logger.info(f"Set workspace to: {new_workspace}")
+                    else:
+                        self.logger.debug("Workspace already correct")
+                else:
+                    self.logger.warning(f"No workspace found for: {file_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to set workspace: {e}")
+
+        return True
 
     @block_table_selection_method
     def unreference_all(self):
@@ -1130,11 +1178,16 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     - UI state synchronization during initialization
 
     Widget Responsibilities:
-    - txt000: Root directory input with browse and workspace options
+    - txt000: Root directory input with browse, workspace options, and pin values for directory history
     - txt001: File filter input with enable/strip options
     - cmb000: Workspace selection dropdown
     - tbl000: File table with reference selection and context menu
     - Various buttons and checkboxes for reference operations
+
+    New Features:
+    - Pin Values: txt000 now supports pinning frequently used directories for quick access
+      Users can pin current directory and select from previously pinned directories
+      Directories are persisted using the key "reference_manager_directories"
 
     The slots class maintains no business logic - it purely routes UI events
     to the appropriate controller methods.
@@ -1193,7 +1246,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def tbl000_init(self, widget):
         if not widget.is_initialized:
             widget.setColumnCount(2)
-            widget.setHorizontalHeaderLabels(["Files", "Open"])
+            widget.setHorizontalHeaderLabels(["Open", "Reference"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -1231,7 +1284,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             f"Double-click detected on item: {item.text() if item else 'None'}"
         )
 
-        if item and item.column() == 0:  # Only handle the filename column
+        if (
+            item and item.column() == 1
+        ):  # Only handle the filename column (now at index 1)
             self.logger.debug(f"Starting edit for item: {item.text()}")
 
             # Prepare the item for editing (show full filename)
@@ -1243,7 +1298,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def tbl000_item_changed(self, item):
         """Handle item changes when user renames a file."""
-        if item.column() != 0:  # Only handle the filename column
+        if item.column() != 1:  # Only handle the filename column (now at index 1)
             return
 
         # Only process if this item is being edited
@@ -1267,7 +1322,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Handle when the rename editor is closed."""
         # Get the item that was being edited
         current_item = self.ui.tbl000.currentItem()
-        if current_item and current_item.column() == 0:
+        if (
+            current_item and current_item.column() == 1
+        ):  # Files column is now at index 1
             # Restore the display name (either original or newly edited)
             self.controller.restore_item_display(current_item)
 
@@ -1309,7 +1366,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller.refresh_file_list()
 
     def txt000_init(self, widget):
-        """Initialize the text input for the current working directory."""
+        """Initialize the text input for the current working directory with pin values."""
         self.logger.debug(
             f"txt000_init called, is_initialized: {getattr(widget, 'is_initialized', False)}"
         )
@@ -1346,7 +1403,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     lambda: self.controller.update_current_dir(text), ms=500
                 )
             )
-            self.logger.debug("txt000 text input initialized.")
+            self.logger.debug(
+                "txt000 text input initialized with pin values for directory history."
+            )
 
         self.controller.update_current_dir()
 

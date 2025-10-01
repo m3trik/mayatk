@@ -181,12 +181,15 @@ class Preview:
 
                 self.create_button.setEnabled(True)
                 self.refresh()
-                self.operation_performed = True
+                # operation_performed is now determined by the success of refresh()
+                self.operation_performed = self.needs_undo
             else:
                 self.message_func("No objects selected.")
                 self.disable()
         except Exception as e:
             self.logger.exception(f"Exception in enable: {e}")
+            # If enable fails, make sure we don't leave needs_undo as True
+            self.needs_undo = False
 
     def disable(self):
         """Disables the preview and reverts to the initial state."""
@@ -213,16 +216,21 @@ class Preview:
     def undo_if_needed(self):
         """Executes undo operation if required."""
         if self.needs_undo:
+            self.logger.debug("Performing undo as operation was previously successful")
             self.internal_undo_triggered = True
             pm.undoInfo(closeChunk=True)
             try:
                 pm.undo()
-            except RuntimeError:
-                pass
+            except RuntimeError as e:
+                self.logger.warning(f"Undo operation failed: {e}")
             finally:
                 pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
 
             self.needs_undo = False
+        else:
+            self.logger.debug(
+                "No undo needed - operation did not complete successfully"
+            )
 
     def refresh(self, *args):
         """Refreshes the preview to reflect any changes."""
@@ -231,6 +239,7 @@ class Preview:
         self.is_refreshing = True
         self.undo_if_needed()
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        operation_successful = False
         try:
             # Convert strings back to PyMel objects for operation
             operated_objects = pm.ls(self.operated_objects, flatten=True)
@@ -238,11 +247,13 @@ class Preview:
 
             # Add the operated objects to the isolation set if one exists.
             _display_utils.DisplayUtils.add_to_isolation_set(operated_objects)
+            operation_successful = True
         except Exception as e:
             self.logger.exception(f"Exception during operation: {e}")
         finally:
             pm.undoInfo(closeChunk=True)
-        self.needs_undo = True  # Set to True once the operation has been performed
+        # Only set needs_undo to True if the operation completed successfully
+        self.needs_undo = operation_successful
         self.is_refreshing = False
 
     def finalize_changes(self):

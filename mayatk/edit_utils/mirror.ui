@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>184</height>
+    <height>164</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -141,7 +141,7 @@
            </property>
           </widget>
          </item>
-         <item row="12" column="0" colspan="4">
+         <item row="11" column="0" colspan="4">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -269,47 +269,6 @@
           </widget>
          </item>
          <item row="8" column="0" colspan="4">
-          <widget class="ComboBox" name="cmb002">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the axis orientation for mirroring. Object Axes uses the object's local orientation for the mirror direction, while World Axes uses the global coordinate system.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="maxVisibleItems">
-            <number>40</number>
-           </property>
-           <property name="maxCount">
-            <number>500</number>
-           </property>
-           <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContents</enum>
-           </property>
-           <property name="frame">
-            <bool>true</bool>
-           </property>
-           <item>
-            <property name="text">
-             <string>Axes:  Object</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Axes:  World</string>
-            </property>
-           </item>
-          </widget>
-         </item>
-         <item row="9" column="0" colspan="4">
           <widget class="ComboBox" name="cmb001">
            <property name="minimumSize">
             <size>

@@ -1317,30 +1317,23 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         low_angle: float = 0,
         high_angle: float = 180,
     ) -> List[object]:
-        """Extend to support edges, mesh objects, and their string representations.
+        """Return edges whose adjacent face-normal angle falls within a range.
 
         Parameters:
-            objects: The objects (or their names) to get edges from. Can be a single object or a list of objects.
+            objects: Any of Transform, Mesh, MeshEdge, MeshFace, MeshVertex, or their strings.
             low_angle: The lower bound of the normal angle range.
             high_angle: The upper bound of the normal angle range.
 
         Returns:
             A list of polygon edges that have normals within the specified angle range.
         """
-        edges = []
-        for obj in pm.ls(objects):
-            if isinstance(obj, pm.general.MeshEdge):
-                edges.append(obj)
-            elif isinstance(obj, pm.nt.Transform):
-                obj = obj.getShape()
-                if obj and isinstance(obj, pm.nt.Mesh):
-                    edges.extend(obj.edges)
-            elif isinstance(obj, pm.nt.Mesh):
-                edges.extend(obj.edges)
-            else:
-                raise TypeError(
-                    f"Unsupported type {type(obj)}. Expected Transform, Mesh, or MeshEdge."
-                )
+        # Normalize any supported input to MeshEdge objects using the shared converter
+        edges: List[pm.general.MeshEdge] = pm.ls(
+            cls.convert_component_type(
+                objects, "edge", returned_type="obj", flatten=True
+            ),
+            flatten=True,
+        )
 
         # Filter edges by normal angle
         filtered_edges = [

@@ -6,6 +6,10 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+try:
+    from maya.api import OpenMaya as om  # For MPoint, MVector, etc.
+except Exception:
+    om = None  # Allow module to import outside Maya; guard at call sites
 import pythontk as ptk
 
 # from this package:
@@ -432,12 +436,11 @@ class XformUtils(ptk.HelpMixin):
 
         Parameters:
             node (PyNode): The object whose reference position is determined.
-            pivot (int/str/tuple/list): Mode or explicit position.
-                - `0` or `"boundingBox"` → Uses bounding box properties.
-                - `1` or `"object"` → Uses the object's rotate pivot.
-                - `2` or `"world"` → Uses world origin `(0,0,0)`.
-                - `"manip"` → Uses the manipulation pivot (scale pivot).
+            pivot (str/tuple/list): Mode or explicit position.
                 - `"center"` → Uses bounding box center.
+                - `"object"` → Uses the object's rotate pivot.
+                - `"world"` → Uses world origin `(0,0,0)`.
+                - `"manip"` → Uses the manipulator/tool pivot (not the object's scale pivot).
                 - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
                 - `"baked"` → Uses the baked (original) rotate pivot in world space.
                 - `(x, y, z)` → Uses a specified world-space pivot.
@@ -458,15 +461,50 @@ class XformUtils(ptk.HelpMixin):
         if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
             return float(pivot[axis_index])
 
-        # Object pivot (rotate pivot in world space)
-        if pivot in {1, "object"}:
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
-            return float(obj_pivot_ws[axis_index])
-
-        # Manipulation pivot (scale pivot in world space)
+        # Manipulator pivot (actual manipulator/tool position in world space)
         if pivot == "manip":
-            manip_pivot_ws = pm.xform(node, q=True, ws=True, sp=True)
-            return float(manip_pivot_ws[axis_index])
+            # Ensure object is selected for consistent manipulator pivot query
+            current_selection = pm.selected()
+            pm.select(node, replace=True)
+
+            try:
+                # Query the current manipulator pivot position
+                manip_pivot_result = pm.manipPivot(q=True, p=True)
+
+                # Normalize result to flat [x,y,z] format
+                if (
+                    isinstance(manip_pivot_result, (list, tuple))
+                    and len(manip_pivot_result) > 0
+                    and isinstance(manip_pivot_result[0], (list, tuple))
+                ):
+                    manip_pivot_ws = list(manip_pivot_result[0][:3])
+                else:
+                    manip_pivot_ws = list(manip_pivot_result[:3])
+
+                # Ensure we have exactly 3 coordinates
+                if len(manip_pivot_ws) < 3:
+                    raise ValueError(
+                        f"Invalid manipulator pivot result: {manip_pivot_result}"
+                    )
+
+            finally:
+                # Restore original selection
+                pm.select(current_selection, replace=True)
+
+            return (
+                float(manip_pivot_ws[axis_index])
+                if axis_index is not None
+                else manip_pivot_ws
+            )
+
+        # Object pivot (rotate pivot in world space)
+        if pivot == "object":
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
+            return (
+                float(obj_pivot_ws[axis_index])
+                if axis_index is not None
+                else obj_pivot_ws
+            )
 
         # Baked pivot (local-space rotate pivot transformed to world space)
         if pivot == "baked":
@@ -474,33 +512,46 @@ class XformUtils(ptk.HelpMixin):
             world_rp = pm.dt.Point(local_rp) * pm.PyNode(node).getMatrix(
                 worldSpace=True
             )
-            return float(world_rp[axis_index])
+            return (
+                float(world_rp[axis_index])
+                if axis_index is not None
+                else list(world_rp)
+            )
 
         # World origin
-        if pivot in {2, "world"}:
-            return 0.0
+        if pivot == "world":
+            return 0.0 if axis_index is not None else [0.0, 0.0, 0.0]
 
         # Bounding box center
         if pivot == "center":
             center = cls.get_bounding_box(node, "center")
-            return float(center[axis_index])
+            return float(center[axis_index]) if axis_index is not None else list(center)
 
         # Bounding box limits (xmin, ymax, etc.)
-        axis_map = {"xmin": 0, "xmax": 0, "ymin": 1, "ymax": 1, "zmin": 2, "zmax": 2}
-        valid_keys = cls.get_bounding_box(node, return_valid_keys=True)
+        limit_pivots = {"xmin", "xmax", "ymin", "ymax", "zmin", "zmax"}
+        if isinstance(pivot, str) and pivot in limit_pivots:
+            # Get center only once
+            center = cls.get_bounding_box(node, "center")
+            limit_value = float(cls.get_bounding_box(node, pivot))  # single float
+            axis_for_limit = {"x": 0, "y": 1, "z": 2}[pivot[0]]
 
-        if isinstance(pivot, str) and pivot in valid_keys:
-            val = cls.get_bounding_box(node, pivot)
-            if isinstance(val, (tuple, list)):
-                return float(val[axis_map[pivot]])
-            return float(val)
+            if axis_index is None:
+                result = list(center)
+                result[axis_for_limit] = limit_value
+                return result
+            else:
+                return (
+                    limit_value
+                    if axis_index == axis_for_limit
+                    else float(center[axis_index])
+                )
 
         # Fallback to center
         pm.warning(
             f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
         )
         fallback = cls.get_bounding_box(node, "center")
-        return float(fallback[axis_index])
+        return float(fallback[axis_index]) if axis_index is not None else list(fallback)
 
     @staticmethod
     @CoreUtils.undoable

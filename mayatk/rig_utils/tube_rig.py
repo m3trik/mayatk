@@ -502,7 +502,8 @@ class TubeRig(ptk.LoggingMixin):
 class TubeRigSlots:
     def __init__(self, switchboard):
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.hierarchy_manager
+        # Bind to the UI that corresponds to this slots class (tube_rig.ui)
+        self.ui = self.sb.loaded_ui.tube_rig
 
     def get_tube_rig(self, obj):
         """Get the tube rig instance for the given object, its parent, or mesh ancestor."""

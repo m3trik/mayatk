@@ -2,9 +2,13 @@
 # coding=utf-8
 import sys, os
 import importlib
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, TYPE_CHECKING
 import pythontk as ptk
 from uitk import Switchboard
+
+if TYPE_CHECKING:
+    # Only for type checking; avoids runtime Qt import outside host apps
+    from qtpy import QtWidgets
 
 # From this package:
 from mayatk import ui_utils

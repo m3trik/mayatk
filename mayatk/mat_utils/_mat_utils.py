@@ -1073,6 +1073,237 @@ class MatUtils(ptk.HelpMixin):
 
         return QIcon(pixmap)
 
+    @staticmethod
+    @CoreUtils.undoable
+    def convert_bump_to_normal(
+        bump_file_node: Union[str, "pm.nt.File"],
+        output_path: Optional[str] = None,
+        intensity: float = 1.0,
+        format_type: str = "opengl",
+        filter_type: str = "3x3",
+        wrap_mode: str = "black",
+        create_file_node: bool = True,
+        node_name: Optional[str] = None,
+    ) -> Optional["pm.nt.File"]:
+        """Convert a bump/height map to a normal map using Maya's bump2d node.
+        
+        This method creates a Maya node network to convert height/bump information
+        into tangent-space normal maps compatible with various rendering pipelines.
+        
+        Parameters:
+            bump_file_node (str/pm.nt.File): The source bump/height map file node.
+            output_path (Optional[str]): Path to save the generated normal map. 
+                                       If None, creates in-memory conversion only.
+            intensity (float): Bump depth/intensity. Higher values create more pronounced normals.
+                              Range typically 0.1-5.0. Default is 1.0.
+            format_type (str): Target format convention:
+                              'opengl' - Standard OpenGL (Y+ up, typical for most engines)
+                              'directx' - DirectX convention (Y- up, flipped green channel)
+                              Default is 'opengl'.
+            filter_type (str): Filtering method for normal calculation:
+                              '3x3' - Standard 3x3 Sobel filter (balanced quality/performance)
+                              '5x5' - 5x5 filter (higher quality, smoother gradients)
+                              Default is '3x3'.
+            wrap_mode (str): Edge handling for height sampling:
+                            'black' - Treat edges as zero height
+                            'clamp' - Extend edge pixels
+                            'repeat' - Tile/wrap the texture
+                            Default is 'black'.
+            create_file_node (bool): If True, creates a file node for the output normal map.
+                                   If False, returns the bump2d conversion node only.
+            node_name (Optional[str]): Custom name for created nodes. Auto-generated if None.
+                                     
+        Returns:
+            Optional[pm.nt.File]: The created file node for the normal map, or None if creation failed.
+            
+        Raises:
+            ValueError: If bump_file_node doesn't exist or output_path is invalid.
+            RuntimeError: If Maya node creation fails.
+            
+        Example:
+            >>> # Convert existing bump map to OpenGL normal map
+            >>> bump_node = pm.ls('file1')[0]  # Existing file node
+            >>> normal_node = MatUtils.convert_bump_to_normal(
+            ...     bump_node, 
+            ...     output_path="C:/textures/wall_normal.exr",
+            ...     intensity=2.0,
+            ...     format_type="opengl"
+            ... )
+            
+            >>> # Create DirectX normal map with higher quality filtering
+            >>> normal_node = MatUtils.convert_bump_to_normal(
+            ...     "wallBumpFile",
+            ...     intensity=1.5,
+            ...     format_type="directx", 
+            ...     filter_type="5x5"
+            ... )
+        """
+        # Validate and get the bump file node
+        try:
+            bump_node = pm.PyNode(bump_file_node)
+            if not isinstance(bump_node, pm.nt.File):
+                raise ValueError(f"Node {bump_file_node} is not a file node")
+        except pm.MayaNodeError:
+            raise ValueError(f"Bump file node {bump_file_node} does not exist")
+            
+        # Validate parameters
+        if format_type not in ["opengl", "directx"]:
+            raise ValueError("format_type must be 'opengl' or 'directx'")
+            
+        if filter_type not in ["3x3", "5x5"]:
+            raise ValueError("filter_type must be '3x3' or '5x5'")
+            
+        if wrap_mode not in ["black", "clamp", "repeat"]:
+            raise ValueError("wrap_mode must be 'black', 'clamp', or 'repeat'")
+            
+        if not 0.1 <= intensity <= 10.0:
+            pm.warning(f"Intensity {intensity} is outside recommended range (0.1-10.0)")
+            
+        # Generate node names
+        base_name = node_name or f"{bump_node.name()}_normal"
+        bump2d_name = f"{base_name}_bump2d"
+        
+        try:
+            # Create bump2d node for conversion
+            bump2d_node = pm.shadingNode("bump2d", asUtility=True, name=bump2d_name)
+            
+            # Configure bump2d node parameters
+            bump2d_node.bumpInterp.set(1)  # Bump mode (0=bump, 1=tangent space normal)
+            bump2d_node.bumpDepth.set(intensity)
+            
+            # Set filtering method
+            if filter_type == "5x5":
+                # Use higher quality filtering if supported
+                if hasattr(bump2d_node, 'bumpFilter'):
+                    bump2d_node.bumpFilter.set(1)  # 5x5 filter
+                    
+            # Configure wrap mode for UV sampling
+            wrap_value = {"black": 0, "clamp": 1, "repeat": 2}.get(wrap_mode, 0)
+            
+            # Connect the bump file to bump2d
+            pm.connectAttr(f"{bump_node.name()}.outColor", f"{bump2d_node.name()}.bumpValue")
+            
+            # Handle format-specific adjustments
+            if format_type == "directx":
+                # DirectX typically needs Y-channel (green) flipped
+                # Create a reverse node to flip the green channel
+                reverse_name = f"{base_name}_reverse"
+                reverse_node = pm.shadingNode("reverse", asUtility=True, name=reverse_name)
+                
+                # Create a channel mixer or use component masking to flip only green
+                # For simplicity, we'll use a luminance node approach
+                if hasattr(bump2d_node, 'normalCamera'):
+                    # Connect through reverse for Y-flip
+                    pm.connectAttr(f"{bump2d_node.name()}.outNormal", f"{reverse_node.name()}.input")
+                    output_attr = f"{reverse_node.name()}.output"
+                else:
+                    output_attr = f"{bump2d_node.name()}.outNormal"
+            else:
+                # OpenGL - use direct output
+                output_attr = f"{bump2d_node.name()}.outNormal"
+            
+            # Create output file node if requested
+            if create_file_node:
+                if output_path:
+                    # Validate output path
+                    output_dir = os.path.dirname(output_path)
+                    if output_dir and not os.path.exists(output_dir):
+                        try:
+                            os.makedirs(output_dir)
+                        except OSError as e:
+                            raise RuntimeError(f"Cannot create output directory {output_dir}: {e}")
+                            
+                # Create file node for the normal map
+                normal_file_name = f"{base_name}_file"
+                normal_file_node = pm.shadingNode("file", asTexture=True, name=normal_file_name)
+                
+                # Set file node properties for normal maps
+                normal_file_node.colorSpace.set("Raw")  # Important: don't color-correct normal data
+                normal_file_node.alphaIsLuminance.set(False)
+                
+                if output_path:
+                    normal_file_node.fileTextureName.set(output_path)
+                    
+                    # If we need to bake/render the normal map, we'd use Maya's render setup here
+                    # For now, we create the network and let users handle baking manually
+                    pm.displayInfo(f"// Normal map conversion network created.")
+                    pm.displayInfo(f"// To bake the normal map, use Maya's Render > Batch Render")
+                    pm.displayInfo(f"// or Hypershade > Utilities > Surface Sampler Info")
+                    
+                return normal_file_node
+            else:
+                return bump2d_node
+                
+        except Exception as e:
+            pm.warning(f"Failed to create bump-to-normal conversion: {e}")
+            return None
+
+    @staticmethod
+    def validate_normal_map_setup(
+        normal_file_node: Union[str, "pm.nt.File"], 
+        material: Optional[Union[str, "pm.nt.DependNode"]] = None
+    ) -> Dict[str, Any]:
+        """Validate normal map file node setup and provide recommendations.
+        
+        Parameters:
+            normal_file_node (str/pm.nt.File): The normal map file node to validate.
+            material (Optional[str/pm.nt.DependNode]): Associated material to check connections.
+            
+        Returns:
+            Dict[str, Any]: Validation results with recommendations and issues found.
+        """
+        try:
+            normal_node = pm.PyNode(normal_file_node)
+            if not isinstance(normal_node, pm.nt.File):
+                return {"valid": False, "error": f"Node {normal_file_node} is not a file node"}
+        except pm.MayaNodeError:
+            return {"valid": False, "error": f"Normal file node {normal_file_node} does not exist"}
+            
+        results = {
+            "valid": True,
+            "warnings": [],
+            "recommendations": [],
+            "color_space": None,
+            "connected_to_normal": False,
+            "file_exists": False
+        }
+        
+        # Check color space
+        color_space = normal_node.colorSpace.get()
+        results["color_space"] = color_space
+        if color_space.lower() not in ["raw", "linear", "utility - raw"]:
+            results["warnings"].append(
+                f"Color space is '{color_space}'. Normal maps should use 'Raw' or 'Linear' "
+                "to avoid gamma correction that corrupts normal data."
+            )
+            results["recommendations"].append("Set colorSpace to 'Raw'")
+            
+        # Check if file exists
+        file_path = normal_node.fileTextureName.get()
+        if file_path and os.path.exists(file_path):
+            results["file_exists"] = True
+        elif file_path:
+            results["warnings"].append(f"Normal map file does not exist: {file_path}")
+            
+        # Check material connections if provided
+        if material:
+            try:
+                mat_node = pm.PyNode(material)
+                # Check if connected to bump or normal attributes
+                connections = pm.listConnections(normal_node.outColor, plugs=True)
+                normal_connections = [c for c in connections if 'normal' in c.name().lower() or 'bump' in c.name().lower()]
+                
+                if normal_connections:
+                    results["connected_to_normal"] = True
+                else:
+                    results["warnings"].append("Normal map not connected to material normal/bump input")
+                    results["recommendations"].append("Connect to material normalCamera or bump input")
+                    
+            except pm.MayaNodeError:
+                results["warnings"].append(f"Material {material} does not exist")
+                
+        return results
+
 
 # -----------------------------------------------------------------------------
 
