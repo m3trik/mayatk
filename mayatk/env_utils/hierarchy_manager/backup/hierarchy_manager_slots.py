@@ -1183,7 +1183,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
             widget.menu.setTitle("Reference Hierarchy:")
-            widget.menu.mode = "context"
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Reference",
@@ -1223,7 +1222,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
             widget.menu.setTitle("Current Scene Hierarchy:")
-            widget.menu.mode = "context"
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Current Scene",

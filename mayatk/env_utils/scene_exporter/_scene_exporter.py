@@ -400,31 +400,31 @@ class SceneExporterSlots(SceneExporter):
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Set the preset directory.",
                 setText="Set Preset Directory",
                 setObjectName="b005",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Open the preset directory.",
                 setText="Open Preset Directory",
                 setObjectName="b007",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Add an FBX export preset.",
                 setText="Add New Preset",
                 setObjectName="b003",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Delete the current FBX export preset.",
                 setText="Delete Current Preset",
                 setObjectName="b004",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Open the FBX export preset editor.",
                 setText="Edit Preset",
@@ -460,20 +460,20 @@ class SceneExporterSlots(SceneExporter):
 
     def txt000_init(self, widget) -> None:
         """Init Output Directory"""
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QPushButton",
             setToolTip="Set the output directory.",
             setText="Set Output Directory",
             setObjectName="b010",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QPushButton",
             setToolTip="Open the output directory.",
             setText="Open Output Directory",
             setObjectName="b006",
         )
         # Add the ComboBox for recent output directories
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setToolTip="Select from the last 10 output directories.",
             setObjectName="cmb004",
@@ -481,17 +481,21 @@ class SceneExporterSlots(SceneExporter):
         # Load previously saved output directories
         prev_output_dirs = self.get_recent_output_dirs()
         # Add directories to ComboBox with a unified method
-        self.ui.txt000.menu.cmb004.add(prev_output_dirs, header="Recent Output Dirs:")
+        # Access via option_box.menu (not standalone menu)
+        self.ui.txt000.option_box.menu.cmb004.add(
+            prev_output_dirs, header="Recent Output Dirs:"
+        )
 
     def txt001_init(self, widget) -> None:
         """Init Output Name"""
-        widget.menu.add(
+        widget.option_box.clear_option = True
+        widget.option_box.menu.add(
             "QCheckBox",
             setToolTip="Add a timestamp suffix to the output filename.",
             setText="Timestamp",
             setObjectName="chk004",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QLineEdit",
             setToolTip=(
                 "Regex pattern for formatting the output name.\n\n"
@@ -508,7 +512,9 @@ class SceneExporterSlots(SceneExporter):
     def b001_init(self, widget) -> None:
         """Auto-generate Export Settings UI from task definitions."""
         widget.menu.setTitle("TASKS:")
-        widget.menu.mode = "popup"
+        widget.menu.trigger_button = "left"
+        widget.menu.add_apply_button = False
+        widget.menu.position = "bottom"
 
         for task_name, params in self.task_manager.task_definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
@@ -529,7 +535,9 @@ class SceneExporterSlots(SceneExporter):
     def b002_init(self, widget) -> None:
         """Auto-generate Check Settings UI from check definitions."""
         widget.menu.setTitle("VALIDATION CHECKS:")
-        widget.menu.mode = "popup"
+        widget.menu.trigger_button = "left"
+        widget.menu.add_apply_button = False
+        widget.menu.position = "bottom"
 
         for check_name, params in self.task_manager.check_definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
@@ -749,9 +757,11 @@ class SceneExporterSlots(SceneExporter):
             unique_dirs = unique_dirs[-10:]
             self.ui.settings.setValue("prev_output_dirs", unique_dirs)
 
-            # Optionally update the ComboBox
-            self.ui.txt000.menu.cmb004.clear()
-            self.ui.txt000.menu.cmb004.add(unique_dirs, header="Recent Output Dirs:")
+            # Optionally update the ComboBox (access via option_box.menu)
+            self.ui.txt000.option_box.menu.cmb004.clear()
+            self.ui.txt000.option_box.menu.cmb004.add(
+                unique_dirs, header="Recent Output Dirs:"
+            )
 
 
 # -----------------------------------------------------------------------------

@@ -520,6 +520,172 @@ class CoreUtils(ptk.HelpMixin):
         ]
         return variables
 
+    @staticmethod
+    def reorder_objects(objects=None, method="name", reverse=False):
+        """Reorder a given set of objects using various sorting methods.
+
+        Parameters:
+            objects (str, list, pm.PyNode, None): Objects to reorder.
+                Can be a string, list, PyNode, or None. If None, uses current selection.
+            method (str): Sorting method to use. Options:
+                'name' - Sort alphabetically by object name
+                'hierarchy' - Sort by hierarchy depth (root to leaf)
+                'x', 'y', 'z' - Sort by position along specified axis
+                'distance' - Sort by distance from origin
+                'volume' - Sort by bounding box volume
+                'vertex_count' - Sort by number of vertices
+                'random' - Randomize order
+                'creation_time' - Sort by creation time (oldest to newest)
+            reverse (bool): If True, reverse the sorting order. Default is False.
+
+        Returns:
+            list: List of reordered PyMEL objects
+
+        Example:
+            # Sort selected objects by name
+            sorted_objs = reorder_objects()
+
+            # Sort specific objects by Y position, reversed
+            sorted_objs = reorder_objects(['pCube1', 'pSphere1', 'pCylinder1'], method='y', reverse=True)
+
+            # Sort by hierarchy depth
+            sorted_objs = reorder_objects(method='hierarchy')
+
+            # Randomize selection order
+            sorted_objs = reorder_objects(method='random')
+        """
+        # Get objects - use pm.ls to handle strings, lists, etc.
+        if objects is None:
+            obj_list = pm.ls(selection=True, flatten=True)
+            if not obj_list:
+                pm.warning("No objects provided and nothing selected.")
+                return []
+        else:
+            obj_list = pm.ls(objects, flatten=True)
+
+        if not obj_list:
+            pm.warning("No valid objects to reorder.")
+            return []
+
+        # Sort based on method
+        if method == "name":
+            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+
+        elif method == "hierarchy":
+            # Sort by hierarchy depth (number of parents)
+            def get_hierarchy_depth(obj):
+                depth = 0
+                parent = obj.getParent()
+                while parent:
+                    depth += 1
+                    parent = parent.getParent()
+                return depth
+
+            sorted_objs = sorted(obj_list, key=get_hierarchy_depth)
+
+        elif method in ["x", "y", "z"]:
+            # Sort by position along specified axis
+            axis_map = {"x": 0, "y": 1, "z": 2}
+            axis_index = axis_map[method]
+
+            def get_position(obj):
+                try:
+                    # Try to get world space translation
+                    if hasattr(obj, "getTranslation"):
+                        return obj.getTranslation(space="world")[axis_index]
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_position)
+
+        elif method == "distance":
+            # Sort by distance from origin
+            def get_distance(obj):
+                try:
+                    if hasattr(obj, "getTranslation"):
+                        pos = obj.getTranslation(space="world")
+                        return (pos.x**2 + pos.y**2 + pos.z**2) ** 0.5
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_distance)
+
+        elif method == "volume":
+            # Sort by bounding box volume
+            def get_volume(obj):
+                try:
+                    if hasattr(obj, "getBoundingBox"):
+                        bbox = obj.getBoundingBox(space="world")
+                        width = bbox.width()
+                        height = bbox.height()
+                        depth = bbox.depth()
+                        return width * height * depth
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_volume)
+
+        elif method == "vertex_count":
+            # Sort by number of vertices
+            def get_vertex_count(obj):
+                try:
+                    # Try to get shape node if this is a transform
+                    shapes = []
+                    if hasattr(obj, "getShapes"):
+                        shapes = obj.getShapes()
+                    elif obj.nodeType() in ["mesh", "nurbsCurve", "nurbsSurface"]:
+                        shapes = [obj]
+
+                    if shapes:
+                        # Get vertex count from first shape
+                        shape = shapes[0]
+                        if shape.nodeType() == "mesh":
+                            return shape.numVertices()
+                        elif shape.nodeType() == "nurbsCurve":
+                            return shape.numCVs()
+                        elif shape.nodeType() == "nurbsSurface":
+                            return shape.numCVsInU() * shape.numCVsInV()
+                    return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_vertex_count)
+
+        elif method == "random":
+            # Randomize order
+            import random
+
+            sorted_objs = list(obj_list)
+            random.shuffle(sorted_objs)
+
+        elif method == "creation_time":
+            # Sort by creation time (oldest to newest)
+            def get_creation_time(obj):
+                try:
+                    # Use the object's UUID as a proxy for creation order
+                    # Objects created earlier typically have lower UUID values
+                    return obj.uuid()
+                except:
+                    return ""
+
+            sorted_objs = sorted(obj_list, key=get_creation_time)
+
+        else:
+            pm.warning(f"Unknown sorting method: '{method}'. Using 'name' instead.")
+            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+
+        # Reverse if requested
+        if reverse:
+            sorted_objs = sorted_objs[::-1]
+
+        return sorted_objs
+
 
 # --------------------------------------------------------------------------------------------
 

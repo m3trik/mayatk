@@ -783,30 +783,50 @@ class AnimUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def stagger_keyframes(
         objects: list,
-        offset: int = 1,
-        invert: bool = False,
+        start_frame: int = None,
+        interval: Union[int, Tuple[int, int]] = None,
+        offset: float = 0,
         smooth_tangents: bool = False,
+        invert: bool = False,
+        group_overlapping: bool = False,
     ):
-        """Stagger the keyframes of selected objects such that the keyframes of each subsequent object start after the previous object.
+        """Stagger the keyframes of selected objects with various positioning controls.
 
         If keys are selected, only those keys are staggered. If no keys are selected, all keys are staggered.
 
         Parameters:
             objects (list): List of objects whose keyframes need to be staggered.
-            offset (int, optional): Offset amount to adjust the keyframe stagger (default is 1).
-            invert (bool, optional): If True, the objects list is processed in reverse order (default is False).
+            start_frame (int, optional): Override starting frame. If None, uses earliest keyframe.
+            interval (int or tuple, optional): If set, place each animation at regular frame intervals
+                (e.g., 100 = animations start at frames 0, 100, 200, 300...).
+                Can be a single int or a tuple (base_interval, overlap_interval).
+                When a tuple, if placing an animation would cause overlap with the previous one,
+                it skips to the next overlap_interval position instead.
+                When used, offset is ignored.
+            offset (float, optional): Offset/spacing between animations. Can be:
+                        - Positive value: Gap in frames between animations (e.g., 10 = 10 frame gap)
+                        - Zero: End-to-start with no gap (default)
+                        - Negative value: Overlap in frames (e.g., -5 = 5 frames of overlap)
+                        - Float between -1.0 and 1.0: Percentage of animation duration
+                        (e.g., 0.5 = 50% of duration gap, -0.3 = 30% overlap)
             smooth_tangents (bool, optional): If True, adjusts tangents for smooth transitions (default is False).
+            invert (bool, optional): If True, the objects list is processed in reverse order (default is False).
+            group_overlapping (bool, optional): If True, treats objects with overlapping keyframes as a single block.
+                Objects in the same group will be moved together. (default is False).
         """
         if not objects:
             pm.warning("No objects provided.")
             return
 
-        objects = pm.ls(objects, type="transform")
+        objects = pm.ls(objects, type="transform", flatten=True)
         if invert:
             objects = list(reversed(objects))
 
-        # Determine the first keyframe to maintain the starting frame consistency
+        # Collect all keyframe data for each object
+        obj_keyframe_data = []
         first_keyframe = None
+        last_keyframe = None
+
         for obj in objects:
             keyframes = pm.keyframe(obj, query=True, selected=True)
             if not keyframes:
@@ -814,46 +834,691 @@ class AnimUtils(ptk.HelpMixin):
 
             if keyframes:
                 keyframes = sorted(set(keyframes))
+                obj_keyframe_data.append(
+                    {
+                        "obj": obj,
+                        "keyframes": keyframes,
+                        "start": keyframes[0],
+                        "end": keyframes[-1],
+                        "duration": keyframes[-1] - keyframes[0],
+                    }
+                )
+
                 if first_keyframe is None or keyframes[0] < first_keyframe:
                     first_keyframe = keyframes[0]
+                if last_keyframe is None or keyframes[-1] > last_keyframe:
+                    last_keyframe = keyframes[-1]
 
-        if first_keyframe is None:
+        if not obj_keyframe_data:
             pm.warning("No keyframes found on the provided objects.")
             return
 
-        previous_end_frame = first_keyframe
+        # Group overlapping objects if requested
+        if group_overlapping:
+            obj_keyframe_data = AnimUtils._group_overlapping_keyframes(
+                obj_keyframe_data
+            )
+
+        # Use provided start_frame or earliest keyframe
+        base_frame = start_frame if start_frame is not None else first_keyframe
+
+        # Apply stagger based on interval or offset
+        if interval is not None:
+            # Handle interval as tuple (base_interval, overlap_interval) or single int
+            if isinstance(interval, tuple) and len(interval) == 2:
+                base_interval, overlap_interval = interval
+            else:
+                base_interval = interval
+                overlap_interval = None
+
+            # Place each animation at regular frame intervals
+            previous_end = None  # Track the end of the previous animation
+
+            for i, data in enumerate(obj_keyframe_data):
+                objects_in_group = data.get("objects", [data["obj"]])
+                group_start = data["start"]  # Use the group's start frame
+                group_end = data["end"]
+                duration = data["duration"]
+
+                # Calculate target start position
+                target_start = base_frame + (i * base_interval)
+
+                # Check for overlap if overlap_interval is specified
+                if overlap_interval is not None and previous_end is not None:
+                    # If the target start would overlap with the previous animation's end
+                    if target_start < previous_end:
+                        # Find the next available overlap_interval position that doesn't overlap
+                        overlap_count = 1
+                        while target_start < previous_end:
+                            target_start = (
+                                base_frame
+                                + (i * base_interval)
+                                + (overlap_count * overlap_interval)
+                            )
+                            overlap_count += 1
+
+                shift_amount = target_start - group_start
+
+                if shift_amount != 0:
+                    for obj in objects_in_group:
+                        obj_keyframes = pm.keyframe(obj, query=True, selected=True)
+                        if not obj_keyframes:
+                            obj_keyframes = pm.keyframe(obj, query=True)
+                        if obj_keyframes:
+                            try:
+                                pm.keyframe(
+                                    obj,
+                                    edit=True,
+                                    time=(min(obj_keyframes), max(obj_keyframes)),
+                                    relative=True,
+                                    timeChange=shift_amount,
+                                )
+                            except RuntimeError as e:
+                                pm.warning(f"Failed to move keys for {obj}: {e}")
+
+                # Update previous_end to track this animation's new end position
+                previous_end = target_start + duration
+        else:
+            # Sequential stagger with offset
+            current_frame = base_frame
+
+            for data in obj_keyframe_data:
+                objects_in_group = data.get("objects", [data["obj"]])
+                group_start = data["start"]  # Use the group's start frame
+                duration = data["duration"]
+
+                # Calculate offset in frames
+                # If offset is between -1.0 and 1.0, treat as percentage of duration
+                if -1.0 < offset < 1.0:
+                    offset_frames = duration * offset
+                else:
+                    offset_frames = offset
+
+                shift_amount = current_frame - group_start
+                if shift_amount != 0:
+                    for obj in objects_in_group:
+                        obj_keyframes = pm.keyframe(obj, query=True, selected=True)
+                        if not obj_keyframes:
+                            obj_keyframes = pm.keyframe(obj, query=True)
+                        if obj_keyframes:
+                            try:
+                                pm.keyframe(
+                                    obj,
+                                    edit=True,
+                                    time=(min(obj_keyframes), max(obj_keyframes)),
+                                    relative=True,
+                                    timeChange=shift_amount,
+                                )
+                            except RuntimeError as e:
+                                pm.warning(f"Failed to move keys for {obj}: {e}")
+
+                # Update current frame for next object/group
+                # Positive offset = gap, negative = overlap
+                current_frame = current_frame + duration + offset_frames
+
+        if smooth_tangents:
+            # Ensure smooth transitions for the staggered keyframes
+            for data in obj_keyframe_data:
+                objects_in_group = data.get("objects", [data["obj"]])
+                keyframes = data["keyframes"]
+                for obj in objects_in_group:
+                    try:
+                        # Only smooth the keyframes that were actually staggered
+                        pm.keyTangent(
+                            obj,
+                            edit=True,
+                            time=(keyframes[0], keyframes[-1]),
+                            outTangentType="auto",
+                            inTangentType="auto",
+                        )
+                    except RuntimeError as e:
+                        pm.warning(f"Failed to adjust tangents for {obj}: {e}")
+
+    @staticmethod
+    def _group_overlapping_keyframes(obj_keyframe_data: List[dict]) -> List[dict]:
+        """Helper method to group objects with overlapping keyframe ranges into single blocks.
+
+        Objects are considered overlapping if their keyframe time ranges intersect.
+        Grouped objects are treated as a single unit during staggering operations.
+
+        Parameters:
+            obj_keyframe_data (List[dict]): List of dictionaries containing object keyframe data.
+                Each dict should have 'obj', 'keyframes', 'start', 'end', and 'duration' keys.
+
+        Returns:
+            List[dict]: List of grouped object data. Each group contains:
+                - 'objects': List of objects in the group
+                - 'keyframes': Combined keyframe times
+                - 'start': Earliest keyframe in the group
+                - 'end': Latest keyframe in the group
+                - 'duration': Total duration of the group
+                - 'obj': Representative object (for backward compatibility)
+
+        Example:
+            # Objects with overlapping keyframes [1-10], [5-15], [20-30]
+            # Would be grouped as: [[obj1, obj2]], [[obj3]]
+        """
+        if not obj_keyframe_data:
+            return []
+
+        # Sort by start frame
+        sorted_data = sorted(obj_keyframe_data, key=lambda x: x["start"])
+
+        groups = []
+        current_group = {
+            "objects": [sorted_data[0]["obj"]],
+            "keyframes": sorted_data[0]["keyframes"],
+            "start": sorted_data[0]["start"],
+            "end": sorted_data[0]["end"],
+            "duration": sorted_data[0]["duration"],
+            "obj": sorted_data[0][
+                "obj"
+            ],  # Representative object for backward compatibility
+        }
+
+        for i in range(1, len(sorted_data)):
+            data = sorted_data[i]
+
+            # Check if this object overlaps with the current group
+            if data["start"] <= current_group["end"]:
+                # Overlapping - add to current group
+                current_group["objects"].append(data["obj"])
+                # Merge keyframes
+                current_group["keyframes"] = sorted(
+                    set(current_group["keyframes"] + data["keyframes"])
+                )
+                # Update group boundaries
+                current_group["end"] = max(current_group["end"], data["end"])
+                current_group["duration"] = (
+                    current_group["end"] - current_group["start"]
+                )
+            else:
+                # Not overlapping - start new group
+                groups.append(current_group)
+                current_group = {
+                    "objects": [data["obj"]],
+                    "keyframes": data["keyframes"],
+                    "start": data["start"],
+                    "end": data["end"],
+                    "duration": data["duration"],
+                    "obj": data["obj"],
+                }
+
+        # Add the last group
+        groups.append(current_group)
+
+        return groups
+
+    @staticmethod
+    @CoreUtils.undoable
+    def align_selected_keyframes(
+        objects: Optional[List[Union[str, "pm.PyNode"]]] = None,
+        target_frame: Optional[float] = None,
+        use_earliest: bool = True,
+    ) -> bool:
+        """Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.
+
+        This method finds the earliest (or latest) selected keyframe across all objects and shifts
+        each object's selected keyframes so they start at the same frame. Only processes selected
+        keyframes from the graph editor.
+
+        Parameters:
+            objects (Optional[List[Union[str, pm.PyNode]]]): Objects to align. If None, uses current selection.
+            target_frame (Optional[float]): Specific frame to align to. If None, aligns to the earliest
+                                           (or latest if use_earliest=False) selected keyframe.
+            use_earliest (bool): If True, aligns to the earliest selected keyframe. If False, aligns
+                                to the latest. Only used when target_frame is None. Default is True.
+
+        Returns:
+            bool: True if keyframes were successfully aligned, False otherwise.
+
+        Example:
+            # Align selected keyframes to their earliest frame
+            align_selected_keyframes()
+
+            # Align selected keyframes to frame 10
+            align_selected_keyframes(target_frame=10)
+
+            # Align selected keyframes to their latest frame
+            align_selected_keyframes(use_earliest=False)
+        """
+        # Get objects to work with
+        if objects is None:
+            objects = pm.selected()
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return False
+
+        # Ensure we have transform nodes, not shape nodes
+        objects = pm.ls(objects, type="transform", flatten=True)
+
+        if not objects:
+            pm.warning("No valid transform nodes found.")
+            return False
+
+        # Collect selected keyframe data for each object
+        obj_keyframe_data = []
 
         for obj in objects:
-            keyframes = pm.keyframe(obj, query=True, selected=True)
-            if not keyframes:
-                keyframes = pm.keyframe(obj, query=True)
+            # Get animation curve nodes with selected keyframes
+            curve_nodes = pm.keyframe(obj, query=True, name=True, selected=True)
+
+            if not curve_nodes:
+                continue
+
+            # For each curve node, get the selected keyframe times
+            obj_selected_times = []
+            for node in curve_nodes:
+                selected_times = pm.keyframe(
+                    node, query=True, selected=True, timeChange=True
+                )
+                if selected_times:
+                    obj_selected_times.extend(selected_times)
+
+            if obj_selected_times:
+                obj_selected_times = sorted(set(obj_selected_times))
+                obj_keyframe_data.append(
+                    {
+                        "obj": obj,
+                        "curve_nodes": curve_nodes,
+                        "times": obj_selected_times,
+                        "start": min(obj_selected_times),
+                        "end": max(obj_selected_times),
+                    }
+                )
+
+        if not obj_keyframe_data:
+            pm.warning("No selected keyframes found on any objects.")
+            return False
+
+        # Determine the alignment target frame
+        if target_frame is None:
+            if use_earliest:
+                target_frame = min(data["start"] for data in obj_keyframe_data)
+            else:
+                target_frame = max(data["start"] for data in obj_keyframe_data)
+
+        # Align each object's selected keyframes
+        for data in obj_keyframe_data:
+            obj = data["obj"]
+            curve_nodes = data["curve_nodes"]
+            times = data["times"]
+            current_start = data["start"]
+
+            # Calculate the shift amount
+            shift_amount = target_frame - current_start
+
+            if abs(shift_amount) < 1e-6:  # Skip if already aligned (within tolerance)
+                continue
+
+            # Shift the selected keyframes for this object
+            # Use the time range of selected keys to target only those keys
+            min_time = min(times)
+            max_time = max(times)
+
+            # Move the keyframes - must target the object, not individual curve nodes
+            # to ensure all selected keys move together
+            pm.keyframe(
+                obj,
+                edit=True,
+                time=(min_time, max_time),
+                relative=True,
+                timeChange=shift_amount,
+                option="over",  # Only affect keyframes in the time range
+            )
+
+        pm.displayInfo(
+            f"Aligned selected keyframes for {len(obj_keyframe_data)} object(s) to frame {target_frame:.2f}"
+        )
+        return True
+
+    @staticmethod
+    @CoreUtils.undoable
+    def set_visibility_keys(
+        objects: Optional[List[Union[str, "pm.PyNode"]]] = None,
+        visible: bool = True,
+        when: str = "start",
+        offset: int = 0,
+        group_overlapping: bool = False,
+    ) -> int:
+        """Sets visibility keyframes for objects with options for timing and grouping.
+
+        This method creates visibility keyframes at specific points in the animation timeline,
+        with support for grouping objects that have overlapping keyframe ranges.
+
+        Parameters:
+            objects (Optional[List[Union[str, pm.PyNode]]]): Objects to set visibility keys on.
+                If None, uses current selection.
+            visible (bool): Visibility state to set (True = visible, False = hidden). Default is True.
+            when (str): When to set the visibility key. Options:
+                - "start": At the start of each object's keyframe range
+                - "end": At the end of each object's keyframe range
+                - "both": At both start and end
+                - "before_start": One frame before the start
+                - "after_end": One frame after the end
+                Default is "start".
+            offset (int): Frame offset to apply to the keyframe timing. Positive values move
+                keys later, negative values move keys earlier. Default is 0.
+            group_overlapping (bool): If True, treats objects with overlapping keyframe ranges
+                as a single group, setting visibility keys based on the group's combined range.
+                Default is False.
+
+        Returns:
+            int: Number of visibility keyframes created.
+
+        Example:
+            # Hide objects at the start of their animation
+            set_visibility_keys(visible=False, when="start")
+
+            # Make objects visible at the end of their animation with 5 frame offset
+            set_visibility_keys(visible=True, when="end", offset=5)
+
+            # Set visibility for grouped overlapping animations
+            set_visibility_keys(visible=True, when="both", group_overlapping=True)
+        """
+        # Get objects to work with
+        if objects is None:
+            objects = pm.selected()
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return 0
+
+        # Ensure we have transform nodes
+        objects = pm.ls(objects, type="transform", flatten=True)
+
+        if not objects:
+            pm.warning("No valid transform nodes found.")
+            return 0
+
+        # Collect keyframe data for each object
+        obj_keyframe_data = []
+
+        for obj in objects:
+            keyframes = pm.keyframe(obj, query=True)
 
             if keyframes:
                 keyframes = sorted(set(keyframes))
+                obj_keyframe_data.append(
+                    {
+                        "obj": obj,
+                        "keyframes": keyframes,
+                        "start": keyframes[0],
+                        "end": keyframes[-1],
+                        "duration": keyframes[-1] - keyframes[0],
+                    }
+                )
 
-                if previous_end_frame is not None:
-                    shift_amount = previous_end_frame + offset - keyframes[0]
-                    pm.keyframe(
-                        obj,
-                        edit=True,
-                        time=(keyframes[0], keyframes[-1]),
-                        relative=True,
-                        timeChange=shift_amount,
+        if not obj_keyframe_data:
+            pm.warning("No keyframes found on the provided objects.")
+            return 0
+
+        # Group overlapping objects if requested
+        if group_overlapping:
+            obj_keyframe_data = AnimUtils._group_overlapping_keyframes(
+                obj_keyframe_data
+            )
+
+        # Determine visibility value (0 or 1)
+        visibility_value = 1 if visible else 0
+
+        # Set visibility keyframes based on 'when' parameter
+        keys_created = 0
+
+        for data in obj_keyframe_data:
+            objects_in_group = data.get("objects", [data["obj"]])
+            start_frame = data["start"]
+            end_frame = data["end"]
+
+            # Determine target frames based on 'when' parameter
+            target_frames = []
+
+            if when == "start":
+                target_frames = [start_frame + offset]
+            elif when == "end":
+                target_frames = [end_frame + offset]
+            elif when == "both":
+                target_frames = [start_frame + offset, end_frame + offset]
+            elif when == "before_start":
+                target_frames = [start_frame - 1 + offset]
+            elif when == "after_end":
+                target_frames = [end_frame + 1 + offset]
+            else:
+                pm.warning(f"Invalid 'when' parameter: {when}. Using 'start'.")
+                target_frames = [start_frame + offset]
+
+            # Set visibility keys for each object in the group
+            for obj in objects_in_group:
+                for frame in target_frames:
+                    pm.setKeyframe(
+                        obj, attribute="visibility", time=frame, value=visibility_value
                     )
+                    keys_created += 1
 
-                    previous_end_frame = keyframes[-1] + shift_amount
+        pm.displayInfo(
+            f"Created {keys_created} visibility keyframe(s) for {len(obj_keyframe_data)} object(s)/group(s)"
+        )
+        return keys_created
+
+    @staticmethod
+    @CoreUtils.undoable
+    def snap_keys_to_frames(
+        objects: Optional[List[Union[str, "pm.PyNode"]]] = None,
+        method: str = "nearest",
+        selected_only: bool = False,
+        time_range: Optional[Tuple[float, float]] = None,
+    ) -> int:
+        """Snaps keyframes with decimal time values to whole frame numbers.
+
+        This method rounds keyframe times to the nearest whole number, useful for cleaning up
+        keyframes that have been scaled, retimed, or imported with fractional frame values.
+
+        Parameters:
+            objects (Optional[List[Union[str, pm.PyNode]]]): Objects to process keyframes for.
+                If None, uses current selection.
+            method (str): Rounding method to use. Options:
+                - "nearest": Round to nearest whole number (default)
+                - "floor": Always round down
+                - "ceil": Always round up
+                - "half_up": Round .5 and above up, below .5 down (standard rounding)
+                - "preferred": Round to aesthetically pleasing numbers when very close (within ~1 frame).
+                  Examples: 24→25, 19→20, 18→20, 99→100. Conservative approach.
+                - "aggressive_preferred": Round to preferred numbers even when farther away.
+                  Examples: 48.x→50, 73.x→75, 88.x→90, 23.x→25, 7.x→10. More aggressive rounding.
+            selected_only (bool): If True, only snap selected keyframes. If False, snap all
+                keyframes on the objects. Default is False.
+            time_range (Optional[Tuple[float, float]]): (start_time, end_time) to limit which
+                keyframes to snap. If None, processes all keyframes. Default is None.
+
+        Returns:
+            int: Number of keyframes that were snapped to whole frames.
+
+        Example:
+            # Snap all keyframes to nearest whole frame
+            snap_keys_to_frames()
+
+            # Snap only selected keyframes, always rounding down
+            snap_keys_to_frames(method="floor", selected_only=True)
+
+            # Snap keyframes in a specific time range
+            snap_keys_to_frames(time_range=(10, 100))
+
+            # Snap to preferred round numbers (conservative)
+            snap_keys_to_frames(method="preferred")
+
+            # Snap to preferred round numbers (aggressive)
+            snap_keys_to_frames(method="aggressive_preferred")
+        """
+        import math
+
+        # Get objects to work with
+        if objects is None:
+            objects = pm.selected()
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return 0
+
+        # Ensure we have PyMel objects
+        objects = pm.ls(objects, flatten=True)
+
+        # Define rounding function based on method
+        if method == "floor":
+            round_func = math.floor
+        elif method == "ceil":
+            round_func = math.ceil
+        elif method == "half_up":
+            round_func = lambda x: math.floor(x + 0.5)
+        elif method == "preferred":
+            round_func = ptk.round_to_preferred
+        elif method == "aggressive_preferred":
+            round_func = ptk.round_to_aggressive_preferred
+        else:  # "nearest" or default
+            round_func = round
+
+        keys_snapped = 0
+        keys_to_move = (
+            {}
+        )  # Store keyframe data to move: {(obj, attr, old_time): new_time}
+
+        for obj in objects:
+            # Get animation curves
+            if selected_only:
+                curve_nodes = pm.keyframe(obj, query=True, name=True, selected=True)
+            else:
+                curve_nodes = pm.keyframe(obj, query=True, name=True)
+
+            if not curve_nodes:
+                continue
+
+            for curve in curve_nodes:
+                # Query keyframe times
+                if selected_only:
+                    if time_range:
+                        keyframe_times = pm.keyframe(
+                            curve,
+                            query=True,
+                            selected=True,
+                            timeChange=True,
+                            time=time_range,
+                        )
+                    else:
+                        keyframe_times = pm.keyframe(
+                            curve, query=True, selected=True, timeChange=True
+                        )
                 else:
-                    previous_end_frame = keyframes[-1] + offset
+                    if time_range:
+                        keyframe_times = pm.keyframe(
+                            curve, query=True, timeChange=True, time=time_range
+                        )
+                    else:
+                        keyframe_times = pm.keyframe(curve, query=True, timeChange=True)
 
-        if smooth_tangents:
-            # Ensure smooth transitions if necessary
-            for obj in objects:
+                if not keyframe_times:
+                    continue
+
+                # Get the attribute name for this curve
+                connections = pm.listConnections(
+                    curve, plugs=True, destination=True, source=False
+                )
+                if not connections:
+                    continue
+
+                attr_name = str(connections[0])
+
+                # Find keyframes with decimal values
+                for time in keyframe_times:
+                    # Check if time has decimal places
+                    if time != int(time):
+                        new_time = round_func(time)
+
+                        # Store the keyframe data for moving
+                        key = (obj, attr_name, time)
+                        keys_to_move[key] = new_time
+
+        # Now move all the keyframes
+        for (obj, attr_name, old_time), new_time in keys_to_move.items():
+            try:
+                # Get the keyframe value and tangent info at the old time
+                value = pm.keyframe(
+                    attr_name, query=True, time=(old_time,), valueChange=True
+                )
+                if not value:
+                    continue
+                value = value[0]
+
+                # Get tangent information
+                in_tangent_type = pm.keyTangent(
+                    attr_name, query=True, time=(old_time,), inTangentType=True
+                )[0]
+                out_tangent_type = pm.keyTangent(
+                    attr_name, query=True, time=(old_time,), outTangentType=True
+                )[0]
+
+                # Try to get angle and weight info
                 try:
-                    pm.keyTangent(
-                        obj, edit=True, outTangentType="auto", inTangentType="auto"
-                    )
-                except RuntimeError as e:
-                    pm.warning(f"Failed to adjust tangents for {obj}: {e}")
+                    in_angle = pm.keyTangent(
+                        attr_name, query=True, time=(old_time,), inAngle=True
+                    )[0]
+                    out_angle = pm.keyTangent(
+                        attr_name, query=True, time=(old_time,), outAngle=True
+                    )[0]
+                    in_weight = pm.keyTangent(
+                        attr_name, query=True, time=(old_time,), inWeight=True
+                    )[0]
+                    out_weight = pm.keyTangent(
+                        attr_name, query=True, time=(old_time,), outWeight=True
+                    )[0]
+                    has_tangent_data = True
+                except:
+                    has_tangent_data = False
+
+                # Delete the old keyframe
+                pm.cutKey(attr_name, time=(old_time, old_time), option="keys")
+
+                # Create new keyframe at rounded time
+                pm.setKeyframe(attr_name, time=new_time, value=value)
+
+                # Restore tangent types
+                pm.keyTangent(
+                    attr_name,
+                    edit=True,
+                    time=(new_time,),
+                    inTangentType=in_tangent_type,
+                    outTangentType=out_tangent_type,
+                )
+
+                # Restore tangent angles and weights if available
+                if has_tangent_data:
+                    try:
+                        pm.keyTangent(
+                            attr_name,
+                            edit=True,
+                            time=(new_time,),
+                            inAngle=in_angle,
+                            outAngle=out_angle,
+                            inWeight=in_weight,
+                            outWeight=out_weight,
+                        )
+                    except:
+                        pass  # Some tangent types don't support angle/weight editing
+
+                keys_snapped += 1
+
+            except Exception as e:
+                pm.warning(
+                    f"Failed to snap keyframe for {attr_name} at time {old_time}: {e}"
+                )
+
+        if keys_snapped > 0:
+            pm.displayInfo(
+                f"Snapped {keys_snapped} keyframe(s) to whole frames using '{method}' method"
+            )
+        else:
+            pm.displayInfo("No keyframes with decimal values found to snap")
+
+        return keys_snapped
 
     @classmethod
     @CoreUtils.undoable

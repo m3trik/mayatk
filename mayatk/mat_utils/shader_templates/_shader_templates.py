@@ -354,7 +354,6 @@ class ShaderTemplatesSlots:
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
-            widget.menu.mode = "context"
             widget.menu.setTitle("Template Options")
             widget.menu.add(
                 self.sb.registered_widgets.Label,
