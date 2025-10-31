@@ -18,6 +18,26 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.naming
 
+    @property
+    def valid_suffixes(self):
+        """Get current valid suffixes from tb003 widget fields."""
+        try:
+            suffixes = [
+                self.ui.tb003.option_box.menu.tb003_txt000.text(),  # Group
+                self.ui.tb003.option_box.menu.tb003_txt001.text(),  # Locator
+                self.ui.tb003.option_box.menu.tb003_txt002.text(),  # Joint
+                self.ui.tb003.option_box.menu.tb003_txt003.text(),  # Mesh
+                self.ui.tb003.option_box.menu.tb003_txt004.text(),  # Nurbs Curve
+                self.ui.tb003.option_box.menu.tb003_txt005.text(),  # Camera
+                self.ui.tb003.option_box.menu.tb003_txt006.text(),  # Light
+                self.ui.tb003.option_box.menu.tb003_txt007.text(),  # Display Layer
+            ]
+            # Filter out empty strings
+            return [s for s in suffixes if s]
+        except (AttributeError, RuntimeError):
+            # Fallback if widgets not initialized or accessed before tb003 exists
+            return ["_GRP", "_LOC", "_JNT", "_GEO", "_CRV", "_CAM", "_LGT", "_LYR"]
+
     def txt000_init(self, widget):
         """ """
         widget.option_box.menu.setTitle("Find")
@@ -72,6 +92,15 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             ]
             pm.select(found_objects)
 
+            # Print user-friendly result
+            object_type = "locators" if locators_only else "objects"
+            if found_objects:
+                pm.displayInfo(
+                    f"Found and selected {len(found_objects)} {object_type} matching '{text}'"
+                )
+            else:
+                pm.warning(f"No {object_type} found matching '{text}'")
+
     def txt001_init(self, widget):
         """ """
         widget.option_box.menu.setTitle("Rename")
@@ -81,7 +110,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "QCheckBox",
             setText="Retain Suffix",
             setObjectName="chk002",
-            setToolTip="Retain the suffix of the selected object(s).",
+            setToolTip="Retain the suffix of the selected object(s) if it matches one defined in Suffix By Type.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Ignore Find",
+            setObjectName="chk008",
+            setToolTip="Ignore the find field and rename all matched objects.",
         )
 
     # The LineEdit text parameter is not emitted on `returnPressed`
@@ -94,15 +129,31 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         regex = widget.ui.txt000.menu.chk001.isChecked()
         ign_case = widget.ui.txt000.menu.chk000.isChecked()
         retain_suffix = widget.ui.txt001.menu.chk002.isChecked()
+        ignore_find = widget.ui.txt001.menu.chk008.isChecked()
+
+        # Get current valid suffixes from property if retain_suffix is enabled
+        valid_suffixes = self.valid_suffixes if retain_suffix else None
 
         selection = pm.selected() or pm.ls()
+
+        # Count objects before rename
+        object_count = len(selection)
+
         self.rename(
             selection,
             to,
-            find,
+            find if not ignore_find else "",
             regex=regex,
             ignore_case=ign_case,
             retain_suffix=retain_suffix,
+            valid_suffixes=valid_suffixes,
+        )
+
+        # Print user-friendly result
+        filter_info = f" matching '{find}'" if find and not ignore_find else ""
+        suffix_info = " (with suffix retention)" if retain_suffix else ""
+        pm.displayInfo(
+            f"Renamed {object_count} object(s){filter_info} to pattern '{to}'{suffix_info}"
         )
 
     def tb000_init(self, widget):

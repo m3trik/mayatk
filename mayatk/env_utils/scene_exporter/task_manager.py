@@ -434,9 +434,14 @@ class _TaskChecksMixin(_TaskDataMixin):
         for obj in AnimUtils.filter_objects_with_keys(keys="visibility"):
             visibility_keys_found = True
 
+            # Set visibility to true before deleting keys
+            obj.visibility.set(True)
+
             # Delete visibility keys
             pm.cutKey(obj, attribute="visibility")
-            log_messages.append(f"Visibility keys deleted for object: {obj}")
+            log_messages.append(
+                f"Visibility set to true and keys deleted for object: {obj}"
+            )
 
         if visibility_keys_found:
             log_messages.append(

@@ -626,6 +626,118 @@ class XformUtils(ptk.HelpMixin):
             pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
 
     @staticmethod
+    def world_aligned_pivot(objects=None, mode="set", pivot_type="manip"):
+        """Get or set world-aligned pivot for objects.
+
+        This function helps manipulate objects with strangely oriented pivots by getting
+        or setting a world-aligned orientation (Y-up, X on X-axis, Z on Z-axis).
+
+        Parameters:
+            objects (str/obj/list/None): The object(s) to work with.
+                                         If None, uses current selection.
+            mode (str): Operation mode:
+                        "get" - Returns the world-aligned pivot position and orientation
+                        "set" - Sets the pivot to world-aligned orientation (default)
+            pivot_type (str): Type of pivot to work with:
+                             "manip" - Temporary manipulator pivot (resets on deselect, default)
+                             "object" - Actual object pivot (permanent until reset)
+
+        Returns:
+            dict/bool: If mode="get", returns dict with 'position' and 'orientation'.
+                      If mode="set", returns True if successful, False otherwise.
+
+        Example:
+            # Get world-aligned pivot info
+            info = world_aligned_pivot(mode="get")
+
+            # Set temporary manip pivot to world-aligned (most common use)
+            world_aligned_pivot()
+
+            # Set actual object pivot to world-aligned
+            world_aligned_pivot(mode="set", pivot_type="object")
+
+            # Work with specific objects
+            world_aligned_pivot(['pCube1', 'pCube2'], mode="set")
+        """
+        # Get the objects
+        if objects is None:
+            selected = pm.selected()
+            if not selected:
+                pm.warning("No objects specified and nothing is selected.")
+                return False if mode == "set" else None
+            objects = selected
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            pm.warning("No valid objects found.")
+            return False if mode == "set" else None
+
+        # Store the original selection
+        original_selection = pm.selected()
+
+        # Ensure all objects are selected
+        pm.select(objects, replace=True)
+
+        # Get the center pivot position from all selected objects
+        pivot_positions = [
+            pm.xform(obj, q=True, rotatePivot=True, worldSpace=True) for obj in objects
+        ]
+        avg_pivot_pos = [sum(coords) / len(coords) for coords in zip(*pivot_positions)]
+
+        if mode == "get":
+            # Return the world-aligned pivot information
+            result = {
+                "position": avg_pivot_pos,
+                "orientation": [0, 0, 0],  # World-aligned orientation
+                "objects": [str(obj) for obj in objects],
+            }
+            pm.select(original_selection, replace=True)
+            return result
+
+        elif mode == "set":
+            if pivot_type == "manip":
+                # Set temporary manipulator pivot to world-aligned orientation
+                # Note: We must keep the selection active for manipPivot to work
+                pm.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
+                # DO NOT restore selection here - manipPivot needs active selection
+                return True
+
+            elif pivot_type == "object":
+                # Set actual object pivot to world-aligned orientation
+                for obj in objects:
+                    # Get current pivot position
+                    pivot_pos = pm.xform(obj, q=True, rotatePivot=True, worldSpace=True)
+
+                    # Reset pivot orientation to world space
+                    pm.xform(
+                        obj,
+                        worldSpace=True,
+                        pivots=pivot_pos,
+                        preserve=True,
+                    )
+
+                    # Explicitly set rotation pivot orientation to world aligned
+                    pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
+                    pm.xform(obj, preserve=True, rotateOrient=(0, 0, 0))
+
+                # Restore selection for object pivot mode
+                pm.select(original_selection, replace=True)
+                return True
+
+            else:
+                pm.warning(
+                    f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'."
+                )
+                pm.select(original_selection, replace=True)
+                return False
+
+        else:
+            pm.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
+            pm.select(original_selection, replace=True)
+            return False
+
+    @staticmethod
     @CoreUtils.undoable
     def bake_pivot(objects, position=False, orientation=False):
         """Bake the pivot orientation and position of the given object(s).

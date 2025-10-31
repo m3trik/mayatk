@@ -13,7 +13,31 @@ from mayatk.core_utils import CoreUtils
 
 
 class AnimUtils(ptk.HelpMixin):
-    """For help on this class use: AnimUtils.help()"""
+    """Animation utilities for Maya.
+
+    For help on this class use: AnimUtils.help()
+
+    BEST PRACTICES FOR GETTING ANIMATION CURVES:
+    ============================================
+
+    When working with animation curves, use these methods to ensure you capture ALL curve types
+    (including visibility, custom attributes, etc.):
+
+    1. For simple object-to-curves conversion:
+       curves = AnimUtils.objects_to_curves(objects, recursive=False)
+
+    2. For common patterns (scene curves, selected keys, object curves):
+       curves = AnimUtils.get_anim_curves(objects=None, selected_keys_only=False, recursive=False)
+
+    3. Both methods use pm.listConnections(type="animCurve") which properly captures all curve types.
+
+    AVOID querying keyframes at the object level for curve operations:
+       - pm.keyframe(obj, query=True, timeChange=True) # May miss some attributes
+
+    PREFERRED approach - work with curves directly:
+       - Get curves first using objects_to_curves() or get_anim_curves()
+       - Then query/modify the curves: pm.keyframe(curve, query=True, timeChange=True)
+    """
 
     # Map frame rate types to their numerical values
     FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
@@ -76,6 +100,59 @@ class AnimUtils(ptk.HelpMixin):
 
         # Return the results as a list, preserving the unique set of animCurves
         return list(anim_curves)
+
+    @classmethod
+    def get_anim_curves(
+        cls,
+        objects: Optional[List["pm.PyNode"]] = None,
+        selected_keys_only: bool = False,
+        recursive: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Get animation curves from objects, selected keys, or all scene curves.
+
+        This is a higher-level convenience method that handles common patterns for getting
+        animation curves. It properly handles visibility and all other attribute types by
+        working directly with animation curve nodes rather than querying at the object level.
+
+        This method should be used when you need to:
+        - Get all curves in a scene
+        - Get curves from selected graph editor keys
+        - Get curves from specific objects (with optional recursion)
+
+        Parameters:
+            objects: Objects to get curves from. If None, uses all scene curves or selected keys.
+            selected_keys_only: If True, gets curves from selected keys in graph editor.
+                               Only applies when objects is None.
+            recursive: Whether to recursively search through children of objects for curves.
+
+        Returns:
+            A list of unique animation curves.
+
+        Example:
+            # Get all animation curves in the scene
+            all_curves = AnimUtils.get_anim_curves()
+
+            # Get curves from selected keys
+            selected_curves = AnimUtils.get_anim_curves(selected_keys_only=True)
+
+            # Get curves from specific objects
+            curves = AnimUtils.get_anim_curves(objects=pm.selected())
+
+            # Get curves from objects and their children
+            curves = AnimUtils.get_anim_curves(objects=pm.selected(), recursive=True)
+        """
+        if objects is None:
+            if selected_keys_only:
+                # Get animation curves from selected keys in graph editor
+                anim_curves = pm.keyframe(query=True, sl=True, name=True)
+                return list(set(anim_curves)) if anim_curves else []
+            else:
+                # Get all animation curves in the scene
+                return pm.ls(type="animCurve")
+        else:
+            # Use existing objects_to_curves method for objects
+            # This uses pm.listConnections which properly gets ALL curve types including visibility
+            return cls.objects_to_curves(objects, recursive=recursive)
 
     @classmethod
     def get_static_curves(
@@ -366,8 +443,9 @@ class AnimUtils(ptk.HelpMixin):
         objects=None,
         frame=None,
         time_range=None,
-        only_move_selected=False,
+        selected_keys_only=False,
         retain_spacing=False,
+        channel_box_attrs_only=False,
     ):
         """Move keyframes to the given frame with comprehensive control options.
 
@@ -376,11 +454,13 @@ class AnimUtils(ptk.HelpMixin):
             frame (int or float, optional): The frame to move keys to.
                                                    If None, uses the current time.
             time_range (tuple, optional): (start_frame, end_frame) to limit which keys to move.
-                                         If None, moves all/only_move_selected keys.
-            only_move_selected (bool): If True, only moves only_move_selected keys. If False, moves all keys
-                                 in the specified time range.
+                                         If None, moves all keys.
+            selected_keys_only (bool): If True, only moves selected keys from the graph editor.
+                                 If False, moves all keys in the specified time range.
             retain_spacing (bool): If True, maintains relative spacing between objects.
                                    If False, moves each object's first key to the target frame.
+            channel_box_attrs_only (bool): If True, only affects attributes selected in the channel box.
+                                    Works in combination with selected_keys_only.
         Returns:
             bool: True if keys were moved successfully, False otherwise.
         """
@@ -398,8 +478,18 @@ class AnimUtils(ptk.HelpMixin):
 
         objects = pm.ls(objects)  # Ensure we have PyMel objects
 
+        # Get channel box attributes if filtering is requested
+        channel_box_attrs = None
+        if channel_box_attrs_only:
+            channel_box_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+            if not channel_box_attrs:
+                pm.warning("No attributes selected in channel box.")
+                return False
+
         # If working with selected keys, validate there are selected keys
-        if only_move_selected:
+        if selected_keys_only:
             all_active_key_times = pm.keyframe(query=True, sl=True, tc=True)
             if not all_active_key_times:
                 pm.warning("No keyframes selected.")
@@ -414,7 +504,7 @@ class AnimUtils(ptk.HelpMixin):
 
             # Find the earliest key across all objects
             for obj in objects:
-                if only_move_selected:
+                if selected_keys_only:
                     keys = pm.keyframe(obj, query=True, name=True, sl=True)
                     for node in keys:
                         if time_range:
@@ -454,9 +544,24 @@ class AnimUtils(ptk.HelpMixin):
 
         for obj in objects:
             # Get keyframes based on selection preference and time range
-            if only_move_selected:
+            if selected_keys_only:
                 # Use AnimUtils pattern for selected keys
                 keys = pm.keyframe(obj, query=True, name=True, sl=True)
+
+                # Filter by channel box attributes if requested
+                if channel_box_attrs_only:
+                    filtered_keys = []
+                    for node in keys:
+                        # Get the attribute name from the curve node
+                        connections = pm.listConnections(
+                            node, plugs=True, destination=True, source=False
+                        )
+                        if connections:
+                            attr_name = connections[0].attrName()
+                            if attr_name in channel_box_attrs:
+                                filtered_keys.append(node)
+                    keys = filtered_keys
+
                 for node in keys:
                     if time_range:
                         active_key_times = pm.keyframe(
@@ -486,31 +591,72 @@ class AnimUtils(ptk.HelpMixin):
                         keys_moved += len(active_key_times)
             else:
                 # Handle all keys in time range
-                if time_range:
-                    keys = pm.keyframe(
-                        obj, query=True, timeChange=True, time=time_range
-                    )
+                if channel_box_attrs_only:
+                    # Move keys only for channel box attributes
+                    for attr in channel_box_attrs:
+                        if not obj.hasAttr(attr):
+                            continue
+
+                        attr_name = f"{obj}.{attr}"
+                        if time_range:
+                            keys = pm.keyframe(
+                                attr_name, query=True, timeChange=True, time=time_range
+                            )
+                        else:
+                            keys = pm.keyframe(attr_name, query=True, timeChange=True)
+
+                        if keys:
+                            # Calculate offset - use global offset if maintaining spacing
+                            if retain_spacing and global_offset is not None:
+                                offset = global_offset
+                            else:
+                                first_key_time = min(keys)
+                                offset = frame - first_key_time
+
+                            # Move the keys
+                            if time_range:
+                                pm.keyframe(
+                                    attr_name,
+                                    edit=True,
+                                    time=time_range,
+                                    relative=True,
+                                    timeChange=offset,
+                                )
+                            else:
+                                pm.keyframe(
+                                    attr_name,
+                                    edit=True,
+                                    relative=True,
+                                    timeChange=offset,
+                                )
+                            keys_moved += len(keys)
                 else:
-                    keys = pm.keyframe(obj, query=True, timeChange=True)
-
-                if keys:
-                    # Calculate offset - use global offset if maintaining spacing
-                    if retain_spacing and global_offset is not None:
-                        offset = global_offset
-                    else:
-                        first_key_time = min(keys)
-                        offset = frame - first_key_time
-
-                    # Move the keys using moveKey
+                    # Move all keys on object
                     if time_range:
-                        pm.moveKey(obj, time=time_range, timeSlice=offset)
+                        keys = pm.keyframe(
+                            obj, query=True, timeChange=True, time=time_range
+                        )
                     else:
-                        pm.moveKey(obj, timeSlice=offset)
+                        keys = pm.keyframe(obj, query=True, timeChange=True)
 
-                    keys_moved += len(keys)
+                    if keys:
+                        # Calculate offset - use global offset if maintaining spacing
+                        if retain_spacing and global_offset is not None:
+                            offset = global_offset
+                        else:
+                            first_key_time = min(keys)
+                            offset = frame - first_key_time
+
+                        # Move the keys using moveKey
+                        if time_range:
+                            pm.moveKey(obj, time=time_range, timeSlice=offset)
+                        else:
+                            pm.moveKey(obj, timeSlice=offset)
+
+                        keys_moved += len(keys)
 
         if keys_moved > 0:
-            selection_type = "selected" if only_move_selected else "all"
+            selection_type = "selected" if selected_keys_only else "all"
             range_info = f" in range {time_range}" if time_range else ""
             spacing_info = " (maintaining relative spacing)" if retain_spacing else ""
             pm.displayInfo(
@@ -528,13 +674,17 @@ class AnimUtils(ptk.HelpMixin):
 
         Parameters:
             objects (list): The objects to set the keyframes on.
-            **kwargs: Attribute/value pairs and optionally 'target_times'.
+            **kwargs: Attribute/value pairs and optionally 'target_times' and 'refresh_channel_box'.
                       If 'target_times' is not provided, the current Maya time is used.
+                      If 'refresh_channel_box' is True, the channel box will be updated after setting keys.
         Example:
             set_keys_for_attributes(objects, translateX=5, translateY=10)
             set_keys_for_attributes(objects, translateX=5, target_times=[10, 15, 20])
+            set_keys_for_attributes(objects, translateX=5, refresh_channel_box=True)
         """
         target_times = kwargs.pop("target_times", [pm.currentTime(query=True)])
+        refresh_channel_box = kwargs.pop("refresh_channel_box", False)
+
         if isinstance(target_times, int):
             target_times = [target_times]
 
@@ -543,6 +693,9 @@ class AnimUtils(ptk.HelpMixin):
                 attr_full_name = f"{obj}.{attr}"
                 for time in target_times:
                     pm.setKeyframe(attr_full_name, time=time, value=value)
+
+        if refresh_channel_box:
+            pm.mel.eval("channelBoxCommand -update;")
 
     @staticmethod
     def filter_objects_with_keys(
@@ -1606,48 +1759,318 @@ class AnimUtils(ptk.HelpMixin):
                             )
 
     @staticmethod
-    def delete_keys(objects, *attributes, time=None):
-        """Deletes keyframes for specified attributes on given objects, optionally within a time range.
+    def parse_time_range(
+        time: Union[None, int, str, Tuple, List],
+        recursive_callback: Optional[callable] = None,
+    ) -> Union[Tuple[float, float], None, List]:
+        """Parse time specification into a time range tuple for keyframe operations.
 
-        This function can delete keyframes for all attributes or specified attributes, and within the entire timeline
-        or a specified time range. The time range can be a single integer (to delete keyframes at a specific time)
-        or a tuple/list of two integers specifying the start and end times.
+        This helper method handles various time specifications and converts them into
+        time ranges suitable for Maya keyframe operations. It supports recursive processing
+        for complex time specifications like pipe-separated strings or multi-element sequences.
 
         Parameters:
-            objects (list): The list of objects from which to delete keyframes.
-            *attributes (str): Variable length argument list of attribute names.
-                               If empty, keyframes for all attributes will be deleted.
-                               Can accept a list by unpacking when calling the function using *
-            time (None, int, tuple, list): Specifies the time range for keyframe deletion.
-                                           Accepts a single integer (specific time),
-                                           a tuple/list of two integers (start and end time),
-                                           or None (entire timeline).
-        Example Usage:
-            delete_keys([obj1, obj2], 'translateX', 'translateY', time=10) # Delete keyframes at time=10 for specified attributes
-            delete_keys([obj1, obj2], time=(5, 15)) # Delete all keyframes between time 5 and 15
-            delete_keys([obj1, obj2], 'rotateX', 'rotateY') # Delete all keyframes for 'rotateX' and 'rotateY'
+            time (None, int, str, tuple, list): Time specification to parse.
+                Accepts:
+                - None or 'all': Returns None (entire timeline)
+                - int: Returns (time, time) for specific frame
+                - 'current': Returns (current_time, current_time)
+                - 'before': Returns (-1000000, current_time - 1)
+                - 'after': Returns (current_time + 1, 1000000)
+                - tuple/list of 2 elements: Returns (start, end) range
+                - tuple/list of 3+ elements: Returns list for recursive processing
+                - Pipe-separated strings: Returns list for recursive processing
+            recursive_callback (callable, optional): Function to call for recursive processing
+                of pipe-separated strings or multi-element sequences. Should accept the same
+                parameters as the calling function.
+
+        Returns:
+            Union[Tuple[float, float], None, List]:
+                - None: Process entire timeline
+                - Tuple[float, float]: (start_time, end_time) range
+                - List: Multiple time values/ranges requiring recursive processing
+
+        Example:
+            # Single frame
+            time_range = parse_time_range(10)  # Returns (10, 10)
+
+            # Current frame
+            time_range = parse_time_range('current')  # Returns (current_time, current_time)
+
+            # Before current frame
+            time_range = parse_time_range('before')  # Returns (-1000000, current_time - 1)
+
+            # Range
+            time_range = parse_time_range((5, 15))  # Returns (5, 15)
+
+            # Multiple frames (returns list for recursive processing)
+            time_values = parse_time_range((1, 5, 10, 20))  # Returns [1, 5, 10, 20]
+
+            # Pipe-separated (returns list for recursive processing)
+            time_values = parse_time_range('before|current')  # Returns ['before', 'current']
         """
-        # Determine time range for deletion
+        # Handle pipe-separated time strings - return list for recursive processing
+        if isinstance(time, str) and "|" in time:
+            return [p.strip() for p in time.split("|")]
+
+        # Handle tuples/lists with more than 2 values - return list for recursive processing
+        if isinstance(time, (list, tuple)) and len(time) > 2:
+            return list(time)
+
+        # Determine time range for single time specification
         time_range = None
-        if isinstance(time, (list, tuple)) and len(time) == 2:
+
+        if isinstance(time, str):
+            time_lower = time.lower()
+            current_time = pm.currentTime(query=True)
+
+            if time_lower == "current":
+                time_range = (current_time, current_time)
+            elif time_lower == "before":
+                # From very early time to just before current
+                time_range = (-1000000, current_time - 1)
+            elif time_lower == "after":
+                # From just after current to very late time
+                time_range = (current_time + 1, 1000000)
+            elif time_lower == "all":
+                time_range = None  # Process all
+        elif isinstance(time, (list, tuple)) and len(time) == 2:
             time_range = (time[0], time[1])
         elif isinstance(time, int):
             time_range = (time, time)
 
+        return time_range
+
+    @staticmethod
+    @CoreUtils.undoable
+    def delete_keys(objects, *attributes, time=None, channel_box_only=False):
+        """Deletes keyframes for specified attributes on given objects, optionally within a time range.
+
+        This function can delete keyframes for all attributes or specified attributes, and within the entire timeline
+        or a specified time range. Supports flexible time specification including single frames, ranges, and
+        combinations using pipe separators or sequences.
+
+        Parameters:
+            objects (list): The list of objects from which to delete keyframes.
+            *attributes (str): Variable length argument list of attribute names.
+                            If empty, keyframes for all attributes will be deleted (unless channel_box_only=True).
+                            Can accept a list by unpacking when calling the function using *
+            time (None, int, str, tuple, list): Specifies the time range for keyframe deletion.
+                    Accepts:
+                    - None or 'all': Delete all keyframes (entire timeline)
+                    - int: Delete keyframes at specific frame
+                    - 'current': Delete keyframes at current frame
+                    - 'before': Delete all keyframes before current frame (excluding current)
+                    - 'after': Delete all keyframes after current frame (excluding current)
+                    - Pipe-separated combinations: 'before|current', 'after|current', etc.
+                    - tuple/list of 2 elements: (start, end) - Delete keyframes in range
+                    - tuple/list of 3+ elements: (t1, t2, t3, ...) - Delete at each frame recursively
+            channel_box_only (bool): If True, only deletes keys for attributes selected in the channel box.
+                                    Ignores the *attributes parameter. Default is False.
+
+        Notes:
+            - Pipe-separated strings are processed recursively (e.g., 'before|current' deletes both ranges)
+            - Tuples with more than 2 elements are processed as individual frames recursively
+            - All string values are case-insensitive
+            - When channel_box_only=True, no attributes are selected in channel box will result in no deletion
+
+        Example Usage:
+            delete_keys([obj1, obj2], 'translateX', 'translateY', time=10) # Delete keyframes at frame 10
+            delete_keys([obj1, obj2], time='current') # Delete keyframes at current frame
+            delete_keys([obj1, obj2], time='before') # Delete all keyframes before current (excluding current)
+            delete_keys([obj1, obj2], time='after') # Delete all keyframes after current (excluding current)
+            delete_keys([obj1, obj2], time='before|current') # Delete up to and including current
+            delete_keys([obj1, obj2], time='after|current') # Delete from and after current
+            delete_keys([obj1, obj2], time='before|current|after') # Delete all keyframes (equivalent to 'all')
+            delete_keys([obj1, obj2], time=(5, 15)) # Delete all keyframes between frames 5 and 15
+            delete_keys([obj1, obj2], time=(1, 5, 10, 20)) # Delete keyframes at frames 1, 5, 10, and 20
+            delete_keys([obj1, obj2], 'rotateX', 'rotateY') # Delete all keyframes for specified attributes
+            delete_keys([obj1, obj2], channel_box_only=True) # Delete only for channel box selected attributes
+        """
+        if objects is None:
+            objects = pm.selected()
+
+        objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return
+
+        # Handle channel box filtering
+        if channel_box_only:
+            cb_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+            if not cb_attrs:
+                pm.warning("No attributes selected in channel box.")
+                return
+            # Override attributes with channel box selection
+            attributes = cb_attrs
+
+        # Parse time range using helper method
+        time_range = AnimUtils.parse_time_range(time)
+
+        # Handle recursive cases (pipe-separated or multi-element sequences)
+        if isinstance(time_range, list):
+            for t in time_range:
+                AnimUtils.delete_keys(
+                    objects, *attributes, time=t, channel_box_only=False
+                )
+            return
+
         for obj in objects:
-            if attributes:
-                # Delete keyframes for specified attributes
+            if attributes:  # Delete keyframes for specified attributes
                 for attr in attributes:
                     if time_range:
                         pm.cutKey(f"{obj}.{attr}", time=time_range, clear=True)
                     else:
                         pm.cutKey(f"{obj}.{attr}", clear=True)
-            else:
-                # Delete keyframes for all attributes
+            else:  # Delete keyframes for all attributes
                 if time_range:
                     pm.cutKey(obj, time=time_range, clear=True)
                 else:
                     pm.cutKey(obj, clear=True)
+
+    @staticmethod
+    def select_keys(
+        objects: Optional[List[Union[str, "pm.PyNode"]]] = None,
+        *attributes: str,
+        time: Union[None, int, str, Tuple, List] = None,
+        channel_box_only: bool = False,
+        add_to_selection: bool = False,
+    ) -> int:
+        """Selects keyframes for specified attributes on given objects, optionally within a time range.
+
+        This function selects keyframes for all attributes or specified attributes, and within the entire timeline
+        or a specified time range. Supports flexible time specification including single frames, ranges, and
+        combinations using pipe separators or sequences.
+
+        Parameters:
+            objects (list, optional): The list of objects from which to select keyframes. If None, uses selection.
+            *attributes (str): Variable length argument list of attribute names.
+                            If empty, keyframes for all attributes will be selected (unless channel_box_only=True).
+                            Can accept a list by unpacking when calling the function using *
+            time (None, int, str, tuple, list): Specifies the time range for keyframe selection.
+                    Accepts:
+                    - None or 'all': Select all keyframes (entire timeline)
+                    - int: Select keyframes at specific frame
+                    - 'current': Select keyframes at current frame
+                    - 'before': Select all keyframes before current frame (excluding current)
+                    - 'after': Select all keyframes after current frame (excluding current)
+                    - Pipe-separated combinations: 'before|current', 'after|current', etc.
+                    - tuple/list of 2 elements: (start, end) - Select keyframes in range
+                    - tuple/list of 3+ elements: (t1, t2, t3, ...) - Select at each frame recursively
+            channel_box_only (bool): If True, only selects keys for attributes selected in the channel box.
+                                    Ignores the *attributes parameter. Default is False.
+            add_to_selection (bool): If True, adds to existing keyframe selection. If False, replaces selection.
+                                    Default is False.
+
+        Returns:
+            int: Number of keyframes selected.
+
+        Notes:
+            - Pipe-separated strings are processed recursively (e.g., 'before|current' selects both ranges)
+            - Tuples with more than 2 elements are processed as individual frames recursively
+            - All string values are case-insensitive
+            - When channel_box_only=True, no attributes selected in channel box will result in no selection
+
+        Example Usage:
+            select_keys([obj1, obj2], 'translateX', 'translateY', time=10) # Select keyframes at frame 10
+            select_keys([obj1, obj2], time='current') # Select keyframes at current frame
+            select_keys([obj1, obj2], time='before') # Select all keyframes before current (excluding current)
+            select_keys([obj1, obj2], time='after') # Select all keyframes after current (excluding current)
+            select_keys([obj1, obj2], time='before|current') # Select up to and including current
+            select_keys([obj1, obj2], time='after|current') # Select from and after current
+            select_keys([obj1, obj2], time='before|current|after') # Select all keyframes (equivalent to 'all')
+            select_keys([obj1, obj2], time=(5, 15)) # Select all keyframes between frames 5 and 15
+            select_keys([obj1, obj2], time=(1, 5, 10, 20)) # Select keyframes at frames 1, 5, 10, and 20
+            select_keys([obj1, obj2], 'rotateX', 'rotateY') # Select all keyframes for specified attributes
+            select_keys([obj1, obj2], channel_box_only=True) # Select only for channel box selected attributes
+            select_keys([obj1, obj2], time='current', add_to_selection=True) # Add current frame keys to selection
+        """
+        if objects is None:
+            objects = pm.selected()
+
+        objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return 0
+
+        # Handle channel box filtering
+        if channel_box_only:
+            cb_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+            if not cb_attrs:
+                pm.warning("No attributes selected in channel box.")
+                return 0
+            # Override attributes with channel box selection
+            attributes = cb_attrs
+
+        # Parse time range using helper method
+        time_range = AnimUtils.parse_time_range(time)
+
+        # Handle recursive cases (pipe-separated or multi-element sequences)
+        if isinstance(time_range, list):
+            total_selected = 0
+            for i, t in enumerate(time_range):
+                # Only replace selection on first iteration, add to selection afterward
+                add = add_to_selection or (i > 0)
+                count = AnimUtils.select_keys(
+                    objects,
+                    *attributes,
+                    time=t,
+                    channel_box_only=False,
+                    add_to_selection=add,
+                )
+                total_selected += count
+            return total_selected
+
+        # Clear selection if not adding to it
+        if not add_to_selection:
+            pm.selectKey(clear=True)
+
+        keys_selected = 0
+
+        for obj in objects:
+            if attributes:  # Select keyframes for specified attributes
+                for attr in attributes:
+                    if time_range:
+                        pm.selectKey(f"{obj}.{attr}", time=time_range, add=True)
+                        # Count selected keys
+                        selected = pm.keyframe(
+                            f"{obj}.{attr}", query=True, selected=True, timeChange=True
+                        )
+                        if selected:
+                            keys_selected += len(selected)
+                    else:
+                        pm.selectKey(f"{obj}.{attr}", add=True)
+                        # Count selected keys
+                        selected = pm.keyframe(
+                            f"{obj}.{attr}", query=True, selected=True, timeChange=True
+                        )
+                        if selected:
+                            keys_selected += len(selected)
+            else:  # Select keyframes for all attributes
+                if time_range:
+                    pm.selectKey(obj, time=time_range, add=True)
+                    # Count selected keys
+                    selected = pm.keyframe(
+                        obj, query=True, selected=True, timeChange=True
+                    )
+                    if selected:
+                        keys_selected += len(selected)
+                else:
+                    pm.selectKey(obj, add=True)
+                    # Count selected keys
+                    selected = pm.keyframe(
+                        obj, query=True, selected=True, timeChange=True
+                    )
+                    if selected:
+                        keys_selected += len(selected)
+
+        return keys_selected
 
     @staticmethod
     def get_frame_ranges(
@@ -1754,6 +2177,298 @@ class AnimUtils(ptk.HelpMixin):
                     pm.setKeyframe(attr, time=end_frame)
 
         pm.displayInfo("Keyframes tied to the range for keyed attributes.")
+
+    @staticmethod
+    @CoreUtils.undoable
+    def untie_keyframes(
+        objects: List["pm.nt.Transform"] = None, absolute: bool = False
+    ):
+        """Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
+
+        This method intelligently removes keyframes at the start and end of the animation range
+        that were likely added by tie_keyframes. It preserves actual animation keys by checking
+        if the next/previous keyframe has a different value (indicating real animation).
+
+        Parameters:
+            objects (List[pm.nt.Transform], optional): List of PyMel transform nodes to process.
+                If None, all keyed objects in the scene will be used.
+            absolute (bool, optional): If True, uses the absolute start and end keyframes
+                across all objects as the range. If False, uses the scene's playback range.
+                Default is False.
+
+        Example:
+            # Remove bookend keys added by tie_keyframes
+            untie_keyframes()
+
+            # Remove bookend keys for specific objects
+            untie_keyframes([obj1, obj2])
+
+            # Use absolute keyframe range instead of playback range
+            untie_keyframes(absolute=True)
+        """
+        if objects is None:  # Get all objects that have keyframes
+            objects = pm.ls(type="transform")
+            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+
+        if not objects:
+            pm.warning("No keyed objects found.")
+            return
+
+        # Determine the keyframe range
+        if absolute:  # Use the absolute start and end keyframes of all objects
+            all_keyframes = pm.keyframe(objects, query=True, timeChange=True)
+            if not all_keyframes:
+                pm.warning("No keyframes found on any objects.")
+                return
+            range_start = min(all_keyframes)
+            range_end = max(all_keyframes)
+        else:  # Use the start and end frames of the entire scene's playback range
+            range_start = pm.playbackOptions(query=True, minTime=True)
+            range_end = pm.playbackOptions(query=True, maxTime=True)
+
+        keys_removed = 0
+
+        for obj in objects:
+            # Get all the attributes that have keyframes
+            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+
+            if keyed_attrs:
+                for attr in keyed_attrs:
+                    # Get all keyframe times for this attribute
+                    keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
+
+                    if not keyframe_times or len(keyframe_times) < 2:
+                        continue  # Need at least 2 keys to have bookends
+
+                    keyframe_times = sorted(keyframe_times)
+
+                    # Check start keyframe (use tolerance for float comparison)
+                    if (
+                        abs(keyframe_times[0] - range_start) < 1e-5
+                        and len(keyframe_times) > 1
+                    ):
+                        # Get values of first two keyframes
+                        start_value = pm.keyframe(
+                            attr,
+                            query=True,
+                            time=(keyframe_times[0],),
+                            valueChange=True,
+                        )[0]
+                        next_value = pm.keyframe(
+                            attr,
+                            query=True,
+                            time=(keyframe_times[1],),
+                            valueChange=True,
+                        )[0]
+
+                        # If values are the same, this is likely a bookend key
+                        if abs(start_value - next_value) < 1e-5:
+                            pm.cutKey(attr, time=(range_start, range_start), clear=True)
+                            keys_removed += 1
+
+                    # Check end keyframe (re-query in case we removed the start key)
+                    keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
+                    if keyframe_times and len(keyframe_times) > 1:
+                        keyframe_times = sorted(keyframe_times)
+
+                        if abs(keyframe_times[-1] - range_end) < 1e-5:
+                            # Get values of last two keyframes
+                            end_value = pm.keyframe(
+                                attr,
+                                query=True,
+                                time=(keyframe_times[-1],),
+                                valueChange=True,
+                            )[0]
+                            prev_value = pm.keyframe(
+                                attr,
+                                query=True,
+                                time=(keyframe_times[-2],),
+                                valueChange=True,
+                            )[0]
+
+                            # If values are the same, this is likely a bookend key
+                            if abs(end_value - prev_value) < 1e-5:
+                                pm.cutKey(attr, time=(range_end, range_end), clear=True)
+                                keys_removed += 1
+
+        if keys_removed > 0:
+            pm.displayInfo(f"Removed {keys_removed} bookend keyframe(s).")
+        else:
+            pm.displayInfo("No bookend keyframes found to remove.")
+
+    @classmethod
+    @CoreUtils.undoable
+    def insert_keyframe_gap(
+        cls,
+        duration: Union[int, Tuple[int, int]],
+        objects: Optional[List["pm.PyNode"]] = None,
+        selected_keys_only: bool = False,
+    ):
+        """Create a gap in keyframes by moving keyframes forward in time.
+
+        This method shifts keyframes to create an empty gap at a specified location in the timeline.
+        Keys AFTER the gap start will be moved forward to ensure the full gap range is clear.
+        The actual shift amount is calculated based on where the first key after gap_start is located,
+        ensuring it moves to gap_end (or beyond).
+
+        Parameters:
+            duration (int or tuple): Either:
+                                    - An int: number of frames for the gap. Uses current timeline
+                                      position as the start. The first key after current time will
+                                      move to (current_time + duration), with all subsequent keys
+                                      maintaining their relative spacing.
+                                    - A tuple (start, end): Creates a gap from start to end frames.
+                                      The first key after 'start' will move to 'end', with all
+                                      subsequent keys maintaining their relative spacing. This ensures
+                                      the entire range from start to end is cleared.
+            objects (list, optional): Objects to affect. If None, uses all animated objects in the scene.
+            selected_keys_only (bool): If True, only affects selected keyframes in the graph editor.
+
+        Returns:
+            dict: Summary with 'keys_moved' count, 'affected_objects' list, gap info, and actual offset used.
+
+        Example:
+            # Create a 10-frame gap starting at current time
+            # If current time is 50 and first key after 50 is at 52, keys move by 8 frames
+            # so the key at 52 ends up at 60
+            insert_keyframe_gap(duration=10)
+
+            # Create a gap from frame 1700 to 2100
+            # Keys at 1700 stay at 1700. If first key after 1700 is at 1900,
+            # it moves to 2100 (shift of 200), clearing frames 1701-2100
+            insert_keyframe_gap(duration=(1700, 2100))
+
+            # Create a gap only for selected objects
+            insert_keyframe_gap(duration=5, objects=pm.selected())
+        """
+        # Parse duration parameter
+        if isinstance(duration, tuple):
+            if len(duration) != 2:
+                pm.warning("Duration tuple must have exactly 2 elements (start, end).")
+                return {"keys_moved": 0, "affected_objects": []}
+            gap_start, gap_end = duration
+            gap_duration = gap_end - gap_start
+            if gap_duration <= 0:
+                pm.warning(
+                    f"Duration end frame ({gap_end}) must be greater than start frame ({gap_start})."
+                )
+                return {"keys_moved": 0, "affected_objects": []}
+            # When using tuple, we move keys at or after gap_start
+            move_from_frame = gap_start
+        else:
+            gap_duration = duration
+            if gap_duration <= 0:
+                pm.warning("Gap duration must be greater than 0.")
+                return {"keys_moved": 0, "affected_objects": []}
+            # When using int, use current time as the start
+            gap_start = int(pm.currentTime(query=True))
+            gap_end = gap_start + gap_duration
+            move_from_frame = gap_start
+
+        # Get animation curves to work with
+        anim_curves = cls.get_anim_curves(
+            objects=objects, selected_keys_only=selected_keys_only, recursive=False
+        )
+
+        if not anim_curves:
+            if selected_keys_only:
+                pm.warning("No keyframes selected.")
+            elif objects:
+                pm.warning("No animation found on specified objects.")
+            else:
+                pm.warning("No animated objects found.")
+            return {"keys_moved": 0, "affected_objects": []}
+
+        # Define the time range for keys to move (everything AFTER move_from_frame, not including it)
+        # Use a large upper bound to capture all keyframes beyond the playback range
+        max_time = pm.playbackOptions(query=True, maxTime=True)
+        # Add a small epsilon to exclude keys exactly at move_from_frame
+        time_range = (move_from_frame + 0.001, max_time + 10000)
+
+        # First pass: find the earliest key after gap_start across all curves
+        earliest_key = None
+        for curve in anim_curves:
+            if selected_keys_only:
+                key_times = pm.keyframe(
+                    curve, query=True, sl=True, timeChange=True, time=time_range
+                )
+            else:
+                key_times = pm.keyframe(
+                    curve, query=True, timeChange=True, time=time_range
+                )
+
+            if key_times:
+                curve_earliest = min(key_times)
+                if earliest_key is None or curve_earliest < earliest_key:
+                    earliest_key = curve_earliest
+
+        # If no keys found, nothing to do
+        if earliest_key is None:
+            pm.warning(f"No keyframes found after frame {move_from_frame}.")
+            return {
+                "keys_moved": 0,
+                "affected_objects": [],
+                "gap_start": gap_start,
+                "gap_end": gap_end,
+                "gap_duration": gap_duration,
+            }
+
+        # Calculate the offset needed to move the earliest key to gap_end
+        # This ensures the full gap range is cleared
+        actual_offset = gap_end - earliest_key
+
+        keys_moved = 0
+        affected_objects_set = set()
+
+        # Second pass: move all keys by the calculated offset
+        for curve in anim_curves:
+            if selected_keys_only:
+                key_times = pm.keyframe(
+                    curve, query=True, sl=True, timeChange=True, time=time_range
+                )
+            else:
+                key_times = pm.keyframe(
+                    curve, query=True, timeChange=True, time=time_range
+                )
+
+            if key_times:
+                # Move these keys forward by actual_offset
+                pm.keyframe(
+                    curve,
+                    edit=True,
+                    time=(min(key_times), max(key_times)),
+                    relative=True,
+                    timeChange=actual_offset,
+                )
+                keys_moved += len(key_times)
+
+                # Track the object this curve is connected to
+                connections = pm.listConnections(curve, source=False, destination=True)
+                if connections:
+                    affected_objects_set.update(connections)
+
+        affected_objects = list(affected_objects_set)
+
+        # Report results
+        if keys_moved > 0:
+            selection_type = "selected" if selected_keys_only else "all"
+            pm.displayInfo(
+                f"Created gap from frame {gap_start} to {gap_end}. "
+                f"First key was at {earliest_key}, moved {keys_moved} {selection_type} keyframes "
+                f"by {actual_offset} frames on {len(affected_objects)} objects."
+            )
+        else:
+            pm.warning(f"No keyframes found after frame {move_from_frame}.")
+
+        return {
+            "keys_moved": keys_moved,
+            "affected_objects": affected_objects,
+            "gap_start": gap_start,
+            "gap_end": gap_end,
+            "gap_duration": gap_duration,
+            "actual_offset": actual_offset,
+            "earliest_key": earliest_key,
+        }
 
     @staticmethod
     def create_playblast(

@@ -31,6 +31,7 @@ class Naming(ptk.HelpMixin):
         regex: bool = False,
         ignore_case: bool = False,
         retain_suffix: bool = False,
+        valid_suffixes: Optional[List[str]] = None,
     ) -> None:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -53,6 +54,8 @@ class Naming(ptk.HelpMixin):
             regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
             ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
             retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
+            valid_suffixes (Optional[List[str]]): List of valid suffixes to retain. If provided, only these suffixes will be retained.
+                If None, any suffix (text after last underscore) will be retained. Default is None.
 
         Returns:
             None: Objects are renamed in the scene directly.
@@ -118,6 +121,9 @@ class Naming(ptk.HelpMixin):
                 suffix = ""
                 if "_" in oldName:
                     suffix = oldName[oldName.rfind("_") :]
+                    # If valid_suffixes is provided, only retain if suffix is in the list
+                    if valid_suffixes is not None and suffix not in valid_suffixes:
+                        suffix = ""
                     # Avoid duplicate suffix
                     if suffix and not newName.endswith(suffix):
                         newName += suffix
