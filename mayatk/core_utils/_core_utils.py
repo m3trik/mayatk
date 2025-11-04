@@ -447,6 +447,7 @@ class CoreUtils(ptk.HelpMixin):
         include_locked=False,
         include_nonkeyable=False,
         include_object_name=False,
+        as_group=False,
     ):
         """Retrieves the current values of specified attributes from the channel box for given objects.
 
@@ -456,13 +457,24 @@ class CoreUtils(ptk.HelpMixin):
             include_locked (bool, optional): Includes locked attributes in the results.
             include_nonkeyable (bool, optional): Includes non-keyable attributes in the results.
             include_object_name (bool, optional): Returns full attribute names including the object name if True.
+            as_group (bool, optional): If True, returns a flat dict where later objects overwrite earlier ones.
+                                      If False (default), returns nested dict preserving each object's unique values.
 
         Returns:
-            dict: Dictionary with attribute names as keys and their current values as values.
+            dict: If as_group=False (default): {obj_name: {attr: value, ...}, ...}
+                  If as_group=True: {attr: value, ...} (flat dict, later objects overwrite earlier ones)
 
         Example:
-            selected_attributes = get_channel_box_attributes(objects, 'translateX', 'rotateY', include_object_name=True)
-            selected_attributes = get_channel_box_attributes(objects, include_object_name=False)
+            # Per-object dict (default - preserves each object's unique values)
+            attrs = get_channel_box_attributes(objects)
+            # Returns: {'pCube1': {'translateX': 5.0}, 'pCube2': {'translateX': 10.0}}
+
+            # Flat dict (last object's values win)
+            attrs = get_channel_box_attributes(objects, as_group=True)
+            # Returns: {'translateX': 10.0}
+
+            # With specific attributes
+            attrs = get_channel_box_attributes(objects, 'translateX', 'rotateY')
         """
         channel_box = pm.melGlobals["gChannelBoxName"]
         attributes_dict = {}
@@ -482,10 +494,20 @@ class CoreUtils(ptk.HelpMixin):
                 attrs += pm.listAttr(obj, keyable=False)
 
             # Fetch attribute values
-            for attr in attrs:
-                attr_name = f"{obj}.{attr}" if include_object_name else attr
-                value = pm.getAttr(f"{obj}.{attr}")
-                attributes_dict[attr_name] = value
+            if as_group:
+                # Flat mode: later objects overwrite earlier ones
+                for attr in attrs:
+                    attr_name = f"{obj}.{attr}" if include_object_name else attr
+                    value = pm.getAttr(f"{obj}.{attr}")
+                    attributes_dict[attr_name] = value
+            else:
+                # Per-object mode (default): preserve each object's unique values
+                obj_attrs = {}
+                for attr in attrs:
+                    value = pm.getAttr(f"{obj}.{attr}")
+                    obj_attrs[attr] = value
+                if obj_attrs:
+                    attributes_dict[str(obj)] = obj_attrs
 
         return attributes_dict
 

@@ -669,30 +669,89 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def set_keys_for_attributes(objects, **kwargs):
+    def set_keys_for_attributes(
+        objects, target_times=None, refresh_channel_box=False, **kwargs
+    ):
         """Sets keyframes for the specified attributes on given objects at given times.
+
+        Automatically detects whether to apply the same values to all objects (shared mode)
+        or different values per object (per-object mode) based on the data structure.
 
         Parameters:
             objects (list): The objects to set the keyframes on.
-            **kwargs: Attribute/value pairs and optionally 'target_times' and 'refresh_channel_box'.
-                      If 'target_times' is not provided, the current Maya time is used.
-                      If 'refresh_channel_box' is True, the channel box will be updated after setting keys.
-        Example:
-            set_keys_for_attributes(objects, translateX=5, translateY=10)
-            set_keys_for_attributes(objects, translateX=5, target_times=[10, 15, 20])
-            set_keys_for_attributes(objects, translateX=5, refresh_channel_box=True)
-        """
-        target_times = kwargs.pop("target_times", [pm.currentTime(query=True)])
-        refresh_channel_box = kwargs.pop("refresh_channel_box", False)
+            target_times (int/list, optional): Frame(s) to set keys at. Default: current time.
+            refresh_channel_box (bool, optional): Update channel box after setting keys. Default: False.
+            **kwargs: Can be used in two modes:
 
-        if isinstance(target_times, int):
+                SHARED MODE - Same values to all objects:
+                    Attribute names as keys with their values.
+
+                PER-OBJECT MODE - Different values per object:
+                    Pass the per-object dictionary unpacked. The function auto-detects this mode when
+                    the first kwarg value is a dict containing attribute/value pairs.
+                    Format when unpacking: {obj_name: {attr: value, ...}, ...}
+
+        Example:
+            # Shared mode - same values to all objects
+            set_keys_for_attributes([obj1, obj2], translateX=5, translateY=10)
+            set_keys_for_attributes(objects, target_times=[10, 15, 20], translateX=5)
+
+            # Per-object mode - different values per object (auto-detected)
+            data = {'pCube1': {'translateX': 5.0}, 'pCube2': {'translateX': 10.0}}
+            set_keys_for_attributes([obj1, obj2], **data)
+
+            # With times and refresh
+            set_keys_for_attributes(objects, target_times=10, refresh_channel_box=True, translateX=5)
+        """
+        if target_times is None:
+            target_times = [pm.currentTime(query=True)]
+        elif isinstance(target_times, int):
             target_times = [target_times]
 
-        for obj in pm.ls(objects):
-            for attr, value in kwargs.items():
-                attr_full_name = f"{obj}.{attr}"
-                for time in target_times:
-                    pm.setKeyframe(attr_full_name, time=time, value=value)
+        # Auto-detect per-object mode: if first remaining kwarg value is a dict of attributes
+        per_object_mode = False
+        if kwargs:
+            first_value = next(iter(kwargs.values()))
+            # Per-object mode if the value is a dict (and likely contains attribute mappings)
+            if isinstance(first_value, dict):
+                per_object_mode = True
+
+        if per_object_mode:
+            # Per-object mode: Each object gets its specific attribute values
+            # kwargs structure: {obj_name: {attr: value, ...}, ...}
+            per_object_data = kwargs
+
+            for obj in pm.ls(objects):
+                obj_name = str(obj)
+
+                # Try to find matching stored data
+                obj_attrs = per_object_data.get(obj_name)
+
+                if not obj_attrs:
+                    # Try short name if full path didn't match
+                    short_name = obj.nodeName()
+                    obj_attrs = per_object_data.get(short_name)
+
+                    # Try matching stored short names against current long name
+                    if not obj_attrs:
+                        for stored_name in per_object_data.keys():
+                            if stored_name.split("|")[-1] == short_name:
+                                obj_attrs = per_object_data.get(stored_name)
+                                break
+
+                if obj_attrs:
+                    for attr, value in obj_attrs.items():
+                        attr_full_name = f"{obj}.{attr}"
+                        for time in target_times:
+                            pm.setKeyframe(attr_full_name, time=time, value=value)
+        else:
+            # Shared mode: All objects get the same attribute values
+            # kwargs structure: {attr: value, attr2: value2, ...}
+            for obj in pm.ls(objects):
+                for attr, value in kwargs.items():
+                    attr_full_name = f"{obj}.{attr}"
+                    for time in target_times:
+                        pm.setKeyframe(attr_full_name, time=time, value=value)
 
         if refresh_channel_box:
             pm.mel.eval("channelBoxCommand -update;")
