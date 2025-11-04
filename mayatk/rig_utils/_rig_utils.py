@@ -212,8 +212,9 @@ class RigUtils(ptk.HelpMixin):
             mesh_shape = obj.getShape()
             vertices = mesh_shape.vtx[:] if mesh_shape else None
             orig_parent = pm.listRelatives(obj, parent=True)
+            is_group = NodeUtils.is_group(obj)
 
-            if not NodeUtils.is_group(obj):
+            if not is_group:
                 XformUtils.bake_pivot(obj, position=True, orientation=True)
 
             matrix = XformUtils.get_manip_pivot_matrix(obj, ws=True)
@@ -224,11 +225,13 @@ class RigUtils(ptk.HelpMixin):
             if parent:
                 grp = pm.group(em=True)
                 pm.delete(pm.parentConstraint(loc, grp))
-                pm.parent(loc, grp)
-                pm.parent(obj, loc)
 
+                # Freeze locator BEFORE parenting to avoid connection issues
                 if freeze_locator:
                     XformUtils.freeze_transforms(loc, normal=True)
+
+                pm.parent(loc, grp)
+                pm.parent(obj, loc)
 
                 if orig_parent:
                     pm.parent(grp, orig_parent)
@@ -236,15 +239,18 @@ class RigUtils(ptk.HelpMixin):
             if vertices:
                 pm.polyNormalPerVertex(vertices, unFreezeNormal=True)
 
-            # Freeze object after hierarchy is set up
-            if freeze_object:
+            # Freeze object after hierarchy is set up (but not groups)
+            if freeze_object and not is_group:
                 XformUtils.freeze_transforms(obj, normal=True)
 
             # Rename group, locator, and object using the clean base name
+            # IMPORTANT: Reassign variables after renaming to update PyMEL references
             if parent:
-                pm.rename(grp, f"{base_name_stripped}{grp_suffix}")
-            pm.rename(loc, f"{base_name_stripped}{loc_suffix}")
-            pm.rename(obj, f"{base_name_stripped}{obj_suffix}")
+                grp = pm.rename(grp, f"{base_name_stripped}{grp_suffix}")
+            loc = pm.rename(loc, f"{base_name_stripped}{loc_suffix}")
+            # Only apply obj_suffix if the object is not a group
+            if not is_group:
+                obj = pm.rename(obj, f"{base_name_stripped}{obj_suffix}")
 
             if parent:
                 XformUtils.freeze_transforms(grp, scale=True)

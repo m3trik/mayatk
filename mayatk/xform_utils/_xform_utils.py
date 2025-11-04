@@ -1363,29 +1363,6 @@ class XformUtils(ptk.HelpMixin):
             )
         return ptk.format_return(result, objects)
 
-    @staticmethod
-    def hash_points(points, precision=4):
-        """Hash the given list of point values.
-
-        Parameters:
-            points (list): A list of point values as tuples.
-            precision (int): determines the number of decimal places that are retained
-                    in the fixed-point representation. For example, with a value of 4, the
-                    fixed-point representation would retain 4 decimal place.
-        Returns:
-            (list) list(s) of hashed tuples.
-        """
-        nested = ptk.nested_depth(points) > 1
-        sets = points if nested else [points]
-
-        def clamp(p):
-            return int(p * 10**precision)
-
-        result = []
-        for pset in sets:
-            result.append([hash(tuple(map(clamp, i))) for i in pset])
-        return ptk.format_return(result, nested)
-
     @classmethod
     def get_matching_verts(cls, a, b, world_space=False):
         """Find any vertices which point locations match between two given mesh.
@@ -1399,7 +1376,7 @@ class XformUtils(ptk.HelpMixin):
             (list) nested tuples with int values representing matching vertex pairs.
         """
         vert_pos_a, vert_pos_b = cls.get_vertex_positions([a, b], world_space)
-        hash_a, hash_b = cls.hash_points([vert_pos_a, vert_pos_b])
+        hash_a, hash_b = ptk.hash_points([vert_pos_a, vert_pos_b])
 
         matching = set(hash_a).intersection(hash_b)
         return [
