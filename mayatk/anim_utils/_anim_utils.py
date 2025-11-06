@@ -930,11 +930,12 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def invert_selected_keys(time=1, relative=True, delete_original=False):
+    def invert_selected_keys(time=None, relative=True, delete_original=False):
         """Duplicate any selected keyframes and paste them inverted at the given time.
 
         Parameters:
-            time (int): The desired start time for the inverted keys.
+            time (int, optional): The desired start time for the inverted keys.
+                If None, uses the earliest selected keyframe time (default is None).
             relative (bool): Start time position as relative or absolute.
             delete_original (bool): Delete the original keyframes after inverting.
 
@@ -951,9 +952,15 @@ class AnimUtils(ptk.HelpMixin):
             raise RuntimeError("No keyframes selected.")
 
         maxTime = max(allActiveKeyTimes)
+        minTime = min(allActiveKeyTimes)
+
+        # Use earliest keyframe time if time is None
+        if time is None:
+            time = minTime if not relative else 0
+
         inversionPoint = maxTime + time if relative else time
 
-        # Store keyframe data
+        # Store keyframe data including tangent information and original times
         keyframe_data = []
         for obj in selection:
             keys = pm.keyframe(obj, query=True, name=True, sl=True)
@@ -962,45 +969,69 @@ class AnimUtils(ptk.HelpMixin):
                 for t in activeKeyTimes:
                     keyVal = pm.keyframe(node, query=True, time=(t,), eval=True)[0]
                     invertedTime = inversionPoint - (t - maxTime)
-                    keyframe_data.append((node, t, keyVal, invertedTime))
 
-        # Optionally delete original keyframes
-        if delete_original:
-            for obj in selection:
-                keys = pm.keyframe(obj, query=True, name=True, sl=True)
-                for node in keys:
-                    pm.cutKey(
-                        node, time=(min(allActiveKeyTimes), max(allActiveKeyTimes))
+                    # Store tangent info before potentially deleting the keyframe
+                    inAngle = None
+                    outAngle = None
+                    try:
+                        in_angles = pm.keyTangent(
+                            node, query=True, time=(t,), inAngle=True
+                        )
+                        out_angles = pm.keyTangent(
+                            node, query=True, time=(t,), outAngle=True
+                        )
+                        if in_angles and out_angles:
+                            inAngle = in_angles[0]
+                            outAngle = out_angles[0]
+                    except:
+                        pass
+
+                    keyframe_data.append(
+                        (node, t, keyVal, invertedTime, inAngle, outAngle)
                     )
 
-        # Create inverted keyframes
-        for node, t, keyVal, invertedTime in keyframe_data:
+        # Create inverted keyframes FIRST
+        for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data:
             pm.setKeyframe(node, time=invertedTime, value=keyVal)
-            tangent_info = pm.keyTangent(
-                node, query=True, time=t, inAngle=True, outAngle=True
-            )
-            if tangent_info:
-                inAngle, outAngle = tangent_info
-                inAngleVal = -outAngle[0] if isinstance(outAngle, list) else -outAngle
-                outAngleVal = -inAngle[0] if isinstance(inAngle, list) else -inAngle
+
+            # Apply inverted tangents if they were stored
+            if inAngle is not None and outAngle is not None:
+                inAngleVal = -outAngle
+                outAngleVal = -inAngle
                 pm.keyTangent(
                     node,
                     edit=True,
-                    time=invertedTime,
+                    time=(invertedTime,),
                     inAngle=inAngleVal,
                     outAngle=outAngleVal,
                 )
+
+        # Delete original keyframes AFTER creating inverted ones
+        if delete_original:
+            # Build a set of (node, invertedTime) pairs to protect from deletion
+            inverted_positions = {
+                (node, round(invertedTime, 3))
+                for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data
+            }
+
+            for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data:
+                # Only delete the original keyframe if no inverted keyframe exists at that position
+                rounded_t = round(t, 3)
+                if (node, rounded_t) not in inverted_positions:
+                    pm.cutKey(node, time=(t, t))
 
     @staticmethod
     @CoreUtils.undoable
     def stagger_keyframes(
         objects: list,
         start_frame: int = None,
-        interval: Union[int, Tuple[int, int]] = None,
-        offset: float = 0,
+        spacing: Union[int, float] = 0,
+        use_intervals: bool = False,
+        avoid_overlap: bool = False,
         smooth_tangents: bool = False,
         invert: bool = False,
         group_overlapping: bool = False,
+        ignore: Union[str, List[str]] = None,
     ):
         """Stagger the keyframes of selected objects with various positioning controls.
 
@@ -1009,22 +1040,31 @@ class AnimUtils(ptk.HelpMixin):
         Parameters:
             objects (list): List of objects whose keyframes need to be staggered.
             start_frame (int, optional): Override starting frame. If None, uses earliest keyframe.
-            interval (int or tuple, optional): If set, place each animation at regular frame intervals
-                (e.g., 100 = animations start at frames 0, 100, 200, 300...).
-                Can be a single int or a tuple (base_interval, overlap_interval).
-                When a tuple, if placing an animation would cause overlap with the previous one,
-                it skips to the next overlap_interval position instead.
-                When used, offset is ignored.
-            offset (float, optional): Offset/spacing between animations. Can be:
-                        - Positive value: Gap in frames between animations (e.g., 10 = 10 frame gap)
-                        - Zero: End-to-start with no gap (default)
-                        - Negative value: Overlap in frames (e.g., -5 = 5 frames of overlap)
-                        - Float between -1.0 and 1.0: Percentage of animation duration
-                        (e.g., 0.5 = 50% of duration gap, -0.3 = 30% overlap)
+            spacing (int or float, optional): Controls how animations are spaced. Behavior depends on use_intervals:
+
+                When use_intervals=False (sequential stagger, default):
+                    - Positive value: Gap in frames between animations (e.g., 10 = 10 frame gap)
+                    - Zero: End-to-start with no gap (default)
+                    - Negative value: Overlap in frames (e.g., -5 = 5 frames of overlap)
+                    - Float between -1.0 and 1.0: Percentage of animation duration
+                      (e.g., 0.5 = 50% of duration gap, -0.3 = 30% overlap)
+
+                When use_intervals=True (fixed intervals):
+                    - Places each animation at regular frame intervals
+                      (e.g., spacing=100 → animations start at frames 0, 100, 200, 300...)
+                    - avoid_overlap can skip to next interval if needed
+
+            use_intervals (bool, optional): If True, uses spacing as fixed frame intervals instead of
+                sequential offsets. Default is False.
+            avoid_overlap (bool, optional): Only applies when use_intervals=True. If an animation would
+                overlap with the previous one, skip to the next interval position. Default is False.
             smooth_tangents (bool, optional): If True, adjusts tangents for smooth transitions (default is False).
             invert (bool, optional): If True, the objects list is processed in reverse order (default is False).
             group_overlapping (bool, optional): If True, treats objects with overlapping keyframes as a single block.
                 Objects in the same group will be moved together. (default is False).
+            ignore (str or list, optional): Attribute name(s) to ignore when staggering.
+                E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these attributes
+                will not be moved during staggering.
         """
         if not objects:
             pm.warning("No objects provided.")
@@ -1034,21 +1074,79 @@ class AnimUtils(ptk.HelpMixin):
         if invert:
             objects = list(reversed(objects))
 
+        # Normalize ignore parameter to a list
+        if ignore is None:
+            ignore_attrs = []
+        elif isinstance(ignore, str):
+            ignore_attrs = [ignore]
+        else:
+            ignore_attrs = list(ignore)
+
+        ignore_attr_set = {
+            attr.lower()
+            for attr in ignore_attrs
+            if isinstance(attr, str) and attr.strip()
+        }
+
+        def _curve_is_allowed(curve) -> bool:
+            if not ignore_attr_set:
+                return True
+            connections = (
+                pm.listConnections(curve, plugs=True, destination=True, source=False)
+                or []
+            )
+            for plug in connections:
+                if AnimUtils._get_plug_attribute_names(plug) & ignore_attr_set:
+                    return False
+            return True
+
         # Collect all keyframe data for each object
         obj_keyframe_data = []
         first_keyframe = None
         last_keyframe = None
 
         for obj in objects:
-            keyframes = pm.keyframe(obj, query=True, selected=True)
-            if not keyframes:
-                keyframes = pm.keyframe(obj, query=True)
+            # Get animation curves - work directly with curves instead of selections
+            selected_curves = pm.keyframe(obj, query=True, name=True, selected=True)
+
+            # Determine which curves to use based on whether keys are selected
+            if selected_curves:
+                # User has selected specific keys - respect their selection
+                curves_to_use = [
+                    curve for curve in selected_curves if _curve_is_allowed(curve)
+                ]
+
+                # Get selected keyframe times from these curves
+                keyframes = []
+                for curve in curves_to_use:
+                    curve_times = pm.keyframe(
+                        curve, query=True, selected=True, timeChange=True
+                    )
+                    if curve_times:
+                        keyframes.extend(curve_times)
+            else:
+                # No selection - get all curves on the object
+                all_curves = (
+                    pm.listConnections(obj, type="animCurve", s=True, d=False) or []
+                )
+
+                curves_to_use = [
+                    curve for curve in all_curves if _curve_is_allowed(curve)
+                ]
+
+                # Get all keyframe times from these curves
+                keyframes = []
+                for curve in curves_to_use:
+                    curve_times = pm.keyframe(curve, query=True, timeChange=True)
+                    if curve_times:
+                        keyframes.extend(curve_times)
 
             if keyframes:
                 keyframes = sorted(set(keyframes))
                 obj_keyframe_data.append(
                     {
                         "obj": obj,
+                        "curves": curves_to_use,  # Store the curves we'll actually move
                         "keyframes": keyframes,
                         "start": keyframes[0],
                         "end": keyframes[-1],
@@ -1074,99 +1172,63 @@ class AnimUtils(ptk.HelpMixin):
         # Use provided start_frame or earliest keyframe
         base_frame = start_frame if start_frame is not None else first_keyframe
 
-        # Apply stagger based on interval or offset
-        if interval is not None:
-            # Handle interval as tuple (base_interval, overlap_interval) or single int
-            if isinstance(interval, tuple) and len(interval) == 2:
-                base_interval, overlap_interval = interval
-            else:
-                base_interval = interval
-                overlap_interval = None
-
-            # Place each animation at regular frame intervals
+        # Apply stagger based on mode
+        if use_intervals:
+            # Fixed interval mode: place animations at regular frame intervals
             previous_end = None  # Track the end of the previous animation
 
             for i, data in enumerate(obj_keyframe_data):
                 objects_in_group = data.get("objects", [data["obj"]])
-                group_start = data["start"]  # Use the group's start frame
-                group_end = data["end"]
+                group_start = data["start"]
                 duration = data["duration"]
 
                 # Calculate target start position
-                target_start = base_frame + (i * base_interval)
+                target_start = base_frame + (i * spacing)
 
-                # Check for overlap if overlap_interval is specified
-                if overlap_interval is not None and previous_end is not None:
+                # Check for overlap if avoid_overlap is enabled
+                if avoid_overlap and previous_end is not None:
                     # If the target start would overlap with the previous animation's end
                     if target_start < previous_end:
-                        # Find the next available overlap_interval position that doesn't overlap
+                        # Skip to next interval position(s) that doesn't overlap
                         overlap_count = 1
                         while target_start < previous_end:
                             target_start = (
-                                base_frame
-                                + (i * base_interval)
-                                + (overlap_count * overlap_interval)
+                                base_frame + (i * spacing) + (overlap_count * spacing)
                             )
                             overlap_count += 1
 
                 shift_amount = target_start - group_start
 
                 if shift_amount != 0:
-                    for obj in objects_in_group:
-                        obj_keyframes = pm.keyframe(obj, query=True, selected=True)
-                        if not obj_keyframes:
-                            obj_keyframes = pm.keyframe(obj, query=True)
-                        if obj_keyframes:
-                            try:
-                                pm.keyframe(
-                                    obj,
-                                    edit=True,
-                                    time=(min(obj_keyframes), max(obj_keyframes)),
-                                    relative=True,
-                                    timeChange=shift_amount,
-                                )
-                            except RuntimeError as e:
-                                pm.warning(f"Failed to move keys for {obj}: {e}")
+                    curves_to_move = data.get("curves", [])
+                    AnimUtils._shift_curves_by_amount(curves_to_move, shift_amount)
 
                 # Update previous_end to track this animation's new end position
                 previous_end = target_start + duration
         else:
-            # Sequential stagger with offset
+            # Sequential stagger mode: animations placed end-to-end with spacing offset
             current_frame = base_frame
 
             for data in obj_keyframe_data:
                 objects_in_group = data.get("objects", [data["obj"]])
-                group_start = data["start"]  # Use the group's start frame
+                group_start = data["start"]
                 duration = data["duration"]
 
-                # Calculate offset in frames
-                # If offset is between -1.0 and 1.0, treat as percentage of duration
-                if -1.0 < offset < 1.0:
-                    offset_frames = duration * offset
+                # Calculate spacing in frames
+                # If spacing is between -1.0 and 1.0, treat as percentage of duration
+                if -1.0 < spacing < 1.0:
+                    spacing_frames = duration * spacing
                 else:
-                    offset_frames = offset
+                    spacing_frames = spacing
 
                 shift_amount = current_frame - group_start
                 if shift_amount != 0:
-                    for obj in objects_in_group:
-                        obj_keyframes = pm.keyframe(obj, query=True, selected=True)
-                        if not obj_keyframes:
-                            obj_keyframes = pm.keyframe(obj, query=True)
-                        if obj_keyframes:
-                            try:
-                                pm.keyframe(
-                                    obj,
-                                    edit=True,
-                                    time=(min(obj_keyframes), max(obj_keyframes)),
-                                    relative=True,
-                                    timeChange=shift_amount,
-                                )
-                            except RuntimeError as e:
-                                pm.warning(f"Failed to move keys for {obj}: {e}")
+                    curves_to_move = data.get("curves", [])
+                    AnimUtils._shift_curves_by_amount(curves_to_move, shift_amount)
 
                 # Update current frame for next object/group
-                # Positive offset = gap, negative = overlap
-                current_frame = current_frame + duration + offset_frames
+                # Positive spacing = gap, negative = overlap
+                current_frame = current_frame + duration + spacing_frames
 
         if smooth_tangents:
             # Ensure smooth transitions for the staggered keyframes
@@ -1185,6 +1247,82 @@ class AnimUtils(ptk.HelpMixin):
                         )
                     except RuntimeError as e:
                         pm.warning(f"Failed to adjust tangents for {obj}: {e}")
+
+    @staticmethod
+    def _get_plug_attribute_names(plug: "pm.Attribute") -> set:
+        """Get all possible attribute name variants for a plug (long, short, etc.).
+
+        This helper collects all name variations that Maya might use to refer to an attribute,
+        including long names, short names, and names extracted from the plug string.
+        All names are returned in lowercase for case-insensitive matching.
+
+        Parameters:
+            plug (pm.Attribute): The attribute plug to get names from.
+
+        Returns:
+            set: Set of lowercase attribute name strings.
+
+        Example:
+            >>> plug = obj.attr('visibility')
+            >>> names = AnimUtils._get_plug_attribute_names(plug)
+            >>> names
+            {'visibility', 'v'}
+        """
+        names = set()
+        try:
+            name = plug.attrName()
+            if name:
+                names.add(name)
+        except Exception:
+            pass
+        for flag in (True, False):
+            try:
+                name = plug.attrName(longName=flag)
+                if name:
+                    names.add(name)
+            except Exception:
+                continue
+        for getter_name in ("longName", "shortName"):
+            getter = getattr(plug, getter_name, None)
+            if callable(getter):
+                try:
+                    name = getter()
+                    if name:
+                        names.add(name)
+                except Exception:
+                    continue
+        plug_str = str(plug)
+        if plug_str and "." in plug_str:
+            names.add(plug_str.split(".")[-1])
+        return {name.lower() for name in names if isinstance(name, str)}
+
+    @staticmethod
+    def _shift_curves_by_amount(curves: List["pm.PyNode"], shift_amount: float) -> int:
+        """Helper method to shift a list of animation curves by a given amount.
+
+        Parameters:
+            curves (List[pm.PyNode]): List of animation curve nodes to shift.
+            shift_amount (float): Number of frames to shift the curves by.
+
+        Returns:
+            int: Number of curves successfully shifted.
+        """
+        shifted_count = 0
+        for curve in curves:
+            curve_keyframes = pm.keyframe(curve, query=True, timeChange=True)
+            if curve_keyframes:
+                try:
+                    pm.keyframe(
+                        curve,
+                        edit=True,
+                        time=(min(curve_keyframes), max(curve_keyframes)),
+                        relative=True,
+                        timeChange=shift_amount,
+                    )
+                    shifted_count += 1
+                except RuntimeError as e:
+                    pm.warning(f"Failed to move keys for {curve}: {e}")
+        return shifted_count
 
     @staticmethod
     def _group_overlapping_keyframes(obj_keyframe_data: List[dict]) -> List[dict]:
@@ -1223,6 +1361,7 @@ class AnimUtils(ptk.HelpMixin):
             "start": sorted_data[0]["start"],
             "end": sorted_data[0]["end"],
             "duration": sorted_data[0]["duration"],
+            "curves": sorted_data[0].get("curves", []),  # Preserve curves data
             "obj": sorted_data[0][
                 "obj"
             ],  # Representative object for backward compatibility
@@ -1239,6 +1378,8 @@ class AnimUtils(ptk.HelpMixin):
                 current_group["keyframes"] = sorted(
                     set(current_group["keyframes"] + data["keyframes"])
                 )
+                # Merge curves from all objects in the group
+                current_group["curves"].extend(data.get("curves", []))
                 # Update group boundaries
                 current_group["end"] = max(current_group["end"], data["end"])
                 current_group["duration"] = (
@@ -1253,6 +1394,7 @@ class AnimUtils(ptk.HelpMixin):
                     "start": data["start"],
                     "end": data["end"],
                     "duration": data["duration"],
+                    "curves": data.get("curves", []),  # Preserve curves data
                     "obj": data["obj"],
                 }
 
@@ -1732,6 +1874,29 @@ class AnimUtils(ptk.HelpMixin):
 
         return keys_snapped
 
+    @staticmethod
+    def _curves_to_attributes(curves: List["pm.PyNode"], obj: "pm.PyNode") -> List[str]:
+        """Helper method to extract attribute names from animation curves connected to an object.
+
+        Parameters:
+            curves (List[pm.PyNode]): List of animation curve nodes.
+            obj (pm.PyNode): The object to check attribute ownership against.
+
+        Returns:
+            List[str]: List of attribute names (without object prefix) that exist on the object.
+        """
+        attributes = []
+        for curve in curves:
+            connections = pm.listConnections(
+                curve, plugs=True, destination=True, source=False
+            )
+            if connections:
+                for conn in connections:
+                    attr_name = conn.attrName()
+                    if attr_name and obj.hasAttr(attr_name):
+                        attributes.append(attr_name)
+        return list(set(attributes))  # Remove duplicates
+
     @classmethod
     @CoreUtils.undoable
     def transfer_keyframes(
@@ -1741,6 +1906,9 @@ class AnimUtils(ptk.HelpMixin):
         transfer_tangents: bool = False,
     ):
         """Transfer keyframes from the first selected object to the subsequent objects.
+
+        If keyframes are selected in the graph editor, only those keyframes and their
+        associated attributes will be transferred. Otherwise, all keyframes are transferred.
 
         Parameters:
             objects (List[Union[str, object]]): List of objects. The first object is the source, and the rest are targets.
@@ -1755,21 +1923,38 @@ class AnimUtils(ptk.HelpMixin):
         source_obj = resolved_objects[0]
         target_objs = resolved_objects[1:]
 
-        # Get keyframe times from the source object
-        keyframe_times = pm.keyframe(source_obj, query=True, timeChange=True)
-        if not keyframe_times:
+        # Check if keyframes are selected, if not use all keyframes
+        selected_curves = pm.keyframe(source_obj, query=True, name=True, selected=True)
+
+        if selected_curves:
+            # Use only selected keyframes and their attributes
+            keyframe_times = []
+            for curve in selected_curves:
+                times = pm.keyframe(curve, query=True, selected=True, timeChange=True)
+                if times:
+                    keyframe_times.extend(times)
+            keyframe_times = sorted(set(keyframe_times))
+            keyframe_attributes = cls._curves_to_attributes(selected_curves, source_obj)
+        else:
+            # Use all animation curves and keyframes from the source object
+            all_curves = cls.objects_to_curves([source_obj])
+            if not all_curves:
+                pm.warning(f"No keyframes found on source object '{source_obj}'.")
+                return
+
+            keyframe_times = []
+            for curve in all_curves:
+                times = pm.keyframe(curve, query=True, timeChange=True)
+                if times:
+                    keyframe_times.extend(times)
+            keyframe_times = sorted(set(keyframe_times))
+            keyframe_attributes = cls._curves_to_attributes(all_curves, source_obj)
+
+        if not keyframe_times or not keyframe_attributes:
             pm.warning(f"No keyframes found on source object '{source_obj}'.")
             return
 
-        # Get keyable attributes from the source object that have keyframes
-        keyable_attributes = pm.listAttr(source_obj, keyable=True)
-        keyframe_attributes = [
-            attr
-            for attr in keyable_attributes
-            if pm.keyframe(source_obj.attr(attr), query=True, name=True)
-        ]
-
-        # Store initial values for target objects
+        # Store initial values for target objects (for relative mode)
         initial_values = {
             target: {
                 attr: target.attr(attr).get()
@@ -1784,7 +1969,11 @@ class AnimUtils(ptk.HelpMixin):
             for attr in keyframe_attributes:
                 if not target_obj.hasAttr(attr):
                     continue
-                initial_value = initial_values[target_obj][attr]
+
+                initial_value = initial_values[target_obj].get(attr)
+                if initial_value is None:
+                    continue
+
                 for time in keyframe_times:
                     values = pm.keyframe(
                         source_obj.attr(attr),
@@ -1795,15 +1984,15 @@ class AnimUtils(ptk.HelpMixin):
                     if values:
                         value = values[0]
                         if relative:
-                            value += (
-                                initial_value
-                                - pm.keyframe(
-                                    source_obj.attr(attr),
-                                    query=True,
-                                    time=(keyframe_times[0],),
-                                    valueChange=True,
-                                )[0]
-                            )
+                            # Offset by difference between target's initial value and source's first keyframe value
+                            first_value = pm.keyframe(
+                                source_obj.attr(attr),
+                                query=True,
+                                time=(keyframe_times[0],),
+                                valueChange=True,
+                            )[0]
+                            value += initial_value - first_value
+
                         pm.setKeyframe(target_obj.attr(attr), time=time, value=value)
 
                         if transfer_tangents:
