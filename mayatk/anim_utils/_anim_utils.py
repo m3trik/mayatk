@@ -378,6 +378,145 @@ class AnimUtils(ptk.HelpMixin):
         return modified
 
     @staticmethod
+    def get_keyframe_times(
+        sources: Union["pm.PyNode", List["pm.PyNode"]],
+        mode: str = "all",
+        from_curves: Optional[bool] = None,
+        as_range: bool = False,
+        time_range: Optional[Tuple[float, float]] = None,
+    ) -> Union[List[float], Tuple[float, float], None]:
+        """Get keyframe times from objects or curves with flexible filtering options.
+
+        This is a low-level utility for extracting keyframe time values. For getting
+        animation curves themselves, use objects_to_curves() or get_anim_curves().
+
+        Parameters:
+            sources: Objects or animation curves to get keyframe times from.
+            mode: How to select keyframes. Options:
+                - "all": Get all keyframes (default)
+                - "selected": Get only selected keyframes in graph editor
+                - "selected_or_all": Try selected first, fallback to all if none selected
+            from_curves: If True, treats sources as curves. If False, treats as objects.
+                        If None (default), auto-detects based on node type.
+            as_range: If True, returns (min_time, max_time) tuple. If False, returns sorted list.
+            time_range: Optional (start, end) tuple to filter keyframes within a range.
+
+        Returns:
+            - List[float]: Sorted unique keyframe times (if as_range=False)
+            - Tuple[float, float]: (start_time, end_time) range (if as_range=True)
+            - None: If no keyframes found
+
+        Example:
+            # Get all keyframe times from objects
+            times = AnimUtils.get_keyframe_times(pm.selected())
+            # Returns: [1.0, 5.0, 10.0, 20.0, 30.0]
+
+            # Get time range from objects
+            start, end = AnimUtils.get_keyframe_times(pm.selected(), as_range=True)
+            # Returns: (1.0, 30.0)
+
+            # Get only selected keyframe times (returns None if none selected)
+            times = AnimUtils.get_keyframe_times(pm.selected(), mode="selected")
+
+            # Try selected, fallback to all (common pattern)
+            times = AnimUtils.get_keyframe_times(pm.selected(), mode="selected_or_all")
+
+            # Get times from curves directly
+            curves = AnimUtils.objects_to_curves(pm.selected())
+            times = AnimUtils.get_keyframe_times(curves, from_curves=True)
+
+            # Filter to specific time range
+            times = AnimUtils.get_keyframe_times(obj, time_range=(10, 50))
+        """
+        sources = pm.ls(sources, flatten=True)
+        if not sources:
+            return None
+
+        # Auto-detect if working with curves
+        if from_curves is None:
+            from_curves = any(pm.nodeType(s).startswith("animCurve") for s in sources)
+
+        all_times = set()
+
+        if from_curves:
+            # Working with animation curves directly
+            for curve in sources:
+                times = None
+                if mode in ("selected", "selected_or_all"):
+                    times = (
+                        pm.keyframe(
+                            curve,
+                            query=True,
+                            selected=True,
+                            timeChange=True,
+                            time=time_range,
+                        )
+                        if time_range
+                        else pm.keyframe(
+                            curve, query=True, selected=True, timeChange=True
+                        )
+                    )
+
+                # If mode is "all" or "selected_or_all" and no selected times found
+                if mode == "all" or (mode == "selected_or_all" and not times):
+                    times = (
+                        pm.keyframe(curve, query=True, timeChange=True, time=time_range)
+                        if time_range
+                        else pm.keyframe(curve, query=True, timeChange=True)
+                    )
+
+                if times:
+                    all_times.update(times)
+        else:
+            # Working with objects - need to check for selected keys first
+            selected_times = set()
+
+            if mode in ("selected", "selected_or_all"):
+                for obj in sources:
+                    # Get selected keyframe times from this object
+                    curve_nodes = pm.keyframe(obj, query=True, name=True, selected=True)
+                    if curve_nodes:
+                        for curve in curve_nodes:
+                            times = (
+                                pm.keyframe(
+                                    curve,
+                                    query=True,
+                                    selected=True,
+                                    timeChange=True,
+                                    time=time_range,
+                                )
+                                if time_range
+                                else pm.keyframe(
+                                    curve, query=True, selected=True, timeChange=True
+                                )
+                            )
+                            if times:
+                                selected_times.update(times)
+
+            # Use selected times if we found any, or get all if mode requires it
+            if selected_times:
+                all_times = selected_times
+            elif mode == "all" or (mode == "selected_or_all" and not selected_times):
+                for obj in sources:
+                    times = (
+                        pm.keyframe(obj, query=True, timeChange=True, time=time_range)
+                        if time_range
+                        else pm.keyframe(obj, query=True, timeChange=True)
+                    )
+                    if times:
+                        all_times.update(times)
+
+        if not all_times:
+            return None
+
+        sorted_times = sorted(all_times)
+
+        if as_range:
+            return (sorted_times[0], sorted_times[-1])
+        else:
+            return sorted_times
+
+    @staticmethod
     def get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]:
         """Get tangent information (in and out angles and weights) for a given attribute at a specific time.
 
@@ -1115,34 +1254,24 @@ class AnimUtils(ptk.HelpMixin):
                 curves_to_use = [
                     curve for curve in selected_curves if _curve_is_allowed(curve)
                 ]
-
                 # Get selected keyframe times from these curves
-                keyframes = []
-                for curve in curves_to_use:
-                    curve_times = pm.keyframe(
-                        curve, query=True, selected=True, timeChange=True
-                    )
-                    if curve_times:
-                        keyframes.extend(curve_times)
+                keyframes = AnimUtils.get_keyframe_times(
+                    curves_to_use, mode="selected", from_curves=True
+                )
             else:
                 # No selection - get all curves on the object
                 all_curves = (
                     pm.listConnections(obj, type="animCurve", s=True, d=False) or []
                 )
-
                 curves_to_use = [
                     curve for curve in all_curves if _curve_is_allowed(curve)
                 ]
-
                 # Get all keyframe times from these curves
-                keyframes = []
-                for curve in curves_to_use:
-                    curve_times = pm.keyframe(curve, query=True, timeChange=True)
-                    if curve_times:
-                        keyframes.extend(curve_times)
+                keyframes = AnimUtils.get_keyframe_times(
+                    curves_to_use, from_curves=True
+                )
 
             if keyframes:
-                keyframes = sorted(set(keyframes))
                 obj_keyframe_data.append(
                     {
                         "obj": obj,
@@ -1461,24 +1590,19 @@ class AnimUtils(ptk.HelpMixin):
             if not curve_nodes:
                 continue
 
-            # For each curve node, get the selected keyframe times
-            obj_selected_times = []
-            for node in curve_nodes:
-                selected_times = pm.keyframe(
-                    node, query=True, selected=True, timeChange=True
-                )
-                if selected_times:
-                    obj_selected_times.extend(selected_times)
+            # Get the selected keyframe times
+            obj_selected_times = AnimUtils.get_keyframe_times(
+                curve_nodes, mode="selected", from_curves=True
+            )
 
             if obj_selected_times:
-                obj_selected_times = sorted(set(obj_selected_times))
                 obj_keyframe_data.append(
                     {
                         "obj": obj,
                         "curve_nodes": curve_nodes,
                         "times": obj_selected_times,
-                        "start": min(obj_selected_times),
-                        "end": max(obj_selected_times),
+                        "start": obj_selected_times[0],
+                        "end": obj_selected_times[-1],
                     }
                 )
 
@@ -1590,10 +1714,9 @@ class AnimUtils(ptk.HelpMixin):
         obj_keyframe_data = []
 
         for obj in objects:
-            keyframes = pm.keyframe(obj, query=True)
+            keyframes = AnimUtils.get_keyframe_times(obj)
 
             if keyframes:
-                keyframes = sorted(set(keyframes))
                 obj_keyframe_data.append(
                     {
                         "obj": obj,
@@ -1748,26 +1871,10 @@ class AnimUtils(ptk.HelpMixin):
 
             for curve in curve_nodes:
                 # Query keyframe times
-                if selected_only:
-                    if time_range:
-                        keyframe_times = pm.keyframe(
-                            curve,
-                            query=True,
-                            selected=True,
-                            timeChange=True,
-                            time=time_range,
-                        )
-                    else:
-                        keyframe_times = pm.keyframe(
-                            curve, query=True, selected=True, timeChange=True
-                        )
-                else:
-                    if time_range:
-                        keyframe_times = pm.keyframe(
-                            curve, query=True, timeChange=True, time=time_range
-                        )
-                    else:
-                        keyframe_times = pm.keyframe(curve, query=True, timeChange=True)
+                mode = "selected" if selected_only else "all"
+                keyframe_times = AnimUtils.get_keyframe_times(
+                    curve, mode=mode, from_curves=True, time_range=time_range
+                )
 
                 if not keyframe_times:
                     continue
@@ -1924,17 +2031,18 @@ class AnimUtils(ptk.HelpMixin):
         target_objs = resolved_objects[1:]
 
         # Check if keyframes are selected, if not use all keyframes
-        selected_curves = pm.keyframe(source_obj, query=True, name=True, selected=True)
+        selected_curves = pm.keyframe(
+            source_obj, query=True, name=True, selected=True
+        )
 
         if selected_curves:
             # Use only selected keyframes and their attributes
-            keyframe_times = []
-            for curve in selected_curves:
-                times = pm.keyframe(curve, query=True, selected=True, timeChange=True)
-                if times:
-                    keyframe_times.extend(times)
-            keyframe_times = sorted(set(keyframe_times))
-            keyframe_attributes = cls._curves_to_attributes(selected_curves, source_obj)
+            keyframe_times = cls.get_keyframe_times(
+                selected_curves, mode="selected", from_curves=True
+            )
+            keyframe_attributes = cls._curves_to_attributes(
+                selected_curves, source_obj
+            )
         else:
             # Use all animation curves and keyframes from the source object
             all_curves = cls.objects_to_curves([source_obj])
@@ -1942,12 +2050,7 @@ class AnimUtils(ptk.HelpMixin):
                 pm.warning(f"No keyframes found on source object '{source_obj}'.")
                 return
 
-            keyframe_times = []
-            for curve in all_curves:
-                times = pm.keyframe(curve, query=True, timeChange=True)
-                if times:
-                    keyframe_times.extend(times)
-            keyframe_times = sorted(set(keyframe_times))
+            keyframe_times = cls.get_keyframe_times(all_curves, from_curves=True)
             keyframe_attributes = cls._curves_to_attributes(all_curves, source_obj)
 
         if not keyframe_times or not keyframe_attributes:
@@ -2353,9 +2456,8 @@ class AnimUtils(ptk.HelpMixin):
 
         frame_ranges = {}
         for obj in objects:
-            keyframes = pm.keyframe(obj, query=True)
+            keyframes = AnimUtils.get_keyframe_times(obj)
             if keyframes:
-                keyframes = sorted(set(keyframes))  # Ensure unique, sorted keyframes
                 ranges = []
                 start_frame = keyframes[0]
                 last_frame = keyframes[0]
@@ -2405,12 +2507,12 @@ class AnimUtils(ptk.HelpMixin):
 
         # Determine the keyframe range
         if absolute:  # Use the absolute start and end keyframes of all objects
-            all_keyframes = pm.keyframe(objects, query=True, timeChange=True)
-            if not all_keyframes:
+            start_frame, end_frame = AnimUtils.get_keyframe_times(
+                objects, as_range=True
+            )
+            if start_frame is None:
                 pm.warning("No keyframes found on any objects.")
                 return
-            start_frame = min(all_keyframes)
-            end_frame = max(all_keyframes)
         else:  # Use the start and end frames of the entire scene's playback range
             start_frame = pm.playbackOptions(query=True, minTime=True)
             end_frame = pm.playbackOptions(query=True, maxTime=True)
