@@ -863,25 +863,11 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(target, ws=world_space, rp=source_translate_pivot)
 
             if rotate:
-                locator = None
-                try:
-                    # Create a locator at the source pivot
-                    locator = pm.spaceLocator()
-                    pm.delete(pm.pointConstraint(source, locator))
-                    pm.delete(pm.orientConstraint(source, locator))
-
-                    # Get the original target rotation
-                    original_rotation = pm.xform(target, q=True, ws=True, ro=True)
-                    # Orient the target to the locator's orientation
-                    pm.orientConstraint(locator, target, mo=False)
-                    pm.delete(pm.orientConstraint(locator, target))
-                    # Restore the original target rotation
-                    pm.xform(target, ws=True, ro=original_rotation)
-                except Exception as e:
-                    print(f"Error processing target {target}: {e}")
-                finally:
-                    if locator:
-                        pm.delete(locator)
+                # Transfer the pivot orientation by copying the source's rotate pivot orientation
+                source_pivot_orientation = pm.xform(
+                    source, q=True, ws=world_space, roo=True
+                )
+                pm.xform(target, ws=world_space, roo=source_pivot_orientation)
 
             if scale:
                 source_scale_pivot = pm.xform(source, q=True, ws=world_space, sp=True)
@@ -891,8 +877,9 @@ class XformUtils(ptk.HelpMixin):
                 pm.makeIdentity(
                     target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
                 )
-            if select_targets_after_transfer:
-                pm.select(targets, replace=True)
+
+        if select_targets_after_transfer:
+            pm.select(targets, replace=True)
 
     @staticmethod
     @CoreUtils.undoable

@@ -934,7 +934,7 @@ class AnimUtils(ptk.HelpMixin):
         cls,
         objects: Optional[List[str]] = None,
         spacing: int = 1,
-        time: int = 0,
+        time: Optional[int] = 0,
         relative: bool = True,
         preserve_keys: bool = False,
     ):
@@ -944,18 +944,29 @@ class AnimUtils(ptk.HelpMixin):
         Parameters:
             objects (Optional[List[str]]): Objects to adjust keyframes for. If None, adjusts all scene objects.
             spacing (int): Spacing to add or remove. Negative values remove spacing.
-            time (int): Time at which to start adjusting spacing.
+            time (Optional[int]): Time at which to start adjusting spacing.
+                                 If None, uses the earliest keyframe time from objects.
             relative (bool): If True, time is relative to the current frame.
             preserve_keys (bool): Preserves and adjusts a keyframe at the specified time if it exists.
         """
         if spacing == 0:
             return
 
-        current_time = pm.currentTime(query=True)
-        adjusted_time = time + current_time if relative else time
-
         if objects is None:
             objects = pm.ls(type="transform", long=True)
+
+        # Auto-detect earliest keyframe if time is None
+        if time is None:
+            earliest_times = cls.get_keyframe_times(
+                objects, mode="all", from_curves=False
+            )
+            if not earliest_times:
+                pm.warning("No keyframes found on specified objects.")
+                return
+            time = earliest_times[0]  # Use earliest keyframe time
+
+        current_time = pm.currentTime(query=True)
+        adjusted_time = time + current_time if relative else time
 
         keyframe_movements = []
 
@@ -1001,20 +1012,26 @@ class AnimUtils(ptk.HelpMixin):
     @staticmethod
     def add_intermediate_keys(
         objects: Union[str, "pm.nt.Transform", List[Union[str, "pm.nt.Transform"]]],
-        start: int,
-        end: int,
+        time_range: Optional[Union[int, Tuple[int, int]]] = None,
         percent: Optional[float] = None,
         include_flat: bool = False,
+        ignore: Union[str, List[str], None] = None,
     ) -> None:
-        """Keys selected or animated attributes on given object(s) between `start` and `end`.
+        """Keys selected or animated attributes on given object(s) within a time range.
         If attributes are selected in the channel box, only those will be keyed.
+        If time_range is not specified, automatically detects the first and last keyframe per attribute.
 
         Parameters:
             objects (str/list): One or more objects to key.
-            start (int): Start frame.
-            end (int): End frame.
-            percent (float): Optional percent (0–100) of frames to key, evenly distributed.
+            time_range (int, tuple, or None):
+                - None: Auto-detects range from first to last keyframe per attribute
+                - int: End frame (starts from first keyframe)
+                - tuple (start, end): Explicit start and end frames
+            percent (float): Optional percent (0-100) of frames to key, evenly distributed.
             include_flat (bool): If False, skips keys where value doesn't vary across time.
+            ignore (str/list, optional): Attribute name(s) to ignore when adding keys.
+                E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these
+                attributes will not have intermediate keys added.
         """
         from math import isclose
 
@@ -1032,23 +1049,76 @@ class AnimUtils(ptk.HelpMixin):
             pm.warning("No keyable or connected attributes found.")
             return
 
-        frames = list(range(start + 1, end))
-        if percent is not None:
-            count = max(1, int(len(frames) * (percent / 100.0)))
-            step = max(1, len(frames) // count)
-            frames = frames[::step]
+        # Filter out ignored attributes
+        if ignore:
+            ignore_set = (
+                {ignore.lower()}
+                if isinstance(ignore, str)
+                else {attr.lower() for attr in ignore if isinstance(attr, str)}
+            )
+            attrs = [attr for attr in attrs if attr.lower() not in ignore_set]
 
+            if not attrs:
+                pm.warning("All attributes were ignored.")
+                return
+
+        # Build per-attribute key data with auto-detected or explicit ranges
+        attr_key_data = {}
+        for obj in targets:
+            for attr in attrs:
+                plug = obj.attr(attr)
+                if not plug.isConnected() or not plug.isKeyable():
+                    continue
+
+                # Determine range based on time_range parameter
+                if time_range is None:
+                    # Auto-detect full range
+                    key_times = pm.keyframe(plug, query=True, timeChange=True)
+                    if not key_times or len(key_times) < 2:
+                        continue
+                    attr_start = int(key_times[0])
+                    attr_end = int(key_times[-1])
+                elif isinstance(time_range, tuple):
+                    # Tuple (start, end) - either can be None for auto-detect
+                    start_val, end_val = time_range
+                    key_times = None
+
+                    if start_val is None or end_val is None:
+                        key_times = pm.keyframe(plug, query=True, timeChange=True)
+                        if not key_times:
+                            continue
+
+                    attr_start = int(key_times[0]) if start_val is None else start_val
+                    attr_end = int(key_times[-1]) if end_val is None else end_val
+                else:
+                    # Single int - start from first key, end at specified frame
+                    key_times = pm.keyframe(plug, query=True, timeChange=True)
+                    if not key_times:
+                        continue
+                    attr_start = int(key_times[0])
+                    attr_end = time_range
+
+                # Calculate frames to key (excluding bookends)
+                frames = list(range(attr_start + 1, attr_end))
+                if percent is not None:
+                    count = max(1, int(len(frames) * (percent / 100.0)))
+                    step = max(1, len(frames) // count)
+                    frames = frames[::step]
+
+                if frames:
+                    attr_key_data.setdefault((obj, attr), []).extend(frames)
+
+        # Collect values for all frames
         frame_values = {}
-        for frame in frames:
-            pm.currentTime(frame, edit=True)
-            frame_values[frame] = {}
-            for obj in targets:
-                obj_data = frame_values[frame].setdefault(obj, {})
-                for attr in attrs:
-                    plug = obj.attr(attr)
-                    if plug.isConnected() and plug.isKeyable():
-                        obj_data[attr] = plug.get()
+        for (obj, attr), frames in attr_key_data.items():
+            plug = obj.attr(attr)
+            for frame in frames:
+                pm.currentTime(frame, edit=True)
+                frame_values.setdefault(frame, {}).setdefault(obj, {})[
+                    attr
+                ] = plug.get()
 
+        # Set keys
         for frame, obj_data in frame_values.items():
             pm.currentTime(frame, edit=True)
             for obj, attr_values in obj_data.items():
@@ -1066,6 +1136,126 @@ class AnimUtils(ptk.HelpMixin):
                             continue
                     plug.set(value)
                     plug.setKey()
+
+    @staticmethod
+    @CoreUtils.undoable
+    def remove_intermediate_keys(
+        objects: Union[str, "pm.nt.Transform", List[Union[str, "pm.nt.Transform"]]],
+        ignore: Union[str, List[str], None] = None,
+    ) -> int:
+        """Removes all intermediate keyframes, keeping only the first and last key on each attribute.
+        If attributes are selected in the channel box, only those will be affected.
+        Automatically detects the keyframe range for each attribute.
+
+        Parameters:
+            objects (str/list): One or more objects to remove intermediate keys from.
+            ignore (str/list, optional): Attribute name(s) to ignore when removing keys.
+                E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these
+                attributes will not have intermediate keys removed.
+
+        Returns:
+            int: Number of keyframes removed.
+
+        Example:
+            # Remove all intermediate keys, keeping only first and last
+            remove_intermediate_keys(pm.selected())
+
+            # Remove intermediate keys for channel box selected attributes only
+            remove_intermediate_keys([obj1, obj2])
+
+            # Remove intermediate keys except for visibility
+            remove_intermediate_keys(pm.selected(), ignore='visibility')
+        """
+        targets = pm.ls(objects, flatten=True)
+        if not targets:
+            pm.warning("No valid objects provided.")
+            return 0
+
+        # Check for channel box selected attributes
+        cb_attrs = pm.channelBox("mainChannelBox", q=True, selectedMainAttributes=True)
+
+        # Filter out ignored attributes
+        if ignore and cb_attrs:
+            ignore_set = (
+                {ignore.lower()}
+                if isinstance(ignore, str)
+                else {attr.lower() for attr in ignore if isinstance(attr, str)}
+            )
+            cb_attrs = [attr for attr in cb_attrs if attr.lower() not in ignore_set]
+
+        keys_removed = 0
+
+        for obj in targets:
+            if cb_attrs:
+                # Remove keys only for channel box selected attributes
+                for attr in cb_attrs:
+                    if obj.hasAttr(attr):
+                        attr_name = f"{obj}.{attr}"
+                        # Get keyframe times for this specific attribute
+                        keyframe_times = pm.keyframe(
+                            attr_name, query=True, timeChange=True
+                        )
+
+                        if keyframe_times and len(keyframe_times) > 2:
+                            # Sort to ensure we have correct start and end
+                            keyframe_times = sorted(keyframe_times)
+                            start = keyframe_times[0]
+                            end = keyframe_times[-1]
+
+                            # Count keys that will be removed
+                            intermediate_keys = pm.keyframe(
+                                attr_name,
+                                query=True,
+                                timeChange=True,
+                                time=(start + 0.001, end - 0.001),
+                            )
+                            if intermediate_keys:
+                                keys_removed += len(intermediate_keys)
+                                # Remove intermediate keys (exclusive of start and end)
+                                pm.cutKey(
+                                    attr_name,
+                                    time=(start + 0.001, end - 0.001),
+                                    clear=True,
+                                )
+            else:
+                # Get all keyed attributes on the object
+                keyed_attrs = pm.keyframe(obj, query=True, name=True)
+
+                if keyed_attrs:
+                    # Filter out ignored curves
+                    keyed_attrs = AnimUtils._filter_curves_by_ignore(
+                        keyed_attrs, ignore
+                    )
+
+                    for attr in keyed_attrs:
+                        # Get keyframe times for this specific attribute/curve
+                        keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
+
+                        if keyframe_times and len(keyframe_times) > 2:
+                            # Sort to ensure we have correct start and end
+                            keyframe_times = sorted(keyframe_times)
+                            start = keyframe_times[0]
+                            end = keyframe_times[-1]
+
+                            # Count and remove intermediate keys
+                            intermediate_keys = pm.keyframe(
+                                attr,
+                                query=True,
+                                timeChange=True,
+                                time=(start + 0.001, end - 0.001),
+                            )
+                            if intermediate_keys:
+                                keys_removed += len(intermediate_keys)
+                                pm.cutKey(
+                                    attr, time=(start + 0.001, end - 0.001), clear=True
+                                )
+
+        if keys_removed > 0:
+            pm.displayInfo(f"Removed {keys_removed} intermediate keyframe(s).")
+        else:
+            pm.displayInfo("No intermediate keyframes found to remove.")
+
+        return keys_removed
 
     @staticmethod
     @CoreUtils.undoable
@@ -1213,32 +1403,6 @@ class AnimUtils(ptk.HelpMixin):
         if invert:
             objects = list(reversed(objects))
 
-        # Normalize ignore parameter to a list
-        if ignore is None:
-            ignore_attrs = []
-        elif isinstance(ignore, str):
-            ignore_attrs = [ignore]
-        else:
-            ignore_attrs = list(ignore)
-
-        ignore_attr_set = {
-            attr.lower()
-            for attr in ignore_attrs
-            if isinstance(attr, str) and attr.strip()
-        }
-
-        def _curve_is_allowed(curve) -> bool:
-            if not ignore_attr_set:
-                return True
-            connections = (
-                pm.listConnections(curve, plugs=True, destination=True, source=False)
-                or []
-            )
-            for plug in connections:
-                if AnimUtils._get_plug_attribute_names(plug) & ignore_attr_set:
-                    return False
-            return True
-
         # Collect all keyframe data for each object
         obj_keyframe_data = []
         first_keyframe = None
@@ -1251,9 +1415,9 @@ class AnimUtils(ptk.HelpMixin):
             # Determine which curves to use based on whether keys are selected
             if selected_curves:
                 # User has selected specific keys - respect their selection
-                curves_to_use = [
-                    curve for curve in selected_curves if _curve_is_allowed(curve)
-                ]
+                curves_to_use = AnimUtils._filter_curves_by_ignore(
+                    selected_curves, ignore
+                )
                 # Get selected keyframe times from these curves
                 keyframes = AnimUtils.get_keyframe_times(
                     curves_to_use, mode="selected", from_curves=True
@@ -1263,9 +1427,7 @@ class AnimUtils(ptk.HelpMixin):
                 all_curves = (
                     pm.listConnections(obj, type="animCurve", s=True, d=False) or []
                 )
-                curves_to_use = [
-                    curve for curve in all_curves if _curve_is_allowed(curve)
-                ]
+                curves_to_use = AnimUtils._filter_curves_by_ignore(all_curves, ignore)
                 # Get all keyframe times from these curves
                 keyframes = AnimUtils.get_keyframe_times(
                     curves_to_use, from_curves=True
@@ -1424,6 +1586,59 @@ class AnimUtils(ptk.HelpMixin):
         if plug_str and "." in plug_str:
             names.add(plug_str.split(".")[-1])
         return {name.lower() for name in names if isinstance(name, str)}
+
+    @staticmethod
+    def _filter_curves_by_ignore(
+        curves: List["pm.PyNode"], ignore: Union[str, List[str], None]
+    ) -> List["pm.PyNode"]:
+        """Filter animation curves, excluding those connected to ignored attributes.
+
+        Parameters:
+            curves (list): Animation curves to filter.
+            ignore (str/list/None): Attribute name(s) to ignore.
+                E.g., 'visibility' or ['visibility', 'translateX'].
+
+        Returns:
+            list: Filtered list of animation curves.
+
+        Example:
+            >>> curves = pm.listConnections(obj, type='animCurve')
+            >>> filtered = AnimUtils._filter_curves_by_ignore(curves, 'visibility')
+        """
+        if ignore is None:
+            return curves
+
+        # Normalize ignore parameter to a set
+        if isinstance(ignore, str):
+            ignore_attrs = [ignore]
+        else:
+            ignore_attrs = list(ignore)
+
+        ignore_attr_set = {
+            attr.lower()
+            for attr in ignore_attrs
+            if isinstance(attr, str) and attr.strip()
+        }
+
+        if not ignore_attr_set:
+            return curves
+
+        # Filter curves
+        filtered = []
+        for curve in curves:
+            connections = (
+                pm.listConnections(curve, plugs=True, destination=True, source=False)
+                or []
+            )
+            is_allowed = True
+            for plug in connections:
+                if AnimUtils._get_plug_attribute_names(plug) & ignore_attr_set:
+                    is_allowed = False
+                    break
+            if is_allowed:
+                filtered.append(curve)
+
+        return filtered
 
     @staticmethod
     def _shift_curves_by_amount(curves: List["pm.PyNode"], shift_amount: float) -> int:
@@ -2031,18 +2246,14 @@ class AnimUtils(ptk.HelpMixin):
         target_objs = resolved_objects[1:]
 
         # Check if keyframes are selected, if not use all keyframes
-        selected_curves = pm.keyframe(
-            source_obj, query=True, name=True, selected=True
-        )
+        selected_curves = pm.keyframe(source_obj, query=True, name=True, selected=True)
 
         if selected_curves:
             # Use only selected keyframes and their attributes
             keyframe_times = cls.get_keyframe_times(
                 selected_curves, mode="selected", from_curves=True
             )
-            keyframe_attributes = cls._curves_to_attributes(
-                selected_curves, source_obj
-            )
+            keyframe_attributes = cls._curves_to_attributes(selected_curves, source_obj)
         else:
             # Use all animation curves and keyframes from the source object
             all_curves = cls.objects_to_curves([source_obj])
@@ -2486,16 +2697,35 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def tie_keyframes(objects: List["pm.nt.Transform"] = None, absolute: bool = False):
+    @staticmethod
+    @CoreUtils.undoable
+    def tie_keyframes(
+        objects: List["pm.nt.Transform"] = None,
+        absolute: bool = False,
+        padding: int = 0,
+    ):
         """Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)
         by setting keyframes only on the attributes that already have keyframes,
         at the start and end of the specified animation range.
 
         Parameters:
             objects (List[pm.nt.Transform], optional): List of PyMel transform nodes to process.
-            If None, all keyed objects in the scene will be used.
+                If None, all keyed objects in the scene will be used.
             absolute (bool, optional): If True, uses the absolute start and end keyframes
-            across all objects as the range. If False, uses the scene's playback range. Default is False.
+                across all objects as the range. If False, uses the scene's playback range. Default is False.
+            padding (int, optional): Number of frames to extend the tie keyframes beyond the range.
+                Positive values add padding (e.g., 5 = tie 5 frames before start and 5 frames after end).
+                Negative values shrink the range inward. Default is 0.
+
+        Example:
+            # Tie keyframes at the exact playback range (e.g., 10-100)
+            tie_keyframes()  # Ties at 10 and 100
+
+            # Add 5 frames of padding on both ends
+            tie_keyframes(padding=5)  # Ties at 5 and 105 (if playback is 10-100)
+
+            # Use with absolute=True to add padding around actual keyframes
+            tie_keyframes(absolute=True, padding=10)  # Adds 10 frame hold before/after animation
         """
         if objects is None:  # Get all objects that have keyframes
             objects = pm.ls(type="transform")
@@ -2517,34 +2747,41 @@ class AnimUtils(ptk.HelpMixin):
             start_frame = pm.playbackOptions(query=True, minTime=True)
             end_frame = pm.playbackOptions(query=True, maxTime=True)
 
+        # Apply padding
+        tie_start_frame = start_frame - padding
+        tie_end_frame = end_frame + padding
+
         for obj in objects:  # Get all the attributes that have keyframes
             keyed_attrs = pm.keyframe(obj, query=True, name=True)
 
             if keyed_attrs:
                 for attr in keyed_attrs:
                     # Set a keyframe at the start and end of the determined range for the specific attribute
-                    pm.setKeyframe(attr, time=start_frame)
-                    pm.setKeyframe(attr, time=end_frame)
+                    pm.setKeyframe(attr, time=tie_start_frame)
+                    pm.setKeyframe(attr, time=tie_end_frame)
 
-        pm.displayInfo("Keyframes tied to the range for keyed attributes.")
+        pm.displayInfo(
+            f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."
+        )
 
     @staticmethod
     @CoreUtils.undoable
     def untie_keyframes(
-        objects: List["pm.nt.Transform"] = None, absolute: bool = False
+        objects: List["pm.nt.Transform"] = None,
+        absolute: bool = False,
     ):
         """Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
 
-        This method intelligently removes keyframes at the start and end of the animation range
-        that were likely added by tie_keyframes. It preserves actual animation keys by checking
-        if the next/previous keyframe has a different value (indicating real animation).
+        This method intelligently removes keyframes at the start and end of each attribute's
+        keyframe range that were likely added by tie_keyframes. It automatically detects
+        bookend keys by checking if the first/last keyframe has the same value as the
+        next/previous keyframe (indicating a hold rather than actual animation).
 
         Parameters:
             objects (List[pm.nt.Transform], optional): List of PyMel transform nodes to process.
                 If None, all keyed objects in the scene will be used.
-            absolute (bool, optional): If True, uses the absolute start and end keyframes
-                across all objects as the range. If False, uses the scene's playback range.
-                Default is False.
+            absolute (bool, optional): Reserved for future use. Currently not used as untie
+                automatically detects bookend keys per attribute.
 
         Example:
             # Remove bookend keys added by tie_keyframes
@@ -2552,9 +2789,6 @@ class AnimUtils(ptk.HelpMixin):
 
             # Remove bookend keys for specific objects
             untie_keyframes([obj1, obj2])
-
-            # Use absolute keyframe range instead of playback range
-            untie_keyframes(absolute=True)
         """
         if objects is None:  # Get all objects that have keyframes
             objects = pm.ls(type="transform")
@@ -2563,18 +2797,6 @@ class AnimUtils(ptk.HelpMixin):
         if not objects:
             pm.warning("No keyed objects found.")
             return
-
-        # Determine the keyframe range
-        if absolute:  # Use the absolute start and end keyframes of all objects
-            all_keyframes = pm.keyframe(objects, query=True, timeChange=True)
-            if not all_keyframes:
-                pm.warning("No keyframes found on any objects.")
-                return
-            range_start = min(all_keyframes)
-            range_end = max(all_keyframes)
-        else:  # Use the start and end frames of the entire scene's playback range
-            range_start = pm.playbackOptions(query=True, minTime=True)
-            range_end = pm.playbackOptions(query=True, maxTime=True)
 
         keys_removed = 0
 
@@ -2592,11 +2814,8 @@ class AnimUtils(ptk.HelpMixin):
 
                     keyframe_times = sorted(keyframe_times)
 
-                    # Check start keyframe (use tolerance for float comparison)
-                    if (
-                        abs(keyframe_times[0] - range_start) < 1e-5
-                        and len(keyframe_times) > 1
-                    ):
+                    # Check start keyframe - is it a bookend (same value as next key)?
+                    if len(keyframe_times) > 1:
                         # Get values of first two keyframes
                         start_value = pm.keyframe(
                             attr,
@@ -2613,7 +2832,11 @@ class AnimUtils(ptk.HelpMixin):
 
                         # If values are the same, this is likely a bookend key
                         if abs(start_value - next_value) < 1e-5:
-                            pm.cutKey(attr, time=(range_start, range_start), clear=True)
+                            pm.cutKey(
+                                attr,
+                                time=(keyframe_times[0], keyframe_times[0]),
+                                clear=True,
+                            )
                             keys_removed += 1
 
                     # Check end keyframe (re-query in case we removed the start key)
@@ -2621,25 +2844,28 @@ class AnimUtils(ptk.HelpMixin):
                     if keyframe_times and len(keyframe_times) > 1:
                         keyframe_times = sorted(keyframe_times)
 
-                        if abs(keyframe_times[-1] - range_end) < 1e-5:
-                            # Get values of last two keyframes
-                            end_value = pm.keyframe(
-                                attr,
-                                query=True,
-                                time=(keyframe_times[-1],),
-                                valueChange=True,
-                            )[0]
-                            prev_value = pm.keyframe(
-                                attr,
-                                query=True,
-                                time=(keyframe_times[-2],),
-                                valueChange=True,
-                            )[0]
+                        # Get values of last two keyframes
+                        end_value = pm.keyframe(
+                            attr,
+                            query=True,
+                            time=(keyframe_times[-1],),
+                            valueChange=True,
+                        )[0]
+                        prev_value = pm.keyframe(
+                            attr,
+                            query=True,
+                            time=(keyframe_times[-2],),
+                            valueChange=True,
+                        )[0]
 
-                            # If values are the same, this is likely a bookend key
-                            if abs(end_value - prev_value) < 1e-5:
-                                pm.cutKey(attr, time=(range_end, range_end), clear=True)
-                                keys_removed += 1
+                        # If values are the same, this is likely a bookend key
+                        if abs(end_value - prev_value) < 1e-5:
+                            pm.cutKey(
+                                attr,
+                                time=(keyframe_times[-1], keyframe_times[-1]),
+                                clear=True,
+                            )
+                            keys_removed += 1
 
         if keys_removed > 0:
             pm.displayInfo(f"Removed {keys_removed} bookend keyframe(s).")

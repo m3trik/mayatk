@@ -225,13 +225,11 @@ class RigUtils(ptk.HelpMixin):
             if parent:
                 grp = pm.group(em=True)
                 pm.delete(pm.parentConstraint(loc, grp))
-
-                # Freeze locator BEFORE parenting to avoid connection issues
-                if freeze_locator:
-                    XformUtils.freeze_transforms(loc, normal=True)
-
                 pm.parent(loc, grp)
                 pm.parent(obj, loc)
+
+                if freeze_locator:
+                    XformUtils.freeze_transforms(loc, normal=True)
 
                 if orig_parent:
                     pm.parent(grp, orig_parent)

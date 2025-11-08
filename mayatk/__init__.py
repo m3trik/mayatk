@@ -170,6 +170,7 @@ include = {
     "_xform_utils": ["*"],
     # Specific classes from modules
     "components": ["Components"],
+    "matrices": ["Matrices"],
     "macros": ["Macros"],
     # Nested ui_utils mappings (explicit for clarity and robustness)
     "ui_utils.maya_menu_handler": ["MayaMenuHandler"],
