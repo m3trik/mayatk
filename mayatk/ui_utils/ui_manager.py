@@ -189,7 +189,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.set_attributes(WA_TranslucentBackground=True)
             ui.set_flags(FramelessWindowHint=True)
             ui.style.set(theme="dark", style_class="translucentBgWithBorder")
-            ui.header.config_buttons(menu_button=True, hide_button=True)
+            ui.header.config_buttons("menu_button", "hide_button")
             return ui
 
     def _load_maya_ui(
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     CoreUtils.clear_scrollfield_reporters()
 
     ui = UiManager.instance().get("scene_exporter", reload=True)
-    ui.header.config_buttons(hide_button=True)
+    ui.header.config_buttons("hide_button")
     ui.show(pos="screen", app_exec=True)
 
 # --------------------------------------------------------------------------------------------

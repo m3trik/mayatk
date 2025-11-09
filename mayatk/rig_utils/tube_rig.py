@@ -700,7 +700,7 @@ if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
     ui = UiManager.instance().get("tube_rig", reload=True)
-    ui.header.config_buttons(hide_button=True)
+    ui.header.config_buttons("hide_button")
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
