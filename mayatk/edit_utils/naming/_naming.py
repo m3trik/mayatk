@@ -68,7 +68,7 @@ class Naming(ptk.HelpMixin):
         """
         objects = pm.ls(objects, flatten=True)
         long_names = [obj.name() for obj in objects]
-        short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
+        short_names = [ii if ii else i for i, ii in ptk.split_at_delimiter(long_names)]
 
         # Handle empty filter case which causes crashes
         if not fltr:

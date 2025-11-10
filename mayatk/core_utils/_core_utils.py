@@ -441,6 +441,108 @@ class CoreUtils(ptk.HelpMixin):
         return attrs
 
     @staticmethod
+    def filter_attributes(
+        attributes: List[str],
+        exclude: Union[str, List[str], None] = None,
+        include: Union[str, List[str], None] = None,
+        case_sensitive: bool = False,
+    ) -> List[str]:
+        """Filter attribute names based on inclusion and/or exclusion patterns.
+
+        This is a general-purpose utility for filtering attribute lists that can be used
+        throughout the toolkit. Supports both exact matching and pattern matching.
+
+        Parameters:
+            attributes (list): List of attribute names to filter.
+            exclude (str/list, optional): Attribute name(s) or pattern(s) to exclude.
+                Can be exact names or patterns with wildcards (* and ?).
+                E.g., 'visibility', ['visibility', 'translate*'], or ['*X', '*Y'].
+            include (str/list, optional): Attribute name(s) or pattern(s) to include.
+                If specified, only attributes matching these patterns will be kept.
+                Can be exact names or patterns with wildcards (* and ?).
+            case_sensitive (bool): Whether to use case-sensitive matching. Default is False.
+
+        Returns:
+            list: Filtered list of attribute names.
+
+        Example:
+            >>> attrs = ['translateX', 'translateY', 'translateZ', 'rotateX', 'visibility']
+
+            # Exclude specific attributes
+            >>> filter_attributes(attrs, exclude='visibility')
+            ['translateX', 'translateY', 'translateZ', 'rotateX']
+
+            # Exclude using patterns
+            >>> filter_attributes(attrs, exclude='translate*')
+            ['rotateX', 'visibility']
+
+            # Include only specific patterns
+            >>> filter_attributes(attrs, include='translate*')
+            ['translateX', 'translateY', 'translateZ']
+
+            # Combine include and exclude
+            >>> filter_attributes(attrs, include='translate*', exclude='*Z')
+            ['translateX', 'translateY']
+
+            # Multiple patterns
+            >>> filter_attributes(attrs, exclude=['visibility', '*Z'])
+            ['translateX', 'translateY', 'rotateX']
+        """
+        import fnmatch
+
+        if not attributes:
+            return []
+
+        # Normalize exclude parameter to a list
+        if exclude is None:
+            exclude_patterns = []
+        elif isinstance(exclude, str):
+            exclude_patterns = [exclude]
+        else:
+            exclude_patterns = list(exclude)
+
+        # Normalize include parameter to a list
+        if include is None:
+            include_patterns = []
+        elif isinstance(include, str):
+            include_patterns = [include]
+        else:
+            include_patterns = list(include)
+
+        # Helper function for pattern matching
+        def matches_pattern(attr_name: str, pattern: str) -> bool:
+            """Check if attribute name matches the pattern."""
+            if not case_sensitive:
+                attr_name = attr_name.lower()
+                pattern = pattern.lower()
+
+            # Use fnmatch for wildcard support
+            if "*" in pattern or "?" in pattern:
+                return fnmatch.fnmatch(attr_name, pattern)
+            else:
+                # Exact match
+                return attr_name == pattern
+
+        # Filter attributes
+        filtered = []
+        for attr in attributes:
+            # Check include patterns first (if specified)
+            if include_patterns:
+                if not any(
+                    matches_pattern(attr, pattern) for pattern in include_patterns
+                ):
+                    continue
+
+            # Check exclude patterns
+            if exclude_patterns:
+                if any(matches_pattern(attr, pattern) for pattern in exclude_patterns):
+                    continue
+
+            filtered.append(attr)
+
+        return filtered
+
+    @staticmethod
     def get_channel_box_attributes(
         objects,
         *args,

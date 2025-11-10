@@ -808,6 +808,394 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
+    def scale_keys(
+        objects=None,
+        factor=1.0,
+        selected_keys_only=False,
+        time_range=None,
+        channel_box_attrs_only=False,
+        ignore=None,
+        by_speed=False,
+    ):
+        """Scales keyframes by a given percentage around a pivot time, or by motion speed.
+
+        This method can scale the timing of keyframes in two ways:
+        1. UNIFORM SCALING: Traditional time scaling around a pivot (faster/slower)
+        2. SPEED-BASED SCALING: Time warping based on the object's motion speed
+
+        If keys are selected in the graph editor, only those keys will be scaled.
+
+        Parameters:
+            objects (list, optional): Objects to scale keys for. If None, uses selection.
+
+            factor (float): Scaling multiplier. Meaning changes based on mode:
+
+                UNIFORM MODE (by_speed=False):
+                    - 1.0 = no change (100%)
+                    - 0.5 = compress to 50% (faster animation)
+                    - 2.0 = expand to 200% (slower animation)
+                    - 1.1 = expand by 10%
+
+                SPEED MODE (by_speed=True):
+                    - Controls strength of speed-based effect (exaggeration)
+                    - 1.0 = moderate effect (recommended starting point)
+                    - 0.5 = subtle effect
+                    - 2.0-3.0 = dramatic effect
+                    - Higher = more extreme time distortion
+
+                Default is 1.0.
+
+            selected_keys_only (bool): If True, only scales selected keys from graph editor.
+                If False, scales all keys in the specified time range.
+                Not supported with by_speed=True (will be ignored).
+
+            time_range (tuple, optional): (start_frame, end_frame) context-sensitive usage:
+
+                UNIFORM MODE (by_speed=False):
+                    - None: Scales all keys, pivot at earliest key
+                    - (start, end): Scales keys in range, pivot at start
+                    - (start, None): Scales from start to end of animation (partial range)
+                    - (None, end): Scales from beginning up to end (partial range)
+
+                SPEED MODE (by_speed=True):
+                    - Required: Defines the time window for speed analysis
+                    - Example: (1, 100) analyzes motion from frame 1 to 100
+                    - Supports partial ranges: (start, None) or (None, end)
+
+            channel_box_attrs_only (bool): If True, only affects attributes selected in channel box.
+
+            ignore (str or list, optional): Attribute name(s) to ignore when scaling.
+                E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these
+                attributes will not be scaled.
+
+            by_speed (bool): If True, uses speed-based scaling instead of uniform scaling.
+                Slow movement areas get expanded in time, fast movement gets compressed.
+                Requires time_range to be specified. Default is False.
+
+        Returns:
+            int: Number of keyframes that were scaled.
+
+        Example:
+            # UNIFORM SCALING EXAMPLES:
+            # Scale all keys by 50% (make animation twice as fast)
+            scale_keys(factor=0.5)
+
+            # Scale selected keys by 200% (make animation slower)
+            scale_keys(factor=2.0, selected_keys_only=True)
+
+            # Scale keys in a time range, pivot at frame 10
+            scale_keys(factor=1.5, time_range=(10, 100))
+
+            # Scale from frame 50 onward (partial range)
+            scale_keys(factor=2.0, time_range=(50, None))
+
+            # Scale up to frame 100 (partial range)
+            scale_keys(factor=0.5, time_range=(None, 100))
+
+            # Scale only channel box selected attributes
+            scale_keys(factor=0.75, channel_box_attrs_only=True)
+
+            # Scale keys but ignore visibility attribute
+            scale_keys(factor=0.5, ignore='visibility')
+
+            # SPEED-BASED SCALING EXAMPLES:
+            # Scale keys based on motion speed (slow areas get more time)
+            scale_keys(by_speed=True, time_range=(1, 100), factor=2.0)
+
+            # Subtle speed-based scaling with partial range
+            scale_keys(by_speed=True, time_range=(10, None), factor=0.5)
+        """
+        # Validate parameters based on mode
+        if by_speed:
+            if time_range is None:
+                pm.warning(
+                    "time_range is required when by_speed=True. Please specify a time range."
+                )
+                return 0
+            if selected_keys_only:
+                pm.warning(
+                    "selected_keys_only is not supported with by_speed=True. Processing all keys in time range."
+                )
+                selected_keys_only = False
+
+            # Auto-detect None values in time_range for speed mode
+            if time_range[0] is None or time_range[1] is None:
+                keyframe_times = AnimUtils.get_keyframe_times(objects)
+                if not keyframe_times:
+                    pm.warning("No keyframes found on objects for auto-detection.")
+                    return 0
+                time_range = (
+                    keyframe_times[0] if time_range[0] is None else time_range[0],
+                    keyframe_times[-1] if time_range[1] is None else time_range[1],
+                )
+        else:
+            # Validate scale factor for uniform scaling
+            if factor <= 0:
+                pm.warning("Scale factor must be greater than 0.")
+                return 0
+
+            # Auto-detect None values in time_range for uniform mode
+            # Supports partial ranges: (start, None) or (None, end) or (start, end)
+            if time_range is not None and (
+                time_range[0] is None or time_range[1] is None
+            ):
+                keyframe_times = AnimUtils.get_keyframe_times(objects)
+                if not keyframe_times:
+                    pm.warning("No keyframes found on objects for auto-detection.")
+                    return 0
+
+                # Build the range, keeping infinity for open-ended ranges
+                start = keyframe_times[0] if time_range[0] is None else time_range[0]
+                end = keyframe_times[-1] if time_range[1] is None else time_range[1]
+                time_range = (start, end)
+
+        # Get objects to work with
+        if objects is None:
+            objects = pm.selected()
+
+        if not objects:
+            pm.warning("No objects specified or selected.")
+            return 0
+
+        objects = pm.ls(objects, flatten=True)
+
+        # Get channel box attributes if filtering is requested
+        channel_box_attrs = None
+        if channel_box_attrs_only:
+            channel_box_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+            if not channel_box_attrs:
+                pm.warning("No attributes selected in channel box.")
+                return 0
+
+        # Check for selected keys
+        if selected_keys_only:
+            all_selected_keys = pm.keyframe(query=True, sl=True, tc=True)
+            if not all_selected_keys:
+                pm.warning("No keyframes selected.")
+                return 0
+
+        keys_scaled = 0
+
+        # SPEED-BASED SCALING MODE
+        if by_speed:
+            # Process each object separately for speed-based scaling
+            for obj in objects:
+                # Calculate speed profile for this object
+                try:
+                    _, normalized_speeds = AnimUtils._calculate_speed_profile(
+                        obj, time_range
+                    )
+                except Exception as e:
+                    pm.warning(f"Failed to calculate speed profile for {obj}: {e}")
+                    continue
+
+                if not normalized_speeds:
+                    pm.warning(f"No movement detected for {obj} in time range.")
+                    continue
+
+                # Get all curves for this object and filter by ignore
+                all_curves = AnimUtils.objects_to_curves(obj)
+                curves_to_scale = AnimUtils._filter_curves_by_ignore(all_curves, ignore)
+
+                if channel_box_attrs_only and channel_box_attrs:
+                    # Further filter by channel box attributes
+                    filtered_curves = []
+                    for curve in curves_to_scale:
+                        connections = pm.listConnections(
+                            curve, plugs=True, destination=True, source=False
+                        )
+                        if connections:
+                            attr_name = connections[0].attrName()
+                            if attr_name in channel_box_attrs:
+                                filtered_curves.append(curve)
+                    curves_to_scale = filtered_curves
+
+                # Apply speed-based scaling to the curves
+                keys_scaled += AnimUtils._scale_keys_by_speed_profile(
+                    curves_to_scale,
+                    time_range,
+                    normalized_speeds,
+                    exaggeration=factor,
+                )
+
+            if keys_scaled > 0:
+                range_info = f" in range {time_range}" if time_range else ""
+                pm.displayInfo(
+                    f"Scaled {keys_scaled} keyframes by speed (factor={factor}){range_info}"
+                )
+            else:
+                pm.warning("No keyframes found to scale.")
+
+            return keys_scaled
+
+        # UNIFORM SCALING MODE (original implementation)
+        # Determine pivot time from time_range or auto-detect
+        pivot_time = None
+
+        if time_range is not None:
+            # Use start of time_range as pivot
+            pivot_time = time_range[0]
+        else:
+            # Auto-detect pivot from earliest keyframe across all objects in scope
+            earliest_time = None
+
+            for obj in objects:
+                if selected_keys_only:
+                    # Use get_anim_curves for selected keys
+                    curves = AnimUtils.get_anim_curves(
+                        objects=[obj], selected_keys_only=True
+                    )
+                else:
+                    # Use objects_to_curves for all keys
+                    curves = AnimUtils.objects_to_curves(obj)
+
+                # Filter curves by ignore parameter
+                curves = AnimUtils._filter_curves_by_ignore(curves, ignore)
+
+                # Filter curves by channel box if requested
+                if channel_box_attrs_only and channel_box_attrs:
+                    filtered_curves = []
+                    for curve in curves:
+                        connections = pm.listConnections(
+                            curve, plugs=True, destination=True, source=False
+                        )
+                        if connections:
+                            attr_name = connections[0].attrName()
+                            if attr_name in channel_box_attrs:
+                                filtered_curves.append(curve)
+                    curves = filtered_curves
+
+                if curves:
+                    # Get keyframe times using existing utility
+                    mode = "selected" if selected_keys_only else "all"
+                    times = AnimUtils.get_keyframe_times(
+                        curves, mode=mode, from_curves=True
+                    )
+
+                    if times:
+                        obj_earliest = min(times)
+                        if earliest_time is None or obj_earliest < earliest_time:
+                            earliest_time = obj_earliest
+
+            if earliest_time is None:
+                pm.warning("No keyframes found to scale.")
+                return 0
+
+            pivot_time = earliest_time
+
+        # Scale the keys using uniform scaling
+        for obj in objects:
+            if selected_keys_only:
+                # Get animation curves with selected keys
+                curves = pm.keyframe(obj, query=True, name=True, selected=True)
+
+                if not curves:
+                    continue
+
+                # Filter by ignore parameter
+                curves = AnimUtils._filter_curves_by_ignore(curves, ignore)
+
+                # Filter by channel box if requested
+                if channel_box_attrs_only and channel_box_attrs:
+                    filtered_curves = []
+                    for curve in curves:
+                        connections = pm.listConnections(
+                            curve, plugs=True, destination=True, source=False
+                        )
+                        if connections:
+                            attr_name = connections[0].attrName()
+                            if attr_name in channel_box_attrs:
+                                filtered_curves.append(curve)
+                    curves = filtered_curves
+
+                for curve in curves:
+                    # Scale selected keys on this curve
+                    if time_range:
+                        pm.scaleKey(
+                            curve,
+                            time=time_range,
+                            timeScale=factor,
+                            timePivot=pivot_time,
+                            scaleSpecifiedKeys=True,
+                        )
+                        # Count scaled keys
+                        scaled_times = pm.keyframe(
+                            curve, query=True, selected=True, tc=True, time=time_range
+                        )
+                    else:
+                        pm.scaleKey(
+                            curve,
+                            timeScale=factor,
+                            timePivot=pivot_time,
+                            scaleSpecifiedKeys=True,
+                        )
+                        # Count scaled keys
+                        scaled_times = pm.keyframe(
+                            curve, query=True, selected=True, tc=True
+                        )
+
+                    if scaled_times:
+                        keys_scaled += len(scaled_times)
+
+            else:
+                # Scale all keys (or keys in time range)
+                # Get all curves for this object and filter by ignore
+                all_curves = AnimUtils.objects_to_curves(obj)
+                curves_to_scale = AnimUtils._filter_curves_by_ignore(all_curves, ignore)
+
+                if channel_box_attrs_only and channel_box_attrs:
+                    # Further filter by channel box attributes
+                    filtered_curves = []
+                    for curve in curves_to_scale:
+                        connections = pm.listConnections(
+                            curve, plugs=True, destination=True, source=False
+                        )
+                        if connections:
+                            attr_name = connections[0].attrName()
+                            if attr_name in channel_box_attrs:
+                                filtered_curves.append(curve)
+                    curves_to_scale = filtered_curves
+
+                # Scale each filtered curve
+                for curve in curves_to_scale:
+                    # Check if curve has keys
+                    if time_range:
+                        keys = pm.keyframe(curve, query=True, tc=True, time=time_range)
+                    else:
+                        keys = pm.keyframe(curve, query=True, tc=True)
+
+                    if keys:
+                        if time_range:
+                            pm.scaleKey(
+                                curve,
+                                time=time_range,
+                                timeScale=factor,
+                                timePivot=pivot_time,
+                            )
+                        else:
+                            pm.scaleKey(
+                                curve,
+                                timeScale=factor,
+                                timePivot=pivot_time,
+                            )
+                        keys_scaled += len(keys)
+
+        if keys_scaled > 0:
+            selection_type = "selected" if selected_keys_only else "all"
+            range_info = f" in range {time_range}" if time_range else ""
+            percentage = factor * 100
+            pm.displayInfo(
+                f"Scaled {keys_scaled} {selection_type} keys by {percentage}% around frame {pivot_time}{range_info}"
+            )
+        else:
+            pm.warning("No keyframes found to scale.")
+
+        return keys_scaled
+
+    @staticmethod
+    @CoreUtils.undoable
     def set_keys_for_attributes(
         objects, target_times=None, refresh_channel_box=False, **kwargs
     ):
@@ -1050,17 +1438,10 @@ class AnimUtils(ptk.HelpMixin):
             return
 
         # Filter out ignored attributes
-        if ignore:
-            ignore_set = (
-                {ignore.lower()}
-                if isinstance(ignore, str)
-                else {attr.lower() for attr in ignore if isinstance(attr, str)}
-            )
-            attrs = [attr for attr in attrs if attr.lower() not in ignore_set]
-
-            if not attrs:
-                pm.warning("All attributes were ignored.")
-                return
+        attrs = AnimUtils._filter_attributes_by_ignore(attrs, ignore)
+        if not attrs:
+            pm.warning("All attributes were ignored.")
+            return
 
         # Build per-attribute key data with auto-detected or explicit ranges
         attr_key_data = {}
@@ -1141,14 +1522,19 @@ class AnimUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def remove_intermediate_keys(
         objects: Union[str, "pm.nt.Transform", List[Union[str, "pm.nt.Transform"]]],
+        time_range: Optional[Union[int, Tuple[int, int]]] = None,
         ignore: Union[str, List[str], None] = None,
     ) -> int:
         """Removes all intermediate keyframes, keeping only the first and last key on each attribute.
         If attributes are selected in the channel box, only those will be affected.
-        Automatically detects the keyframe range for each attribute.
+        Automatically detects the keyframe range for each attribute if time_range is not specified.
 
         Parameters:
             objects (str/list): One or more objects to remove intermediate keys from.
+            time_range (int, tuple, or None):
+                - None: Auto-detects range from first to last keyframe per attribute
+                - int: End frame (starts from first keyframe)
+                - tuple (start, end): Explicit start and end frames
             ignore (str/list, optional): Attribute name(s) to ignore when removing keys.
                 E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these
                 attributes will not have intermediate keys removed.
@@ -1165,6 +1551,9 @@ class AnimUtils(ptk.HelpMixin):
 
             # Remove intermediate keys except for visibility
             remove_intermediate_keys(pm.selected(), ignore='visibility')
+
+            # Remove intermediate keys within specific range
+            remove_intermediate_keys(pm.selected(), time_range=(10, 50))
         """
         targets = pm.ls(objects, flatten=True)
         if not targets:
@@ -1175,13 +1564,8 @@ class AnimUtils(ptk.HelpMixin):
         cb_attrs = pm.channelBox("mainChannelBox", q=True, selectedMainAttributes=True)
 
         # Filter out ignored attributes
-        if ignore and cb_attrs:
-            ignore_set = (
-                {ignore.lower()}
-                if isinstance(ignore, str)
-                else {attr.lower() for attr in ignore if isinstance(attr, str)}
-            )
-            cb_attrs = [attr for attr in cb_attrs if attr.lower() not in ignore_set]
+        if cb_attrs:
+            cb_attrs = AnimUtils._filter_attributes_by_ignore(cb_attrs, ignore)
 
         keys_removed = 0
 
@@ -1191,32 +1575,58 @@ class AnimUtils(ptk.HelpMixin):
                 for attr in cb_attrs:
                     if obj.hasAttr(attr):
                         attr_name = f"{obj}.{attr}"
-                        # Get keyframe times for this specific attribute
-                        keyframe_times = pm.keyframe(
-                            attr_name, query=True, timeChange=True
-                        )
 
-                        if keyframe_times and len(keyframe_times) > 2:
-                            # Sort to ensure we have correct start and end
-                            keyframe_times = sorted(keyframe_times)
-                            start = keyframe_times[0]
-                            end = keyframe_times[-1]
-
-                            # Count keys that will be removed
-                            intermediate_keys = pm.keyframe(
-                                attr_name,
-                                query=True,
-                                timeChange=True,
-                                time=(start + 0.001, end - 0.001),
+                        # Determine range based on time_range parameter
+                        if time_range is None:
+                            # Auto-detect full range
+                            keyframe_times = pm.keyframe(
+                                attr_name, query=True, timeChange=True
                             )
-                            if intermediate_keys:
-                                keys_removed += len(intermediate_keys)
-                                # Remove intermediate keys (exclusive of start and end)
-                                pm.cutKey(
-                                    attr_name,
-                                    time=(start + 0.001, end - 0.001),
-                                    clear=True,
+                            if not keyframe_times or len(keyframe_times) < 2:
+                                continue
+                            start = sorted(keyframe_times)[0]
+                            end = sorted(keyframe_times)[-1]
+                        elif isinstance(time_range, tuple):
+                            # Tuple (start, end) - either can be None for auto-detect
+                            start_val, end_val = time_range
+                            key_times = None
+
+                            if start_val is None or end_val is None:
+                                key_times = pm.keyframe(
+                                    attr_name, query=True, timeChange=True
                                 )
+                                if not key_times:
+                                    continue
+
+                            start = (
+                                sorted(key_times)[0] if start_val is None else start_val
+                            )
+                            end = sorted(key_times)[-1] if end_val is None else end_val
+                        else:
+                            # Single int - start from first key, end at specified frame
+                            key_times = pm.keyframe(
+                                attr_name, query=True, timeChange=True
+                            )
+                            if not key_times:
+                                continue
+                            start = sorted(key_times)[0]
+                            end = time_range
+
+                        # Count keys that will be removed
+                        intermediate_keys = pm.keyframe(
+                            attr_name,
+                            query=True,
+                            timeChange=True,
+                            time=(start + 0.001, end - 0.001),
+                        )
+                        if intermediate_keys:
+                            keys_removed += len(intermediate_keys)
+                            # Remove intermediate keys (exclusive of start and end)
+                            pm.cutKey(
+                                attr_name,
+                                time=(start + 0.001, end - 0.001),
+                                clear=True,
+                            )
             else:
                 # Get all keyed attributes on the object
                 keyed_attrs = pm.keyframe(obj, query=True, name=True)
@@ -1228,27 +1638,52 @@ class AnimUtils(ptk.HelpMixin):
                     )
 
                     for attr in keyed_attrs:
-                        # Get keyframe times for this specific attribute/curve
-                        keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
-
-                        if keyframe_times and len(keyframe_times) > 2:
-                            # Sort to ensure we have correct start and end
-                            keyframe_times = sorted(keyframe_times)
-                            start = keyframe_times[0]
-                            end = keyframe_times[-1]
-
-                            # Count and remove intermediate keys
-                            intermediate_keys = pm.keyframe(
-                                attr,
-                                query=True,
-                                timeChange=True,
-                                time=(start + 0.001, end - 0.001),
+                        # Determine range based on time_range parameter
+                        if time_range is None:
+                            # Auto-detect full range
+                            keyframe_times = pm.keyframe(
+                                attr, query=True, timeChange=True
                             )
-                            if intermediate_keys:
-                                keys_removed += len(intermediate_keys)
-                                pm.cutKey(
-                                    attr, time=(start + 0.001, end - 0.001), clear=True
+                            if not keyframe_times or len(keyframe_times) < 2:
+                                continue
+                            start = sorted(keyframe_times)[0]
+                            end = sorted(keyframe_times)[-1]
+                        elif isinstance(time_range, tuple):
+                            # Tuple (start, end) - either can be None for auto-detect
+                            start_val, end_val = time_range
+                            key_times = None
+
+                            if start_val is None or end_val is None:
+                                key_times = pm.keyframe(
+                                    attr, query=True, timeChange=True
                                 )
+                                if not key_times:
+                                    continue
+
+                            start = (
+                                sorted(key_times)[0] if start_val is None else start_val
+                            )
+                            end = sorted(key_times)[-1] if end_val is None else end_val
+                        else:
+                            # Single int - start from first key, end at specified frame
+                            key_times = pm.keyframe(attr, query=True, timeChange=True)
+                            if not key_times:
+                                continue
+                            start = sorted(key_times)[0]
+                            end = time_range
+
+                        # Count and remove intermediate keys
+                        intermediate_keys = pm.keyframe(
+                            attr,
+                            query=True,
+                            timeChange=True,
+                            time=(start + 0.001, end - 0.001),
+                        )
+                        if intermediate_keys:
+                            keys_removed += len(intermediate_keys)
+                            pm.cutKey(
+                                attr, time=(start + 0.001, end - 0.001), clear=True
+                            )
 
         if keys_removed > 0:
             pm.displayInfo(f"Removed {keys_removed} intermediate keyframe(s).")
@@ -1588,6 +2023,37 @@ class AnimUtils(ptk.HelpMixin):
         return {name.lower() for name in names if isinstance(name, str)}
 
     @staticmethod
+    def _filter_attributes_by_ignore(
+        attributes: List[str], ignore: Union[str, List[str], None]
+    ) -> List[str]:
+        """Filter attribute names, excluding those in the ignore list.
+
+        This is a lightweight wrapper around CoreUtils.filter_attributes() for backwards
+        compatibility with the ignore parameter pattern used throughout AnimUtils.
+
+        Parameters:
+            attributes (list): Attribute names to filter.
+            ignore (str/list/None): Attribute name(s) to ignore.
+                E.g., 'visibility' or ['visibility', 'translateX'].
+                Supports wildcards (* and ?) for pattern matching.
+
+        Returns:
+            list: Filtered list of attribute names.
+
+        Example:
+            >>> attrs = ['translateX', 'translateY', 'visibility']
+            >>> filtered = AnimUtils._filter_attributes_by_ignore(attrs, 'visibility')
+            >>> # Returns: ['translateX', 'translateY']
+
+            >>> # Also supports wildcards
+            >>> filtered = AnimUtils._filter_attributes_by_ignore(attrs, 'translate*')
+            >>> # Returns: ['visibility']
+        """
+        return CoreUtils.filter_attributes(
+            attributes, exclude=ignore, case_sensitive=False
+        )
+
+    @staticmethod
     def _filter_curves_by_ignore(
         curves: List["pm.PyNode"], ignore: Union[str, List[str], None]
     ) -> List["pm.PyNode"]:
@@ -1667,6 +2133,215 @@ class AnimUtils(ptk.HelpMixin):
                 except RuntimeError as e:
                     pm.warning(f"Failed to move keys for {curve}: {e}")
         return shifted_count
+
+    @staticmethod
+    def _calculate_speed_profile(
+        obj: "pm.PyNode", time_range: Tuple[float, float]
+    ) -> Tuple[List[float], List[float]]:
+        """Calculate per-frame speed profile for an object's positional movement.
+
+        Measures the distance traveled between consecutive frames to determine speed.
+        Returns both the raw speed values and normalized (0-1) speed values.
+
+        Parameters:
+            obj (pm.PyNode): The object to measure speed for.
+            time_range (Tuple[float, float]): (start_frame, end_frame) range to measure.
+
+        Returns:
+            Tuple[List[float], List[float]]: (speeds, normalized_speeds)
+                - speeds: Raw distance traveled per frame
+                - normalized_speeds: Normalized to 0-1 range where 1.0 = fastest movement
+
+        Example:
+            speeds, norm_speeds = AnimUtils._calculate_speed_profile(obj, (1, 100))
+        """
+        start_frame, end_frame = int(time_range[0]), int(time_range[1])
+        frame_range = list(range(start_frame, end_frame + 1))
+
+        positions = []
+        speeds = []
+
+        # Save current time to restore later
+        current_time = pm.currentTime(query=True)
+
+        try:
+            # Collect positions at each frame
+            for frame in frame_range:
+                pm.currentTime(frame, edit=True, update=False)
+                pos = pm.xform(obj, query=True, worldSpace=True, translation=True)
+                positions.append(pos)
+
+            # Calculate per-frame speeds (distance traveled)
+            for i in range(1, len(positions)):
+                prev_pos = positions[i - 1]
+                curr_pos = positions[i]
+                distance = ptk.distance_between_points(prev_pos, curr_pos)
+                speeds.append(distance)
+
+        finally:
+            # Restore original time
+            pm.currentTime(current_time, edit=True, update=False)
+
+        # Normalize speeds to 0-1 range
+        if speeds:
+            max_speed = max(speeds) if speeds else 1.0
+            if max_speed > 0:
+                normalized_speeds = [s / max_speed for s in speeds]
+            else:
+                normalized_speeds = [0.0] * len(speeds)
+        else:
+            normalized_speeds = []
+
+        return speeds, normalized_speeds
+
+    @staticmethod
+    def _scale_keys_by_speed_profile(
+        curves: List["pm.PyNode"],
+        time_range: Tuple[float, float],
+        normalized_speeds: List[float],
+        exaggeration: float = 1.0,
+    ) -> int:
+        """Scale keyframe timing based on a speed profile.
+
+        Areas of slow movement get expanded in time (more frames), while fast movement
+        gets compressed (fewer frames). This creates a time-remapping effect based on
+        the object's motion speed.
+
+        Parameters:
+            curves (List[pm.PyNode]): Animation curves to scale.
+            time_range (Tuple[float, float]): (start_frame, end_frame) of the animation.
+            normalized_speeds (List[float]): Normalized speed values (0-1) for each frame interval.
+            exaggeration (float): Multiplier for the speed effect. Higher values create more
+                dramatic time distortion. Default is 1.0.
+
+        Returns:
+            int: Number of keyframes that were scaled.
+
+        Example:
+            # Slower movement gets more frames, faster gets less
+            _scale_keys_by_speed_profile(curves, (1, 100), speeds, exaggeration=2.0)
+        """
+        start_frame, end_frame = time_range
+        keys_scaled = 0
+
+        for curve in curves:
+            # Get all keyframe times in the range
+            keyframe_times = pm.keyframe(
+                curve, query=True, timeChange=True, time=time_range
+            )
+
+            if not keyframe_times or len(keyframe_times) < 2:
+                continue
+
+            # Sort keyframes
+            keyframe_times = sorted(keyframe_times)
+
+            # Calculate new keyframe times based on speed profile
+            new_times = [keyframe_times[0]]  # First key stays at original position
+
+            for i in range(1, len(keyframe_times)):
+                old_time = keyframe_times[i]
+                prev_old_time = keyframe_times[i - 1]
+
+                # Calculate the time step for this keyframe interval
+                time_step = old_time - prev_old_time
+
+                # Find which frame intervals this keyframe spans
+                # Use the average speed in this interval
+                start_idx = int(prev_old_time - start_frame)
+                end_idx = int(old_time - start_frame)
+
+                # Ensure indices are within bounds
+                start_idx = max(0, min(start_idx, len(normalized_speeds) - 1))
+                end_idx = max(0, min(end_idx, len(normalized_speeds)))
+
+                if start_idx < end_idx and end_idx <= len(normalized_speeds):
+                    avg_speed = sum(normalized_speeds[start_idx:end_idx]) / (
+                        end_idx - start_idx
+                    )
+                else:
+                    avg_speed = (
+                        normalized_speeds[start_idx]
+                        if start_idx < len(normalized_speeds)
+                        else 0.5
+                    )
+
+                # Apply speed-based scaling
+                # Slow movement (low speed) = stretch time (multiply by factor > 1)
+                # Fast movement (high speed) = compress time (multiply by factor < 1)
+                # Normal: slow areas get more time
+                speed_factor = 1.0 + ((1.0 - avg_speed) * exaggeration)
+
+                scaled_step = time_step * speed_factor
+                new_time = new_times[-1] + scaled_step
+                new_times.append(new_time)
+
+            # Now move the keyframes to their new positions
+            # Work backwards to avoid keyframe collision issues
+            for i in range(len(keyframe_times) - 1, -1, -1):
+                old_time = keyframe_times[i]
+                new_time = new_times[i]
+
+                if abs(new_time - old_time) > 0.001:  # Only move if significant change
+                    # Get keyframe value and tangent data
+                    value = pm.keyframe(
+                        curve, query=True, time=(old_time,), valueChange=True
+                    )[0]
+
+                    try:
+                        in_tangent_type = pm.keyTangent(
+                            curve, query=True, time=(old_time,), inTangentType=True
+                        )[0]
+                        out_tangent_type = pm.keyTangent(
+                            curve, query=True, time=(old_time,), outTangentType=True
+                        )[0]
+                        in_angle = pm.keyTangent(
+                            curve, query=True, time=(old_time,), inAngle=True
+                        )[0]
+                        out_angle = pm.keyTangent(
+                            curve, query=True, time=(old_time,), outAngle=True
+                        )[0]
+                        in_weight = pm.keyTangent(
+                            curve, query=True, time=(old_time,), inWeight=True
+                        )[0]
+                        out_weight = pm.keyTangent(
+                            curve, query=True, time=(old_time,), outWeight=True
+                        )[0]
+                        has_tangent_data = True
+                    except Exception:
+                        has_tangent_data = False
+
+                    # Delete old keyframe
+                    pm.cutKey(curve, time=(old_time, old_time), option="keys")
+
+                    # Create new keyframe at new time
+                    pm.setKeyframe(curve, time=new_time, value=value)
+
+                    # Restore tangent information
+                    if has_tangent_data:
+                        try:
+                            pm.keyTangent(
+                                curve,
+                                edit=True,
+                                time=(new_time,),
+                                inTangentType=in_tangent_type,
+                                outTangentType=out_tangent_type,
+                            )
+                            pm.keyTangent(
+                                curve,
+                                edit=True,
+                                time=(new_time,),
+                                inAngle=in_angle,
+                                outAngle=out_angle,
+                                inWeight=in_weight,
+                                outWeight=out_weight,
+                            )
+                        except Exception:
+                            pass
+
+                    keys_scaled += 1
+
+        return keys_scaled
 
     @staticmethod
     def _group_overlapping_keyframes(obj_keyframe_data: List[dict]) -> List[dict]:
@@ -2696,7 +3371,125 @@ class AnimUtils(ptk.HelpMixin):
         return frame_ranges
 
     @staticmethod
-    @CoreUtils.undoable
+    def get_tied_keyframes(
+        objects: Optional[List["pm.PyNode"]] = None,
+        tolerance: float = 1e-5,
+    ) -> Dict["pm.PyNode", Dict[str, List[float]]]:
+        """Detects tied (bookend) keyframes for given objects.
+
+        A tied keyframe is identified as a keyframe at the start or end of an attribute's
+        keyframe range that has the same value as the adjacent keyframe, indicating it's
+        likely a hold/bookend key rather than actual animation.
+
+        This is useful for:
+        - Identifying keys added by tie_keyframes()
+        - Filtering out bookend keys from operations
+        - Validating animation data
+
+        Parameters:
+            objects (Optional[List[pm.PyNode]]): Objects to check for tied keyframes.
+                If None, checks all keyed objects in the scene.
+            tolerance (float): Tolerance for comparing keyframe values. Two values are
+                considered the same if their difference is less than this value.
+                Default is 1e-5.
+
+        Returns:
+            Dict[pm.PyNode, Dict[str, List[float]]]: Dictionary mapping objects to their
+                tied keyframes. For each object, maps attribute names (curve names) to
+                lists of tied keyframe times.
+
+        Example:
+            # Get all tied keyframes in the scene
+            tied_keys = AnimUtils.get_tied_keyframes()
+            # Returns: {obj1: {'pCube1_translateX': [1.0, 100.0]}, obj2: {...}}
+
+            # Get tied keyframes for selected objects
+            tied_keys = AnimUtils.get_tied_keyframes(pm.selected())
+
+            # Check if a specific object has tied keyframes
+            tied_keys = AnimUtils.get_tied_keyframes([my_obj])
+            if my_obj in tied_keys:
+                print(f"Object has tied keys: {tied_keys[my_obj]}")
+        """
+        # Get objects to check
+        if objects is None:
+            objects = pm.ls(type="transform")
+            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            return {}
+
+        tied_keyframes = {}
+
+        for obj in objects:
+            # Get all animation curves for this object
+            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+
+            if not keyed_attrs:
+                continue
+
+            obj_tied_keys = {}
+
+            for attr in keyed_attrs:
+                # Get all keyframe times for this attribute
+                keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
+
+                if not keyframe_times or len(keyframe_times) < 2:
+                    continue  # Need at least 2 keys to have potential ties
+
+                keyframe_times = sorted(keyframe_times)
+                tied_times = []
+
+                # Check start keyframe - is it a tie (same value as next key)?
+                if len(keyframe_times) > 1:
+                    start_value = pm.keyframe(
+                        attr,
+                        query=True,
+                        time=(keyframe_times[0],),
+                        valueChange=True,
+                    )[0]
+                    next_value = pm.keyframe(
+                        attr,
+                        query=True,
+                        time=(keyframe_times[1],),
+                        valueChange=True,
+                    )[0]
+
+                    # If values are the same, this is a tied keyframe
+                    if abs(start_value - next_value) < tolerance:
+                        tied_times.append(keyframe_times[0])
+
+                # Check end keyframe - is it a tie (same value as previous key)?
+                if len(keyframe_times) > 1:
+                    end_value = pm.keyframe(
+                        attr,
+                        query=True,
+                        time=(keyframe_times[-1],),
+                        valueChange=True,
+                    )[0]
+                    prev_value = pm.keyframe(
+                        attr,
+                        query=True,
+                        time=(keyframe_times[-2],),
+                        valueChange=True,
+                    )[0]
+
+                    # If values are the same, this is a tied keyframe
+                    if abs(end_value - prev_value) < tolerance:
+                        tied_times.append(keyframe_times[-1])
+
+                # Store tied keyframes for this attribute if any were found
+                if tied_times:
+                    obj_tied_keys[attr] = tied_times
+
+            # Store object's tied keyframes if any were found
+            if obj_tied_keys:
+                tied_keyframes[obj] = obj_tied_keys
+
+        return tied_keyframes
+
     @staticmethod
     @CoreUtils.undoable
     def tie_keyframes(
@@ -2790,82 +3583,21 @@ class AnimUtils(ptk.HelpMixin):
             # Remove bookend keys for specific objects
             untie_keyframes([obj1, obj2])
         """
-        if objects is None:  # Get all objects that have keyframes
-            objects = pm.ls(type="transform")
-            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+        # Use the helper method to detect tied keyframes
+        tied_keyframes = AnimUtils.get_tied_keyframes(objects)
 
-        if not objects:
-            pm.warning("No keyed objects found.")
+        if not tied_keyframes:
+            pm.displayInfo("No bookend keyframes found to remove.")
             return
 
         keys_removed = 0
 
-        for obj in objects:
-            # Get all the attributes that have keyframes
-            keyed_attrs = pm.keyframe(obj, query=True, name=True)
-
-            if keyed_attrs:
-                for attr in keyed_attrs:
-                    # Get all keyframe times for this attribute
-                    keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
-
-                    if not keyframe_times or len(keyframe_times) < 2:
-                        continue  # Need at least 2 keys to have bookends
-
-                    keyframe_times = sorted(keyframe_times)
-
-                    # Check start keyframe - is it a bookend (same value as next key)?
-                    if len(keyframe_times) > 1:
-                        # Get values of first two keyframes
-                        start_value = pm.keyframe(
-                            attr,
-                            query=True,
-                            time=(keyframe_times[0],),
-                            valueChange=True,
-                        )[0]
-                        next_value = pm.keyframe(
-                            attr,
-                            query=True,
-                            time=(keyframe_times[1],),
-                            valueChange=True,
-                        )[0]
-
-                        # If values are the same, this is likely a bookend key
-                        if abs(start_value - next_value) < 1e-5:
-                            pm.cutKey(
-                                attr,
-                                time=(keyframe_times[0], keyframe_times[0]),
-                                clear=True,
-                            )
-                            keys_removed += 1
-
-                    # Check end keyframe (re-query in case we removed the start key)
-                    keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
-                    if keyframe_times and len(keyframe_times) > 1:
-                        keyframe_times = sorted(keyframe_times)
-
-                        # Get values of last two keyframes
-                        end_value = pm.keyframe(
-                            attr,
-                            query=True,
-                            time=(keyframe_times[-1],),
-                            valueChange=True,
-                        )[0]
-                        prev_value = pm.keyframe(
-                            attr,
-                            query=True,
-                            time=(keyframe_times[-2],),
-                            valueChange=True,
-                        )[0]
-
-                        # If values are the same, this is likely a bookend key
-                        if abs(end_value - prev_value) < 1e-5:
-                            pm.cutKey(
-                                attr,
-                                time=(keyframe_times[-1], keyframe_times[-1]),
-                                clear=True,
-                            )
-                            keys_removed += 1
+        # Remove all detected tied keyframes
+        for obj, attr_dict in tied_keyframes.items():
+            for attr, tied_times in attr_dict.items():
+                for time in tied_times:
+                    pm.cutKey(attr, time=(time, time), clear=True)
+                    keys_removed += 1
 
         if keys_removed > 0:
             pm.displayInfo(f"Removed {keys_removed} bookend keyframe(s).")

@@ -517,7 +517,7 @@ class SceneExporterSlots(SceneExporter):
         widget.menu.position = "bottom"
 
         for task_name, params in self.task_manager.task_definitions.items():
-            widget_type = params.get("widget_type", "QCheckBox")
+            widget_type = params.pop("widget_type", "QCheckBox")
             object_name = self.sb.convert_to_legal_name(task_name)
 
             # Dynamically resolve the widget class
@@ -530,11 +530,7 @@ class SceneExporterSlots(SceneExporter):
             # Create the widget
             created_widget = widget.menu.add(widget_class)
 
-            # Create a copy of params without widget_type for set_attributes
-            params_copy = {k: v for k, v in params.items() if k != "widget_type"}
-            self.ui.set_attributes(
-                created_widget, setObjectName=object_name, **params_copy
-            )
+            self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
     def b002_init(self, widget) -> None:
         """Auto-generate Check Settings UI from check definitions."""
