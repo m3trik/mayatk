@@ -618,21 +618,30 @@ class SceneExporterSlots(SceneExporter):
         self.logger.debug(f"Task parameters: {task_params}")
         self.logger.debug(f"Check parameters: {check_params}")
 
-        export_visible = task_params.pop("export_visible_objects", True)
+        export_mode = task_params.pop("export_visible_objects", "visible")
 
-        objects_to_export = lambda: (
-            DisplayUtils.get_visible_geometry(
-                consider_templated_visible=False, inherit_parent_visibility=True
-            )
-            if export_visible
-            else pm.selected()
-        )
+        def objects_to_export():
+            if export_mode == "visible":
+                return DisplayUtils.get_visible_geometry(
+                    consider_templated_visible=False, inherit_parent_visibility=True
+                )
+            elif export_mode == "selected":
+                return pm.selected()
+            elif export_mode == "all":
+                return pm.ls(transforms=True, geometry=True)
+            else:
+                # Default to visible if unknown mode
+                return DisplayUtils.get_visible_geometry(
+                    consider_templated_visible=False, inherit_parent_visibility=True
+                )
 
         export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset_file=self.ui.cmb000.currentData(),
-            export_visible=export_visible,
+            export_visible=(
+                export_mode != "selected"
+            ),  # True unless export mode is "selected"
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),

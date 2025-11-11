@@ -515,15 +515,21 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         self.logger = logger
         self.objects = None
 
+    _export_mode_options: Dict[str, Any] = {
+        "Export: All Scene Objects": "all",
+        "Export: All Visible Objects": "visible",
+        "Export: Selected Objects Only": "selected",
+    }
+
     @property
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the task definitions for the UI."""
         return {
             "export_visible_objects": {
-                "widget_type": "QCheckBox",
-                "setText": "Export All Visible Objects",
-                "setToolTip": "Export all visible objects regardless of the current selection.\nIf unchecked, only the selected objects will be exported.",
-                "setChecked": True,
+                "widget_type": "ComboBox",
+                "setToolTip": "Choose what objects to export:\n- All Visible Objects: Export all visible geometry in the scene\n- Selected Objects Only: Export only currently selected objects\n- All Scene Objects: Export all objects regardless of visibility or selection",
+                "add": self._export_mode_options,
+                "value_method": "currentData",
             },
             "set_workspace": {
                 "widget_type": "QCheckBox",
