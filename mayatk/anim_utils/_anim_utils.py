@@ -1,6 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any
+from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any, Iterable, Set
+import math
+import os
 
 try:
     import pymel.core as pm
@@ -12,7 +14,671 @@ import pythontk as ptk
 from mayatk.core_utils import CoreUtils
 
 
-class AnimUtils(ptk.HelpMixin):
+DEBUG_SPEED_RETIME = os.environ.get("MTK_SPEED_RETIME_DEBUG", "1").lower() not in {
+    "0",
+    "false",
+    "off",
+}
+
+
+class _AnimUtilsMixin:
+    """Helper mixin that contains internal shared logic for AnimUtils"""
+
+    @staticmethod
+    def _normalize_group_mode(mode: Optional[str]) -> str:
+        """Validate group mode value.
+
+        Valid modes: 'single_group', 'per_object', 'overlap_groups'
+        """
+        if mode is None:
+            return "single_group"
+
+        normalized = str(mode).strip().lower()
+        valid_modes = {"single_group", "per_object", "overlap_groups"}
+
+        if normalized not in valid_modes:
+            raise ValueError(
+                f"Invalid group_mode '{mode}'. Must be one of: {', '.join(sorted(valid_modes))}"
+            )
+
+        return normalized
+
+    @staticmethod
+    def _normalize_keys_to_time_range_and_selection(
+        keys_value: Any,
+    ) -> Tuple[Tuple[Optional[float], Optional[float]], bool]:
+        """Normalize the ``keys`` argument into a time range and selection flag."""
+
+        if keys_value is None:
+            return (None, None), False
+
+        if isinstance(keys_value, str):
+            normalized = keys_value.strip().lower()
+            if normalized == "selected":
+                return (None, None), True
+            try:
+                numeric_value = float(keys_value)
+            except (TypeError, ValueError):
+                return (None, None), False
+            else:
+                return (numeric_value, numeric_value), False
+
+        if isinstance(keys_value, (int, float)) and not isinstance(keys_value, bool):
+            value = float(keys_value)
+            return (value, value), False
+
+        def _coerce(component: Any) -> Optional[float]:
+            if component is None:
+                return None
+            if isinstance(component, (int, float)) and not isinstance(component, bool):
+                return float(component)
+            if isinstance(component, str):
+                try:
+                    return float(component.strip())
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(keys_value, (list, tuple)):
+            values = list(keys_value)
+            if not values:
+                return (None, None), False
+
+            if (
+                len(values) == 2
+                and not isinstance(values[0], (list, tuple))
+                and not isinstance(values[1], (list, tuple))
+            ):
+                start = _coerce(values[0])
+                end = _coerce(values[1])
+                if start is not None or end is not None:
+                    return (start, end), False
+
+            times: List[float] = []
+            for item in values:
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                    times.append(float(item))
+                elif isinstance(item, str):
+                    parsed = _coerce(item)
+                    if parsed is not None:
+                        times.append(parsed)
+                elif isinstance(item, (list, tuple)) and item:
+                    start = _coerce(item[0])
+                    if start is not None:
+                        times.append(start)
+                    if len(item) > 1:
+                        end = _coerce(item[1])
+                        if end is not None:
+                            times.append(end)
+
+            if times:
+                times.sort()
+                return (times[0], times[-1]), False
+
+        return (None, None), False
+
+    @classmethod
+    def _build_object_groups(
+        cls, object_info: List[Dict[str, Any]], group_mode: str
+    ) -> List[List[Dict[str, Any]]]:
+        """Create processing groups based on the requested grouping mode."""
+
+        if not object_info:
+            return []
+
+        valid_entries = [info for info in object_info if info]
+        if not valid_entries:
+            return []
+
+        normalized_mode = cls._normalize_group_mode(group_mode)
+
+        if normalized_mode == "per_object":
+            return [[info] for info in valid_entries]
+
+        if normalized_mode == "single_group":
+            return [valid_entries]
+
+        # overlap_groups
+        overlap_payload: List[Dict[str, Any]] = []
+        for info in valid_entries:
+            start = info.get("start")
+            end = info.get("end")
+            clamped = ptk.clamp_range(start, end)
+            if not clamped:
+                continue
+
+            overlap_payload.append(
+                {
+                    "obj": info.get("object"),
+                    "keyframes": info.get("key_times") or [],
+                    "start": clamped[0],
+                    "end": clamped[1],
+                    "duration": clamped[1] - clamped[0],
+                    "curves": info.get("curves_to_scale")
+                    or info.get("all_curves")
+                    or [],
+                }
+            )
+
+        if not overlap_payload:
+            return [[info] for info in valid_entries]
+
+        grouped = cls._group_overlapping_keyframes(overlap_payload)
+        if not grouped:
+            return [[info] for info in valid_entries]
+
+        info_lookup = {info.get("object"): info for info in valid_entries}
+        groups: List[List[Dict[str, Any]]] = []
+
+        for group in grouped:
+            group_infos: List[Dict[str, Any]] = []
+            for obj in group.get("objects", []):
+                info = info_lookup.get(obj)
+                if info and info not in group_infos:
+                    group_infos.append(info)
+            if group_infos:
+                groups.append(group_infos)
+
+        return groups if groups else [[info] for info in valid_entries]
+
+    @classmethod
+    def _resolve_group_bounds(
+        cls,
+        group: List[Dict[str, Any]],
+        base_start: Optional[float],
+        base_end: Optional[float],
+    ) -> Optional[Tuple[float, float]]:
+        """Compute the overall time range for a group of objects."""
+
+        if not group:
+            return None
+
+        starts: List[float] = []
+        ends: List[float] = []
+
+        for info in group:
+            range_tuple = ptk.clamp_range(
+                info.get("start"), info.get("end"), base_start, base_end
+            )
+            if not range_tuple:
+                continue
+
+            starts.append(range_tuple[0])
+            ends.append(range_tuple[1])
+
+        if not starts or not ends:
+            return None
+
+        return min(starts), max(ends)
+
+    @classmethod
+    def _resolve_range_for_object(
+        cls,
+        info: Dict[str, Any],
+        group_range: Optional[Tuple[float, float]],
+        group_mode: str,
+        base_start: Optional[float],
+        base_end: Optional[float],
+    ) -> Optional[Tuple[float, float]]:
+        """Determine the active time range for an object within a group."""
+
+        clamped = ptk.clamp_range(
+            info.get("start"), info.get("end"), base_start, base_end
+        )
+        if not clamped:
+            return None
+
+        if group_range is not None:
+            clamped = ptk.clamp_range(clamped[0], clamped[1], *group_range)
+
+        return clamped
+
+    @classmethod
+    def _collect_scale_targets(
+        cls,
+        objects: List["pm.PyNode"],
+        ignore: Optional[Union[str, List[str]]],
+        channel_box_attrs: Optional[List[str]],
+        selected_keys_only: bool,
+        range_specified: bool,
+        base_start: Optional[float],
+        base_end: Optional[float],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Prepare per-object payload for scale_keys, respecting ignore filters."""
+
+        targets: List[Dict[str, Any]] = []
+        diagnostics: Dict[str, Any] = {
+            "objects_processed": 0,
+            "objects_with_curves": 0,
+            "filtered_by_ignore": 0,
+            "filtered_by_channel_box": 0,
+        }
+
+        for obj in objects:
+            diagnostics["objects_processed"] += 1
+
+            curves_initial = cls.objects_to_curves(obj)
+            if not curves_initial:
+                continue
+
+            diagnostics["objects_with_curves"] += 1
+
+            curves_filtered = cls._filter_curves_by_ignore(curves_initial, ignore)
+            if not curves_filtered:
+                diagnostics["filtered_by_ignore"] += 1
+                continue
+
+            curves_all = cls._filter_curves_by_channel_box(
+                curves_filtered, channel_box_attrs
+            )
+            if not curves_all:
+                if channel_box_attrs:
+                    diagnostics["filtered_by_channel_box"] += 1
+                continue
+
+            curves_all = list(dict.fromkeys(curves_all))
+            info: Dict[str, Any] = {
+                "object": obj,
+                "all_curves": curves_all,
+            }
+
+            if selected_keys_only:
+                selected_curves = (
+                    pm.keyframe(obj, query=True, name=True, selected=True) or []
+                )
+                selected_curves = cls._filter_curves_by_ignore(selected_curves, ignore)
+                selected_curves = cls._filter_curves_by_channel_box(
+                    selected_curves, channel_box_attrs
+                )
+                selected_curves = list(dict.fromkeys(selected_curves))
+                if not selected_curves:
+                    continue
+                info["curves_to_scale"] = selected_curves
+                key_mode = "selected"
+            else:
+                info["curves_to_scale"] = curves_all
+                key_mode = "all"
+
+            key_times_full_raw = cls.get_keyframe_times(
+                info["curves_to_scale"], mode=key_mode, from_curves=True
+            )
+            key_times_full = (
+                sorted({float(t) for t in key_times_full_raw})
+                if key_times_full_raw
+                else []
+            )
+            if not key_times_full:
+                continue
+
+            info["key_times_full"] = key_times_full
+            info["start_full"] = key_times_full[0]
+            info["end_full"] = key_times_full[-1]
+
+            if range_specified:
+                filtered_times = [
+                    t
+                    for t in key_times_full
+                    if (base_start is None or t >= base_start)
+                    and (base_end is None or t <= base_end)
+                ]
+            else:
+                filtered_times = key_times_full
+
+            info["key_times"] = filtered_times
+            info["start"] = filtered_times[0] if filtered_times else None
+            info["end"] = filtered_times[-1] if filtered_times else None
+
+            targets.append(info)
+
+        return targets, diagnostics
+
+    @staticmethod
+    def _filter_attributes_by_ignore(
+        attributes: Optional[List[Any]], ignore: Optional[Union[str, List[str]]]
+    ) -> List[Any]:
+        """Filter attribute names based on the ignore list."""
+
+        if not attributes:
+            return []
+
+        if not ignore:
+            return list(attributes)
+
+        # Parse ignore patterns into full names and simple names (last component)
+        ignore_list = [ignore] if isinstance(ignore, str) else ignore
+        ignored_full: Set[str] = set()
+        ignored_simple: Set[str] = set()
+
+        for pattern in ignore_list:
+            if not pattern:
+                continue
+            pattern_lower = str(pattern).lower()
+            ignored_full.add(pattern_lower)
+            # Extract simple name (last component after . or |) using func parameter
+            if "." in pattern_lower:
+                parts = ptk.split_delimited_string(
+                    pattern_lower, delimiter=".", func=lambda x: x[-1:]
+                )
+                ignored_simple.add(parts[0])
+            elif "|" in pattern_lower:
+                parts = ptk.split_delimited_string(
+                    pattern_lower, delimiter="|", func=lambda x: x[-1:]
+                )
+                ignored_simple.add(parts[0])
+            else:
+                ignored_simple.add(pattern_lower)
+
+        if not ignored_full and not ignored_simple:
+            return list(attributes)
+
+        filtered: List[Any] = []
+        for attr in attributes:
+            attr_name = str(attr)
+            attr_lower = attr_name.lower()
+            simple = attr_lower.split(".")[-1]
+            if attr_lower in ignored_full or simple in ignored_simple:
+                continue
+            filtered.append(attr)
+        return filtered
+
+    @staticmethod
+    def _filter_curves_by_ignore(
+        curves: Optional[List[Union[str, "pm.PyNode"]]],
+        ignore: Optional[Union[str, List[str]]],
+    ) -> List["pm.PyNode"]:
+        """Filter animation curves that should be ignored."""
+
+        if not curves:
+            return []
+
+        if not ignore:
+            return [pm.PyNode(c) for c in curves]
+
+        # Parse ignore patterns into full names and simple names (last component)
+        ignore_list = [ignore] if isinstance(ignore, str) else ignore
+        ignored_full: Set[str] = set()
+        ignored_attrs: Set[str] = set()
+
+        for pattern in ignore_list:
+            if not pattern:
+                continue
+            pattern_lower = str(pattern).lower()
+            ignored_full.add(pattern_lower)
+            # Extract simple name (last component after . or |) using func parameter
+            if "." in pattern_lower:
+                parts = ptk.split_delimited_string(
+                    pattern_lower, delimiter=".", func=lambda x: x[-1:]
+                )
+                ignored_attrs.add(parts[0])
+            elif "|" in pattern_lower:
+                parts = ptk.split_delimited_string(
+                    pattern_lower, delimiter="|", func=lambda x: x[-1:]
+                )
+                ignored_attrs.add(parts[0])
+            else:
+                ignored_attrs.add(pattern_lower)
+
+        ignored_suffixes: Tuple[str, ...] = tuple(
+            list(f"_{attr}" for attr in ignored_attrs)
+            + list(f".{attr}" for attr in ignored_attrs)
+        )
+
+        filtered: List["pm.PyNode"] = []
+        for curve in curves:
+            try:
+                curve_node = pm.PyNode(curve)
+            except Exception:
+                continue
+
+            curve_name = str(curve_node).lower()
+            if curve_name in ignored_full:
+                continue
+
+            connections = list(curve_node.outputs(plugs=True))
+            if not connections:
+                connections = (
+                    pm.listConnections(
+                        curve_node, plugs=True, destination=True, source=False
+                    )
+                    or []
+                )
+
+            include_curve = True
+            for conn in connections:
+                try:
+                    full_name = conn.longName()
+                except AttributeError:
+                    full_name = str(conn)
+                full_name = full_name.lower()
+                simple_name = full_name.split(".")[-1]
+
+                if full_name in ignored_full or simple_name in ignored_attrs:
+                    include_curve = False
+                    break
+
+            if include_curve and ignored_suffixes:
+                if curve_name.endswith(ignored_suffixes):
+                    include_curve = False
+
+            if include_curve:
+                filtered.append(curve_node)
+
+        return filtered
+
+    @staticmethod
+    def _filter_curves_by_channel_box(
+        curves: Optional[List[Union[str, "pm.PyNode"]]],
+        channel_box_attrs: Optional[List[str]],
+    ) -> List["pm.PyNode"]:
+        """Restrict curves to those whose attributes are selected in the channel box."""
+
+        if not curves:
+            return []
+
+        if not channel_box_attrs:
+            return [pm.PyNode(curve) for curve in curves]
+
+        # Parse channel box attrs into full names and simple names (last component)
+        allowed_full: Set[str] = set()
+        allowed_simple: Set[str] = set()
+
+        for attr in channel_box_attrs:
+            if not attr:
+                continue
+            attr_lower = str(attr).lower()
+            allowed_full.add(attr_lower)
+            # Extract simple name (last component after . or |) using func parameter
+            if "." in attr_lower:
+                parts = ptk.split_delimited_string(
+                    attr_lower, delimiter=".", func=lambda x: x[-1:]
+                )
+                allowed_simple.add(parts[0])
+            elif "|" in attr_lower:
+                parts = ptk.split_delimited_string(
+                    attr_lower, delimiter="|", func=lambda x: x[-1:]
+                )
+                allowed_simple.add(parts[0])
+            else:
+                allowed_simple.add(attr_lower)
+
+        if not allowed_full and not allowed_simple:
+            return [pm.PyNode(curve) for curve in curves]
+
+        filtered: List["pm.PyNode"] = []
+        for curve in curves:
+            try:
+                curve_node = pm.PyNode(curve)
+            except Exception:
+                continue
+
+            connections = (
+                pm.listConnections(
+                    curve_node, plugs=True, destination=True, source=False
+                )
+                or []
+            )
+
+            for conn in connections:
+                attr_name = conn.attrName()
+                if not attr_name:
+                    continue
+
+                attr_key = attr_name.lower()
+                full_name = f"{conn.node().name()}.{attr_name}".lower()
+                if attr_key in allowed_simple or full_name in allowed_full:
+                    filtered.append(curve_node)
+                    break
+
+        return filtered
+
+    @classmethod
+    def _compute_motion_progress(
+        cls,
+        obj: "pm.PyNode",
+        time_range: Tuple[float, float],
+        samples: Optional[int] = None,
+    ) -> Tuple[List[float], List[float], float]:
+        """Sample an object's motion and return normalized progress values."""
+
+        if obj is None or not pm.objExists(obj):
+            return [], [], 0.0
+
+        if not time_range or len(time_range) != 2:
+            return [], [], 0.0
+
+        start, end = time_range
+        if start is None or end is None or end <= start:
+            return [], [], 0.0
+
+        try:
+            sample_count = int(samples) if samples is not None else 64
+        except (TypeError, ValueError):
+            sample_count = 64
+
+        sample_count = max(3, sample_count)
+
+        span = end - start
+        if sample_count == 1 or math.isclose(span, 0.0):
+            return [], [], 0.0
+
+        sample_times = [
+            float(start + (span * index) / (sample_count - 1))
+            for index in range(sample_count)
+        ]
+
+        current_time = pm.currentTime(query=True)
+        positions: List[Tuple[float, float, float]] = []
+
+        try:
+            for time_value in sample_times:
+                pm.currentTime(time_value, edit=True)
+                position = pm.xform(obj, query=True, worldSpace=True, translation=True)
+                if not position or len(position) < 3:
+                    return [], [], 0.0
+                positions.append(
+                    (float(position[0]), float(position[1]), float(position[2]))
+                )
+        except Exception:
+            return [], [], 0.0
+        finally:
+            pm.currentTime(current_time, edit=True)
+
+        if len(positions) < 2:
+            return [], [], 0.0
+
+        cumulative: List[float] = [0.0]
+        total_distance = 0.0
+        for index in range(1, len(positions)):
+            distance = ptk.MathUtils.distance_between_points(
+                positions[index - 1], positions[index]
+            )
+            total_distance += distance
+            cumulative.append(total_distance)
+
+        if total_distance <= 1e-8:
+            progress = [0.0 for _ in cumulative]
+        else:
+            progress = [value / total_distance for value in cumulative]
+
+        return sample_times, progress, total_distance
+
+    @staticmethod
+    def _get_curve_tangent_data(
+        curve: "pm.PyNode", time: float
+    ) -> Optional[Dict[str, Any]]:
+        """Capture tangent information for a keyframe on the given curve."""
+
+        try:
+            return {
+                "inTangentType": pm.keyTangent(
+                    curve, query=True, time=(time,), inTangentType=True
+                )[0],
+                "outTangentType": pm.keyTangent(
+                    curve, query=True, time=(time,), outTangentType=True
+                )[0],
+                "inAngle": pm.keyTangent(curve, query=True, time=(time,), inAngle=True)[
+                    0
+                ],
+                "outAngle": pm.keyTangent(
+                    curve, query=True, time=(time,), outAngle=True
+                )[0],
+                "inWeight": pm.keyTangent(
+                    curve, query=True, time=(time,), inWeight=True
+                )[0],
+                "outWeight": pm.keyTangent(
+                    curve, query=True, time=(time,), outWeight=True
+                )[0],
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _apply_curve_tangent_data(
+        curve: "pm.PyNode", time: float, data: Optional[Dict[str, Any]]
+    ) -> None:
+        """Restore tangent information for a keyframe on the given curve."""
+
+        if not data:
+            return
+
+        try:
+            pm.keyTangent(
+                curve,
+                edit=True,
+                time=(time,),
+                inTangentType=data.get("inTangentType"),
+                outTangentType=data.get("outTangentType"),
+            )
+            pm.keyTangent(
+                curve,
+                edit=True,
+                time=(time,),
+                inAngle=data.get("inAngle"),
+                outAngle=data.get("outAngle"),
+                inWeight=data.get("inWeight"),
+                outWeight=data.get("outWeight"),
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _curves_to_attributes(curves: List["pm.PyNode"], obj: "pm.PyNode") -> List[str]:
+        """Helper method to extract attribute names from animation curves connected to an object."""
+
+        attributes = []
+        for curve in curves:
+            connections = pm.listConnections(
+                curve, plugs=True, destination=True, source=False
+            )
+            if connections:
+                for conn in connections:
+                    attr_name = conn.attrName()
+                    if attr_name and obj.hasAttr(attr_name):
+                        attributes.append(attr_name)
+        return list(set(attributes))
+
+
+class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     """Animation utilities for Maya.
 
     For help on this class use: AnimUtils.help()
@@ -806,150 +1472,88 @@ class AnimUtils(ptk.HelpMixin):
             pm.warning("No keyframes found to move.")
             return False
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def scale_keys(
+        cls,
         objects=None,
+        mode="uniform",
         factor=1.0,
-        selected_keys_only=False,
-        time_range=None,
+        keys=None,
+        pivot=None,
         channel_box_attrs_only=False,
         ignore=None,
-        by_speed=False,
+        group_mode="single_group",
+        snap_mode="nearest",
+        samples=None,
     ):
-        """Scales keyframes by a given percentage around a pivot time, or by motion speed.
-
-        This method can scale the timing of keyframes in two ways:
-        1. UNIFORM SCALING: Traditional time scaling around a pivot (faster/slower)
-        2. SPEED-BASED SCALING: Time warping based on the object's motion speed
-
-        If keys are selected in the graph editor, only those keys will be scaled.
+        """Scale keyframes uniformly or via motion-aware retiming.
 
         Parameters:
-            objects (list, optional): Objects to scale keys for. If None, uses selection.
-
-            factor (float): Scaling multiplier. Meaning changes based on mode:
-
-                UNIFORM MODE (by_speed=False):
-                    - 1.0 = no change (100%)
-                    - 0.5 = compress to 50% (faster animation)
-                    - 2.0 = expand to 200% (slower animation)
-                    - 1.1 = expand by 10%
-
-                SPEED MODE (by_speed=True):
-                    - Controls strength of speed-based effect (exaggeration)
-                    - 1.0 = moderate effect (recommended starting point)
-                    - 0.5 = subtle effect
-                    - 2.0-3.0 = dramatic effect
-                    - Higher = more extreme time distortion
-
-                Default is 1.0.
-
-            selected_keys_only (bool): If True, only scales selected keys from graph editor.
-                If False, scales all keys in the specified time range.
-                Not supported with by_speed=True (will be ignored).
-
-            time_range (tuple, optional): (start_frame, end_frame) context-sensitive usage:
-
-                UNIFORM MODE (by_speed=False):
-                    - None: Scales all keys, pivot at earliest key
-                    - (start, end): Scales keys in range, pivot at start
-                    - (start, None): Scales from start to end of animation (partial range)
-                    - (None, end): Scales from beginning up to end (partial range)
-
-                SPEED MODE (by_speed=True):
-                    - Required: Defines the time window for speed analysis
-                    - Example: (1, 100) analyzes motion from frame 1 to 100
-                    - Supports partial ranges: (start, None) or (None, end)
-
-            channel_box_attrs_only (bool): If True, only affects attributes selected in channel box.
-
-            ignore (str or list, optional): Attribute name(s) to ignore when scaling.
-                E.g., 'visibility' or ['visibility', 'translateX']. Curves connected to these
-                attributes will not be scaled.
-
-            by_speed (bool): If True, uses speed-based scaling instead of uniform scaling.
-                Slow movement areas get expanded in time, fast movement gets compressed.
-                Requires time_range to be specified. Default is False.
+            objects (Sequence, optional): Objects whose animation keys should be processed. Defaults
+                to the current selection.
+            mode (str): Scaling mode. Options:
+                - "uniform": Traditional time scaling around a pivot point (default)
+                - "speed": Motion-aware retiming to a target speed
+            factor (float): Scaling value. Interpretation depends on mode:
+                - uniform mode: Time-space multiplier (1.0 = no change, 0.5 = twice as fast, 2.0 = twice as slow)
+                - speed mode: Target speed in units per frame (e.g., 5.0 = all objects move at 5 units/frame)
+            keys (None | "selected" | list | tuple): Which keys to operate on. None processes all
+                keys, "selected" acts on graph editor selections, sequences define explicit frames
+                or ranges.
+            pivot (float, optional): Explicit pivot frame for uniform scaling. When None the pivot is
+                auto-detected. Ignored in speed mode.
+            channel_box_attrs_only (bool): Restrict processing to channel box selected attributes.
+            ignore (str | list, optional): Attribute names to exclude from processing.
+            group_mode (str): Pivot/range grouping strategy. One of "single_group", "per_object",
+                or "overlap_groups".
+            snap_mode (str): Whole-frame snapping strategy. Options:
+                - "nearest": Round to nearest whole number (default)
+                - "preferred": Round to clean numbers when close (24→25, 99→100)
+                - "aggressive_preferred": Round to clean numbers aggressively (48→50, 73→75)
+                - "none": No snapping, preserve precise decimal times
+            samples (int, optional): Number of samples for motion detection in speed mode.
+                Higher values = more accurate but slower. Default: 64. Ignored in uniform mode.
 
         Returns:
-            int: Number of keyframes that were scaled.
+            int: The number of keyframes modified.
 
         Example:
-            # UNIFORM SCALING EXAMPLES:
-            # Scale all keys by 50% (make animation twice as fast)
-            scale_keys(factor=0.5)
+            # Uniform scaling - make 2x faster
+            scale_keys(objects, mode="uniform", factor=0.5)
 
-            # Scale selected keys by 200% (make animation slower)
-            scale_keys(factor=2.0, selected_keys_only=True)
-
-            # Scale keys in a time range, pivot at frame 10
-            scale_keys(factor=1.5, time_range=(10, 100))
-
-            # Scale from frame 50 onward (partial range)
-            scale_keys(factor=2.0, time_range=(50, None))
-
-            # Scale up to frame 100 (partial range)
-            scale_keys(factor=0.5, time_range=(None, 100))
-
-            # Scale only channel box selected attributes
-            scale_keys(factor=0.75, channel_box_attrs_only=True)
-
-            # Scale keys but ignore visibility attribute
-            scale_keys(factor=0.5, ignore='visibility')
-
-            # SPEED-BASED SCALING EXAMPLES:
-            # Scale keys based on motion speed (slow areas get more time)
-            scale_keys(by_speed=True, time_range=(1, 100), factor=2.0)
-
-            # Subtle speed-based scaling with partial range
-            scale_keys(by_speed=True, time_range=(10, None), factor=0.5)
+            # Speed mode - all objects move at exactly 5 units/frame
+            scale_keys(objects, mode="speed", factor=5.0)
         """
-        # Validate parameters based on mode
-        if by_speed:
-            if time_range is None:
-                pm.warning(
-                    "time_range is required when by_speed=True. Please specify a time range."
-                )
-                return 0
-            if selected_keys_only:
-                pm.warning(
-                    "selected_keys_only is not supported with by_speed=True. Processing all keys in time range."
-                )
-                selected_keys_only = False
 
-            # Auto-detect None values in time_range for speed mode
-            if time_range[0] is None or time_range[1] is None:
-                keyframe_times = AnimUtils.get_keyframe_times(objects)
-                if not keyframe_times:
-                    pm.warning("No keyframes found on objects for auto-detection.")
-                    return 0
-                time_range = (
-                    keyframe_times[0] if time_range[0] is None else time_range[0],
-                    keyframe_times[-1] if time_range[1] is None else time_range[1],
-                )
-        else:
-            # Validate scale factor for uniform scaling
-            if factor <= 0:
-                pm.warning("Scale factor must be greater than 0.")
-                return 0
+        by_speed = mode == "speed"
+        if mode not in {"uniform", "speed"}:
+            pm.warning(f"Invalid mode '{mode}'. Using 'uniform'.")
+            mode = "uniform"
+            by_speed = False
 
-            # Auto-detect None values in time_range for uniform mode
-            # Supports partial ranges: (start, None) or (None, end) or (start, end)
-            if time_range is not None and (
-                time_range[0] is None or time_range[1] is None
-            ):
-                keyframe_times = AnimUtils.get_keyframe_times(objects)
-                if not keyframe_times:
-                    pm.warning("No keyframes found on objects for auto-detection.")
-                    return 0
+        # Set default samples for speed mode if not specified
+        if samples is None and by_speed:
+            samples = 64  # Default: good balance of speed and accuracy
 
-                # Build the range, keeping infinity for open-ended ranges
-                start = keyframe_times[0] if time_range[0] is None else time_range[0]
-                end = keyframe_times[-1] if time_range[1] is None else time_range[1]
-                time_range = (start, end)
+        time_range, selected_keys_only = (
+            cls._normalize_keys_to_time_range_and_selection(keys)
+        )
+        base_start_raw, base_end_raw = time_range
 
-        # Get objects to work with
+        def _coerce_to_float(value):
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pm.warning(f"Invalid time_range value '{value}'. Ignoring component.")
+                return None
+
+        base_start = _coerce_to_float(base_start_raw)
+        base_end = _coerce_to_float(base_end_raw)
+        range_specified = base_start is not None or base_end is not None
+
         if objects is None:
             objects = pm.selected()
 
@@ -958,8 +1562,10 @@ class AnimUtils(ptk.HelpMixin):
             return 0
 
         objects = pm.ls(objects, flatten=True)
+        if not objects:
+            pm.warning("No valid objects specified or selected.")
+            return 0
 
-        # Get channel box attributes if filtering is requested
         channel_box_attrs = None
         if channel_box_attrs_only:
             channel_box_attrs = pm.channelBox(
@@ -969,208 +1575,274 @@ class AnimUtils(ptk.HelpMixin):
                 pm.warning("No attributes selected in channel box.")
                 return 0
 
-        # Check for selected keys
-        if selected_keys_only:
+        if selected_keys_only and not by_speed:
             all_selected_keys = pm.keyframe(query=True, sl=True, tc=True)
             if not all_selected_keys:
                 pm.warning("No keyframes selected.")
                 return 0
 
-        keys_scaled = 0
+        group_mode = cls._normalize_group_mode(group_mode)
+        if group_mode not in {"single_group", "per_object", "overlap_groups"}:
+            pm.warning(
+                f"Unsupported group_mode '{group_mode}'. Falling back to 'single_group'."
+            )
+            group_mode = "single_group"
 
-        # SPEED-BASED SCALING MODE
+        if by_speed and selected_keys_only:
+            pm.warning(
+                "selected_keys_only is not supported with mode='speed'. Processing all keys in range."
+            )
+            selected_keys_only = False
+
         if by_speed:
-            # Process each object separately for speed-based scaling
-            for obj in objects:
-                # Calculate speed profile for this object
-                try:
-                    _, normalized_speeds = AnimUtils._calculate_speed_profile(
-                        obj, time_range
-                    )
-                except Exception as e:
-                    pm.warning(f"Failed to calculate speed profile for {obj}: {e}")
-                    continue
+            # Speed mode: factor represents target speed in units/frame
+            try:
+                target_speed = float(factor)
+            except (TypeError, ValueError):
+                pm.warning("Factor must be a numeric value in speed mode.")
+                return 0
 
-                if not normalized_speeds:
-                    pm.warning(f"No movement detected for {obj} in time range.")
-                    continue
-
-                # Get all curves for this object and filter by ignore
-                all_curves = AnimUtils.objects_to_curves(obj)
-                curves_to_scale = AnimUtils._filter_curves_by_ignore(all_curves, ignore)
-
-                if channel_box_attrs_only and channel_box_attrs:
-                    # Further filter by channel box attributes
-                    filtered_curves = []
-                    for curve in curves_to_scale:
-                        connections = pm.listConnections(
-                            curve, plugs=True, destination=True, source=False
-                        )
-                        if connections:
-                            attr_name = connections[0].attrName()
-                            if attr_name in channel_box_attrs:
-                                filtered_curves.append(curve)
-                    curves_to_scale = filtered_curves
-
-                # Apply speed-based scaling to the curves
-                keys_scaled += AnimUtils._scale_keys_by_speed_profile(
-                    curves_to_scale,
-                    time_range,
-                    normalized_speeds,
-                    exaggeration=factor,
+            if target_speed <= 0.0:
+                pm.warning(
+                    "Factor (target speed) must be greater than 0 in speed mode."
                 )
+                return 0
 
-            if keys_scaled > 0:
-                range_info = f" in range {time_range}" if time_range else ""
-                pm.displayInfo(
-                    f"Scaled {keys_scaled} keyframes by speed (factor={factor}){range_info}"
+        object_info, diagnostics = cls._collect_scale_targets(
+            objects,
+            ignore=ignore,
+            channel_box_attrs=channel_box_attrs,
+            selected_keys_only=selected_keys_only,
+            range_specified=range_specified,
+            base_start=base_start,
+            base_end=base_end,
+        )
+
+        if not object_info:
+            if diagnostics.get("filtered_by_channel_box") and channel_box_attrs:
+                pm.warning(
+                    "No keyframes matched the selected channel box attributes. "
+                    "Clear the channel box selection or choose keyed attributes."
+                )
+            elif diagnostics.get("filtered_by_ignore") and ignore:
+                pm.warning(
+                    "All keyed attributes were filtered out by the ignore list: "
+                    f"{ignore}"
                 )
             else:
-                pm.warning("No keyframes found to scale.")
+                pm.warning(
+                    "No animation curves found to retime."
+                    if by_speed
+                    else "No keyframes found to scale."
+                )
+            return 0
+
+        groups = cls._build_object_groups(object_info, group_mode)
+
+        if by_speed:
+            keys_scaled = 0
+            processed_objects = 0
+            min_target_start: Optional[float] = None
+            max_target_end: Optional[float] = None
+
+            for group in groups:
+                group_range = (
+                    None
+                    if group_mode == "per_object"
+                    else cls._resolve_group_bounds(group, base_start, base_end)
+                )
+                if group_mode != "per_object":
+                    if not group_range or group_range[1] <= group_range[0]:
+                        continue
+
+                for info in group:
+                    object_range = cls._resolve_range_for_object(
+                        info, group_range, group_mode, base_start, base_end
+                    )
+                    if not object_range or object_range[1] <= object_range[0]:
+                        continue
+
+                    num_curves = len(info.get("all_curves", []))
+                    if num_curves == 0:
+                        pm.warning(
+                            f"Object {info['object']} has no curves in range {object_range}"
+                        )
+                        continue
+
+                    sample_times, progress, total_distance = (
+                        AnimUtils._compute_motion_progress(
+                            info["object"], object_range, samples=samples
+                        )
+                    )
+
+                    if not sample_times or total_distance <= 1e-6:
+                        pm.warning(
+                            f"No motion detected for {info['object']} in range {object_range}. "
+                            f"Speed-based retiming requires spatial movement. Skipping {num_curves} curve(s)."
+                        )
+                        continue
+
+                    original_duration = object_range[1] - object_range[0]
+                    if original_duration <= 0.0:
+                        continue
+
+                    # Calculate target duration: distance / speed
+                    target_duration = total_distance / target_speed
+                    if DEBUG_SPEED_RETIME:
+                        # print(
+                        #     f"[speed-retime] {info['object']} distance={total_distance:.6f} "
+                        #     f"target_speed={target_speed:.6f} → target_duration={target_duration:.6f}"
+                        # )
+                        pass
+
+                    if target_duration <= 1e-8:
+                        pm.warning(
+                            f"Target duration became too small for {info['object']}. Skipping."
+                        )
+                        continue
+
+                    target_range = (
+                        object_range[0],
+                        object_range[0] + target_duration,
+                    )
+
+                    moved = AnimUtils._retime_curves_to_constant_speed(
+                        info["all_curves"],
+                        object_range,
+                        target_range,
+                        sample_times,
+                        progress,
+                        snap_mode,
+                    )
+                    if moved:
+                        keys_scaled += moved
+                        processed_objects += 1
+                        if (
+                            min_target_start is None
+                            or target_range[0] < min_target_start
+                        ):
+                            min_target_start = target_range[0]
+                        if max_target_end is None or target_range[1] > max_target_end:
+                            max_target_end = target_range[1]
+
+            if keys_scaled > 0:
+                mode_label = {
+                    "single_group": "single-group",
+                    "per_object": "per-object",
+                    "overlap_groups": "overlap-group",
+                }[group_mode]
+                range_info = ""
+                if min_target_start is not None and max_target_end is not None:
+                    range_info = f" (target range: {min_target_start:.2f} → {max_target_end:.2f})"
+
+                pm.displayInfo(
+                    f"Retimed {keys_scaled} keyframes to {target_speed:.3f} units/frame using {mode_label} ranges (objects processed={processed_objects}){range_info}."
+                )
+            else:
+                pm.warning(
+                    "No keyframes were retimed. Check the specified objects and time range."
+                )
 
             return keys_scaled
 
-        # UNIFORM SCALING MODE (original implementation)
-        # Determine pivot time from time_range or auto-detect
-        pivot_time = None
+        if factor <= 0:
+            pm.warning("Scale factor must be greater than 0.")
+            return 0
 
-        if time_range is not None:
-            # Use start of time_range as pivot
-            pivot_time = time_range[0]
-        else:
-            # Auto-detect pivot from earliest keyframe across all objects in scope
-            earliest_time = None
+        keys_scaled = 0
+        mode_label_map = {
+            "single_group": "single-group pivot",
+            "per_object": "per-object pivots",
+            "overlap_groups": "overlap-group pivots",
+        }
+        global_pivot: Optional[float] = None
 
-            for obj in objects:
-                if selected_keys_only:
-                    # Use get_anim_curves for selected keys
-                    curves = AnimUtils.get_anim_curves(
-                        objects=[obj], selected_keys_only=True
-                    )
-                else:
-                    # Use objects_to_curves for all keys
-                    curves = AnimUtils.objects_to_curves(obj)
+        for group in groups:
+            group_range = (
+                None
+                if group_mode == "per_object"
+                else cls._resolve_group_bounds(group, base_start, base_end)
+            )
 
-                # Filter curves by ignore parameter
-                curves = AnimUtils._filter_curves_by_ignore(curves, ignore)
+            if group_mode != "per_object":
+                if not group_range or group_range[1] <= group_range[0]:
+                    continue
+                group_pivot = pivot if pivot is not None else group_range[0]
+                if global_pivot is None:
+                    global_pivot = group_pivot
+            else:
+                group_pivot = None
 
-                # Filter curves by channel box if requested
-                if channel_box_attrs_only and channel_box_attrs:
-                    filtered_curves = []
-                    for curve in curves:
-                        connections = pm.listConnections(
-                            curve, plugs=True, destination=True, source=False
-                        )
-                        if connections:
-                            attr_name = connections[0].attrName()
-                            if attr_name in channel_box_attrs:
-                                filtered_curves.append(curve)
-                    curves = filtered_curves
-
-                if curves:
-                    # Get keyframe times using existing utility
-                    mode = "selected" if selected_keys_only else "all"
-                    times = AnimUtils.get_keyframe_times(
-                        curves, mode=mode, from_curves=True
-                    )
-
-                    if times:
-                        obj_earliest = min(times)
-                        if earliest_time is None or obj_earliest < earliest_time:
-                            earliest_time = obj_earliest
-
-            if earliest_time is None:
-                pm.warning("No keyframes found to scale.")
-                return 0
-
-            pivot_time = earliest_time
-
-        # Scale the keys using uniform scaling
-        for obj in objects:
-            if selected_keys_only:
-                # Get animation curves with selected keys
-                curves = pm.keyframe(obj, query=True, name=True, selected=True)
-
-                if not curves:
+            for info in group:
+                curves_to_scale = info.get("curves_to_scale", [])
+                if not curves_to_scale:
                     continue
 
-                # Filter by ignore parameter
-                curves = AnimUtils._filter_curves_by_ignore(curves, ignore)
+                object_range = cls._resolve_range_for_object(
+                    info, group_range, group_mode, base_start, base_end
+                )
 
-                # Filter by channel box if requested
-                if channel_box_attrs_only and channel_box_attrs:
-                    filtered_curves = []
-                    for curve in curves:
-                        connections = pm.listConnections(
-                            curve, plugs=True, destination=True, source=False
-                        )
-                        if connections:
-                            attr_name = connections[0].attrName()
-                            if attr_name in channel_box_attrs:
-                                filtered_curves.append(curve)
-                    curves = filtered_curves
+                if pivot is not None and group_mode != "per_object":
+                    pivot_time = pivot
+                elif group_mode == "per_object":
+                    pivot_time = object_range[0] if object_range else None
+                else:
+                    pivot_time = group_pivot
+                if pivot_time is None:
+                    continue
+                pivot_time = float(pivot_time)
 
-                for curve in curves:
-                    # Scale selected keys on this curve
-                    if time_range:
-                        pm.scaleKey(
-                            curve,
-                            time=time_range,
-                            timeScale=factor,
-                            timePivot=pivot_time,
-                            scaleSpecifiedKeys=True,
-                        )
-                        # Count scaled keys
-                        scaled_times = pm.keyframe(
-                            curve, query=True, selected=True, tc=True, time=time_range
-                        )
-                    else:
-                        pm.scaleKey(
-                            curve,
-                            timeScale=factor,
-                            timePivot=pivot_time,
-                            scaleSpecifiedKeys=True,
-                        )
-                        # Count scaled keys
-                        scaled_times = pm.keyframe(
-                            curve, query=True, selected=True, tc=True
-                        )
+                time_arg = object_range if (range_specified and object_range) else None
 
-                    if scaled_times:
-                        keys_scaled += len(scaled_times)
-
-            else:
-                # Scale all keys (or keys in time range)
-                # Get all curves for this object and filter by ignore
-                all_curves = AnimUtils.objects_to_curves(obj)
-                curves_to_scale = AnimUtils._filter_curves_by_ignore(all_curves, ignore)
-
-                if channel_box_attrs_only and channel_box_attrs:
-                    # Further filter by channel box attributes
-                    filtered_curves = []
+                if selected_keys_only:
                     for curve in curves_to_scale:
-                        connections = pm.listConnections(
-                            curve, plugs=True, destination=True, source=False
-                        )
-                        if connections:
-                            attr_name = connections[0].attrName()
-                            if attr_name in channel_box_attrs:
-                                filtered_curves.append(curve)
-                    curves_to_scale = filtered_curves
-
-                # Scale each filtered curve
-                for curve in curves_to_scale:
-                    # Check if curve has keys
-                    if time_range:
-                        keys = pm.keyframe(curve, query=True, tc=True, time=time_range)
-                    else:
-                        keys = pm.keyframe(curve, query=True, tc=True)
-
-                    if keys:
-                        if time_range:
+                        if time_arg:
                             pm.scaleKey(
                                 curve,
-                                time=time_range,
+                                time=time_arg,
+                                timeScale=factor,
+                                timePivot=pivot_time,
+                                scaleSpecifiedKeys=True,
+                            )
+                            scaled_times = pm.keyframe(
+                                curve,
+                                query=True,
+                                selected=True,
+                                tc=True,
+                                time=time_arg,
+                            )
+                        else:
+                            pm.scaleKey(
+                                curve,
+                                timeScale=factor,
+                                timePivot=pivot_time,
+                                scaleSpecifiedKeys=True,
+                            )
+                            scaled_times = pm.keyframe(
+                                curve, query=True, selected=True, tc=True
+                            )
+                        if scaled_times:
+                            keys_scaled += len(scaled_times)
+
+                            # Apply snapping if requested (skip 'none' mode)
+                            if snap_mode and snap_mode != "none":
+                                cls._snap_curve_keys(curve, scaled_times, snap_mode)
+                else:
+                    for curve in curves_to_scale:
+                        if time_arg:
+                            keys = pm.keyframe(
+                                curve, query=True, tc=True, time=time_arg
+                            )
+                        else:
+                            keys = pm.keyframe(curve, query=True, tc=True)
+
+                        if not keys:
+                            continue
+
+                        if time_arg:
+                            pm.scaleKey(
+                                curve,
+                                time=time_arg,
                                 timeScale=factor,
                                 timePivot=pivot_time,
                             )
@@ -1182,12 +1854,33 @@ class AnimUtils(ptk.HelpMixin):
                             )
                         keys_scaled += len(keys)
 
+                        # Apply snapping if requested (skip 'none' mode)
+                        if snap_mode and snap_mode != "none":
+                            # Get the scaled keyframe times
+                            if time_arg:
+                                scaled_keys = pm.keyframe(
+                                    curve, query=True, tc=True, time=time_arg
+                                )
+                            else:
+                                scaled_keys = pm.keyframe(curve, query=True, tc=True)
+
+                            if scaled_keys:
+                                cls._snap_curve_keys(curve, scaled_keys, snap_mode)
+
         if keys_scaled > 0:
             selection_type = "selected" if selected_keys_only else "all"
-            range_info = f" in range {time_range}" if time_range else ""
-            percentage = factor * 100
+            range_info = ""
+            if range_specified:
+                start_text = f"{base_start:.2f}" if base_start is not None else "auto"
+                end_text = f"{base_end:.2f}" if base_end is not None else "auto"
+                range_info = f" (range: {start_text} → {end_text})"
+
+            pivot_info = ""
+            if group_mode == "single_group" and global_pivot is not None:
+                pivot_info = f" around frame {global_pivot:.2f}"
+
             pm.displayInfo(
-                f"Scaled {keys_scaled} {selection_type} keys by {percentage}% around frame {pivot_time}{range_info}"
+                f"Scaled {keys_scaled} {selection_type} keys by {factor * 100:.2f}% using {mode_label_map[group_mode]}{pivot_info}{range_info}."
             )
         else:
             pm.warning("No keyframes found to scale.")
@@ -1694,95 +2387,126 @@ class AnimUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def invert_selected_keys(time=None, relative=True, delete_original=False):
-        """Duplicate any selected keyframes and paste them inverted at the given time.
+    def invert_keys(time=None, relative=True, delete_original=False):
+        """Invert keyframes around the last key, preferring selected keys but falling back to all keys.
 
         Parameters:
-            time (int, optional): The desired start time for the inverted keys.
-                If None, uses the earliest selected keyframe time (default is None).
-            relative (bool): Start time position as relative or absolute.
-            delete_original (bool): Delete the original keyframes after inverting.
-
-        Example:
-            invert_selected_frames(time=48, relative=0)
+            time (int, optional): Desired start time for inverted keys. If None, uses earliest keyframe.
+            relative (bool): When True, time is treated as an offset from the last key. Defaults to True.
+            delete_original (bool): Delete the source keyframes after inversion. Defaults to False.
         """
-        # Validate selection and keyframes
+
         selection = pm.selected()
         if not selection:
             raise RuntimeError("No objects selected.")
 
-        allActiveKeyTimes = pm.keyframe(query=True, sl=True, tc=True)
-        if not allActiveKeyTimes:
-            raise RuntimeError("No keyframes selected.")
+        selected_key_times = pm.keyframe(query=True, sl=True, tc=True) or []
+        use_selected = bool(selected_key_times)
 
-        maxTime = max(allActiveKeyTimes)
-        minTime = min(allActiveKeyTimes)
+        key_entries: List[Tuple[Any, float]] = []
+        seen_entries: Set[Tuple[str, float]] = set()
+        all_key_times: List[float] = []
 
-        # Use earliest keyframe time if time is None
-        if time is None:
-            time = minTime if not relative else 0
-
-        inversionPoint = maxTime + time if relative else time
-
-        # Store keyframe data including tangent information and original times
-        keyframe_data = []
         for obj in selection:
-            keys = pm.keyframe(obj, query=True, name=True, sl=True)
-            for node in keys:
-                activeKeyTimes = pm.keyframe(node, query=True, sl=True, tc=True)
-                for t in activeKeyTimes:
-                    keyVal = pm.keyframe(node, query=True, time=(t,), eval=True)[0]
-                    invertedTime = inversionPoint - (t - maxTime)
+            key_nodes = (
+                pm.keyframe(obj, query=True, name=True, selected=True) or []
+                if use_selected
+                else pm.keyframe(obj, query=True, name=True) or []
+            )
 
-                    # Store tangent info before potentially deleting the keyframe
-                    inAngle = None
-                    outAngle = None
-                    try:
-                        in_angles = pm.keyTangent(
-                            node, query=True, time=(t,), inAngle=True
-                        )
-                        out_angles = pm.keyTangent(
-                            node, query=True, time=(t,), outAngle=True
-                        )
-                        if in_angles and out_angles:
-                            inAngle = in_angles[0]
-                            outAngle = out_angles[0]
-                    except:
-                        pass
+            for node in key_nodes:
+                times = (
+                    pm.keyframe(node, query=True, selected=True, timeChange=True)
+                    if use_selected
+                    else pm.keyframe(node, query=True, timeChange=True)
+                )
+                if not times:
+                    continue
 
-                    keyframe_data.append(
-                        (node, t, keyVal, invertedTime, inAngle, outAngle)
-                    )
+                for t in times:
+                    identifier = (str(node), float(t))
+                    if identifier in seen_entries:
+                        continue
+                    seen_entries.add(identifier)
+                    key_entries.append((node, float(t)))
+                    all_key_times.append(float(t))
 
-        # Create inverted keyframes FIRST
-        for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data:
-            pm.setKeyframe(node, time=invertedTime, value=keyVal)
+        if not all_key_times:
+            raise RuntimeError("No keyframes selected or found to invert.")
 
-            # Apply inverted tangents if they were stored
-            if inAngle is not None and outAngle is not None:
-                inAngleVal = -outAngle
-                outAngleVal = -inAngle
+        max_time = max(all_key_times)
+        min_time = min(all_key_times)
+
+        if time is None:
+            time = min_time if not relative else 0
+
+        inversion_point = max_time + time if relative else time
+
+        keyframe_data: List[
+            Tuple[Any, float, float, float, Optional[float], Optional[float]]
+        ] = []
+        for node, key_time in key_entries:
+            key_value = pm.keyframe(node, query=True, time=(key_time,), eval=True)[0]
+            inverted_time = inversion_point - (key_time - max_time)
+
+            in_angle = None
+            out_angle = None
+            try:
+                in_angles = pm.keyTangent(
+                    node, query=True, time=(key_time,), inAngle=True
+                )
+                out_angles = pm.keyTangent(
+                    node, query=True, time=(key_time,), outAngle=True
+                )
+                if in_angles and out_angles:
+                    in_angle = in_angles[0]
+                    out_angle = out_angles[0]
+            except Exception:
+                pass
+
+            keyframe_data.append(
+                (node, key_time, key_value, inverted_time, in_angle, out_angle)
+            )
+
+        for (
+            node,
+            key_time,
+            key_value,
+            inverted_time,
+            in_angle,
+            out_angle,
+        ) in keyframe_data:
+            pm.setKeyframe(node, time=inverted_time, value=key_value)
+
+            if in_angle is not None and out_angle is not None:
                 pm.keyTangent(
                     node,
                     edit=True,
-                    time=(invertedTime,),
-                    inAngle=inAngleVal,
-                    outAngle=outAngleVal,
+                    time=(inverted_time,),
+                    inAngle=-out_angle,
+                    outAngle=-in_angle,
                 )
 
-        # Delete original keyframes AFTER creating inverted ones
         if delete_original:
-            # Build a set of (node, invertedTime) pairs to protect from deletion
             inverted_positions = {
-                (node, round(invertedTime, 3))
-                for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data
+                (str(node), round(inverted_time, 3))
+                for node, key_time, key_value, inverted_time, in_angle, out_angle in keyframe_data
             }
 
-            for node, t, keyVal, invertedTime, inAngle, outAngle in keyframe_data:
-                # Only delete the original keyframe if no inverted keyframe exists at that position
-                rounded_t = round(t, 3)
-                if (node, rounded_t) not in inverted_positions:
-                    pm.cutKey(node, time=(t, t))
+            for (
+                node,
+                key_time,
+                key_value,
+                inverted_time,
+                in_angle,
+                out_angle,
+            ) in keyframe_data:
+                rounded_time = round(key_time, 3)
+                if (str(node), rounded_time) not in inverted_positions:
+                    pm.cutKey(node, time=(key_time, key_time))
+
+    # Backward compatibility
+    invert_selected_keys = invert_keys
 
     @staticmethod
     @CoreUtils.undoable
@@ -1974,137 +2698,242 @@ class AnimUtils(ptk.HelpMixin):
                     except RuntimeError as e:
                         pm.warning(f"Failed to adjust tangents for {obj}: {e}")
 
-    @staticmethod
-    def _get_plug_attribute_names(plug: "pm.Attribute") -> set:
-        """Get all possible attribute name variants for a plug (long, short, etc.).
-
-        This helper collects all name variations that Maya might use to refer to an attribute,
-        including long names, short names, and names extracted from the plug string.
-        All names are returned in lowercase for case-insensitive matching.
+    @classmethod
+    def _snap_curve_keys(
+        cls,
+        curve: "pm.PyNode",
+        key_times: List[float],
+        snap_mode: str = "nearest",
+    ) -> int:
+        """Snap keyframe times to whole frames using the specified rounding mode.
 
         Parameters:
-            plug (pm.Attribute): The attribute plug to get names from.
+            curve: The animation curve to snap keys on.
+            key_times: List of keyframe times to snap.
+            snap_mode: Rounding mode ('nearest', 'preferred', 'aggressive_preferred', 'none').
 
         Returns:
-            set: Set of lowercase attribute name strings.
-
-        Example:
-            >>> plug = obj.attr('visibility')
-            >>> names = AnimUtils._get_plug_attribute_names(plug)
-            >>> names
-            {'visibility', 'v'}
+            Number of keys snapped.
         """
-        names = set()
-        try:
-            name = plug.attrName()
-            if name:
-                names.add(name)
-        except Exception:
-            pass
-        for flag in (True, False):
-            try:
-                name = plug.attrName(longName=flag)
-                if name:
-                    names.add(name)
-            except Exception:
+        if not key_times or snap_mode == "none":
+            return 0
+
+        snapped = 0
+        keys_to_move = []
+
+        for time in key_times:
+            # Only snap if the time has decimal places
+            if time != int(time):
+                new_time = ptk.MathUtils.round_value(time, mode=snap_mode)
+                if abs(new_time - time) > 1e-6:  # Only move if actually different
+                    keys_to_move.append((time, new_time))
+
+        # Move the keys
+        if keys_to_move:
+            snapped = cls._move_curve_keys(curve, keys_to_move)
+
+        return snapped
+
+    @staticmethod
+    def _move_curve_keys(
+        curve: "pm.PyNode",
+        time_pairs: List[Tuple[float, float]],
+        tolerance: float = 1e-4,
+    ) -> int:
+        """Move keys on a curve to new times, preserving value and tangents."""
+
+        if not time_pairs:
+            return 0
+
+        moved = 0
+
+        for old_time, new_time in sorted(
+            time_pairs, key=lambda pair: pair[0], reverse=True
+        ):
+            if abs(new_time - old_time) <= tolerance:
                 continue
-        for getter_name in ("longName", "shortName"):
-            getter = getattr(plug, getter_name, None)
-            if callable(getter):
-                try:
-                    name = getter()
-                    if name:
-                        names.add(name)
-                except Exception:
-                    continue
-        plug_str = str(plug)
-        if plug_str and "." in plug_str:
-            names.add(plug_str.split(".")[-1])
-        return {name.lower() for name in names if isinstance(name, str)}
+
+            values = pm.keyframe(curve, query=True, time=(old_time,), valueChange=True)
+            if not values:
+                continue
+
+            tangent_data = AnimUtils._get_curve_tangent_data(curve, old_time)
+
+            try:
+                pm.cutKey(curve, time=(old_time, old_time), option="keys")
+                pm.setKeyframe(curve, time=new_time, value=values[0])
+                AnimUtils._apply_curve_tangent_data(curve, new_time, tangent_data)
+                moved += 1
+            except RuntimeError as error:
+                pm.warning(f"Failed to move key on {curve} at {old_time}: {error}")
+
+        return moved
 
     @staticmethod
-    def _filter_attributes_by_ignore(
-        attributes: List[str], ignore: Union[str, List[str], None]
-    ) -> List[str]:
-        """Filter attribute names, excluding those in the ignore list.
-
-        This is a lightweight wrapper around CoreUtils.filter_attributes() for backwards
-        compatibility with the ignore parameter pattern used throughout AnimUtils.
-
-        Parameters:
-            attributes (list): Attribute names to filter.
-            ignore (str/list/None): Attribute name(s) to ignore.
-                E.g., 'visibility' or ['visibility', 'translateX'].
-                Supports wildcards (* and ?) for pattern matching.
-
-        Returns:
-            list: Filtered list of attribute names.
-
-        Example:
-            >>> attrs = ['translateX', 'translateY', 'visibility']
-            >>> filtered = AnimUtils._filter_attributes_by_ignore(attrs, 'visibility')
-            >>> # Returns: ['translateX', 'translateY']
-
-            >>> # Also supports wildcards
-            >>> filtered = AnimUtils._filter_attributes_by_ignore(attrs, 'translate*')
-            >>> # Returns: ['visibility']
-        """
-        return CoreUtils.filter_attributes(
-            attributes, exclude=ignore, case_sensitive=False
-        )
-
-    @staticmethod
-    def _filter_curves_by_ignore(
-        curves: List["pm.PyNode"], ignore: Union[str, List[str], None]
-    ) -> List["pm.PyNode"]:
-        """Filter animation curves, excluding those connected to ignored attributes.
+    def _retime_curves_to_constant_speed(
+        curves: List["pm.PyNode"],
+        source_range: Tuple[float, float],
+        target_range: Tuple[float, float],
+        sample_times: List[float],
+        progress: List[float],
+        snap_mode: str = "nearest",
+    ) -> int:
+        """Retimes keys on the supplied curves so progress happens at constant speed.
 
         Parameters:
-            curves (list): Animation curves to filter.
-            ignore (str/list/None): Attribute name(s) to ignore.
-                E.g., 'visibility' or ['visibility', 'translateX'].
+            curves: Animation curves to retime.
+            source_range: (start, end) range of the original key distribution.
+            target_range: (start, end) desired output time range.
+            sample_times: Sampled time values for motion progress.
+            progress: Normalized progress values (0-1) at each sample time.
+            snap_mode: Rounding mode for whole-number keyframe times. Options:
+                - "none": No snapping, preserve precise decimal times
+                - "nearest": Round to nearest whole number (default)
+                - "floor": Always round down
+                - "ceil": Always round up
+                - "half_up": Round .5 and above up
+                - "preferred": Round to aesthetically pleasing numbers (conservative)
+                - "aggressive_preferred": Round to preferred numbers (aggressive)
 
         Returns:
-            list: Filtered list of animation curves.
-
-        Example:
-            >>> curves = pm.listConnections(obj, type='animCurve')
-            >>> filtered = AnimUtils._filter_curves_by_ignore(curves, 'visibility')
+            int: Number of keys successfully moved.
         """
-        if ignore is None:
-            return curves
 
-        # Normalize ignore parameter to a set
-        if isinstance(ignore, str):
-            ignore_attrs = [ignore]
-        else:
-            ignore_attrs = list(ignore)
+        if not curves or not sample_times:
+            return 0
 
-        ignore_attr_set = {
-            attr.lower()
-            for attr in ignore_attrs
-            if isinstance(attr, str) and attr.strip()
-        }
+        source_start, source_end = source_range
+        target_start, target_end = target_range
 
-        if not ignore_attr_set:
-            return curves
+        source_duration = source_end - source_start
+        target_duration = target_end - target_start
+        if source_duration <= 0.0 or target_duration <= 0.0:
+            return 0
 
-        # Filter curves
-        filtered = []
+        min_delta = max(1e-4, target_duration * 1e-5)
+        total_moved = 0
+
         for curve in curves:
-            connections = (
-                pm.listConnections(curve, plugs=True, destination=True, source=False)
-                or []
+            key_times = pm.keyframe(
+                curve, query=True, timeChange=True, time=source_range
             )
-            is_allowed = True
-            for plug in connections:
-                if AnimUtils._get_plug_attribute_names(plug) & ignore_attr_set:
-                    is_allowed = False
-                    break
-            if is_allowed:
-                filtered.append(curve)
+            if not key_times or len(key_times) < 2:
+                if DEBUG_SPEED_RETIME:
+                    # print(
+                    #     f"[speed-retime] Skipping {curve}: insufficient key data (keys={len(key_times) if key_times else 0})"
+                    # )
+                    pass
+                continue
 
-        return filtered
+            unique_times = sorted(set(key_times))
+            new_time_pairs: List[Tuple[float, float]] = []
+            prev_enforced_time: Optional[float] = None
+            prev_output_time: Optional[float] = None
+            retain_whole_times = all(
+                ptk.MathUtils.is_close_to_whole(t) for t in unique_times
+            )
+            debug_rows: List[str] = []
+
+            # Identify actual first/last keys in this curve's range
+            first_key_time = unique_times[0]
+            last_key_time = unique_times[-1]
+
+            if DEBUG_SPEED_RETIME:
+                # print(
+                #     f"[speed-retime] Curve {curve}: keys={len(unique_times)} retain_whole={retain_whole_times} first={first_key_time:.3f} last={last_key_time:.3f}"
+                # )
+                pass
+
+            for idx, original_time in enumerate(unique_times):
+                is_first_key = idx == 0
+                is_last_key = idx == len(unique_times) - 1
+
+                normalized = ptk.MathUtils.evaluate_sampled_progress(
+                    original_time, sample_times, progress
+                )
+                raw_target_time = target_start + normalized * target_duration
+
+                # Anchor endpoints to the requested target range boundaries
+                if is_first_key:
+                    raw_target_time = target_start
+                elif is_last_key:
+                    raw_target_time = target_end
+                # Also anchor to range boundaries if they match
+                elif math.isclose(original_time, source_start, abs_tol=1e-4):
+                    raw_target_time = target_start
+                elif math.isclose(original_time, source_end, abs_tol=1e-4):
+                    raw_target_time = target_end
+
+                if (
+                    prev_enforced_time is not None
+                    and raw_target_time <= prev_enforced_time
+                    and prev_enforced_time < target_end
+                ):
+                    raw_target_time = min(target_end, prev_enforced_time + min_delta)
+
+                new_time = raw_target_time
+                snapped = False
+
+                if retain_whole_times and ptk.MathUtils.is_close_to_whole(
+                    original_time
+                ):
+                    # Snap to whole frames when possible so integer-timed keys stay on integers.
+                    candidate = ptk.MathUtils.round_value(
+                        raw_target_time, mode=snap_mode
+                    )
+                    candidate = max(target_start, min(target_end, float(candidate)))
+                    if (
+                        prev_output_time is None
+                        or candidate >= prev_output_time - min_delta
+                    ):
+                        new_time = candidate
+                        snapped = True
+
+                # Re-anchor first/last keys after snapping attempt
+                if is_first_key:
+                    new_time = target_start
+                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
+                        target_start
+                    )
+                elif is_last_key:
+                    new_time = target_end
+                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
+                        target_end
+                    )
+                # Also handle range boundary anchoring
+                elif math.isclose(original_time, source_start, abs_tol=1e-4):
+                    new_time = target_start
+                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
+                        target_start
+                    )
+                elif math.isclose(original_time, source_end, abs_tol=1e-4):
+                    new_time = target_end
+                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
+                        target_end
+                    )
+
+                new_time_pairs.append((original_time, new_time))
+                prev_enforced_time = raw_target_time
+                prev_output_time = new_time
+
+                if DEBUG_SPEED_RETIME:
+                    # debug_rows.append(
+                    #     f"    {original_time:.3f} -> {new_time:.3f} (raw={raw_target_time:.3f}, snapped={'yes' if snapped else 'no'})"
+                    # )
+                    pass
+
+            moved = AnimUtils._move_curve_keys(curve, new_time_pairs)
+            total_moved += moved
+
+            if DEBUG_SPEED_RETIME:
+                # for row in debug_rows:
+                #     print(row)
+                # print(
+                #     f"[speed-retime] Curve {curve}: moved {moved} keys (original={source_start:.3f}->{source_end:.3f}, target={target_start:.3f}->{target_end:.3f})"
+                # )
+                pass
+
+        return total_moved
 
     @staticmethod
     def _shift_curves_by_amount(curves: List["pm.PyNode"], shift_amount: float) -> int:
@@ -2155,193 +2984,27 @@ class AnimUtils(ptk.HelpMixin):
         Example:
             speeds, norm_speeds = AnimUtils._calculate_speed_profile(obj, (1, 100))
         """
-        start_frame, end_frame = int(time_range[0]), int(time_range[1])
-        frame_range = list(range(start_frame, end_frame + 1))
+        sample_times, progress, total_distance = AnimUtils._compute_motion_progress(
+            obj, time_range
+        )
 
-        positions = []
-        speeds = []
+        if not sample_times or len(progress) < 2:
+            return [], []
 
-        # Save current time to restore later
-        current_time = pm.currentTime(query=True)
+        speeds: List[float] = []
+        for index in range(1, len(progress)):
+            delta_progress = progress[index] - progress[index - 1]
+            speeds.append(delta_progress * total_distance)
 
-        try:
-            # Collect positions at each frame
-            for frame in frame_range:
-                pm.currentTime(frame, edit=True, update=False)
-                pos = pm.xform(obj, query=True, worldSpace=True, translation=True)
-                positions.append(pos)
-
-            # Calculate per-frame speeds (distance traveled)
-            for i in range(1, len(positions)):
-                prev_pos = positions[i - 1]
-                curr_pos = positions[i]
-                distance = ptk.distance_between_points(prev_pos, curr_pos)
-                speeds.append(distance)
-
-        finally:
-            # Restore original time
-            pm.currentTime(current_time, edit=True, update=False)
-
-        # Normalize speeds to 0-1 range
         if speeds:
-            max_speed = max(speeds) if speeds else 1.0
-            if max_speed > 0:
-                normalized_speeds = [s / max_speed for s in speeds]
-            else:
-                normalized_speeds = [0.0] * len(speeds)
+            max_speed = max(speeds)
+            normalized_speeds = [
+                s / max_speed if max_speed > 0 else 0.0 for s in speeds
+            ]
         else:
             normalized_speeds = []
 
         return speeds, normalized_speeds
-
-    @staticmethod
-    def _scale_keys_by_speed_profile(
-        curves: List["pm.PyNode"],
-        time_range: Tuple[float, float],
-        normalized_speeds: List[float],
-        exaggeration: float = 1.0,
-    ) -> int:
-        """Scale keyframe timing based on a speed profile.
-
-        Areas of slow movement get expanded in time (more frames), while fast movement
-        gets compressed (fewer frames). This creates a time-remapping effect based on
-        the object's motion speed.
-
-        Parameters:
-            curves (List[pm.PyNode]): Animation curves to scale.
-            time_range (Tuple[float, float]): (start_frame, end_frame) of the animation.
-            normalized_speeds (List[float]): Normalized speed values (0-1) for each frame interval.
-            exaggeration (float): Multiplier for the speed effect. Higher values create more
-                dramatic time distortion. Default is 1.0.
-
-        Returns:
-            int: Number of keyframes that were scaled.
-
-        Example:
-            # Slower movement gets more frames, faster gets less
-            _scale_keys_by_speed_profile(curves, (1, 100), speeds, exaggeration=2.0)
-        """
-        start_frame, end_frame = time_range
-        keys_scaled = 0
-
-        for curve in curves:
-            # Get all keyframe times in the range
-            keyframe_times = pm.keyframe(
-                curve, query=True, timeChange=True, time=time_range
-            )
-
-            if not keyframe_times or len(keyframe_times) < 2:
-                continue
-
-            # Sort keyframes
-            keyframe_times = sorted(keyframe_times)
-
-            # Calculate new keyframe times based on speed profile
-            new_times = [keyframe_times[0]]  # First key stays at original position
-
-            for i in range(1, len(keyframe_times)):
-                old_time = keyframe_times[i]
-                prev_old_time = keyframe_times[i - 1]
-
-                # Calculate the time step for this keyframe interval
-                time_step = old_time - prev_old_time
-
-                # Find which frame intervals this keyframe spans
-                # Use the average speed in this interval
-                start_idx = int(prev_old_time - start_frame)
-                end_idx = int(old_time - start_frame)
-
-                # Ensure indices are within bounds
-                start_idx = max(0, min(start_idx, len(normalized_speeds) - 1))
-                end_idx = max(0, min(end_idx, len(normalized_speeds)))
-
-                if start_idx < end_idx and end_idx <= len(normalized_speeds):
-                    avg_speed = sum(normalized_speeds[start_idx:end_idx]) / (
-                        end_idx - start_idx
-                    )
-                else:
-                    avg_speed = (
-                        normalized_speeds[start_idx]
-                        if start_idx < len(normalized_speeds)
-                        else 0.5
-                    )
-
-                # Apply speed-based scaling
-                # Slow movement (low speed) = stretch time (multiply by factor > 1)
-                # Fast movement (high speed) = compress time (multiply by factor < 1)
-                # Normal: slow areas get more time
-                speed_factor = 1.0 + ((1.0 - avg_speed) * exaggeration)
-
-                scaled_step = time_step * speed_factor
-                new_time = new_times[-1] + scaled_step
-                new_times.append(new_time)
-
-            # Now move the keyframes to their new positions
-            # Work backwards to avoid keyframe collision issues
-            for i in range(len(keyframe_times) - 1, -1, -1):
-                old_time = keyframe_times[i]
-                new_time = new_times[i]
-
-                if abs(new_time - old_time) > 0.001:  # Only move if significant change
-                    # Get keyframe value and tangent data
-                    value = pm.keyframe(
-                        curve, query=True, time=(old_time,), valueChange=True
-                    )[0]
-
-                    try:
-                        in_tangent_type = pm.keyTangent(
-                            curve, query=True, time=(old_time,), inTangentType=True
-                        )[0]
-                        out_tangent_type = pm.keyTangent(
-                            curve, query=True, time=(old_time,), outTangentType=True
-                        )[0]
-                        in_angle = pm.keyTangent(
-                            curve, query=True, time=(old_time,), inAngle=True
-                        )[0]
-                        out_angle = pm.keyTangent(
-                            curve, query=True, time=(old_time,), outAngle=True
-                        )[0]
-                        in_weight = pm.keyTangent(
-                            curve, query=True, time=(old_time,), inWeight=True
-                        )[0]
-                        out_weight = pm.keyTangent(
-                            curve, query=True, time=(old_time,), outWeight=True
-                        )[0]
-                        has_tangent_data = True
-                    except Exception:
-                        has_tangent_data = False
-
-                    # Delete old keyframe
-                    pm.cutKey(curve, time=(old_time, old_time), option="keys")
-
-                    # Create new keyframe at new time
-                    pm.setKeyframe(curve, time=new_time, value=value)
-
-                    # Restore tangent information
-                    if has_tangent_data:
-                        try:
-                            pm.keyTangent(
-                                curve,
-                                edit=True,
-                                time=(new_time,),
-                                inTangentType=in_tangent_type,
-                                outTangentType=out_tangent_type,
-                            )
-                            pm.keyTangent(
-                                curve,
-                                edit=True,
-                                time=(new_time,),
-                                inAngle=in_angle,
-                                outAngle=out_angle,
-                                inWeight=in_weight,
-                                outWeight=out_weight,
-                            )
-                        except Exception:
-                            pass
-
-                    keys_scaled += 1
-
-        return keys_scaled
 
     @staticmethod
     def _group_overlapping_keyframes(obj_keyframe_data: List[dict]) -> List[dict]:
@@ -2717,8 +3380,6 @@ class AnimUtils(ptk.HelpMixin):
             # Snap to preferred round numbers (aggressive)
             snap_keys_to_frames(method="aggressive_preferred")
         """
-        import math
-
         # Get objects to work with
         if objects is None:
             objects = pm.selected()
@@ -2729,20 +3390,6 @@ class AnimUtils(ptk.HelpMixin):
 
         # Ensure we have PyMel objects
         objects = pm.ls(objects, flatten=True)
-
-        # Define rounding function based on method
-        if method == "floor":
-            round_func = math.floor
-        elif method == "ceil":
-            round_func = math.ceil
-        elif method == "half_up":
-            round_func = lambda x: math.floor(x + 0.5)
-        elif method == "preferred":
-            round_func = ptk.round_to_preferred
-        elif method == "aggressive_preferred":
-            round_func = ptk.round_to_aggressive_preferred
-        else:  # "nearest" or default
-            round_func = round
 
         keys_snapped = 0
         keys_to_move = (
@@ -2782,7 +3429,7 @@ class AnimUtils(ptk.HelpMixin):
                 for time in keyframe_times:
                     # Check if time has decimal places
                     if time != int(time):
-                        new_time = round_func(time)
+                        new_time = ptk.MathUtils.round_value(time, mode=method)
 
                         # Store the keyframe data for moving
                         key = (obj, attr_name, time)
@@ -2870,29 +3517,6 @@ class AnimUtils(ptk.HelpMixin):
             pm.displayInfo("No keyframes with decimal values found to snap")
 
         return keys_snapped
-
-    @staticmethod
-    def _curves_to_attributes(curves: List["pm.PyNode"], obj: "pm.PyNode") -> List[str]:
-        """Helper method to extract attribute names from animation curves connected to an object.
-
-        Parameters:
-            curves (List[pm.PyNode]): List of animation curve nodes.
-            obj (pm.PyNode): The object to check attribute ownership against.
-
-        Returns:
-            List[str]: List of attribute names (without object prefix) that exist on the object.
-        """
-        attributes = []
-        for curve in curves:
-            connections = pm.listConnections(
-                curve, plugs=True, destination=True, source=False
-            )
-            if connections:
-                for conn in connections:
-                    attr_name = conn.attrName()
-                    if attr_name and obj.hasAttr(attr_name):
-                        attributes.append(attr_name)
-        return list(set(attributes))  # Remove duplicates
 
     @classmethod
     @CoreUtils.undoable

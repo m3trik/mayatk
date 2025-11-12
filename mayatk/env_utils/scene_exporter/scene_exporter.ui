@@ -159,39 +159,21 @@
           </widget>
          </item>
          <item>
-          <layout class="QHBoxLayout" name="horizontalLayout">
+          <layout class="QHBoxLayout" name="horizontalLayout_3">
            <property name="spacing">
-            <number>0</number>
+            <number>1</number>
            </property>
            <item>
-            <widget class="PushButton" name="b001">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
+            <widget class="WidgetComboBox" name="cmb001">
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select which &lt;span style=&quot; font-weight:600;&quot;&gt;tasks&lt;/span&gt; to run.&lt;/p&gt;&lt;p&gt;All tasks run before any checks.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-             </property>
-             <property name="text">
-              <string>Tasks</string>
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
             </widget>
            </item>
            <item>
-            <widget class="PushButton" name="b002">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
+            <widget class="WidgetComboBox" name="cmb002">
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select which &lt;span style=&quot; font-weight:600;&quot;&gt;checks &lt;/span&gt;to run.&lt;/p&gt;&lt;p&gt;Checks run after all tasks have been completed.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-             </property>
-             <property name="text">
-              <string>Checks</string>
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
             </widget>
            </item>
@@ -298,14 +280,14 @@
    <header>widgets.lineedit.h</header>
   </customwidget>
   <customwidget>
-   <class>PushButton</class>
-   <extends>QPushButton</extends>
-   <header>widgets.pushbutton.h</header>
-  </customwidget>
-  <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>WidgetComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.widgetComboBox.WidgetComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

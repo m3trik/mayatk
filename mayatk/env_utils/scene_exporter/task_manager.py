@@ -531,16 +531,16 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "add": self._export_mode_options,
                 "value_method": "currentData",
             },
+            "set_linear_unit": {
+                "widget_type": "ComboBox",
+                "setToolTip": "Linear unit to be used during export.",
+                "add": self._scene_unit_options,
+            },
             "set_workspace": {
                 "widget_type": "QCheckBox",
                 "setText": "Auto Set Workspace",
                 "setToolTip": "Determine the workspace directory from the scene path.",
                 "setChecked": True,
-            },
-            "set_linear_unit": {
-                "widget_type": "ComboBox",
-                "setToolTip": "Linear unit to be used during export.",
-                "add": self._scene_unit_options,
             },
             "delete_env_nodes": {
                 "widget_type": "QCheckBox",
@@ -596,6 +596,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     def check_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the check definitions for the UI."""
         return {
+            "check_framerate": {
+                "widget_type": "ComboBox",
+                "setToolTip": "Check the scene framerate against the target framerate.",
+                "add": self._frame_rate_options,
+            },
             "check_top_level_group_temp": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Top-level Group Named 'temp'",
@@ -607,11 +612,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Check Geometry LOD Suffix (_LODx)",
                 "setToolTip": "Detect geometry named with LOD suffixes ending in '_LOD' or '_LOD' followed by digits (e.g., _LOD, _LOD1, _LOD02). This is informational.",
                 "setChecked": True,
-            },
-            "check_framerate": {
-                "widget_type": "ComboBox",
-                "setToolTip": "Check the scene framerate against the target framerate.",
-                "add": self._frame_rate_options,
             },
             "check_duplicate_locator_names": {
                 "widget_type": "QCheckBox",

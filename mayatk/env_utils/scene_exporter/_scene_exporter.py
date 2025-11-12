@@ -389,7 +389,7 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb001",
+            setObjectName="cmb003",  # Renamed from cmb001 to avoid collision
             add=self._log_level_options,
             setCurrentIndex=1,  # Default to INFO
             setToolTip="Set the log level.",
@@ -509,12 +509,9 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    def b001_init(self, widget) -> None:
-        """Auto-generate Export Settings UI from task definitions."""
-        widget.menu.setTitle("TASKS:")
-        widget.menu.trigger_button = "left"
-        widget.menu.add_apply_button = False
-        widget.menu.position = "bottom"
+    def cmb001_init(self, widget) -> None:
+        """Auto-generate Export Settings UI from task definitions using WidgetComboBox."""
+        widget_items = []
 
         for task_name, params in self.task_manager.task_definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
@@ -527,17 +524,19 @@ class SceneExporterSlots(SceneExporter):
                 if widget_class is None:
                     raise ValueError(f"Unknown widget type: {widget_type}")
 
-            # Create the widget
-            created_widget = widget.menu.add(widget_class)
-
+            # Create the widget instance
+            created_widget = widget_class()
             self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
-    def b002_init(self, widget) -> None:
-        """Auto-generate Check Settings UI from check definitions."""
-        widget.menu.setTitle("VALIDATION CHECKS:")
-        widget.menu.trigger_button = "left"
-        widget.menu.add_apply_button = False
-        widget.menu.position = "bottom"
+            # Add as (widget, label) tuple for the combo box
+            widget_items.append((created_widget, task_name))
+
+        # Add all widgets to the combo box with a header
+        widget.add(widget_items, header="Tasks", clear=True)
+
+    def cmb002_init(self, widget) -> None:
+        """Auto-generate Check Settings UI from check definitions using WidgetComboBox."""
+        widget_items = []
 
         for check_name, params in self.task_manager.check_definitions.items():
             widget_type = params.get("widget_type", "QCheckBox")
@@ -550,14 +549,20 @@ class SceneExporterSlots(SceneExporter):
                 if widget_class is None:
                     raise ValueError(f"Unknown widget type: {widget_type}")
 
-            # Create the widget
-            created_widget = widget.menu.add(widget_class)
+            # Create the widget instance
+            created_widget = widget_class()
 
             # Create a copy of params without widget_type for set_attributes
             params_copy = {k: v for k, v in params.items() if k != "widget_type"}
             self.ui.set_attributes(
                 created_widget, setObjectName=object_name, **params_copy
             )
+
+            # Add as (widget, label) tuple for the combo box
+            widget_items.append((created_widget, check_name))
+
+        # Add all widgets to the combo box with a header
+        widget.add(widget_items, header="Validation Checks", clear=True)
 
     def b000(self) -> None:
         """Export."""
@@ -646,7 +651,7 @@ class SceneExporterSlots(SceneExporter):
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),
             create_log_file=self.ui.b011.isChecked(),
-            log_level=self.ui.cmb001.currentData(),
+            log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
             tasks={**task_params, **check_params},  # Pass both to perform_export
         )
 
