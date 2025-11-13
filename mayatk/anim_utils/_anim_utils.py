@@ -969,6 +969,39 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    def repair_corrupted_curves(
+        cls,
+        objects: Optional[
+            Union[str, "pm.PyNode", List[Union[str, "pm.PyNode"]]]
+        ] = None,
+        recursive: bool = True,
+        delete_corrupted: bool = False,
+        fix_infinite: bool = True,
+        fix_invalid_times: bool = True,
+        time_range_threshold: float = 1e6,
+        value_threshold: float = 1e6,
+        quiet: bool = False,
+    ) -> Dict[str, Any]:
+        """Legacy wrapper maintained for backwards compatibility.
+
+        The implementation now lives in :class:`AnimCurveRepair`.
+        """
+
+        from mayatk.core_utils.repair import AnimCurveRepair
+
+        return AnimCurveRepair.repair_corrupted_curves(
+            objects=objects,
+            recursive=recursive,
+            delete_corrupted=delete_corrupted,
+            fix_infinite=fix_infinite,
+            fix_invalid_times=fix_invalid_times,
+            time_range_threshold=time_range_threshold,
+            value_threshold=value_threshold,
+            quiet=quiet,
+        )
+
+    @classmethod
+    @CoreUtils.undoable
     def optimize_keys(
         cls,
         objects: Union[str, "pm.PyNode", List[Union[str, "pm.PyNode"]]],
@@ -1795,16 +1828,12 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 time_arg = object_range if (range_specified and object_range) else None
 
                 if selected_keys_only:
+                    # Query selected times once upfront from the curves we're about to scale
+                    # Store them so we don't rely on selection state during the actual scaling
+                    curve_selected_times = {}
                     for curve in curves_to_scale:
                         if time_arg:
-                            pm.scaleKey(
-                                curve,
-                                time=time_arg,
-                                timeScale=factor,
-                                timePivot=pivot_time,
-                                scaleSpecifiedKeys=True,
-                            )
-                            scaled_times = pm.keyframe(
+                            selected_times = pm.keyframe(
                                 curve,
                                 query=True,
                                 selected=True,
@@ -1812,21 +1841,31 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                                 time=time_arg,
                             )
                         else:
-                            pm.scaleKey(
-                                curve,
-                                timeScale=factor,
-                                timePivot=pivot_time,
-                                scaleSpecifiedKeys=True,
-                            )
-                            scaled_times = pm.keyframe(
+                            selected_times = pm.keyframe(
                                 curve, query=True, selected=True, tc=True
                             )
-                        if scaled_times:
-                            keys_scaled += len(scaled_times)
 
-                            # Apply snapping if requested (skip 'none' mode)
-                            if snap_mode and snap_mode != "none":
-                                cls._snap_curve_keys(curve, scaled_times, snap_mode)
+                        if selected_times:
+                            curve_selected_times[curve] = list(selected_times)
+
+                    # Now work purely with the stored time data, no further selection queries
+                    for curve, selected_times in curve_selected_times.items():
+                        # Manually calculate scaled positions and move keys
+                        time_pairs = []
+                        for old_time in selected_times:
+                            # Calculate new time: new_time = pivot + (old_time - pivot) * factor
+                            new_time = pivot_time + (old_time - pivot_time) * factor
+                            time_pairs.append((old_time, new_time))
+
+                        # Move keys using the helper method
+                        moved = cls._move_curve_keys(curve, time_pairs)
+                        keys_scaled += moved
+
+                        # Apply snapping if requested (skip 'none' mode)
+                        if snap_mode and snap_mode != "none":
+                            # Snap the new positions
+                            new_times = [new_time for _, new_time in time_pairs]
+                            cls._snap_curve_keys(curve, new_times, snap_mode)
                 else:
                     for curve in curves_to_scale:
                         if time_arg:
@@ -2391,7 +2430,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         """Invert keyframes around the last key, preferring selected keys but falling back to all keys.
 
         Parameters:
-            time (int, optional): Desired start time for inverted keys. If None, uses earliest keyframe.
+            time (int, optional): Desired start time for inverted keys. If None, uses current time.
             relative (bool): When True, time is treated as an offset from the last key. Defaults to True.
             delete_original (bool): Delete the source keyframes after inversion. Defaults to False.
         """
@@ -2438,7 +2477,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         min_time = min(all_key_times)
 
         if time is None:
-            time = min_time if not relative else 0
+            time = pm.currentTime(q=True) if not relative else 0
 
         inversion_point = max_time + time if relative else time
 
@@ -2504,9 +2543,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 rounded_time = round(key_time, 3)
                 if (str(node), rounded_time) not in inverted_positions:
                     pm.cutKey(node, time=(key_time, key_time))
-
-    # Backward compatibility
-    invert_selected_keys = invert_keys
 
     @staticmethod
     @CoreUtils.undoable

@@ -166,14 +166,14 @@
            <item>
             <widget class="WidgetComboBox" name="cmb001">
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Specify tasks to run before export.</string>
              </property>
             </widget>
            </item>
            <item>
             <widget class="WidgetComboBox" name="cmb002">
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Specify checks to run before export.</string>
              </property>
             </widget>
            </item>

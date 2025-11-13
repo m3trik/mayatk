@@ -10,6 +10,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils, components
+from mayatk.core_utils.repair import MeshRepair
 from mayatk.display_utils import DisplayUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils
@@ -739,45 +740,28 @@ class EditUtils(ptk.HelpMixin):
             allMeshes (bool): Clean all geometry in the scene instead of only the current selection.
             repair (bool): Attempt to repair instead of just selecting geometry.
         """
-        if allMeshes:
-            objects = pm.ls(geometry=True)
-        elif not isinstance(objects, list):
-            objects = [objects]
-
-        if bakePartialHistory:
-            pm.bakePartialHistory(objects, prePostDeformers=True)
-
-        # Prepare selection for cleanup
-        pm.select(objects)
-
-        # Configure cleanup options
-        options = [
-            int(allMeshes),
-            1 if repair else 2,
-            int(historyOn),
-            int(quads),
-            int(nsided),
-            int(concave),
-            int(holed),
-            int(nonplanar),
-            int(zeroGeom),
-            float(zeroGeomTol),
-            int(zeroEdge),
-            float(zeroEdgeTol),
-            int(zeroMap),
-            float(zeroMapTol),
-            int(sharedUVs),
-            int(nonmanifold),
-            int(lamina),
-            int(invalidComponents),
-        ]
-        # Construct the polyCleanup command argument string
-        arg_list = ",".join([f'"{option}"' for option in options])
-        command = f"polyCleanupArgList 4 {{{arg_list}}}"
-
-        # Execute the cleanup command
-        pm.mel.eval(command)
-        pm.select(objects)
+        MeshRepair.clean_geometry(
+            objects=objects,
+            allMeshes=allMeshes,
+            repair=repair,
+            quads=quads,
+            nsided=nsided,
+            concave=concave,
+            holed=holed,
+            nonplanar=nonplanar,
+            zeroGeom=zeroGeom,
+            zeroGeomTol=zeroGeomTol,
+            zeroEdge=zeroEdge,
+            zeroEdgeTol=zeroEdgeTol,
+            zeroMap=zeroMap,
+            zeroMapTol=zeroMapTol,
+            sharedUVs=sharedUVs,
+            nonmanifold=nonmanifold,
+            lamina=lamina,
+            invalidComponents=invalidComponents,
+            historyOn=historyOn,
+            bakePartialHistory=bakePartialHistory,
+        )
 
     @staticmethod
     def get_overlapping_duplicates(
@@ -986,20 +970,7 @@ class EditUtils(ptk.HelpMixin):
         Returns:
             (list)
         """
-        pm.select(objects)
-        # Change to Component mode to retain object highlighting
-        pm.mel.changeSelectMode(1)
-        # Change to Face Component Mode
-        pm.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
-        # Select Object/s and Run Script to highlight N-Gons
-        pm.polySelectConstraint(mode=3, type=0x0008, size=3)
-        nGons = pm.ls(sl=1)
-        pm.polySelectConstraint(disable=1)
-
-        if repair:  # convert N-Sided Faces To Quads
-            pm.polyQuad(nGons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
-
-        return nGons
+        return MeshRepair.get_ngons(objects, repair=repair)
 
     @staticmethod
     def get_overlapping_vertices(objects, threshold=0.0003):
