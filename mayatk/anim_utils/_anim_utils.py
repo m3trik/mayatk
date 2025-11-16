@@ -987,7 +987,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         The implementation now lives in :class:`AnimCurveRepair`.
         """
 
-        from mayatk.core_utils.repair import AnimCurveRepair
+        from mayatk.core_utils.diagnostic import AnimCurveDiagnostics as AnimCurveRepair
 
         return AnimCurveRepair.repair_corrupted_curves(
             objects=objects,
@@ -4437,97 +4437,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             "actual_offset": actual_offset,
             "earliest_key": earliest_key,
         }
-
-    @staticmethod
-    def create_playblast(
-        filepath: str = None,
-        start_frame: int = None,
-        end_frame: int = None,
-        camera_name: str = "persp",
-        **kwargs,
-    ) -> str:
-        """Creates a playblast in Maya, outputting to an .avi file.
-
-        Parameters:
-            filepath (str): Output path for the playblast file. Uses scene name if not specified.
-            start_frame (int): Starting frame for the playblast. Defaults to Maya's playback start.
-            end_frame (int): Ending frame for the playblast. Defaults to Maya's playback end.
-            camera_name (str): Camera to use for the playblast. Defaults to "persp".
-            **kwargs: Additional keyword arguments passed to `pm.playblast()`.
-
-        Returns:
-            str: Filepath where the playblast video was created.
-
-        Raises:
-            ValueError: If the scene is not saved, filepath is invalid, or camera doesn't exist.
-            RuntimeError: If the playblast fails to create a video file.
-        """
-        import os
-
-        # Format filepath using ptk.format_path
-        filepath = ptk.format_path(filepath) if filepath else None
-
-        # Default to scene name if no filepath provided or it's a directory
-        if not filepath or os.path.isdir(filepath):
-            scene_name = pm.sceneName()
-            if not scene_name:
-                raise ValueError(
-                    "No scene name found. Save the scene or provide a filepath."
-                )
-            scene_name_with_ext = (
-                os.path.basename(scene_name).rsplit(".", 1)[0] + ".avi"
-            )
-            filepath = os.path.join(filepath or "", scene_name_with_ext)
-        else:
-            if not filepath.endswith(".avi"):
-                filepath += ".avi"
-
-        # Check camera exists
-        if not pm.objExists(camera_name):
-            raise ValueError(f"Camera '{camera_name}' does not exist.")
-
-        # Set frame range from playback options if not provided
-        start_frame = start_frame or int(pm.playbackOptions(q=True, minTime=True))
-        end_frame = end_frame or int(pm.playbackOptions(q=True, maxTime=True))
-
-        # Define essential playblast parameters with defaults, allowing overrides from kwargs
-        playblast_params = {
-            "format": kwargs.get("format", "avi"),
-            "compression": kwargs.get("compression", "none"),
-            "forceOverwrite": kwargs.get("forceOverwrite", True),
-            "viewer": kwargs.get("viewer", False),
-            "widthHeight": kwargs.get("widthHeight", (1920, 1080)),
-            "quality": kwargs.get("quality", 100),
-            "showOrnaments": kwargs.get("showOrnaments", True),
-            "percent": kwargs.get("percent", 100),
-        }
-        playblast_params.update(kwargs)
-
-        # Set up and override model panel cameras
-        model_panels = pm.getPanel(type="modelPanel")
-        original_cameras = {
-            panel: pm.modelEditor(panel, q=True, camera=True) for panel in model_panels
-        }
-        for panel in model_panels:
-            pm.modelEditor(panel, e=True, camera=camera_name)
-
-        try:
-            pm.playblast(
-                filename=filepath,
-                startTime=start_frame,
-                endTime=end_frame,
-                **playblast_params,
-            )
-            if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-                raise RuntimeError(
-                    f"Playblast failed; no .avi file created at {filepath}"
-                )
-
-            print(f"Playblast video created at: {filepath}")
-            return filepath
-        finally:
-            for panel in model_panels:
-                pm.modelEditor(panel, e=True, camera=original_cameras[panel])
 
 
 # -----------------------------------------------------------------------------

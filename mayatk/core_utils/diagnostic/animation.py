@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Dedicated animation-curve repair utilities."""
+"""Animation-curve diagnostics and optional repair helpers."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -16,8 +16,8 @@ from mayatk.core_utils import CoreUtils
 PyNodeLike = Union[str, "pm.PyNode"]
 
 
-class AnimCurveRepair:
-    """Utility class that handles detection and repair of corrupted animation curves."""
+class AnimCurveDiagnostics:
+    """Utilities for detecting and resolving common animation-curve issues."""
 
     @classmethod
     @CoreUtils.undoable
@@ -32,7 +32,7 @@ class AnimCurveRepair:
         value_threshold: float = 1e6,
         quiet: bool = False,
     ) -> Dict[str, Any]:
-        """Detect and repair corrupted animation curves."""
+        """Detect and (optionally) repair corrupted animation curves."""
 
         return cls._repair_corrupted_curves(
             objects=objects,
@@ -57,7 +57,7 @@ class AnimCurveRepair:
         value_threshold: float = 1e6,
         quiet: bool = False,
     ) -> Dict[str, Any]:
-        """Internal implementation used by both the public API and legacy wrappers."""
+        """Internal implementation shared by public API and legacy wrappers."""
 
         anim_curves = cls._collect_anim_curves(objects, recursive)
 
@@ -82,7 +82,7 @@ class AnimCurveRepair:
 
         if not quiet:
             print(
-                f"[repair] Checking {len(anim_curves)} animation curves for corruption..."
+                f"[diagnostic] Checking {len(anim_curves)} animation curves for corruption..."
             )
 
         for curve in anim_curves:
@@ -198,7 +198,7 @@ class AnimCurveRepair:
                 continue
 
         if not quiet:
-            print("\n[repair] === Repair Summary ===")
+            print("\n[diagnostic] === Animation Curve Summary ===")
             print(f"  Curves checked: {len(anim_curves)}")
             print(f"  Corrupted found: {stats['corrupted_found']}")
             print(f"  Curves repaired: {stats['curves_repaired']}")
@@ -260,7 +260,7 @@ class AnimCurveRepair:
         value_threshold: float,
         quiet: bool = False,
     ) -> bool:
-        """Attempt to fix or delete specific corrupted keys on a curve."""
+        """Attempt to remediate or delete specific corrupted keys on a curve."""
 
         try:
             for key_idx in sorted(keys_to_fix, reverse=True):
@@ -320,3 +320,13 @@ class AnimCurveRepair:
             if not quiet:
                 pm.warning(f"Failed to repair curve keys: {str(exc)}")
             return False
+
+
+def repair_corrupted_curves(**kwargs) -> Dict[str, Any]:
+    """Module-level helper mirroring :meth:`AnimCurveDiagnostics.repair_corrupted_curves`."""
+
+    return AnimCurveDiagnostics.repair_corrupted_curves(**kwargs)
+
+
+# Compatibility alias for legacy imports
+AnimCurveRepair = AnimCurveDiagnostics

@@ -43,9 +43,9 @@ DEFAULT_INCLUDE = {
     "env_utils.hierarchy_manager.manager": "HierarchyManager",
     "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],
     "env_utils.hierarchy_manager.swapper": "ObjectSwapper",
-    # Repair utilities
-    "anim_utils.repair": "AnimCurveRepair",
-    "core_utils.repair._repair": "Repair",
+    # Diagnostics utilities
+    "core_utils.diagnostic.mesh": "MeshDiagnostics",
+    "core_utils.diagnostic.animation": "AnimCurveDiagnostics",
     # Examples of wildcard usage:
     # "some_module": ["*"],  # Expose all classes from some_module
 }
@@ -53,6 +53,9 @@ DEFAULT_INCLUDE = {
 DEFAULT_FALLBACKS = {
     "UiManager": "mayatk.ui_utils.ui_manager",
     "MayaMenuHandler": "mayatk.ui_utils.maya_menu_handler",
+    "clean_geometry": "mayatk.core_utils.diagnostic.mesh",
+    "get_ngons": "mayatk.core_utils.diagnostic.mesh",
+    "repair_corrupted_curves": "mayatk.core_utils.diagnostic.animation",
 }
 
 

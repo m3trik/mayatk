@@ -921,7 +921,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     to the appropriate controller methods.
     """
 
-    def __init__(self, switchboard, log_level="DEBUG"):
+    def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
 

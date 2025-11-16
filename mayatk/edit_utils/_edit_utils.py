@@ -10,7 +10,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils import CoreUtils, components
-from mayatk.core_utils.repair import MeshRepair
+from mayatk.core_utils.diagnostic import MeshDiagnostics as MeshRepair
 from mayatk.display_utils import DisplayUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils
@@ -709,60 +709,6 @@ class EditUtils(ptk.HelpMixin):
             )
             return None
 
-    @classmethod
-    def clean_geometry(
-        cls,
-        objects: Union[str, object, List[Union[str, object]]],
-        allMeshes: bool = False,
-        repair: bool = False,
-        quads: bool = False,
-        nsided: bool = False,
-        concave: bool = False,
-        holed: bool = False,
-        nonplanar: bool = False,
-        zeroGeom: bool = False,
-        zeroGeomTol: float = 0.000010,
-        zeroEdge: bool = False,
-        zeroEdgeTol: float = 0.000010,
-        zeroMap: bool = False,
-        zeroMapTol: float = 0.000010,
-        sharedUVs: bool = False,
-        nonmanifold: bool = False,
-        lamina: bool = False,
-        invalidComponents: bool = False,
-        historyOn: bool = True,
-        bakePartialHistory: bool = False,
-    ) -> None:
-        """Select or remove unwanted geometry from a polygon mesh using polyCleanupArgList.
-
-        Parameters:
-            objects (Union[str, pm.nt.DependNode, List[Union[str, pm.nt.DependNode]]]): The polygon objects to clean.
-            allMeshes (bool): Clean all geometry in the scene instead of only the current selection.
-            repair (bool): Attempt to repair instead of just selecting geometry.
-        """
-        MeshRepair.clean_geometry(
-            objects=objects,
-            allMeshes=allMeshes,
-            repair=repair,
-            quads=quads,
-            nsided=nsided,
-            concave=concave,
-            holed=holed,
-            nonplanar=nonplanar,
-            zeroGeom=zeroGeom,
-            zeroGeomTol=zeroGeomTol,
-            zeroEdge=zeroEdge,
-            zeroEdgeTol=zeroEdgeTol,
-            zeroMap=zeroMap,
-            zeroMapTol=zeroMapTol,
-            sharedUVs=sharedUVs,
-            nonmanifold=nonmanifold,
-            lamina=lamina,
-            invalidComponents=invalidComponents,
-            historyOn=historyOn,
-            bakePartialHistory=bakePartialHistory,
-        )
-
     @staticmethod
     def get_overlapping_duplicates(
         objects: Optional[List] = None,
@@ -958,19 +904,6 @@ class EditUtils(ptk.HelpMixin):
         if select:
             pm.select(vertex, add=1)
         pm.undoInfo(closeChunk=True)
-
-    @staticmethod
-    def get_ngons(objects, repair=False):
-        """Get any N-Gons from the given object using selection contraints.
-
-        Parameters:
-            objects (str/obj/list): The objects to query.
-            repair (bool): Repair any found N-gons.
-
-        Returns:
-            (list)
-        """
-        return MeshRepair.get_ngons(objects, repair=repair)
 
     @staticmethod
     def get_overlapping_vertices(objects, threshold=0.0003):

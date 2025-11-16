@@ -1,22 +1,22 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Mesh repair utilities."""
+"""Mesh diagnostics and repair helpers."""
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 try:
     import pymel.core as pm
 except ImportError as error:  # pragma: no cover - Maya runtime specific
     print(__file__, error)
 
-# Type aliases to avoid importing Maya stubs during type checking
+# Type aliases keep Maya stubs optional during static analysis
 PyNodeLike = Union[str, object]
 PyNodeSeq = Union[PyNodeLike, Sequence[PyNodeLike]]
 
 
-class MeshRepair:
-    """Operations for identifying and fixing common mesh issues."""
+class MeshDiagnostics:
+    """Operations for inspecting and fixing common mesh issues."""
 
     @staticmethod
     def clean_geometry(
@@ -41,12 +41,18 @@ class MeshRepair:
         historyOn: bool = True,
         bakePartialHistory: bool = False,
     ) -> None:
-        """Select or remove unwanted geometry from a polygon mesh using ``polyCleanupArgList``."""
+        """Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``."""
 
         if allMeshes:
             objects = pm.ls(geometry=True)
         elif not isinstance(objects, (list, tuple, set)):
             objects = [objects]
+
+        objects = [obj for obj in objects if obj] if objects else []
+        if not objects:
+            raise ValueError(
+                "Mesh cleanup requires one or more mesh objects. Select meshes and try again."
+            )
 
         if bakePartialHistory:
             pm.bakePartialHistory(objects, prePostDeformers=True)
@@ -95,3 +101,19 @@ class MeshRepair:
             pm.polyQuad(n_gons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
 
         return n_gons
+
+
+def clean_geometry(**kwargs) -> None:
+    """Module-level helper mirroring :meth:`MeshDiagnostics.clean_geometry`."""
+
+    return MeshDiagnostics.clean_geometry(**kwargs)
+
+
+def get_ngons(objects: Optional[PyNodeSeq], repair: bool = False):
+    """Module-level helper mirroring :meth:`MeshDiagnostics.get_ngons`."""
+
+    return MeshDiagnostics.get_ngons(objects=objects, repair=repair)
+
+
+# Compatibility alias for legacy imports
+MeshRepair = MeshDiagnostics

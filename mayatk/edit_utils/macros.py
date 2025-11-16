@@ -305,7 +305,7 @@ class DisplayMacros:
                     fade=True,
                 )
             else:  # If not displaying UV borders, turn it on
-                pm.polyOptions(sel, displayMapBorder=True)
+                pm.polyOptions(obj, displayMapBorder=True)
                 pm.inViewMessage(
                     statusMessage=f"UV Border Edges <hl>Shown</hl>.",
                     pos="topCenter",
@@ -735,11 +735,16 @@ class EditMacros:
         if len(b) > 1:  # Combine multiple meshes
             b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
 
-        if repair_mesh:  # Clean any n-gons
-            EditUtils.clean_geometry(
-                a, repair=True, nonmanifold=True, nsided=True, bakePartialHistory=True
-            )
+        if repair_mesh:  # Clean any n-gons before running the boolean
+            from mayatk.core_utils.diagnostic import clean_geometry
 
+            clean_geometry(
+                objects=a,
+                repair=True,
+                nonmanifold=True,
+                nsided=True,
+                bakePartialHistory=True,
+            )
         # Resolve operation type, defaulting to 'union'
         operation_types = {"union": 1, "difference": 2, "intersection": 3}
         operation = kwargs.pop("operation", kwargs.pop("op", "union"))
