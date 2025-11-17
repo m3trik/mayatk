@@ -17,11 +17,19 @@ References:
 """
 
 from __future__ import annotations
+import math
 from typing import Iterable, Optional, Tuple, List, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pymel.core as pm
-    from maya.api.OpenMaya import MMatrix, MTransformationMatrix, MVector, MQuaternion
+    from maya.api.OpenMaya import (
+        MMatrix,
+        MTransformationMatrix,
+        MVector,
+        MQuaternion,
+        MSpace,
+        MEulerRotation,
+    )
 else:
     try:
         import pymel.core as pm
@@ -35,12 +43,53 @@ else:
             MTransformationMatrix,
             MVector,
             MQuaternion,
+            MSpace,
+            MEulerRotation,
         )
     except ImportError as error:
         print(__file__, error)
         MMatrix = MTransformationMatrix = MVector = MQuaternion = None
+        MSpace = MEulerRotation = None
 
 import pythontk as ptk
+
+SPACE_OBJECT = MSpace.kObject if "MSpace" in locals() and MSpace is not None else 0
+SPACE_WORLD = MSpace.kWorld if "MSpace" in locals() and MSpace is not None else 0
+
+
+def _quat_to_euler_xyz_deg(quat: "MQuaternion") -> Tuple[float, float, float]:
+    """Convert an MQuaternion into XYZ Euler angles in degrees without PyMEL."""
+
+    if quat is None:
+        return 0.0, 0.0, 0.0
+
+    x = quat.x
+    y = quat.y
+    z = quat.z
+    w = quat.w
+
+    # Roll (X-axis rotation)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (Y-axis rotation)
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    # Yaw (Z-axis rotation)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return (
+        math.degrees(roll),
+        math.degrees(pitch),
+        math.degrees(yaw),
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -120,7 +169,7 @@ class _MatrixMath:
             ... )
         """
         t = MTransformationMatrix()
-        t.setTranslation(MVector(*translate), pm.space.kObject)
+        t.setTranslation(MVector(*translate), SPACE_OBJECT)
 
         # Convert euler to quaternion for rotation
         euler = pm.datatypes.EulerRotation(
@@ -130,7 +179,7 @@ class _MatrixMath:
             rotate_order.lower(),
         )
         t.setRotation(euler.asQuaternion())
-        t.setScale(scale, pm.space.kObject)
+        t.setScale(scale, SPACE_OBJECT)
 
         return t.asMatrix()
 
@@ -156,17 +205,17 @@ class _MatrixMath:
             >>> print(t)  # (5.0, 0.0, 0.0)
         """
         tm = MTransformationMatrix(m)
-        t = tm.translation(pm.space.kObject)
-        q = tm.rotation(asQuaternion=True)
-        euler = pm.datatypes.EulerRotation(q)
-        r_deg = (
-            pm.util.radiansToDegrees(euler[0]),
-            pm.util.radiansToDegrees(euler[1]),
-            pm.util.radiansToDegrees(euler[2]),
-        )
-        s = tm.scale(pm.space.kObject)
+        t = tm.translation(SPACE_OBJECT)
+        s = tm.scale(SPACE_OBJECT)
 
-        return (t.x, t.y, t.z), r_deg, (s[0], s[1], s[2])
+        try:
+            quat = tm.rotation(asQuaternion=True)
+        except Exception:
+            quat = None
+
+        rotation_deg = _quat_to_euler_xyz_deg(quat)
+
+        return (t.x, t.y, t.z), rotation_deg, (s[0], s[1], s[2])
 
     @staticmethod
     def inverse(m: "MMatrix") -> "MMatrix":
@@ -256,18 +305,18 @@ class _DagTransforms:
         node.offsetParentMatrix.set(pm.datatypes.Matrix())
 
         tm = MTransformationMatrix(m)
-        t = tm.translation(pm.space.kWorld)
-        s = tm.scale(pm.space.kWorld)
-        euler = pm.datatypes.EulerRotation(tm.rotation(asQuaternion=True))
+        t = tm.translation(SPACE_WORLD)
+        s = tm.scale(SPACE_WORLD)
+
+        try:
+            quat = tm.rotation(asQuaternion=True)
+        except Exception:
+            quat = None
+
+        rotation_deg = _quat_to_euler_xyz_deg(quat)
 
         node.t.set((t.x, t.y, t.z))
-        node.r.set(
-            (
-                pm.util.radiansToDegrees(euler[0]),
-                pm.util.radiansToDegrees(euler[1]),
-                pm.util.radiansToDegrees(euler[2]),
-            )
-        )
+        node.r.set(rotation_deg)
         node.s.set(s)
 
     @staticmethod
