@@ -588,6 +588,7 @@ class MatUtils(ptk.HelpMixin):
         materials: Optional[List[str]] = None,
         new_dir: Optional[str] = None,
         silent: bool = False,
+        file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
     ) -> None:
         """Remaps file texture paths for materials to new_dir, using relative paths if inside sourceimages.
 
@@ -595,15 +596,56 @@ class MatUtils(ptk.HelpMixin):
             materials (Optional[List[str]]): List of material names to remap. Defaults to all materials.
             new_dir (Optional[str]): Target directory to remap the file nodes to. Defaults to sourceimages.
             silent (bool): If True, suppresses output messages.
+            file_nodes (Optional[List[Union[str, pm.nt.File]]]): Specific file nodes to remap. When provided,
+                only these nodes are processed unless materials are also supplied.
         """
         new_dir = new_dir or EnvUtils.get_env_info("sourceimages")
         if not new_dir or not os.path.isdir(new_dir):
             pm.warning(f"Invalid directory: {new_dir}")
             return
 
-        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
-        textures = cls.collect_material_paths(materials=materials)
-        textures = [t[0] if isinstance(t, tuple) else t for t in textures]
+        file_nodes = pm.ls(file_nodes, type="file") if file_nodes else []
+
+        if materials is None:
+            materials = [] if file_nodes else pm.ls(mat=True)
+        else:
+            materials = pm.ls(materials, mat=True)
+
+        textures: List[str] = []
+
+        if materials:
+            mat_paths = cls.collect_material_paths(materials=materials)
+            textures.extend(t[0] if isinstance(t, tuple) else t for t in mat_paths)
+
+        if file_nodes:
+            project_sourceimages = os.path.abspath(
+                EnvUtils.get_env_info("sourceimages")
+            )
+            sourceimages_name = os.path.basename(project_sourceimages).replace(
+                "\\", "/"
+            )
+            for node in file_nodes:
+                try:
+                    file_path = node.fileTextureName.get()
+                except Exception:
+                    continue
+                if not file_path:
+                    continue
+                file_path = file_path.replace("\\", "/")
+                abs_path = (
+                    os.path.abspath(os.path.join(project_sourceimages, file_path))
+                    if not os.path.isabs(file_path)
+                    else os.path.abspath(file_path)
+                )
+                if abs_path.startswith(project_sourceimages):
+                    rel_path = os.path.relpath(abs_path, project_sourceimages).replace(
+                        "\\", "/"
+                    )
+                    if not rel_path.startswith(sourceimages_name + "/"):
+                        rel_path = f"{sourceimages_name}/{rel_path}"
+                    textures.append(rel_path)
+                else:
+                    textures.append(abs_path)
 
         if not textures:
             pm.warning("No valid texture paths found.")
@@ -936,11 +978,12 @@ class MatUtils(ptk.HelpMixin):
     @classmethod
     def find_texture_files(
         cls,
-        objects: List[str],
+        objects: Optional[List[str]],
         source_dir: str,
         recursive: bool = True,
         return_dir: bool = False,
         quiet: bool = False,
+        file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
     ) -> List[Union[str, Tuple[str, str]]]:
         """Find texture files for given objects' materials inside source_dir.
 
@@ -950,6 +993,8 @@ class MatUtils(ptk.HelpMixin):
             recursive (bool): If True, search subdirectories.
             return_dir (bool): If True, return (dir, filename) tuples instead of filepaths.
             quiet (bool): If False, print the found results in a readable format.
+            file_nodes (Optional[List[Union[str, pm.nt.File]]]): Specific file nodes to resolve texture
+                filenames from when no scene objects are provided.
 
         Returns:
             List[str] or List[Tuple[str, str]]: Filepaths or (dir, filename) based on return_dir.
@@ -958,21 +1003,37 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid source directory: {source_dir}")
             return []
 
-        if not objects:
-            pm.warning("No objects provided to find textures.")
+        if not objects and not file_nodes:
+            pm.warning("No objects or file nodes provided to find textures.")
             return []
 
-        materials = cls.get_mats(objects)
-        if not materials:
-            pm.warning("No materials found for the given objects.")
-            return []
+        texture_filenames: set[str] = set()
 
-        texture_paths = cls.collect_material_paths(materials=materials)
-        texture_filenames = set(
-            os.path.basename(p[0] if isinstance(p, tuple) else p)
-            for p in texture_paths
-            if p
-        )
+        if objects:
+            materials = cls.get_mats(objects)
+            if not materials:
+                pm.warning("No materials found for the given objects.")
+            else:
+                texture_paths = cls.collect_material_paths(materials=materials)
+                texture_filenames.update(
+                    os.path.basename(p[0] if isinstance(p, tuple) else p)
+                    for p in texture_paths
+                    if p
+                )
+
+        if file_nodes:
+            resolved_nodes = pm.ls(file_nodes, type="file")
+            for node in resolved_nodes:
+                try:
+                    tex_path = node.fileTextureName.get()
+                except Exception:
+                    continue
+                if tex_path:
+                    texture_filenames.add(os.path.basename(tex_path))
+
+        if not texture_filenames:
+            pm.warning("No texture names available for lookup.")
+            return []
 
         all_files = ptk.FileUtils.get_dir_contents(
             source_dir, content="filepath", recursive=recursive

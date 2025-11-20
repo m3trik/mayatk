@@ -1,6 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, Union, Optional
+from __future__ import annotations
+
+from typing import List, Tuple, Dict, Union, Optional, Set, Any
 
 try:
     import pymel.core as pm
@@ -294,7 +296,14 @@ class XformUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
-        cls, objects, center_pivot=False, force=True, delete_history=False, **kwargs
+        cls,
+        objects,
+        center_pivot=False,
+        force=True,
+        delete_history=False,
+        freeze_children=False,
+        connection_strategy="preserve",
+        **kwargs,
     ):
         """Freezes transformations on the given objects.
 
@@ -303,17 +312,88 @@ class XformUtils(ptk.HelpMixin):
             center_pivot (bool): If True, centers the pivot.
             force (bool): If True, unlocks locked transform attributes and restores them after.
             delete_history (bool): If True, deletes construction history after freeze.
+            freeze_children (bool): If True, also freeze descendant transforms.
+            connection_strategy (str): How to handle incoming connections on TRS channels.
+                "preserve" (default) -> raise a descriptive error,
+                "disconnect" -> break the incoming connections,
+                "delete" -> break incoming connections and delete their source nodes when possible.
+                Note: "preserve" skips affected objects (reported at the end); "disconnect"/"delete" modify shared drivers, so downstream instances will also lose those connections.
             **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
         """
         from mayatk.rig_utils import RigUtils
 
+        freeze_attrs = {
+            "translate": ("translate", "translateX", "translateY", "translateZ"),
+            "rotate": ("rotate", "rotateX", "rotateY", "rotateZ"),
+            "scale": ("scale", "scaleX", "scaleY", "scaleZ"),
+        }
+
+        freeze_aliases = {
+            "translate": ("t", "translate"),
+            "rotate": ("r", "rotate"),
+            "scale": ("s", "scale"),
+        }
+
         objects = pm.ls(objects, type="transform", long=True)
 
+        strategy = (connection_strategy or "preserve").lower()
+        valid_strategies = {"preserve", "disconnect", "delete"}
+        if strategy not in valid_strategies:
+            raise ValueError(
+                f"Invalid connection_strategy '{connection_strategy}'. "
+                f"Valid options: {sorted(valid_strategies)}"
+            )
+
+        # Expand selection to children up front when requested
+        if freeze_children:
+            expanded = []
+            seen = set()
+            for obj in objects:
+                if not obj or obj in seen:
+                    continue
+                seen.add(obj)
+                expanded.append(obj)
+                for child in pm.listRelatives(obj, ad=True, type="transform") or []:
+                    if child in seen:
+                        continue
+                    seen.add(child)
+                    expanded.append(child)
+            objects = expanded
+
         lock_state: Dict[str, Dict[str, bool]] = {}
+
+        freeze_channels: Set[str] = set()
+        alias_seen = False
+        for channel, aliases in freeze_aliases.items():
+            for alias in aliases:
+                if alias in kwargs:
+                    alias_seen = True
+                    if bool(kwargs.get(alias)):
+                        freeze_channels.add(channel)
+        if not alias_seen:
+            freeze_channels = set(freeze_attrs.keys())
+
+        skipped_connections: List[
+            Tuple[str, Dict[pm.general.Attribute, List[pm.general.Attribute]]]
+        ] = []
+        instanced_skips: List[str] = []
+        frozen_objects: List[str] = []
 
         for obj in objects:
             if center_pivot:
                 pm.xform(obj, centerPivots=True)
+
+            shapes = (
+                pm.listRelatives(obj, shapes=True, noIntermediate=False, fullPath=True)
+                or []
+            )
+            if shapes:
+                try:
+                    if NodeUtils.get_instances(obj):
+                        instanced_skips.append(obj.name())
+                        continue
+                except Exception:
+                    pass
 
             # Store lock state and unlock if force
             if force:
@@ -322,16 +402,92 @@ class XformUtils(ptk.HelpMixin):
                     obj, translate=False, rotate=False, scale=False
                 )
 
-            # Delete history if requested
-            if delete_history:
-                pm.delete(obj, constructionHistory=True)
+            try:
+                blockers: Dict[pm.general.Attribute, List[pm.general.Attribute]] = {}
+                for channel in freeze_channels:
+                    for attr_name in freeze_attrs.get(channel, ()):
+                        try:
+                            plug = obj.attr(attr_name)
+                        except pm.MayaAttributeError:
+                            continue
+                        sources = plug.inputs(plugs=True) or []
+                        if sources:
+                            blockers[plug] = sources
 
-            # Freeze transforms
-            pm.makeIdentity(obj, apply=True, **kwargs)
+                if blockers:
+                    if strategy == "preserve":
+                        skipped_connections.append((obj.name(), blockers))
+                        continue
+                    nodes_to_delete = set()
+                    for plug, sources in blockers.items():
+                        for src in sources:
+                            try:
+                                pm.disconnectAttr(src, plug)
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"Failed to disconnect {src} -> {plug}: {exc}"
+                                ) from exc
 
-            # Restore lock state if needed
-            if force and obj.name() in lock_state:
-                RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
+                            if strategy == "delete":
+                                try:
+                                    node = src.node()
+                                except Exception:
+                                    continue
+                                if not node or node == obj:
+                                    continue
+                                if (
+                                    hasattr(node, "isReferenced")
+                                    and node.isReferenced()
+                                ):
+                                    continue
+                                nodes_to_delete.add(node)
+
+                    if nodes_to_delete:
+                        pm.delete(list(nodes_to_delete))
+
+                # Delete history if requested
+                if delete_history:
+                    pm.delete(obj, constructionHistory=True)
+
+                # Freeze transforms
+                try:
+                    pm.makeIdentity(obj, apply=True, **kwargs)
+                    frozen_objects.append(obj.name())
+                except RuntimeError as exc:
+                    msg = str(exc)
+                    if "incoming connection" in msg.lower():
+                        default_channels = set(freeze_attrs.keys())
+                        blockers = {}
+                        for channel in default_channels:
+                            for attr_name in freeze_attrs.get(channel, ()):
+                                try:
+                                    plug = obj.attr(attr_name)
+                                except pm.MayaAttributeError:
+                                    continue
+                                sources = plug.inputs(plugs=True) or []
+                                if sources:
+                                    blockers[plug] = sources
+                        skipped_connections.append((obj.name(), blockers))
+                        pm.warning(
+                            f"XformUtils.freeze_transforms: Skipping '{obj}' due to runtime connection error: {msg}"
+                        )
+                        continue
+                    raise
+            finally:
+                # Restore lock state if needed
+                if force and obj.name() in lock_state:
+                    RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
+                    lock_state.pop(obj.name(), None)
+
+        total_processed = (
+            len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
+        )
+        if total_processed:
+            skipped_total = len(skipped_connections) + len(instanced_skips)
+            pm.displayInfo(
+                "XformUtils.freeze_transforms: "
+                f"{len(frozen_objects)} frozen, {skipped_total} skipped."
+            )
 
     @staticmethod
     @CoreUtils.undoable
@@ -1229,7 +1385,7 @@ class XformUtils(ptk.HelpMixin):
         return_type: str = "bool",
     ) -> Union[
         List[Tuple["pm.nodetypes.Transform", bool]],
-        List[Tuple["pm.nodetypes.Transform", "om.MPoint"]],
+        List[Tuple["pm.nodetypes.Transform", Any]],
         List[Tuple["pm.nodetypes.Transform", "pm.datatypes.Vector"]],
         List[Tuple["pm.nodetypes.Transform", "pm.MeshVertex"]],
     ]:

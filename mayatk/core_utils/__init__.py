@@ -3,15 +3,6 @@
 
 from mayatk.core_utils._core_utils import *  # noqa: F401,F403
 from mayatk.core_utils.auto_instancer import AutoInstancer
-from mayatk.core_utils.instance_separator import (
-    AssemblyDescriptor,
-    AssemblyGroup,
-    AssemblyTemplateSlot,
-    InstanceGroup,
-    InstancePayload,
-    InstanceSeparationResult,
-    InstanceSeparator,
-)
 from mayatk.core_utils.mash import MashToolkit, MashNetworkNodes
 
 try:

@@ -373,14 +373,21 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed
 
-    def check_objects_below_floor(self) -> tuple:
-        """Check if any object's geometry is below the floor plane (Y=0)."""
+    def check_objects_below_floor(self, tolerance: float = 0.5) -> tuple:
+        """Check if any object's geometry is below the floor plane (Y=0).
+
+        Args:
+            tolerance: Allowable distance (in scene units) beneath the plane before failing.
+        """
         log_messages = []
         has_objects_below = False
 
+        tolerance = 0.0 if tolerance is None else max(0.0, float(tolerance))
+        plane_point = (0, -tolerance, 0) if tolerance else (0, 0, 0)
+
         objects_below_threshold = XformUtils.check_objects_against_plane(
             self.objects,
-            plane_point=(0, 0, 0),
+            plane_point=plane_point,
             plane_normal=(0, 1, 0),
             return_type="bool",
         )
@@ -391,6 +398,10 @@ class _TaskChecksMixin(_TaskDataMixin):
                 log_messages.append(f"Object: {obj} - Below Floor: {is_below}")
 
         if has_objects_below:
+            log_messages.insert(
+                0,
+                f"Tolerance used: {tolerance:.3f} unit{'s' if tolerance != 1 else ''}",
+            )
             return False, log_messages  # Failed, log objects below the floor threshold
 
         return True, log_messages  # All checks passed, no objects below the floor
@@ -652,7 +663,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_objects_below_floor": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Objects Below Floor.",
-                "setToolTip": "Check for objects with a bounding box having a negative Y value.",
+                "setToolTip": (
+                    "Check for geometry dipping below Y=0. A default 0.5 unit "
+                    "tolerance is applied so shallow penetrations (e.g. tires) "
+                    "do not immediately fail. Override by calling the check with a "
+                    "'tolerance' keyword argument."
+                ),
                 "setChecked": True,
             },
             "check_absolute_paths": {

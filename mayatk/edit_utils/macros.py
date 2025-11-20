@@ -1140,7 +1140,7 @@ class AnimationMacros:
     def m_set_selected_keys(objects) -> None:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = CoreUtils.get_selected_channels()
+            attrs = UiUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -1151,7 +1151,7 @@ class AnimationMacros:
     def m_unset_selected_keys(objects) -> None:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = CoreUtils.get_selected_channels()
+            attrs = UiUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)

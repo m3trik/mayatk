@@ -66,9 +66,9 @@ class NamingSlots(Naming, ptk.LoggingMixin):
     def txt000(self, widget):
         """Find"""
         # An asterisk denotes startswith*, *endswith, *contains*
-        regex = widget.ui.txt000.menu.chk001.isChecked()
-        ign_case = widget.ui.txt000.menu.chk000.isChecked()
-        locators_only = widget.ui.txt000.menu.chk007.isChecked()
+        regex = widget.ui.txt000.option_box.menu.chk001.isChecked()
+        ign_case = widget.ui.txt000.option_box.menu.chk000.isChecked()
+        locators_only = widget.ui.txt000.option_box.menu.chk007.isChecked()
 
         text = widget.text()
         if text:
@@ -126,10 +126,10 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         # An asterisk denotes startswith*, *endswith, *contains*
         find = widget.ui.txt000.text()
         to = widget.text()
-        regex = widget.ui.txt000.menu.chk001.isChecked()
-        ign_case = widget.ui.txt000.menu.chk000.isChecked()
-        retain_suffix = widget.ui.txt001.menu.chk002.isChecked()
-        ignore_find = widget.ui.txt001.menu.chk008.isChecked()
+        regex = widget.ui.txt000.option_box.menu.chk001.isChecked()
+        ign_case = widget.ui.txt000.option_box.menu.chk000.isChecked()
+        retain_suffix = widget.ui.txt001.option_box.menu.chk002.isChecked()
+        ignore_find = widget.ui.txt001.option_box.menu.chk008.isChecked()
 
         # Get current valid suffixes from property if retain_suffix is enabled
         valid_suffixes = self.valid_suffixes if retain_suffix else None

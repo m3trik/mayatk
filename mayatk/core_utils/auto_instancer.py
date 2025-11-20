@@ -8,10 +8,10 @@ from typing import Dict, List, Optional, Sequence
 import pymel.core as pm
 import pythontk as ptk
 
-from mayatk.core_utils.instance_separator import (
-    InstanceGroup,
-    InstanceSeparator,
-)
+# from mayatk.core_utils.instance_separator import (
+#     InstanceGroup,
+#     InstanceSeparator,
+# )
 from mayatk.xform_utils.matrices import Matrices
 
 RELOAD_COUNTER = globals().get("RELOAD_COUNTER", 0) + 1
