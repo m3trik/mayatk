@@ -190,6 +190,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.set_flags(FramelessWindowHint=True)
             ui.style.set(theme="dark", style_class="translucentBgWithBorder")
             ui.header.config_buttons("menu_button", "hide_button")
+            ui.edit_tags(add="mayatk")
             return ui
 
     def _load_maya_ui(

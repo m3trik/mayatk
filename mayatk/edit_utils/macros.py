@@ -1093,13 +1093,6 @@ class UiMacros:
     """ """
 
     @staticmethod
-    def m_tentacle_show() -> None:
-        """Display the tentacle marking menu."""
-        from tentacle.tcl_maya import TclMaya
-
-        TclMaya.instance().show()
-
-    @staticmethod
     def m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None:
         """Toggle UI toolbars and menu bar in sync.
 
