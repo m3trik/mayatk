@@ -2,6 +2,7 @@
 # coding=utf-8
 from __future__ import annotations
 
+import contextlib
 from typing import List, Tuple, Dict, Union, Optional, Set, Any
 
 try:
@@ -302,7 +303,9 @@ class XformUtils(ptk.HelpMixin):
         force=True,
         delete_history=False,
         freeze_children=False,
+        unlock_children=True,
         connection_strategy="preserve",
+        from_channel_box=False,
         **kwargs,
     ):
         """Freezes transformations on the given objects.
@@ -313,26 +316,71 @@ class XformUtils(ptk.HelpMixin):
             force (bool): If True, unlocks locked transform attributes and restores them after.
             delete_history (bool): If True, deletes construction history after freeze.
             freeze_children (bool): If True, also freeze descendant transforms.
+            unlock_children (bool): If True (and force is True), also unlock descendant transforms.
             connection_strategy (str): How to handle incoming connections on TRS channels.
                 "preserve" (default) -> raise a descriptive error,
                 "disconnect" -> break the incoming connections,
                 "delete" -> break incoming connections and delete their source nodes when possible.
                 Note: "preserve" skips affected objects (reported at the end); "disconnect"/"delete" modify shared drivers, so downstream instances will also lose those connections.
+            from_channel_box (bool): If True, use the selected attributes in the channel box to determine what to freeze.
             **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
         """
         from mayatk.rig_utils import RigUtils
+        import math
 
-        freeze_attrs = {
-            "translate": ("translate", "translateX", "translateY", "translateZ"),
-            "rotate": ("rotate", "rotateX", "rotateY", "rotateZ"),
-            "scale": ("scale", "scaleX", "scaleY", "scaleZ"),
+        # Determine which axes to freeze
+        axes_to_freeze = set()
+
+        # Helper map for channel names to axes
+        channel_map = {
+            "translate": ["tx", "ty", "tz"],
+            "t": ["tx", "ty", "tz"],
+            "translateX": ["tx"],
+            "tx": ["tx"],
+            "translateY": ["ty"],
+            "ty": ["ty"],
+            "translateZ": ["tz"],
+            "tz": ["tz"],
+            "rotate": ["rx", "ry", "rz"],
+            "r": ["rx", "ry", "rz"],
+            "rotateX": ["rx"],
+            "rx": ["rx"],
+            "rotateY": ["ry"],
+            "ry": ["ry"],
+            "rotateZ": ["rz"],
+            "rz": ["rz"],
+            "scale": ["sx", "sy", "sz"],
+            "s": ["sx", "sy", "sz"],
+            "scaleX": ["sx"],
+            "sx": ["sx"],
+            "scaleY": ["sy"],
+            "sy": ["sy"],
+            "scaleZ": ["sz"],
+            "sz": ["sz"],
         }
 
-        freeze_aliases = {
-            "translate": ("t", "translate"),
-            "rotate": ("r", "rotate"),
-            "scale": ("s", "scale"),
-        }
+        if from_channel_box:
+            from mayatk.ui_utils import UiUtils
+
+            selected_channels = set(UiUtils.get_selected_channels() or [])
+            for ch in selected_channels:
+                # Handle long names like 'pCube1.translateX'
+                if "." in ch:
+                    ch = ch.split(".")[-1]
+                if ch in channel_map:
+                    axes_to_freeze.update(channel_map[ch])
+        else:
+            # Check kwargs for standard flags
+            if kwargs.get("translate") or kwargs.get("t"):
+                axes_to_freeze.update(["tx", "ty", "tz"])
+            if kwargs.get("rotate") or kwargs.get("r"):
+                axes_to_freeze.update(["rx", "ry", "rz"])
+            if kwargs.get("scale") or kwargs.get("s"):
+                axes_to_freeze.update(["sx", "sy", "sz"])
+
+        # If no axes selected, nothing to do
+        if not axes_to_freeze:
+            return
 
         objects = pm.ls(objects, type="transform", long=True)
 
@@ -346,38 +394,52 @@ class XformUtils(ptk.HelpMixin):
 
         # Expand selection to children up front when requested
         if freeze_children:
-            expanded = []
-            seen = set()
-            for obj in objects:
-                if not obj or obj in seen:
-                    continue
-                seen.add(obj)
-                expanded.append(obj)
-                for child in pm.listRelatives(obj, ad=True, type="transform") or []:
-                    if child in seen:
-                        continue
-                    seen.add(child)
-                    expanded.append(child)
-            objects = expanded
+            objects_set = set(objects)
+            for obj in list(objects):
+                descendants = (
+                    pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                    or []
+                )
+                for child in descendants:
+                    if child not in objects_set:
+                        objects.append(child)
+                        objects_set.add(child)
 
-        lock_state: Dict[str, Dict[str, bool]] = {}
-
+        # Determine which channels are involved for connection checking
         freeze_channels: Set[str] = set()
-        alias_seen = False
-        for channel, aliases in freeze_aliases.items():
-            for alias in aliases:
-                if alias in kwargs:
-                    alias_seen = True
-                    if bool(kwargs.get(alias)):
-                        freeze_channels.add(channel)
-        if not alias_seen:
-            freeze_channels = set(freeze_attrs.keys())
+        if not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}):
+            freeze_channels.add("translate")
+        if not axes_to_freeze.isdisjoint({"rx", "ry", "rz"}):
+            freeze_channels.add("rotate")
+        if not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}):
+            freeze_channels.add("scale")
 
         skipped_connections: List[
             Tuple[str, Dict[pm.general.Attribute, List[pm.general.Attribute]]]
         ] = []
         instanced_skips: List[str] = []
         frozen_objects: List[str] = []
+
+        def get_blockers(node):
+            """Helper to find input connections on specified channels."""
+            # Query top-level attributes (e.g. 'translate') to catch all child connections (e.g. 'translateX')
+            plugs = [node.attr(ch) for ch in freeze_channels if node.hasAttr(ch)]
+            if not plugs:
+                return {}
+
+            # Get all input connections (source, destination) pairs
+            connections = (
+                pm.listConnections(
+                    plugs, source=True, destination=False, plugs=True, connections=True
+                )
+                or []
+            )
+
+            found_blockers = {}
+            for src, dest in connections:
+                found_blockers.setdefault(dest, []).append(src)
+
+            return found_blockers
 
         for obj in objects:
             if center_pivot:
@@ -395,89 +457,231 @@ class XformUtils(ptk.HelpMixin):
                 except Exception:
                     pass
 
-            # Store lock state and unlock if force
+            # Determine nodes to unlock
+            nodes_to_unlock = []
             if force:
-                lock_state[obj.name()] = RigUtils.get_attr_lock_state(obj)
-                RigUtils.set_attr_lock_state(
-                    obj, translate=False, rotate=False, scale=False
-                )
+                nodes_to_unlock.append(obj)
+                if unlock_children:
+                    descendants = (
+                        pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                        or []
+                    )
+                    nodes_to_unlock.extend(descendants)
 
-            try:
-                blockers: Dict[pm.general.Attribute, List[pm.general.Attribute]] = {}
-                for channel in freeze_channels:
-                    for attr_name in freeze_attrs.get(channel, ()):
-                        try:
-                            plug = obj.attr(attr_name)
-                        except pm.MayaAttributeError:
-                            continue
-                        sources = plug.inputs(plugs=True) or []
-                        if sources:
-                            blockers[plug] = sources
-
-                if blockers:
-                    if strategy == "preserve":
-                        skipped_connections.append((obj.name(), blockers))
-                        continue
-                    nodes_to_delete = set()
-                    for plug, sources in blockers.items():
-                        for src in sources:
-                            try:
-                                pm.disconnectAttr(src, plug)
-                            except Exception as exc:
-                                raise RuntimeError(
-                                    f"Failed to disconnect {src} -> {plug}: {exc}"
-                                ) from exc
-
-                            if strategy == "delete":
-                                try:
-                                    node = src.node()
-                                except Exception:
-                                    continue
-                                if not node or node == obj:
-                                    continue
-                                if (
-                                    hasattr(node, "isReferenced")
-                                    and node.isReferenced()
-                                ):
-                                    continue
-                                nodes_to_delete.add(node)
-
-                    if nodes_to_delete:
-                        pm.delete(list(nodes_to_delete))
-
-                # Delete history if requested
-                if delete_history:
-                    pm.delete(obj, constructionHistory=True)
-
-                # Freeze transforms
+            with CoreUtils.temporarily_unlock_attributes(nodes_to_unlock):
                 try:
-                    pm.makeIdentity(obj, apply=True, **kwargs)
-                    frozen_objects.append(obj.name())
-                except RuntimeError as exc:
-                    msg = str(exc)
-                    if "incoming connection" in msg.lower():
-                        default_channels = set(freeze_attrs.keys())
-                        blockers = {}
-                        for channel in default_channels:
-                            for attr_name in freeze_attrs.get(channel, ()):
-                                try:
-                                    plug = obj.attr(attr_name)
-                                except pm.MayaAttributeError:
-                                    continue
-                                sources = plug.inputs(plugs=True) or []
-                                if sources:
-                                    blockers[plug] = sources
-                        skipped_connections.append((obj.name(), blockers))
+                    # Delete history if requested
+                    if delete_history:
+                        pm.delete(obj, constructionHistory=True)
+
+                    # Perform Freeze
+                    # We use a manual "Delta Bake" method to support partial axis freezing.
+                    # 1. Get current matrix and TRS
+                    current_matrix = pm.dt.TransformationMatrix(
+                        obj.getMatrix(objectSpace=True)
+                    )
+                    t = obj.translate.get()
+                    r = obj.rotate.get()  # Vector (degrees)
+                    s = obj.scale.get()
+
+                    # 2. Determine target TRS based on frozen axes
+                    target_t = pm.dt.Vector(t)
+                    target_r = pm.dt.Vector(r)
+                    target_s = pm.dt.Vector(s)
+
+                    if "tx" in axes_to_freeze:
+                        target_t.x = 0.0
+                    if "ty" in axes_to_freeze:
+                        target_t.y = 0.0
+                    if "tz" in axes_to_freeze:
+                        target_t.z = 0.0
+
+                    if "rx" in axes_to_freeze:
+                        target_r.x = 0.0
+                    if "ry" in axes_to_freeze:
+                        target_r.y = 0.0
+                    if "rz" in axes_to_freeze:
+                        target_r.z = 0.0
+
+                    if "sx" in axes_to_freeze:
+                        target_s.x = 1.0
+                    if "sy" in axes_to_freeze:
+                        target_s.y = 1.0
+                    if "sz" in axes_to_freeze:
+                        target_s.z = 1.0
+
+                    # 3. Construct target matrix
+                    target_matrix = pm.dt.TransformationMatrix(current_matrix)
+                    target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
+                    # Convert degrees to radians for TransformationMatrix
+                    target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
+                    # Preserve rotation order
+                    target_euler.order = current_matrix.rotationOrder()
+                    target_matrix.setRotation(target_euler)
+                    target_matrix.setScale(target_s, pm.dt.Space.kObject)
+
+                    # 4. Calculate delta matrix (the difference to bake)
+                    # delta * target = current  => delta = current * target^-1
+                    # We apply delta to the object, bake it, then set object to target.
+                    try:
+                        # Convert to standard Matrix to ensure inverse() works reliably
+                        # PyMEL's TransformationMatrix.inverse() can be problematic
+                        curr_m = current_matrix.asMatrix()
+                        targ_m = target_matrix.asMatrix()
+                        delta_matrix = curr_m * targ_m.inverse()
+                    except (ValueError, ZeroDivisionError, AttributeError):
+                        # AttributeError can happen if underlying API fails
                         pm.warning(
-                            f"XformUtils.freeze_transforms: Skipping '{obj}' due to runtime connection error: {msg}"
+                            f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
                         )
                         continue
-                    raise
-            finally:
-                # Restore lock state if needed
-                if force and obj.name() in lock_state:
-                    RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
-                    lock_state.pop(obj.name(), None)
+
+                    # 5. Apply delta
+                    obj.setMatrix(delta_matrix)
+
+                    # 6. Bake everything (push delta into geometry)
+                    # We force t=1, r=1, s=1 because we are baking the delta matrix fully.
+                    # We respect other kwargs like 'n' (normals) or 'pn' (preserve normals).
+                    bake_kwargs = kwargs.copy()
+                    bake_kwargs.update({"t": True, "r": True, "s": True, "apply": True})
+                    pm.makeIdentity(obj, **bake_kwargs)
+
+                    # 7. Restore target transform (the frozen state)
+                    # We set attributes directly to avoid drift and handle joint orients better if needed
+                    obj.translate.set(target_t)
+                    obj.rotate.set(target_r)
+                    obj.scale.set(target_s)
+
+                    frozen_objects.append(obj.name())
+
+                except RuntimeError as exc:
+                    msg = str(exc).lower()
+                    # Check if failure is due to incoming connections
+                    if "incoming connection" in msg or "locked" in msg:
+                        # Analyze blockers
+                        blockers = get_blockers(obj)
+
+                        if not blockers and "locked" not in msg:
+                            # Failed due to connections but none found on target channels
+                            skipped_connections.append((obj.name(), {}))
+                            pm.warning(
+                                f"XformUtils.freeze_transforms: Skipping '{obj}' due to connection error: {exc}"
+                            )
+                            continue
+
+                        if strategy == "preserve":
+                            skipped_connections.append((obj.name(), blockers))
+                            continue
+
+                        # Handle disconnect/delete strategy
+                        nodes_to_delete = set()
+                        for plug, sources in blockers.items():
+                            for src in sources:
+                                try:
+                                    pm.disconnectAttr(src, plug)
+                                except Exception as disconnect_exc:
+                                    raise RuntimeError(
+                                        f"Failed to disconnect {src} -> {plug}: {disconnect_exc}"
+                                    ) from disconnect_exc
+
+                                if strategy == "delete":
+                                    try:
+                                        node = src.node()
+                                    except Exception:
+                                        continue
+                                    if not node or node == obj:
+                                        continue
+                                    if (
+                                        hasattr(node, "isReferenced")
+                                        and node.isReferenced()
+                                    ):
+                                        continue
+                                    nodes_to_delete.add(node)
+
+                        if nodes_to_delete:
+                            pm.delete(list(nodes_to_delete))
+
+                        # Retry freeze after clearing connections
+                        try:
+                            # Re-run the manual bake sequence
+                            current_matrix = pm.dt.TransformationMatrix(
+                                obj.getMatrix(objectSpace=True)
+                            )
+                            t = obj.translate.get()
+                            r = obj.rotate.get()
+                            s = obj.scale.get()
+
+                            target_t = pm.dt.Vector(t)
+                            target_r = pm.dt.Vector(r)
+                            target_s = pm.dt.Vector(s)
+
+                            if "tx" in axes_to_freeze:
+                                target_t.x = 0.0
+                            if "ty" in axes_to_freeze:
+                                target_t.y = 0.0
+                            if "tz" in axes_to_freeze:
+                                target_t.z = 0.0
+                            if "rx" in axes_to_freeze:
+                                target_r.x = 0.0
+                            if "ry" in axes_to_freeze:
+                                target_r.y = 0.0
+                            if "rz" in axes_to_freeze:
+                                target_r.z = 0.0
+                            if "sx" in axes_to_freeze:
+                                target_s.x = 1.0
+                            if "sy" in axes_to_freeze:
+                                target_s.y = 1.0
+                            if "sz" in axes_to_freeze:
+                                target_s.z = 1.0
+
+                            target_matrix = pm.dt.TransformationMatrix(current_matrix)
+                            target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
+                            target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
+                            target_euler.order = current_matrix.rotationOrder()
+                            target_matrix.setRotation(target_euler)
+                            target_matrix.setScale(target_s, pm.dt.Space.kObject)
+
+                            try:
+                                curr_m = current_matrix.asMatrix()
+                                targ_m = target_matrix.asMatrix()
+                                delta_matrix = curr_m * targ_m.inverse()
+                            except (ValueError, ZeroDivisionError, AttributeError):
+                                pm.warning(
+                                    f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
+                                )
+                                continue
+
+                            obj.setMatrix(delta_matrix)
+
+                            bake_kwargs = kwargs.copy()
+                            bake_kwargs.update(
+                                {"t": True, "r": True, "s": True, "apply": True}
+                            )
+                            pm.makeIdentity(obj, **bake_kwargs)
+
+                            obj.translate.set(target_t)
+                            obj.rotate.set(target_r)
+                            obj.scale.set(target_s)
+
+                            frozen_objects.append(obj.name())
+                        except RuntimeError as retry_exc:
+                            skipped_connections.append((obj.name(), blockers))
+                            pm.warning(
+                                f"XformUtils.freeze_transforms: Skipping '{obj}' after clearing connections: {retry_exc}"
+                            )
+
+                    else:
+                        raise
+
+        total_processed = (
+            len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
+        )
+        if total_processed:
+            skipped_total = len(skipped_connections) + len(instanced_skips)
+            pm.displayInfo(
+                "XformUtils.freeze_transforms: "
+                f"{len(frozen_objects)} frozen, {skipped_total} skipped."
+            )
 
         total_processed = (
             len(frozen_objects) + len(skipped_connections) + len(instanced_skips)

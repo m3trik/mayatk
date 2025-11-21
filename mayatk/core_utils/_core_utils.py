@@ -4,6 +4,7 @@ import os
 import sys
 from typing import Union, List, Callable, Any, Tuple, Optional
 from functools import wraps
+import contextlib
 
 try:
     import pymel.core as pm
@@ -14,8 +15,125 @@ import pythontk as ptk
 # Import package modules at class level to avoid circular imports.
 
 
-class CoreUtils(ptk.HelpMixin):
+class _CoreUtilsInternal(object):
+    @staticmethod
+    def _prepare_reparent(
+        nodes: List[object],
+    ) -> Tuple[Optional[object], Optional[object]]:
+        """Prepare reparenting by using a temporary null if needed."""
+        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
+        temp_null = None
+
+        # Determine if any of the nodes are the only child of their parent
+        for node in nodes:
+            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
+            if node_parent:
+                children = pm.listRelatives(node_parent, children=True) or []
+                if len(children) == 1:
+                    temp_null = pm.createNode("transform", n="tempTempNull")
+                    pm.parent(temp_null, node_parent)
+                    break
+
+        return parent, temp_null
+
+    @staticmethod
+    def _finalize_reparent(
+        new_node: Optional[object],
+        parent: Optional[object],
+        temp_null: Optional[object],
+    ) -> None:
+        """Clean up reparenting, handling the parent and temporary null."""
+        if parent and new_node:
+            try:
+                pm.parent(new_node, parent)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to re-parent combined mesh: {e}")
+        if temp_null:
+            try:
+                pm.delete(temp_null)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to delete temporary null: {e}")
+
+    @staticmethod
+    def _calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
+        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
+
+        Parameters:
+            mesh1: The first mesh to compare.
+            mesh2: The second mesh to compare.
+
+        Returns:
+            A float representing the similarity score, where higher means more similar.
+        """
+        # Get bounding box sizes
+        bbox1 = mesh1.getBoundingBox()
+        bbox2 = mesh2.getBoundingBox()
+
+        # Calculate volume of bounding boxes
+        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
+        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
+
+        # Get vertex counts
+        vertex_count1 = len(mesh1.getVertices())
+        vertex_count2 = len(mesh2.getVertices())
+
+        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
+        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
+        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
+            vertex_count1, vertex_count2
+        )
+
+        # Combine similarities (here, equally weighted for simplicity)
+        similarity_score = (volume_similarity + vertex_similarity) / 2
+
+        return similarity_score
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _temp_reparent(nodes):
+        """
+        Context manager to maintain hierarchy for nodes during operations that might reparent them.
+
+        Yields a container object with a 'result' attribute that should be set to the
+        resulting node of the operation if it needs to be reparented to the original parent.
+        """
+        parent, temp_null = _CoreUtilsInternal._prepare_reparent(nodes)
+
+        class Result:
+            def __init__(self):
+                self.result = None
+
+        container = Result()
+
+        try:
+            yield container
+        finally:
+            _CoreUtilsInternal._finalize_reparent(container.result, parent, temp_null)
+
+
+class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     """ """
+
+    @staticmethod
+    @contextlib.contextmanager
+    def temporarily_unlock_attributes(objects, attributes=None):
+        """
+        Context manager to temporarily unlock attributes on objects and restore their state afterwards.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to unlock attributes on.
+            attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
+                             If None, unlocks all standard transform attributes.
+        """
+        from mayatk.rig_utils import RigUtils
+
+        # Get current lock state and unlock
+        lock_state = RigUtils.get_attr_lock_state(objects, unlock=True)
+
+        try:
+            yield
+        finally:
+            RigUtils.set_attr_lock_state(objects, lock_state=lock_state)
 
     def selected(func: Callable) -> Callable:
         """A decorator to pass the current selection to the first parameter if None is given."""
@@ -84,60 +202,14 @@ class CoreUtils(ptk.HelpMixin):
             if not mesh_nodes:
                 raise ValueError("No valid Maya nodes provided.")
 
-            parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
-
-            try:
+            with CoreUtils._temp_reparent(mesh_nodes) as context:
                 if instance:
-                    result_node = func(instance, *node_args, **kwargs)
+                    context.result = func(instance, *node_args, **kwargs)
                 else:
-                    result_node = func(*node_args, **kwargs)
-            except Exception as e:  # Handle exception and perform necessary cleanup
-                CoreUtils.finalize_reparent(None, parent, temp_null)
-                raise e
-
-            CoreUtils.finalize_reparent(result_node, parent, temp_null)
-
-            return result_node
+                    context.result = func(*node_args, **kwargs)
+                return context.result
 
         return wrapped
-
-    @staticmethod
-    def prepare_reparent(
-        nodes: List[object],
-    ) -> Tuple[Optional[object], Optional[object]]:
-        """Prepare reparenting by using a temporary null if needed."""
-        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
-        temp_null = None
-
-        # Determine if any of the nodes are the only child of their parent
-        for node in nodes:
-            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
-            if node_parent:
-                children = pm.listRelatives(node_parent, children=True) or []
-                if len(children) == 1:
-                    temp_null = pm.createNode("transform", n="tempTempNull")
-                    pm.parent(temp_null, node_parent)
-                    break
-
-        return parent, temp_null
-
-    @staticmethod
-    def finalize_reparent(
-        new_node: Optional[object],
-        parent: Optional[object],
-        temp_null: Optional[object],
-    ) -> None:
-        """Clean up reparenting, handling the parent and temporary null."""
-        if parent and new_node:
-            try:
-                pm.parent(new_node, parent)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to re-parent combined mesh: {e}")
-        if temp_null:
-            try:
-                pm.delete(temp_null)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
     def wrap_control(control_name, container):
@@ -349,40 +421,6 @@ class CoreUtils(ptk.HelpMixin):
         for p, v in parameters.items():
             cmd(node, **{p: v})
 
-    @staticmethod
-    def calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
-        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
-
-        Parameters:
-            mesh1: The first mesh to compare.
-            mesh2: The second mesh to compare.
-
-        Returns:
-            A float representing the similarity score, where higher means more similar.
-        """
-        # Get bounding box sizes
-        bbox1 = mesh1.getBoundingBox()
-        bbox2 = mesh2.getBoundingBox()
-
-        # Calculate volume of bounding boxes
-        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
-        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
-
-        # Get vertex counts
-        vertex_count1 = len(mesh1.getVertices())
-        vertex_count2 = len(mesh2.getVertices())
-
-        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
-        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
-        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
-            vertex_count1, vertex_count2
-        )
-
-        # Combine similarities (here, equally weighted for simplicity)
-        similarity_score = (volume_similarity + vertex_similarity) / 2
-
-        return similarity_score
-
     @classmethod
     def build_mesh_similarity_mapping(
         cls,
@@ -414,7 +452,7 @@ class CoreUtils(ptk.HelpMixin):
             highest_similarity = 0
             best_match = None
             for target_child in target_group:
-                similarity = cls.calculate_mesh_similarity(source_child, target_child)
+                similarity = cls._calculate_mesh_similarity(source_child, target_child)
                 if similarity > highest_similarity and similarity >= tolerance:
                     highest_similarity = similarity
                     best_match = target_child
