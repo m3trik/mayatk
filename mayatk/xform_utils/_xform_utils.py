@@ -442,6 +442,9 @@ class XformUtils(ptk.HelpMixin):
             return found_blockers
 
         for obj in objects:
+            if not pm.objExists(obj):
+                continue
+
             if center_pivot:
                 pm.xform(obj, centerPivots=True)
 
@@ -474,85 +477,9 @@ class XformUtils(ptk.HelpMixin):
                     if delete_history:
                         pm.delete(obj, constructionHistory=True)
 
-                    # Perform Freeze
-                    # We use a manual "Delta Bake" method to support partial axis freezing.
-                    # 1. Get current matrix and TRS
-                    current_matrix = pm.dt.TransformationMatrix(
-                        obj.getMatrix(objectSpace=True)
-                    )
-                    t = obj.translate.get()
-                    r = obj.rotate.get()  # Vector (degrees)
-                    s = obj.scale.get()
-
-                    # 2. Determine target TRS based on frozen axes
-                    target_t = pm.dt.Vector(t)
-                    target_r = pm.dt.Vector(r)
-                    target_s = pm.dt.Vector(s)
-
-                    if "tx" in axes_to_freeze:
-                        target_t.x = 0.0
-                    if "ty" in axes_to_freeze:
-                        target_t.y = 0.0
-                    if "tz" in axes_to_freeze:
-                        target_t.z = 0.0
-
-                    if "rx" in axes_to_freeze:
-                        target_r.x = 0.0
-                    if "ry" in axes_to_freeze:
-                        target_r.y = 0.0
-                    if "rz" in axes_to_freeze:
-                        target_r.z = 0.0
-
-                    if "sx" in axes_to_freeze:
-                        target_s.x = 1.0
-                    if "sy" in axes_to_freeze:
-                        target_s.y = 1.0
-                    if "sz" in axes_to_freeze:
-                        target_s.z = 1.0
-
-                    # 3. Construct target matrix
-                    target_matrix = pm.dt.TransformationMatrix(current_matrix)
-                    target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
-                    # Convert degrees to radians for TransformationMatrix
-                    target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
-                    # Preserve rotation order
-                    target_euler.order = current_matrix.rotationOrder()
-                    target_matrix.setRotation(target_euler)
-                    target_matrix.setScale(target_s, pm.dt.Space.kObject)
-
-                    # 4. Calculate delta matrix (the difference to bake)
-                    # delta * target = current  => delta = current * target^-1
-                    # We apply delta to the object, bake it, then set object to target.
-                    try:
-                        # Convert to standard Matrix to ensure inverse() works reliably
-                        # PyMEL's TransformationMatrix.inverse() can be problematic
-                        curr_m = current_matrix.asMatrix()
-                        targ_m = target_matrix.asMatrix()
-                        delta_matrix = curr_m * targ_m.inverse()
-                    except (ValueError, ZeroDivisionError, AttributeError):
-                        # AttributeError can happen if underlying API fails
-                        pm.warning(
-                            f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
-                        )
-                        continue
-
-                    # 5. Apply delta
-                    obj.setMatrix(delta_matrix)
-
-                    # 6. Bake everything (push delta into geometry)
-                    # We force t=1, r=1, s=1 because we are baking the delta matrix fully.
-                    # We respect other kwargs like 'n' (normals) or 'pn' (preserve normals).
-                    bake_kwargs = kwargs.copy()
-                    bake_kwargs.update({"t": True, "r": True, "s": True, "apply": True})
-                    pm.makeIdentity(obj, **bake_kwargs)
-
-                    # 7. Restore target transform (the frozen state)
-                    # We set attributes directly to avoid drift and handle joint orients better if needed
-                    obj.translate.set(target_t)
-                    obj.rotate.set(target_r)
-                    obj.scale.set(target_s)
-
-                    frozen_objects.append(obj.name())
+                    # Perform Freeze using helper
+                    if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                        frozen_objects.append(obj.name())
 
                 except RuntimeError as exc:
                     msg = str(exc).lower()
@@ -603,67 +530,8 @@ class XformUtils(ptk.HelpMixin):
 
                         # Retry freeze after clearing connections
                         try:
-                            # Re-run the manual bake sequence
-                            current_matrix = pm.dt.TransformationMatrix(
-                                obj.getMatrix(objectSpace=True)
-                            )
-                            t = obj.translate.get()
-                            r = obj.rotate.get()
-                            s = obj.scale.get()
-
-                            target_t = pm.dt.Vector(t)
-                            target_r = pm.dt.Vector(r)
-                            target_s = pm.dt.Vector(s)
-
-                            if "tx" in axes_to_freeze:
-                                target_t.x = 0.0
-                            if "ty" in axes_to_freeze:
-                                target_t.y = 0.0
-                            if "tz" in axes_to_freeze:
-                                target_t.z = 0.0
-                            if "rx" in axes_to_freeze:
-                                target_r.x = 0.0
-                            if "ry" in axes_to_freeze:
-                                target_r.y = 0.0
-                            if "rz" in axes_to_freeze:
-                                target_r.z = 0.0
-                            if "sx" in axes_to_freeze:
-                                target_s.x = 1.0
-                            if "sy" in axes_to_freeze:
-                                target_s.y = 1.0
-                            if "sz" in axes_to_freeze:
-                                target_s.z = 1.0
-
-                            target_matrix = pm.dt.TransformationMatrix(current_matrix)
-                            target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
-                            target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
-                            target_euler.order = current_matrix.rotationOrder()
-                            target_matrix.setRotation(target_euler)
-                            target_matrix.setScale(target_s, pm.dt.Space.kObject)
-
-                            try:
-                                curr_m = current_matrix.asMatrix()
-                                targ_m = target_matrix.asMatrix()
-                                delta_matrix = curr_m * targ_m.inverse()
-                            except (ValueError, ZeroDivisionError, AttributeError):
-                                pm.warning(
-                                    f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
-                                )
-                                continue
-
-                            obj.setMatrix(delta_matrix)
-
-                            bake_kwargs = kwargs.copy()
-                            bake_kwargs.update(
-                                {"t": True, "r": True, "s": True, "apply": True}
-                            )
-                            pm.makeIdentity(obj, **bake_kwargs)
-
-                            obj.translate.set(target_t)
-                            obj.rotate.set(target_r)
-                            obj.scale.set(target_s)
-
-                            frozen_objects.append(obj.name())
+                            if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                                frozen_objects.append(obj.name())
                         except RuntimeError as retry_exc:
                             skipped_connections.append((obj.name(), blockers))
                             pm.warning(
@@ -672,16 +540,6 @@ class XformUtils(ptk.HelpMixin):
 
                     else:
                         raise
-
-        total_processed = (
-            len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
-        )
-        if total_processed:
-            skipped_total = len(skipped_connections) + len(instanced_skips)
-            pm.displayInfo(
-                "XformUtils.freeze_transforms: "
-                f"{len(frozen_objects)} frozen, {skipped_total} skipped."
-            )
 
         total_processed = (
             len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
@@ -1839,6 +1697,83 @@ class XformUtils(ptk.HelpMixin):
 
         if selectTypeEdge:
             pm.selectType(edge=True)
+
+    @staticmethod
+    def _apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+        """Helper to calculate and apply freeze deltas.
+
+        Returns:
+            bool: True if successful, False if skipped (e.g. singular matrix).
+        """
+        # 1. Get current matrix and TRS
+        current_matrix = pm.dt.TransformationMatrix(obj.getMatrix(objectSpace=True))
+        t = obj.translate.get()
+        r = obj.rotate.get()  # Vector (degrees)
+        s = obj.scale.get()
+
+        # 2. Determine target TRS based on frozen axes
+        target_t = pm.dt.Vector(t)
+        target_r = pm.dt.Vector(r)
+        target_s = pm.dt.Vector(s)
+
+        if "tx" in axes_to_freeze:
+            target_t.x = 0.0
+        if "ty" in axes_to_freeze:
+            target_t.y = 0.0
+        if "tz" in axes_to_freeze:
+            target_t.z = 0.0
+
+        if "rx" in axes_to_freeze:
+            target_r.x = 0.0
+        if "ry" in axes_to_freeze:
+            target_r.y = 0.0
+        if "rz" in axes_to_freeze:
+            target_r.z = 0.0
+
+        if "sx" in axes_to_freeze:
+            target_s.x = 1.0
+        if "sy" in axes_to_freeze:
+            target_s.y = 1.0
+        if "sz" in axes_to_freeze:
+            target_s.z = 1.0
+
+        # 3. Construct target matrix
+        target_matrix = pm.dt.TransformationMatrix(current_matrix)
+        target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
+        # Convert degrees to radians for TransformationMatrix
+        target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
+        # Preserve rotation order
+        target_euler.order = current_matrix.rotationOrder()
+        target_matrix.setRotation(target_euler)
+        target_matrix.setScale(target_s, pm.dt.Space.kObject)
+
+        # 4. Calculate delta matrix (the difference to bake)
+        # delta * target = current  => delta = current * target^-1
+        try:
+            # Convert to standard Matrix to ensure inverse() works reliably
+            curr_m = current_matrix.asMatrix()
+            targ_m = target_matrix.asMatrix()
+            delta_matrix = curr_m * targ_m.inverse()
+        except (ValueError, ZeroDivisionError, AttributeError):
+            pm.warning(
+                f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
+            )
+            return False
+
+        # 5. Apply delta
+        obj.setMatrix(delta_matrix)
+
+        # 6. Bake everything (push delta into geometry)
+        bake_kwargs = kwargs.copy()
+        bake_kwargs.update({"t": True, "r": True, "s": True, "apply": True})
+        pm.makeIdentity(obj, **bake_kwargs)
+
+        # 7. Restore target transform (the frozen state)
+        obj.translate.set(target_t)
+        obj.rotate.set(target_r)
+        obj.scale.set(target_s)
+
+        return True
 
 
 # -----------------------------------------------------------------------------
