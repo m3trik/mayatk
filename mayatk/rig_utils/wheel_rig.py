@@ -152,7 +152,9 @@ class WheelRig(ptk.LoggingMixin):
 class WheelRigSlots:
     def __init__(self, switchboard):
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.wheel_rig_slots
+        # Use the actual UI name loaded from the wheel_rig.ui file
+        # Avoid creating a placeholder UI ("wheel_rig_slots") which has no widgets
+        self.ui = self.sb.loaded_ui.wheel_rig
 
         # 1) update placeholder right away
         self._selection_job = pm.scriptJob(
@@ -203,6 +205,9 @@ class WheelRigSlots:
         Raises:
             ValueError if selection is invalid.
         """
+        # Note: "wheels" here can be any transform you wish to rotate (e.g. locators),
+        # not necessarily the wheel geometry itself. The wheel geo can be driven by
+        # these transforms downstream if you don't want to rotate the mesh directly.
         sel = pm.selected(flatten=True)
         if len(sel) < 2:
             raise ValueError("Select a control followed by one or more wheel objects.")
@@ -309,7 +314,7 @@ if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
     ui = UiManager.instance().get("wheel_rig", reload=True)
-    ui.header.config_buttons(hide_button=True)
+    ui.header.config_buttons("hide_button")
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

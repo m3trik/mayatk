@@ -15,7 +15,14 @@ class CutOnAxis:
     @staticmethod
     @core_utils.CoreUtils.undoable
     def perform_cut_on_axis(
-        objects, axis="-x", cuts=0, cut_offset=0, delete=False, mirror=False, pivot=0
+        objects,
+        axis="-x",
+        cuts=0,
+        cut_offset=0,
+        delete=False,
+        mirror=False,
+        pivot="manip",
+        use_object_axes=True,
     ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
@@ -25,7 +32,9 @@ class CutOnAxis:
             cuts (int): The number of cuts to make. Default is 0.
             cut_offset (float): Offset amount from the center for the cut. Default is 0.
             delete (bool): If True, delete the faces on the specified axis. Default is False.
-            mirrot (bool): After deleting, mirror the object(s).
+            mirror (bool): After deleting, mirror the object(s).
+            pivot (str): Pivot type string ("manip", "object", "world", "center"). Default is "manip".
+            use_object_axes (bool): If True, uses object's local axes when using object-space pivots.
         """
         if cuts:
             axis = axis.lower()  # Assure lower case.
@@ -38,6 +47,7 @@ class CutOnAxis:
                 mirror=mirror,
                 offset=cut_offset,
                 delete=delete,
+                use_object_axes=use_object_axes,
             )
 
             pm.select(objects)
@@ -65,12 +75,11 @@ class CutOnAxisSlots:
         delete = self.ui.chk005.isChecked()
         mirror = self.ui.chk006.isChecked()
 
-        pivot_mapping = {
-            0: "object",
-            1: "world",
-            2: "center",
-        }
-        pivot = pivot_mapping.get(pivot_index, "center")
+        # Map UI combo box index to pivot strings
+        pivot_options = ["manip", "object", "world", "center"]
+        pivot = (
+            pivot_options[pivot_index] if pivot_index < len(pivot_options) else "center"
+        )
 
         CutOnAxis.perform_cut_on_axis(
             objects,
@@ -80,6 +89,7 @@ class CutOnAxisSlots:
             cut_offset=cut_offset,
             delete=delete,
             mirror=mirror,
+            use_object_axes=True,  # Default to using object axes for better behavior
         )
 
 

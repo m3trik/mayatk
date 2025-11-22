@@ -31,6 +31,7 @@ class Naming(ptk.HelpMixin):
         regex: bool = False,
         ignore_case: bool = False,
         retain_suffix: bool = False,
+        valid_suffixes: Optional[List[str]] = None,
     ) -> None:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -53,6 +54,8 @@ class Naming(ptk.HelpMixin):
             regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
             ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
             retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
+            valid_suffixes (Optional[List[str]]): List of valid suffixes to retain. If provided, only these suffixes will be retained.
+                If None, any suffix (text after last underscore) will be retained. Default is None.
 
         Returns:
             None: Objects are renamed in the scene directly.
@@ -64,8 +67,17 @@ class Naming(ptk.HelpMixin):
             rename(['pCube1'], '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
         """
         objects = pm.ls(objects, flatten=True)
-        long_names = [obj.name() for obj in objects]
-        short_names = [ii if ii else i for i, ii in ptk.split_at_chars(long_names)]
+
+        # Create a mapping of short names to their PyMEL objects (not cached long names)
+        # This prevents issues when renaming changes hierarchy paths
+        short_name_to_obj = {}
+        for obj in objects:
+            long_name = obj.name()
+            _, short_name = ptk.split_delimited_string(long_name, occurrence=-1)
+            short_name = short_name if short_name else long_name
+            short_name_to_obj[short_name] = obj
+
+        short_names = list(short_name_to_obj.keys())
 
         # Handle empty filter case which causes crashes
         if not fltr:
@@ -118,6 +130,9 @@ class Naming(ptk.HelpMixin):
                 suffix = ""
                 if "_" in oldName:
                     suffix = oldName[oldName.rfind("_") :]
+                    # If valid_suffixes is provided, only retain if suffix is in the list
+                    if valid_suffixes is not None and suffix not in valid_suffixes:
+                        suffix = ""
                     # Avoid duplicate suffix
                     if suffix and not newName.endswith(suffix):
                         newName += suffix
@@ -125,19 +140,13 @@ class Naming(ptk.HelpMixin):
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)
 
-            # Ensure we map short names to their correct long names
-            if oldName in short_names:
-                index = short_names.index(oldName)
-                oldName = long_names[index]
-            else:
-                print(
-                    f"// Warning: '{oldName}' not found in the original short names list."
-                )
-                continue  # Skip renaming if the object was not in the original list
-
-            try:
-                if pm.objExists(oldName):
-                    n = pm.rename(oldName, newName)  # Rename the object
+            # Map short name to the PyMEL object for renaming
+            # Using the object reference instead of cached paths prevents issues
+            # when earlier renames in the batch change the hierarchy
+            if oldName in short_name_to_obj:
+                obj = short_name_to_obj[oldName]
+                try:
+                    n = pm.rename(obj, newName)  # Rename using the object reference
                     if not n == newName:
                         pm.warning(
                             f"'{oldName}' renamed to: '{n}' instead of '{newName}'"
@@ -145,9 +154,14 @@ class Naming(ptk.HelpMixin):
                     else:
                         print(f"'{oldName}' renamed to: '{newName}'")
                     count += 1
-            except Exception as e:
-                if not pm.ls(oldName, readOnly=True) == []:  # Ignore read-only errors
-                    print(f"// Error: renaming '{oldName}' to '{newName}': {e}")
+                except Exception as e:
+                    if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors
+                        print(f"// Error: renaming '{oldName}' to '{newName}': {e}")
+            else:
+                print(
+                    f"// Warning: '{oldName}' not found in the original short names list."
+                )
+                continue  # Skip renaming if the object was not in the original list
 
         print(f"// Result: Renamed {count} objects.")
 

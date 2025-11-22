@@ -1033,7 +1033,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         if reference_path:
             fuzzy_matching = (
-                self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
                 if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching")
                 else True
             )
@@ -1155,8 +1155,10 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self.ui.settings.setValue("recent_reference_scenes", recent_scenes)
 
         # Update combo box
-        self.ui.txt001.menu.cmb002.clear()
-        self.ui.txt001.menu.cmb002.add(recent_scenes, header="Recent Scenes:")
+        self.ui.txt001.option_box.menu.cmb002.clear()
+        self.ui.txt001.option_box.menu.cmb002.add(
+            recent_scenes, header="Recent Scenes:"
+        )
 
 
 class HierarchyManagerSlots(ptk.LoggingMixin):
@@ -1232,7 +1234,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
             widget.menu.setTitle("Reference Hierarchy:")
-            widget.menu.mode = "context"
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Reference",
@@ -1272,7 +1273,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
             widget.menu.setTitle("Current Scene Hierarchy:")
-            widget.menu.mode = "context"
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Current Scene",
@@ -1306,13 +1306,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def txt001_init(self, widget):
         """Initialize the reference scene path input."""
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QPushButton",
             setText="Browse Reference Scene",
             setObjectName="b003",
             setToolTip="Browse for a reference scene file.",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setObjectName="cmb002",
             setToolTip="Select from recent reference scenes.",
@@ -1321,10 +1321,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Load recent reference scenes
         recent_scenes = self.controller.get_recent_reference_scenes()
         if recent_scenes:
-            self.ui.txt001.menu.cmb002.add(recent_scenes, header="Recent Scenes:")
+            self.ui.txt001.option_box.menu.cmb002.add(
+                recent_scenes, header="Recent Scenes:"
+            )
         else:
             # Add placeholder if no recent scenes
-            self.ui.txt001.menu.cmb002.add(
+            self.ui.txt001.option_box.menu.cmb002.add(
                 ["No recent scenes"], header="Recent Scenes:"
             )
 
@@ -1333,10 +1335,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def tb001_init(self, widget):
         """Initialize the diff analysis toggle button with options menu."""
-        widget.menu.setTitle("Diff Options:")
+        widget.option_box.menu.setTitle("Diff Options:")
 
         # Add diff mode options
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setObjectName="cmb_diff_mode",
             setToolTip="Select diff analysis mode.",
@@ -1347,10 +1349,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             "Mode: Missing Objects Only": "Missing Objects Only",
             "Mode: Extra Objects Only": "Extra Objects Only",
         }
-        widget.menu.cmb_diff_mode.add(diff_mode_options)
+        widget.option_box.menu.cmb_diff_mode.add(diff_mode_options)
 
         # Add selection mode combobox (replaces individual checkboxes)
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setObjectName="cmb_selection_mode",
             setToolTip="Select how differences should be selected in trees.",
@@ -1361,24 +1363,24 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             "Select: Leaves Only": "leaves_only",
             "Select: No Auto-Selection": "none",
         }
-        widget.menu.cmb_selection_mode.add(selection_mode_options)
+        widget.option_box.menu.cmb_selection_mode.add(selection_mode_options)
 
         # Add remaining diff display options
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QCheckBox",
             setText="Expand Difference Nodes",
             setObjectName="chk_expand_diff",
             setChecked=True,
             setToolTip="Automatically expand nodes with differences.",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QCheckBox",
             setText="Force Re-analysis",
             setObjectName="chk_force_reanalysis",
             setChecked=False,
             setToolTip="Force re-import and re-analysis even if reference was already analyzed.",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QCheckBox",
             setText="Enable Fuzzy Matching",
             setObjectName="chk_fuzzy_matching",
@@ -1388,10 +1390,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def tb002_init(self, widget):
         """Initialize the pull objects toggle button with options menu."""
-        widget.menu.setTitle("Pull Options:")
+        widget.option_box.menu.setTitle("Pull Options:")
 
         # Add pull mode options
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setObjectName="cmb_pull_mode",
             setToolTip="Select how objects should be pulled.",
@@ -1400,10 +1402,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             "Mode: Add to Scene": "Add to Scene",
             "Mode: Merge Hierarchies": "Merge Hierarchies",
         }
-        widget.menu.cmb_pull_mode.add(pull_mode_options)
+        widget.option_box.menu.cmb_pull_mode.add(pull_mode_options)
 
         # Add pull children option
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QCheckBox",
             setText="Pull Children",
             setObjectName="chk_pull_children",
@@ -1416,7 +1418,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         self.controller.refresh_trees()
 
     def tb001(self, state=None):
-        """Toggle button for diff check with options menu."""
+        """Toggle button for diff check with options option_box.menu."""
         reference_path = self.ui.txt001.text().strip()
         if not reference_path:
             self.logger.error("Please specify a reference scene path.")
@@ -1443,18 +1445,25 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
             if hasattr(self.ui.tb001.menu, "cmb_diff_mode"):
-                diff_mode = self.ui.tb001.menu.cmb_diff_mode.currentData() or diff_mode
+                diff_mode = (
+                    self.ui.tb001.option_box.menu.cmb_diff_mode.currentData()
+                    or diff_mode
+                )
             if hasattr(self.ui.tb001.menu, "cmb_selection_mode"):
                 selection_mode = (
-                    self.ui.tb001.menu.cmb_selection_mode.currentData()
+                    self.ui.tb001.option_box.menu.cmb_selection_mode.currentData()
                     or selection_mode
                 )
             if hasattr(self.ui.tb001.menu, "chk_expand_diff"):
-                expand_diff = self.ui.tb001.menu.chk_expand_diff.isChecked()
+                expand_diff = self.ui.tb001.option_box.menu.chk_expand_diff.isChecked()
             if hasattr(self.ui.tb001.menu, "chk_force_reanalysis"):
-                force_reanalysis = self.ui.tb001.menu.chk_force_reanalysis.isChecked()
+                force_reanalysis = (
+                    self.ui.tb001.option_box.menu.chk_force_reanalysis.isChecked()
+                )
             if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching"):
-                fuzzy_matching = self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                fuzzy_matching = (
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
+                )
 
         # Parse selection mode
         auto_select = selection_mode != "none"
@@ -1561,7 +1570,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Get fuzzy matching setting from diff options menu
         if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
             if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching"):
-                fuzzy_matching = self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                fuzzy_matching = (
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
+                )
 
         # Get pull options from toggle button menu
         pull_mode = "Add to Scene"  # Default
@@ -1569,9 +1580,14 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         if hasattr(self.ui, "tb002") and hasattr(self.ui.tb002, "menu"):
             if hasattr(self.ui.tb002.menu, "cmb_pull_mode"):
-                pull_mode = self.ui.tb002.menu.cmb_pull_mode.currentData() or pull_mode
+                pull_mode = (
+                    self.ui.tb002.option_box.menu.cmb_pull_mode.currentData()
+                    or pull_mode
+                )
             if hasattr(self.ui.tb002.menu, "chk_pull_children"):
-                pull_children = self.ui.tb002.menu.chk_pull_children.isChecked()
+                pull_children = (
+                    self.ui.tb002.option_box.menu.chk_pull_children.isChecked()
+                )
 
         self.logger.info(f"Pulling objects using '{pull_mode}' mode")
         if pull_children:
@@ -1711,7 +1727,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 )
 
                 fuzzy_matching = (
-                    self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
                     if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching")
                     else True
                 )
@@ -1752,8 +1768,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         """Load from recent reference scenes."""
         recent_scenes = self.controller.get_recent_reference_scenes()
         if recent_scenes:
-            self.ui.txt001.menu.cmb002.clear()
-            self.ui.txt001.menu.cmb002.add(recent_scenes, header="Recent Scenes:")
+            self.ui.txt001.option_box.menu.cmb002.clear()
+            self.ui.txt001.option_box.menu.cmb002.add(
+                recent_scenes, header="Recent Scenes:"
+            )
 
     def b005(self):
         """Refresh current scene hierarchy tree."""
@@ -1782,7 +1800,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         fuzzy_matching = True  # Default value
         if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
             if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching"):
-                fuzzy_matching = self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                fuzzy_matching = (
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
+                )
 
         dry_run = getattr(self.ui, "chk002", None)
         dry_run = dry_run.isChecked() if dry_run else True
@@ -1808,7 +1828,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         fuzzy_matching = True  # Default value
         if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
             if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching"):
-                fuzzy_matching = self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                fuzzy_matching = (
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
+                )
 
         dry_run = self.ui.chk002.isChecked()
         log_level = self.ui.cmb001.currentData()
@@ -1868,7 +1890,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         fuzzy_matching = True  # Default value
         if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
             if hasattr(self.ui.tb001.menu, "chk_fuzzy_matching"):
-                fuzzy_matching = self.ui.tb001.menu.chk_fuzzy_matching.isChecked()
+                fuzzy_matching = (
+                    self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
+                )
 
         dry_run = getattr(self.ui, "chk002", None)
         dry_run = dry_run.isChecked() if dry_run else True

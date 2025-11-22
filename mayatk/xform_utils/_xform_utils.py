@@ -1,11 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, Union, Optional
+from __future__ import annotations
+
+import contextlib
+from typing import List, Tuple, Dict, Union, Optional, Set, Any
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+try:
+    from maya.api import OpenMaya as om  # For MPoint, MVector, etc.
+except Exception:
+    om = None  # Allow module to import outside Maya; guard at call sites
 import pythontk as ptk
 
 # from this package:
@@ -290,7 +297,16 @@ class XformUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
-        cls, objects, center_pivot=False, force=True, delete_history=False, **kwargs
+        cls,
+        objects,
+        center_pivot=False,
+        force=True,
+        delete_history=False,
+        freeze_children=False,
+        unlock_children=True,
+        connection_strategy="preserve",
+        from_channel_box=False,
+        **kwargs,
     ):
         """Freezes transformations on the given objects.
 
@@ -299,35 +315,241 @@ class XformUtils(ptk.HelpMixin):
             center_pivot (bool): If True, centers the pivot.
             force (bool): If True, unlocks locked transform attributes and restores them after.
             delete_history (bool): If True, deletes construction history after freeze.
+            freeze_children (bool): If True, also freeze descendant transforms.
+            unlock_children (bool): If True (and force is True), also unlock descendant transforms.
+            connection_strategy (str): How to handle incoming connections on TRS channels.
+                "preserve" (default) -> raise a descriptive error,
+                "disconnect" -> break the incoming connections,
+                "delete" -> break incoming connections and delete their source nodes when possible.
+                Note: "preserve" skips affected objects (reported at the end); "disconnect"/"delete" modify shared drivers, so downstream instances will also lose those connections.
+            from_channel_box (bool): If True, use the selected attributes in the channel box to determine what to freeze.
             **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
         """
         from mayatk.rig_utils import RigUtils
+        import math
+
+        # Determine which axes to freeze
+        axes_to_freeze = set()
+
+        # Helper map for channel names to axes
+        channel_map = {
+            "translate": ["tx", "ty", "tz"],
+            "t": ["tx", "ty", "tz"],
+            "translateX": ["tx"],
+            "tx": ["tx"],
+            "translateY": ["ty"],
+            "ty": ["ty"],
+            "translateZ": ["tz"],
+            "tz": ["tz"],
+            "rotate": ["rx", "ry", "rz"],
+            "r": ["rx", "ry", "rz"],
+            "rotateX": ["rx"],
+            "rx": ["rx"],
+            "rotateY": ["ry"],
+            "ry": ["ry"],
+            "rotateZ": ["rz"],
+            "rz": ["rz"],
+            "scale": ["sx", "sy", "sz"],
+            "s": ["sx", "sy", "sz"],
+            "scaleX": ["sx"],
+            "sx": ["sx"],
+            "scaleY": ["sy"],
+            "sy": ["sy"],
+            "scaleZ": ["sz"],
+            "sz": ["sz"],
+        }
+
+        if from_channel_box:
+            from mayatk.ui_utils import UiUtils
+
+            selected_channels = set(UiUtils.get_selected_channels() or [])
+            for ch in selected_channels:
+                # Handle long names like 'pCube1.translateX'
+                if "." in ch:
+                    ch = ch.split(".")[-1]
+                if ch in channel_map:
+                    axes_to_freeze.update(channel_map[ch])
+        else:
+            # Check kwargs for standard flags
+            if kwargs.get("translate") or kwargs.get("t"):
+                axes_to_freeze.update(["tx", "ty", "tz"])
+            if kwargs.get("rotate") or kwargs.get("r"):
+                axes_to_freeze.update(["rx", "ry", "rz"])
+            if kwargs.get("scale") or kwargs.get("s"):
+                axes_to_freeze.update(["sx", "sy", "sz"])
+
+        # If no axes selected, nothing to do
+        if not axes_to_freeze:
+            return
 
         objects = pm.ls(objects, type="transform", long=True)
 
-        lock_state: Dict[str, Dict[str, bool]] = {}
+        strategy = (connection_strategy or "preserve").lower()
+        valid_strategies = {"preserve", "disconnect", "delete"}
+        if strategy not in valid_strategies:
+            raise ValueError(
+                f"Invalid connection_strategy '{connection_strategy}'. "
+                f"Valid options: {sorted(valid_strategies)}"
+            )
+
+        # Expand selection to children up front when requested
+        if freeze_children:
+            objects_set = set(objects)
+            for obj in list(objects):
+                descendants = (
+                    pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                    or []
+                )
+                for child in descendants:
+                    if child not in objects_set:
+                        objects.append(child)
+                        objects_set.add(child)
+
+        # Determine which channels are involved for connection checking
+        freeze_channels: Set[str] = set()
+        if not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}):
+            freeze_channels.add("translate")
+        if not axes_to_freeze.isdisjoint({"rx", "ry", "rz"}):
+            freeze_channels.add("rotate")
+        if not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}):
+            freeze_channels.add("scale")
+
+        skipped_connections: List[
+            Tuple[str, Dict[pm.general.Attribute, List[pm.general.Attribute]]]
+        ] = []
+        instanced_skips: List[str] = []
+        frozen_objects: List[str] = []
+
+        def get_blockers(node):
+            """Helper to find input connections on specified channels."""
+            # Query top-level attributes (e.g. 'translate') to catch all child connections (e.g. 'translateX')
+            plugs = [node.attr(ch) for ch in freeze_channels if node.hasAttr(ch)]
+            if not plugs:
+                return {}
+
+            # Get all input connections (source, destination) pairs
+            connections = (
+                pm.listConnections(
+                    plugs, source=True, destination=False, plugs=True, connections=True
+                )
+                or []
+            )
+
+            found_blockers = {}
+            for src, dest in connections:
+                found_blockers.setdefault(dest, []).append(src)
+
+            return found_blockers
 
         for obj in objects:
+            if not pm.objExists(obj):
+                continue
+
             if center_pivot:
                 pm.xform(obj, centerPivots=True)
 
-            # Store lock state and unlock if force
+            shapes = (
+                pm.listRelatives(obj, shapes=True, noIntermediate=False, fullPath=True)
+                or []
+            )
+            if shapes:
+                try:
+                    if NodeUtils.get_instances(obj):
+                        instanced_skips.append(obj.name())
+                        continue
+                except Exception:
+                    pass
+
+            # Determine nodes to unlock
+            nodes_to_unlock = []
             if force:
-                lock_state[obj.name()] = RigUtils.get_attr_lock_state(obj)
-                RigUtils.set_attr_lock_state(
-                    obj, translate=False, rotate=False, scale=False
-                )
+                nodes_to_unlock.append(obj)
+                if unlock_children:
+                    descendants = (
+                        pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                        or []
+                    )
+                    nodes_to_unlock.extend(descendants)
 
-            # Delete history if requested
-            if delete_history:
-                pm.delete(obj, constructionHistory=True)
+            with CoreUtils.temporarily_unlock_attributes(nodes_to_unlock):
+                try:
+                    # Delete history if requested
+                    if delete_history:
+                        pm.delete(obj, constructionHistory=True)
 
-            # Freeze transforms
-            pm.makeIdentity(obj, apply=True, **kwargs)
+                    # Perform Freeze using helper
+                    if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                        frozen_objects.append(obj.name())
 
-            # Restore lock state if needed
-            if force and obj.name() in lock_state:
-                RigUtils.set_attr_lock_state(obj, **lock_state[obj.name()])
+                except RuntimeError as exc:
+                    msg = str(exc).lower()
+                    # Check if failure is due to incoming connections
+                    if "incoming connection" in msg or "locked" in msg:
+                        # Analyze blockers
+                        blockers = get_blockers(obj)
+
+                        if not blockers and "locked" not in msg:
+                            # Failed due to connections but none found on target channels
+                            skipped_connections.append((obj.name(), {}))
+                            pm.warning(
+                                f"XformUtils.freeze_transforms: Skipping '{obj}' due to connection error: {exc}"
+                            )
+                            continue
+
+                        if strategy == "preserve":
+                            skipped_connections.append((obj.name(), blockers))
+                            continue
+
+                        # Handle disconnect/delete strategy
+                        nodes_to_delete = set()
+                        for plug, sources in blockers.items():
+                            for src in sources:
+                                try:
+                                    pm.disconnectAttr(src, plug)
+                                except Exception as disconnect_exc:
+                                    raise RuntimeError(
+                                        f"Failed to disconnect {src} -> {plug}: {disconnect_exc}"
+                                    ) from disconnect_exc
+
+                                if strategy == "delete":
+                                    try:
+                                        node = src.node()
+                                    except Exception:
+                                        continue
+                                    if not node or node == obj:
+                                        continue
+                                    if (
+                                        hasattr(node, "isReferenced")
+                                        and node.isReferenced()
+                                    ):
+                                        continue
+                                    nodes_to_delete.add(node)
+
+                        if nodes_to_delete:
+                            pm.delete(list(nodes_to_delete))
+
+                        # Retry freeze after clearing connections
+                        try:
+                            if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                                frozen_objects.append(obj.name())
+                        except RuntimeError as retry_exc:
+                            skipped_connections.append((obj.name(), blockers))
+                            pm.warning(
+                                f"XformUtils.freeze_transforms: Skipping '{obj}' after clearing connections: {retry_exc}"
+                            )
+
+                    else:
+                        raise
+
+        total_processed = (
+            len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
+        )
+        if total_processed:
+            skipped_total = len(skipped_connections) + len(instanced_skips)
+            pm.displayInfo(
+                "XformUtils.freeze_transforms: "
+                f"{len(frozen_objects)} frozen, {skipped_total} skipped."
+            )
 
     @staticmethod
     @CoreUtils.undoable
@@ -432,12 +654,11 @@ class XformUtils(ptk.HelpMixin):
 
         Parameters:
             node (PyNode): The object whose reference position is determined.
-            pivot (int/str/tuple/list): Mode or explicit position.
-                - `0` or `"boundingBox"` → Uses bounding box properties.
-                - `1` or `"object"` → Uses the object's rotate pivot.
-                - `2` or `"world"` → Uses world origin `(0,0,0)`.
-                - `"manip"` → Uses the manipulation pivot (scale pivot).
+            pivot (str/tuple/list): Mode or explicit position.
                 - `"center"` → Uses bounding box center.
+                - `"object"` → Uses the object's rotate pivot.
+                - `"world"` → Uses world origin `(0,0,0)`.
+                - `"manip"` → Uses the manipulator/tool pivot (not the object's scale pivot).
                 - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
                 - `"baked"` → Uses the baked (original) rotate pivot in world space.
                 - `(x, y, z)` → Uses a specified world-space pivot.
@@ -458,15 +679,50 @@ class XformUtils(ptk.HelpMixin):
         if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
             return float(pivot[axis_index])
 
-        # Object pivot (rotate pivot in world space)
-        if pivot in {1, "object"}:
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
-            return float(obj_pivot_ws[axis_index])
-
-        # Manipulation pivot (scale pivot in world space)
+        # Manipulator pivot (actual manipulator/tool position in world space)
         if pivot == "manip":
-            manip_pivot_ws = pm.xform(node, q=True, ws=True, sp=True)
-            return float(manip_pivot_ws[axis_index])
+            # Ensure object is selected for consistent manipulator pivot query
+            current_selection = pm.selected()
+            pm.select(node, replace=True)
+
+            try:
+                # Query the current manipulator pivot position
+                manip_pivot_result = pm.manipPivot(q=True, p=True)
+
+                # Normalize result to flat [x,y,z] format
+                if (
+                    isinstance(manip_pivot_result, (list, tuple))
+                    and len(manip_pivot_result) > 0
+                    and isinstance(manip_pivot_result[0], (list, tuple))
+                ):
+                    manip_pivot_ws = list(manip_pivot_result[0][:3])
+                else:
+                    manip_pivot_ws = list(manip_pivot_result[:3])
+
+                # Ensure we have exactly 3 coordinates
+                if len(manip_pivot_ws) < 3:
+                    raise ValueError(
+                        f"Invalid manipulator pivot result: {manip_pivot_result}"
+                    )
+
+            finally:
+                # Restore original selection
+                pm.select(current_selection, replace=True)
+
+            return (
+                float(manip_pivot_ws[axis_index])
+                if axis_index is not None
+                else manip_pivot_ws
+            )
+
+        # Object pivot (rotate pivot in world space)
+        if pivot == "object":
+            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
+            return (
+                float(obj_pivot_ws[axis_index])
+                if axis_index is not None
+                else obj_pivot_ws
+            )
 
         # Baked pivot (local-space rotate pivot transformed to world space)
         if pivot == "baked":
@@ -474,33 +730,46 @@ class XformUtils(ptk.HelpMixin):
             world_rp = pm.dt.Point(local_rp) * pm.PyNode(node).getMatrix(
                 worldSpace=True
             )
-            return float(world_rp[axis_index])
+            return (
+                float(world_rp[axis_index])
+                if axis_index is not None
+                else list(world_rp)
+            )
 
         # World origin
-        if pivot in {2, "world"}:
-            return 0.0
+        if pivot == "world":
+            return 0.0 if axis_index is not None else [0.0, 0.0, 0.0]
 
         # Bounding box center
         if pivot == "center":
             center = cls.get_bounding_box(node, "center")
-            return float(center[axis_index])
+            return float(center[axis_index]) if axis_index is not None else list(center)
 
         # Bounding box limits (xmin, ymax, etc.)
-        axis_map = {"xmin": 0, "xmax": 0, "ymin": 1, "ymax": 1, "zmin": 2, "zmax": 2}
-        valid_keys = cls.get_bounding_box(node, return_valid_keys=True)
+        limit_pivots = {"xmin", "xmax", "ymin", "ymax", "zmin", "zmax"}
+        if isinstance(pivot, str) and pivot in limit_pivots:
+            # Get center only once
+            center = cls.get_bounding_box(node, "center")
+            limit_value = float(cls.get_bounding_box(node, pivot))  # single float
+            axis_for_limit = {"x": 0, "y": 1, "z": 2}[pivot[0]]
 
-        if isinstance(pivot, str) and pivot in valid_keys:
-            val = cls.get_bounding_box(node, pivot)
-            if isinstance(val, (tuple, list)):
-                return float(val[axis_map[pivot]])
-            return float(val)
+            if axis_index is None:
+                result = list(center)
+                result[axis_for_limit] = limit_value
+                return result
+            else:
+                return (
+                    limit_value
+                    if axis_index == axis_for_limit
+                    else float(center[axis_index])
+                )
 
         # Fallback to center
         pm.warning(
             f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
         )
         fallback = cls.get_bounding_box(node, "center")
-        return float(fallback[axis_index])
+        return float(fallback[axis_index]) if axis_index is not None else list(fallback)
 
     @staticmethod
     @CoreUtils.undoable
@@ -573,6 +842,118 @@ class XformUtils(ptk.HelpMixin):
         for obj in objs:
             pm.xform(obj, centerPivots=True)
             pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
+
+    @staticmethod
+    def world_aligned_pivot(objects=None, mode="set", pivot_type="manip"):
+        """Get or set world-aligned pivot for objects.
+
+        This function helps manipulate objects with strangely oriented pivots by getting
+        or setting a world-aligned orientation (Y-up, X on X-axis, Z on Z-axis).
+
+        Parameters:
+            objects (str/obj/list/None): The object(s) to work with.
+                                         If None, uses current selection.
+            mode (str): Operation mode:
+                        "get" - Returns the world-aligned pivot position and orientation
+                        "set" - Sets the pivot to world-aligned orientation (default)
+            pivot_type (str): Type of pivot to work with:
+                             "manip" - Temporary manipulator pivot (resets on deselect, default)
+                             "object" - Actual object pivot (permanent until reset)
+
+        Returns:
+            dict/bool: If mode="get", returns dict with 'position' and 'orientation'.
+                      If mode="set", returns True if successful, False otherwise.
+
+        Example:
+            # Get world-aligned pivot info
+            info = world_aligned_pivot(mode="get")
+
+            # Set temporary manip pivot to world-aligned (most common use)
+            world_aligned_pivot()
+
+            # Set actual object pivot to world-aligned
+            world_aligned_pivot(mode="set", pivot_type="object")
+
+            # Work with specific objects
+            world_aligned_pivot(['pCube1', 'pCube2'], mode="set")
+        """
+        # Get the objects
+        if objects is None:
+            selected = pm.selected()
+            if not selected:
+                pm.warning("No objects specified and nothing is selected.")
+                return False if mode == "set" else None
+            objects = selected
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        if not objects:
+            pm.warning("No valid objects found.")
+            return False if mode == "set" else None
+
+        # Store the original selection
+        original_selection = pm.selected()
+
+        # Ensure all objects are selected
+        pm.select(objects, replace=True)
+
+        # Get the center pivot position from all selected objects
+        pivot_positions = [
+            pm.xform(obj, q=True, rotatePivot=True, worldSpace=True) for obj in objects
+        ]
+        avg_pivot_pos = [sum(coords) / len(coords) for coords in zip(*pivot_positions)]
+
+        if mode == "get":
+            # Return the world-aligned pivot information
+            result = {
+                "position": avg_pivot_pos,
+                "orientation": [0, 0, 0],  # World-aligned orientation
+                "objects": [str(obj) for obj in objects],
+            }
+            pm.select(original_selection, replace=True)
+            return result
+
+        elif mode == "set":
+            if pivot_type == "manip":
+                # Set temporary manipulator pivot to world-aligned orientation
+                # Note: We must keep the selection active for manipPivot to work
+                pm.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
+                # DO NOT restore selection here - manipPivot needs active selection
+                return True
+
+            elif pivot_type == "object":
+                # Set actual object pivot to world-aligned orientation
+                for obj in objects:
+                    # Get current pivot position
+                    pivot_pos = pm.xform(obj, q=True, rotatePivot=True, worldSpace=True)
+
+                    # Reset pivot orientation to world space
+                    pm.xform(
+                        obj,
+                        worldSpace=True,
+                        pivots=pivot_pos,
+                        preserve=True,
+                    )
+
+                    # Explicitly set rotation pivot orientation to world aligned
+                    pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
+                    pm.xform(obj, preserve=True, rotateOrient=(0, 0, 0))
+
+                # Restore selection for object pivot mode
+                pm.select(original_selection, replace=True)
+                return True
+
+            else:
+                pm.warning(
+                    f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'."
+                )
+                pm.select(original_selection, replace=True)
+                return False
+
+        else:
+            pm.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
+            pm.select(original_selection, replace=True)
+            return False
 
     @staticmethod
     @CoreUtils.undoable
@@ -700,25 +1081,11 @@ class XformUtils(ptk.HelpMixin):
                 pm.xform(target, ws=world_space, rp=source_translate_pivot)
 
             if rotate:
-                locator = None
-                try:
-                    # Create a locator at the source pivot
-                    locator = pm.spaceLocator()
-                    pm.delete(pm.pointConstraint(source, locator))
-                    pm.delete(pm.orientConstraint(source, locator))
-
-                    # Get the original target rotation
-                    original_rotation = pm.xform(target, q=True, ws=True, ro=True)
-                    # Orient the target to the locator's orientation
-                    pm.orientConstraint(locator, target, mo=False)
-                    pm.delete(pm.orientConstraint(locator, target))
-                    # Restore the original target rotation
-                    pm.xform(target, ws=True, ro=original_rotation)
-                except Exception as e:
-                    print(f"Error processing target {target}: {e}")
-                finally:
-                    if locator:
-                        pm.delete(locator)
+                # Transfer the pivot orientation by copying the source's rotate pivot orientation
+                source_pivot_orientation = pm.xform(
+                    source, q=True, ws=world_space, roo=True
+                )
+                pm.xform(target, ws=world_space, roo=source_pivot_orientation)
 
             if scale:
                 source_scale_pivot = pm.xform(source, q=True, ws=world_space, sp=True)
@@ -728,8 +1095,9 @@ class XformUtils(ptk.HelpMixin):
                 pm.makeIdentity(
                     target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
                 )
-            if select_targets_after_transfer:
-                pm.select(targets, replace=True)
+
+        if select_targets_after_transfer:
+            pm.select(targets, replace=True)
 
     @staticmethod
     @CoreUtils.undoable
@@ -1079,7 +1447,7 @@ class XformUtils(ptk.HelpMixin):
         return_type: str = "bool",
     ) -> Union[
         List[Tuple["pm.nodetypes.Transform", bool]],
-        List[Tuple["pm.nodetypes.Transform", "om.MPoint"]],
+        List[Tuple["pm.nodetypes.Transform", Any]],
         List[Tuple["pm.nodetypes.Transform", "pm.datatypes.Vector"]],
         List[Tuple["pm.nodetypes.Transform", "pm.MeshVertex"]],
     ]:
@@ -1200,29 +1568,6 @@ class XformUtils(ptk.HelpMixin):
             )
         return ptk.format_return(result, objects)
 
-    @staticmethod
-    def hash_points(points, precision=4):
-        """Hash the given list of point values.
-
-        Parameters:
-            points (list): A list of point values as tuples.
-            precision (int): determines the number of decimal places that are retained
-                    in the fixed-point representation. For example, with a value of 4, the
-                    fixed-point representation would retain 4 decimal place.
-        Returns:
-            (list) list(s) of hashed tuples.
-        """
-        nested = ptk.nested_depth(points) > 1
-        sets = points if nested else [points]
-
-        def clamp(p):
-            return int(p * 10**precision)
-
-        result = []
-        for pset in sets:
-            result.append([hash(tuple(map(clamp, i))) for i in pset])
-        return ptk.format_return(result, nested)
-
     @classmethod
     def get_matching_verts(cls, a, b, world_space=False):
         """Find any vertices which point locations match between two given mesh.
@@ -1236,7 +1581,7 @@ class XformUtils(ptk.HelpMixin):
             (list) nested tuples with int values representing matching vertex pairs.
         """
         vert_pos_a, vert_pos_b = cls.get_vertex_positions([a, b], world_space)
-        hash_a, hash_b = cls.hash_points([vert_pos_a, vert_pos_b])
+        hash_a, hash_b = ptk.hash_points([vert_pos_a, vert_pos_b])
 
         matching = set(hash_a).intersection(hash_b)
         return [
@@ -1352,6 +1697,83 @@ class XformUtils(ptk.HelpMixin):
 
         if selectTypeEdge:
             pm.selectType(edge=True)
+
+    @staticmethod
+    def _apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+        """Helper to calculate and apply freeze deltas.
+
+        Returns:
+            bool: True if successful, False if skipped (e.g. singular matrix).
+        """
+        # 1. Get current matrix and TRS
+        current_matrix = pm.dt.TransformationMatrix(obj.getMatrix(objectSpace=True))
+        t = obj.translate.get()
+        r = obj.rotate.get()  # Vector (degrees)
+        s = obj.scale.get()
+
+        # 2. Determine target TRS based on frozen axes
+        target_t = pm.dt.Vector(t)
+        target_r = pm.dt.Vector(r)
+        target_s = pm.dt.Vector(s)
+
+        if "tx" in axes_to_freeze:
+            target_t.x = 0.0
+        if "ty" in axes_to_freeze:
+            target_t.y = 0.0
+        if "tz" in axes_to_freeze:
+            target_t.z = 0.0
+
+        if "rx" in axes_to_freeze:
+            target_r.x = 0.0
+        if "ry" in axes_to_freeze:
+            target_r.y = 0.0
+        if "rz" in axes_to_freeze:
+            target_r.z = 0.0
+
+        if "sx" in axes_to_freeze:
+            target_s.x = 1.0
+        if "sy" in axes_to_freeze:
+            target_s.y = 1.0
+        if "sz" in axes_to_freeze:
+            target_s.z = 1.0
+
+        # 3. Construct target matrix
+        target_matrix = pm.dt.TransformationMatrix(current_matrix)
+        target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
+        # Convert degrees to radians for TransformationMatrix
+        target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
+        # Preserve rotation order
+        target_euler.order = current_matrix.rotationOrder()
+        target_matrix.setRotation(target_euler)
+        target_matrix.setScale(target_s, pm.dt.Space.kObject)
+
+        # 4. Calculate delta matrix (the difference to bake)
+        # delta * target = current  => delta = current * target^-1
+        try:
+            # Convert to standard Matrix to ensure inverse() works reliably
+            curr_m = current_matrix.asMatrix()
+            targ_m = target_matrix.asMatrix()
+            delta_matrix = curr_m * targ_m.inverse()
+        except (ValueError, ZeroDivisionError, AttributeError):
+            pm.warning(
+                f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
+            )
+            return False
+
+        # 5. Apply delta
+        obj.setMatrix(delta_matrix)
+
+        # 6. Bake everything (push delta into geometry)
+        bake_kwargs = kwargs.copy()
+        bake_kwargs.update({"t": True, "r": True, "s": True, "apply": True})
+        pm.makeIdentity(obj, **bake_kwargs)
+
+        # 7. Restore target transform (the frozen state)
+        obj.translate.set(target_t)
+        obj.rotate.set(target_r)
+        obj.scale.set(target_s)
+
+        return True
 
 
 # -----------------------------------------------------------------------------

@@ -305,7 +305,7 @@ class DisplayMacros:
                     fade=True,
                 )
             else:  # If not displaying UV borders, turn it on
-                pm.polyOptions(sel, displayMapBorder=True)
+                pm.polyOptions(obj, displayMapBorder=True)
                 pm.inViewMessage(
                     statusMessage=f"UV Border Edges <hl>Shown</hl>.",
                     pos="topCenter",
@@ -735,11 +735,16 @@ class EditMacros:
         if len(b) > 1:  # Combine multiple meshes
             b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
 
-        if repair_mesh:  # Clean any n-gons
-            EditUtils.clean_geometry(
-                a, repair=True, nonmanifold=True, nsided=True, bakePartialHistory=True
-            )
+        if repair_mesh:  # Clean any n-gons before running the boolean
+            from mayatk.core_utils.diagnostic import clean_geometry
 
+            clean_geometry(
+                objects=a,
+                repair=True,
+                nonmanifold=True,
+                nsided=True,
+                bakePartialHistory=True,
+            )
         # Resolve operation type, defaulting to 'union'
         operation_types = {"union": 1, "difference": 2, "intersection": 3}
         operation = kwargs.pop("operation", kwargs.pop("op", "union"))
@@ -1088,13 +1093,6 @@ class UiMacros:
     """ """
 
     @staticmethod
-    def m_tentacle_show() -> None:
-        """Display the tentacle marking menu."""
-        from tentacle.tcl_maya import TclMaya
-
-        TclMaya.instance().show()
-
-    @staticmethod
     def m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None:
         """Toggle UI toolbars and menu bar in sync.
 
@@ -1135,7 +1133,7 @@ class AnimationMacros:
     def m_set_selected_keys(objects) -> None:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = CoreUtils.get_selected_channels()
+            attrs = UiUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -1146,7 +1144,7 @@ class AnimationMacros:
     def m_unset_selected_keys(objects) -> None:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = CoreUtils.get_selected_channels()
+            attrs = UiUtils.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)

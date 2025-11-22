@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 from typing import Optional, Dict, Any, List
+import re
 
 try:
     import pymel.core as pm
@@ -176,6 +177,70 @@ class _TaskActionsMixin(_TaskDataMixin):
 class _TaskChecksMixin(_TaskDataMixin):
     """ """
 
+    _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
+
+    def check_geometry_lod_suffix(self) -> tuple:
+        """Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+
+        Notes:
+            - This check is informational. It returns True regardless, and lists any matches.
+            - Suffix examples matched: '_LOD', '_LOD0', '_LOD1', '_LOD02', etc. (case-insensitive)
+        """
+        messages: List[str] = []
+
+        if not self.objects:
+            return True, messages
+
+        matches = []
+        for obj in self.objects:
+            try:
+                if NodeUtils.is_geometry(obj):
+                    name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
+                    if self._LOD_SUFFIX_REGEX.search(name):
+                        matches.append(name)
+            except Exception:
+                # Be resilient to unexpected object types
+                continue
+
+        if matches:
+            messages.append("Geometry with LOD suffix detected (informational):")
+            for n in sorted(set(matches)):
+                messages.append(f"  - {n}")
+
+        return True, messages
+
+    def check_top_level_group_temp(self) -> tuple:
+        """Fail if any top-level group (assembly) is named 'temp' (case-insensitive).
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        log_messages: List[str] = []
+        offenders: List[str] = []
+
+        # Consider only assemblies (top-level DAG nodes)
+        root_nodes = pm.ls(self.objects, assemblies=True) if self.objects else []
+        for node in root_nodes:
+            try:
+                if NodeUtils.is_group(node):
+                    name = node.nodeName() if hasattr(node, "nodeName") else str(node)
+                    if name.lower() == "temp":
+                        offenders.append(name)
+            except Exception:
+                continue
+
+        if offenders:
+            log_messages.append("Top-level group(s) named 'temp' found:")
+            for n in sorted(set(offenders)):
+                log_messages.append(f"  - {n}")
+            # Treat as a failure so it blocks export until renamed
+            return False, log_messages
+
+        return True, log_messages
+
     def check_root_default_transforms(self) -> tuple:
         """Check if all root group nodes have default transforms."""
         log_messages = []
@@ -308,14 +373,21 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed
 
-    def check_objects_below_floor(self) -> tuple:
-        """Check if any object's geometry is below the floor plane (Y=0)."""
+    def check_objects_below_floor(self, tolerance: float = 0.5) -> tuple:
+        """Check if any object's geometry is below the floor plane (Y=0).
+
+        Args:
+            tolerance: Allowable distance (in scene units) beneath the plane before failing.
+        """
         log_messages = []
         has_objects_below = False
 
+        tolerance = 0.0 if tolerance is None else max(0.0, float(tolerance))
+        plane_point = (0, -tolerance, 0) if tolerance else (0, 0, 0)
+
         objects_below_threshold = XformUtils.check_objects_against_plane(
             self.objects,
-            plane_point=(0, 0, 0),
+            plane_point=plane_point,
             plane_normal=(0, 1, 0),
             return_type="bool",
         )
@@ -326,6 +398,10 @@ class _TaskChecksMixin(_TaskDataMixin):
                 log_messages.append(f"Object: {obj} - Below Floor: {is_below}")
 
         if has_objects_below:
+            log_messages.insert(
+                0,
+                f"Tolerance used: {tolerance:.3f} unit{'s' if tolerance != 1 else ''}",
+            )
             return False, log_messages  # Failed, log objects below the floor threshold
 
         return True, log_messages  # All checks passed, no objects below the floor
@@ -369,9 +445,14 @@ class _TaskChecksMixin(_TaskDataMixin):
         for obj in AnimUtils.filter_objects_with_keys(keys="visibility"):
             visibility_keys_found = True
 
+            # Set visibility to true before deleting keys
+            obj.visibility.set(True)
+
             # Delete visibility keys
             pm.cutKey(obj, attribute="visibility")
-            log_messages.append(f"Visibility keys deleted for object: {obj}")
+            log_messages.append(
+                f"Visibility set to true and keys deleted for object: {obj}"
+            )
 
         if visibility_keys_found:
             log_messages.append(
@@ -445,26 +526,32 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         self.logger = logger
         self.objects = None
 
+    _export_mode_options: Dict[str, Any] = {
+        "Export: All Scene Objects": "all",
+        "Export: All Visible Objects": "visible",
+        "Export: Selected Objects Only": "selected",
+    }
+
     @property
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the task definitions for the UI."""
         return {
             "export_visible_objects": {
-                "widget_type": "QCheckBox",
-                "setText": "Export All Visible Objects",
-                "setToolTip": "Export all visible objects regardless of the current selection.\nIf unchecked, only the selected objects will be exported.",
-                "setChecked": True,
+                "widget_type": "ComboBox",
+                "setToolTip": "Choose what objects to export:\n- All Visible Objects: Export all visible geometry in the scene\n- Selected Objects Only: Export only currently selected objects\n- All Scene Objects: Export all objects regardless of visibility or selection",
+                "add": self._export_mode_options,
+                "value_method": "currentData",
+            },
+            "set_linear_unit": {
+                "widget_type": "ComboBox",
+                "setToolTip": "Linear unit to be used during export.",
+                "add": self._scene_unit_options,
             },
             "set_workspace": {
                 "widget_type": "QCheckBox",
                 "setText": "Auto Set Workspace",
                 "setToolTip": "Determine the workspace directory from the scene path.",
                 "setChecked": True,
-            },
-            "set_linear_unit": {
-                "widget_type": "ComboBox",
-                "setToolTip": "Linear unit to be used during export.",
-                "add": self._scene_unit_options,
             },
             "delete_env_nodes": {
                 "widget_type": "QCheckBox",
@@ -525,6 +612,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Check the scene framerate against the target framerate.",
                 "add": self._frame_rate_options,
             },
+            "check_top_level_group_temp": {
+                "widget_type": "QCheckBox",
+                "setText": "Check Top-level Group Named 'temp'",
+                "setToolTip": "Fail if any top-level group (assembly) is named 'temp' (case-insensitive).",
+                "setChecked": True,
+            },
+            "check_geometry_lod_suffix": {
+                "widget_type": "QCheckBox",
+                "setText": "Check Geometry LOD Suffix (_LODx)",
+                "setToolTip": "Detect geometry named with LOD suffixes ending in '_LOD' or '_LOD' followed by digits (e.g., _LOD, _LOD1, _LOD02). This is informational.",
+                "setChecked": True,
+            },
             "check_duplicate_locator_names": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Duplicate Locator Names",
@@ -564,7 +663,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_objects_below_floor": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Objects Below Floor.",
-                "setToolTip": "Check for objects with a bounding box having a negative Y value.",
+                "setToolTip": (
+                    "Check for geometry dipping below Y=0. A default 0.5 unit "
+                    "tolerance is applied so shallow penetrations (e.g. tires) "
+                    "do not immediately fail. Override by calling the check with a "
+                    "'tolerance' keyword argument."
+                ),
                 "setChecked": True,
             },
             "check_absolute_paths": {

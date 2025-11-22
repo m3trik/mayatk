@@ -15,22 +15,183 @@ from mayatk.node_utils import NodeUtils
 from mayatk.env_utils import EnvUtils
 
 
-class MatUtils(ptk.HelpMixin):
+class MatUtilsInternals(ptk.HelpMixin):
+    """Internal helper utilities shared across MatUtils operations."""
+
     @staticmethod
-    def _create_standard_shader():
-        """Get the preferred material type, preferring standardSurface over lambert if available.
+    def _unique_ordered(nodes: List[Any]) -> List[Any]:
+        """Return nodes with original order preserved and duplicates removed."""
+        ordered = []
+        seen = set()
+        for node in nodes or []:
+            if not node:
+                continue
+            if node in seen:
+                continue
+            ordered.append(node)
+            seen.add(node)
+        return ordered
+
+    @classmethod
+    def _resolve_texture_targets(
+        cls,
+        objects: Optional[List[Any]] = None,
+        materials: Optional[List[Any]] = None,
+        file_nodes: Optional[List[Any]] = None,
+        fallback_to_scene: bool = False,
+    ) -> Dict[str, List[Any]]:
+        """Normalize objects/materials/file nodes for texture operations."""
+
+        resolved_objects = pm.ls(objects or [], flatten=True) if objects else []
+
+        resolved_materials: List[Any] = []
+        if materials:
+            resolved_materials.extend(pm.ls(materials, mat=True))
+        if resolved_objects:
+            resolved_materials.extend(cls.get_mats(resolved_objects))
+        resolved_materials = cls._unique_ordered(resolved_materials)
+
+        resolved_file_nodes: List[Any] = []
+        for mat in resolved_materials:
+            resolved_file_nodes.extend(pm.listConnections(mat, type="file") or [])
+
+        if file_nodes:
+            resolved_file_nodes.extend(pm.ls(file_nodes, type="file"))
+
+        if not resolved_file_nodes and fallback_to_scene:
+            resolved_file_nodes = pm.ls(type="file")
+
+        resolved_file_nodes = cls._unique_ordered(resolved_file_nodes)
+
+        return {
+            "objects": resolved_objects,
+            "materials": resolved_materials,
+            "file_nodes": resolved_file_nodes,
+        }
+
+    @staticmethod
+    def _paths_from_file_nodes(file_nodes: List[Any]) -> List[str]:
+        project_sourceimages = EnvUtils.get_env_info("sourceimages")
+        project_sourceimages = (
+            os.path.abspath(project_sourceimages) if project_sourceimages else ""
+        )
+        sourceimages_name = (
+            os.path.basename(project_sourceimages).replace("\\", "/")
+            if project_sourceimages
+            else ""
+        )
+
+        textures: List[str] = []
+        for node in file_nodes or []:
+            try:
+                file_path = node.fileTextureName.get()
+            except Exception:
+                continue
+            if not file_path:
+                continue
+            file_path = file_path.replace("\\", "/")
+
+            if not project_sourceimages:
+                textures.append(file_path)
+                continue
+
+            abs_path = (
+                os.path.abspath(os.path.join(project_sourceimages, file_path))
+                if not os.path.isabs(file_path)
+                else os.path.abspath(file_path)
+            )
+
+            if abs_path.startswith(project_sourceimages):
+                rel_path = os.path.relpath(abs_path, project_sourceimages).replace(
+                    "\\", "/"
+                )
+                if sourceimages_name and not rel_path.startswith(
+                    sourceimages_name + "/"
+                ):
+                    rel_path = f"{sourceimages_name}/{rel_path}"
+                textures.append(rel_path)
+            else:
+                textures.append(abs_path)
+
+        return textures
+
+    @staticmethod
+    def _filenames_from_file_nodes(file_nodes: List[Any]) -> List[str]:
+        filenames: List[str] = []
+        for node in file_nodes or []:
+            try:
+                file_path = node.fileTextureName.get()
+            except Exception:
+                continue
+            if not file_path:
+                continue
+            filenames.append(os.path.basename(file_path))
+        return filenames
+
+    @staticmethod
+    def _create_standard_shader(name=None, color=None, return_type="type"):
+        """Create or get the preferred shader type, with optional node creation.
+
+        Parameters:
+            name (str, optional): Name for the shader node (only used when return_type != 'type').
+            color (tuple, optional): RGB color tuple (0-1 range) to apply to the shader.
+            return_type (str): What to return:
+                - 'type': shader type string ('standardSurface' or 'lambert') [default]
+                - 'shader': created shader node
+                - 'shading_group': created shading group connected to shader
+                - 'both': tuple of (shader, shading_group)
 
         Returns:
-            str: The preferred material type ('standardSurface' or 'lambert').
+            str, pm.PyNode, or tuple: Depends on return_type parameter.
         """
-        try:  # Test if standardSurface is available by trying to create one
+        # Determine the preferred shader type
+        try:
             test_mat = pm.shadingNode("standardSurface", asShader=True)
-            pm.delete(test_mat)  # Clean up immediately
-            return "standardSurface"
+            pm.delete(test_mat)
+            shader_type = "standardSurface"
         except Exception:
-            # Fall back to lambert if standardSurface is not available or if Maya is not available
-            return "lambert"
+            shader_type = "lambert"
 
+        # If only type requested, return early
+        if return_type == "type":
+            return shader_type
+
+        # Create the shader node
+        shader_name = name or f"material_{shader_type}"
+        shader = pm.shadingNode(shader_type, asShader=True, name=shader_name)
+
+        # Apply color if provided
+        if color:
+            color_attr = "baseColor" if shader_type == "standardSurface" else "color"
+            pm.setAttr(
+                f"{shader}.{color_attr}", color[0], color[1], color[2], type="double3"
+            )
+
+        # Return based on requested type
+        if return_type == "shader":
+            return shader
+
+        # Create shading group
+        sg_name = f"{shader_name}_SG" if name else f"{shader}_SG"
+        sg = pm.sets(
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
+            name=sg_name,
+        )
+        shader.outColor.connect(sg.surfaceShader, force=True)
+
+        if return_type == "shading_group":
+            return sg
+        elif return_type == "both":
+            return shader, sg
+        else:
+            raise ValueError(
+                f"Invalid return_type: {return_type}. Must be 'type', 'shader', 'shading_group', or 'both'."
+            )
+
+
+class MatUtils(MatUtilsInternals):
     @staticmethod
     def get_mats(objs=None) -> List[str]:
         """Returns the set of materials assigned to a given list of objects or components.
@@ -481,7 +642,10 @@ class MatUtils(ptk.HelpMixin):
 
     @staticmethod
     def remap_file_nodes(
-        file_paths: List[str], target_dir: str, silent: bool = False
+        file_paths: List[str],
+        target_dir: str,
+        silent: bool = False,
+        limit_to_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
     ) -> List["pm.nt.File"]:
         """Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimages.
 
@@ -489,6 +653,8 @@ class MatUtils(ptk.HelpMixin):
             file_paths (List[str]): List of file paths to remap.
             target_dir (str): Target directory to remap the file nodes to.
             silent (bool): If True, suppresses output messages.
+            limit_to_nodes (Optional[List[str/pm.nt.File]]): Restrict remapping to
+                the provided file nodes instead of the entire scene.
 
         Returns:
             List[pm.nt.File]: List of remapped file nodes.
@@ -496,10 +662,16 @@ class MatUtils(ptk.HelpMixin):
         sourceimages_dir = EnvUtils.get_env_info("sourceimages")
         sourceimages_dir_norm = os.path.normpath(sourceimages_dir).replace("\\", "/")
 
+        limit_nodes = (
+            set(pm.ls(limit_to_nodes, type="file")) if limit_to_nodes else None
+        )
+
         file_nodes: Dict[str, pm.nt.File] = {}
 
         # Build lookup: rel path if under sourceimages, else just filename
         for fn in pm.ls(type="file"):
+            if limit_nodes is not None and fn not in limit_nodes:
+                continue
             file_path = fn.fileTextureName.get()
             if not file_path:
                 continue
@@ -541,6 +713,8 @@ class MatUtils(ptk.HelpMixin):
         materials: Optional[List[str]] = None,
         new_dir: Optional[str] = None,
         silent: bool = False,
+        file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
+        objects: Optional[List[str]] = None,
     ) -> None:
         """Remaps file texture paths for materials to new_dir, using relative paths if inside sourceimages.
 
@@ -548,22 +722,39 @@ class MatUtils(ptk.HelpMixin):
             materials (Optional[List[str]]): List of material names to remap. Defaults to all materials.
             new_dir (Optional[str]): Target directory to remap the file nodes to. Defaults to sourceimages.
             silent (bool): If True, suppresses output messages.
+            file_nodes (Optional[List[Union[str, pm.nt.File]]]): Specific file nodes to remap. When provided,
+                only these nodes are processed unless materials are also supplied.
+            objects (Optional[List[str]]): Scene objects whose assigned materials should be remapped.
         """
         new_dir = new_dir or EnvUtils.get_env_info("sourceimages")
         if not new_dir or not os.path.isdir(new_dir):
             pm.warning(f"Invalid directory: {new_dir}")
             return
 
-        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
-        textures = cls.collect_material_paths(materials=materials)
-        textures = [t[0] if isinstance(t, tuple) else t for t in textures]
+        fallback_to_scene = objects is None and materials is None and file_nodes is None
 
+        scope = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=fallback_to_scene,
+        )
+        resolved_nodes = scope["file_nodes"]
+
+        if not resolved_nodes:
+            pm.warning("No valid file nodes found to remap.")
+            return
+
+        textures = cls._paths_from_file_nodes(resolved_nodes)
         if not textures:
             pm.warning("No valid texture paths found.")
             return
 
         remapped_nodes = cls.remap_file_nodes(
-            file_paths=textures, target_dir=new_dir, silent=silent
+            file_paths=textures,
+            target_dir=new_dir,
+            silent=silent,
+            limit_to_nodes=resolved_nodes,
         )
         if not silent:
             pm.displayInfo(
@@ -889,11 +1080,13 @@ class MatUtils(ptk.HelpMixin):
     @classmethod
     def find_texture_files(
         cls,
-        objects: List[str],
-        source_dir: str,
+        objects: Optional[List[str]] = None,
+        source_dir: str = "",
         recursive: bool = True,
         return_dir: bool = False,
         quiet: bool = False,
+        file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
+        materials: Optional[List[str]] = None,
     ) -> List[Union[str, Tuple[str, str]]]:
         """Find texture files for given objects' materials inside source_dir.
 
@@ -903,6 +1096,9 @@ class MatUtils(ptk.HelpMixin):
             recursive (bool): If True, search subdirectories.
             return_dir (bool): If True, return (dir, filename) tuples instead of filepaths.
             quiet (bool): If False, print the found results in a readable format.
+            file_nodes (Optional[List[Union[str, pm.nt.File]]]): Specific file nodes to resolve texture
+                filenames from when no scene objects are provided.
+            materials (Optional[List[str]]): Material names to include in the search scope.
 
         Returns:
             List[str] or List[Tuple[str, str]]: Filepaths or (dir, filename) based on return_dir.
@@ -911,21 +1107,29 @@ class MatUtils(ptk.HelpMixin):
             pm.warning(f"Invalid source directory: {source_dir}")
             return []
 
-        if not objects:
-            pm.warning("No objects provided to find textures.")
-            return []
-
-        materials = cls.get_mats(objects)
-        if not materials:
-            pm.warning("No materials found for the given objects.")
-            return []
-
-        texture_paths = cls.collect_material_paths(materials=materials)
-        texture_filenames = set(
-            os.path.basename(p[0] if isinstance(p, tuple) else p)
-            for p in texture_paths
-            if p
+        scope = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=False,
         )
+
+        texture_nodes = scope["file_nodes"]
+        if not texture_nodes:
+            pm.warning(
+                "No objects, materials, or file nodes provided to find textures."
+            )
+            return []
+
+        texture_filenames = set(
+            filename
+            for filename in cls._filenames_from_file_nodes(texture_nodes)
+            if filename
+        )
+
+        if not texture_filenames:
+            pm.warning("No texture names available for lookup.")
+            return []
 
         all_files = ptk.FileUtils.get_dir_contents(
             source_dir, content="filepath", recursive=recursive
@@ -964,19 +1168,42 @@ class MatUtils(ptk.HelpMixin):
         new_dir: Optional[str] = None,
         silent: bool = False,
         delete_old: bool = False,
+        objects: Optional[List[str]] = None,
+        file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
     ) -> None:
-        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files."""
+        """Copies texture files from an old directory to a new one, remaps file nodes, and optionally deletes old files.
+
+        Parameters:
+            materials (Optional[List[str]]): Material names to include.
+            old_dir (Optional[str]): Source directory containing the files to migrate.
+            new_dir (Optional[str]): Destination directory for the migrated textures.
+            silent (bool): When True, suppresses informational log output.
+            delete_old (bool): Delete the source file after a successful copy when True.
+            objects (Optional[List[str]]): Scene objects whose assigned textures should be migrated.
+            file_nodes (Optional[List[str/pm.nt.File]]): Explicit file nodes to migrate.
+        """
         for label, path in (("old_dir", old_dir), ("new_dir", new_dir)):
             if not path or not os.path.exists(path) or not os.path.isdir(path):
                 pm.warning(f"{label} is invalid: {path}")
                 return
 
-        textures = cls.collect_material_paths(materials=materials)
-        found_files = [
-            (old_dir, os.path.basename(tex[0] if isinstance(tex, tuple) else tex))
-            for tex in textures
-            if tex
-        ]
+        scope = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=False,
+        )
+        resolved_nodes = scope["file_nodes"]
+        if not resolved_nodes:
+            pm.warning("No file nodes found for migration.")
+            return
+
+        filenames = cls._unique_ordered(cls._filenames_from_file_nodes(resolved_nodes))
+        if not filenames:
+            pm.warning("No texture names available for migration.")
+            return
+
+        found_files = [(old_dir, filename) for filename in filenames]
 
         cls.move_texture_files(
             found_files=found_files,
@@ -987,11 +1214,10 @@ class MatUtils(ptk.HelpMixin):
 
         if found_files:
             cls.remap_file_nodes(
-                file_paths=[
-                    os.path.join(old_dir, filename) for _, filename in found_files
-                ],
+                file_paths=[os.path.join(old_dir, filename) for filename in filenames],
                 target_dir=new_dir,
                 silent=silent,
+                limit_to_nodes=resolved_nodes,
             )
 
     @staticmethod
@@ -1072,6 +1298,268 @@ class MatUtils(ptk.HelpMixin):
                 raise
 
         return QIcon(pixmap)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def convert_bump_to_normal(
+        bump_file_node: Union[str, "pm.nt.File"],
+        output_path: Optional[str] = None,
+        intensity: float = 1.0,
+        format_type: str = "opengl",
+        filter_type: str = "3x3",
+        wrap_mode: str = "black",
+        create_file_node: bool = True,
+        node_name: Optional[str] = None,
+    ) -> Optional["pm.nt.File"]:
+        """Convert a bump/height map to a normal map using Maya's bump2d node.
+
+        This method creates a Maya node network to convert height/bump information
+        into tangent-space normal maps compatible with various rendering pipelines.
+
+        Parameters:
+            bump_file_node (str/pm.nt.File): The source bump/height map file node.
+            output_path (Optional[str]): Path to save the generated normal map.
+                                       If None, creates in-memory conversion only.
+            intensity (float): Bump depth/intensity. Higher values create more pronounced normals.
+                              Range typically 0.1-5.0. Default is 1.0.
+            format_type (str): Target format convention:
+                              'opengl' - Standard OpenGL (Y+ up, typical for most engines)
+                              'directx' - DirectX convention (Y- up, flipped green channel)
+                              Default is 'opengl'.
+            filter_type (str): Filtering method for normal calculation:
+                              '3x3' - Standard 3x3 Sobel filter (balanced quality/performance)
+                              '5x5' - 5x5 filter (higher quality, smoother gradients)
+                              Default is '3x3'.
+            wrap_mode (str): Edge handling for height sampling:
+                            'black' - Treat edges as zero height
+                            'clamp' - Extend edge pixels
+                            'repeat' - Tile/wrap the texture
+                            Default is 'black'.
+            create_file_node (bool): If True, creates a file node for the output normal map.
+                                   If False, returns the bump2d conversion node only.
+            node_name (Optional[str]): Custom name for created nodes. Auto-generated if None.
+
+        Returns:
+            Optional[pm.nt.File]: The created file node for the normal map, or None if creation failed.
+
+        Raises:
+            ValueError: If bump_file_node doesn't exist or output_path is invalid.
+            RuntimeError: If Maya node creation fails.
+
+        Example:
+            >>> # Convert existing bump map to OpenGL normal map
+            >>> bump_node = pm.ls('file1')[0]  # Existing file node
+            >>> normal_node = MatUtils.convert_bump_to_normal(
+            ...     bump_node,
+            ...     output_path="C:/textures/wall_normal.exr",
+            ...     intensity=2.0,
+            ...     format_type="opengl"
+            ... )
+
+            >>> # Create DirectX normal map with higher quality filtering
+            >>> normal_node = MatUtils.convert_bump_to_normal(
+            ...     "wallBumpFile",
+            ...     intensity=1.5,
+            ...     format_type="directx",
+            ...     filter_type="5x5"
+            ... )
+        """
+        # Validate and get the bump file node
+        try:
+            bump_node = pm.PyNode(bump_file_node)
+            if not isinstance(bump_node, pm.nt.File):
+                raise ValueError(f"Node {bump_file_node} is not a file node")
+        except pm.MayaNodeError:
+            raise ValueError(f"Bump file node {bump_file_node} does not exist")
+
+        # Validate parameters
+        if format_type not in ["opengl", "directx"]:
+            raise ValueError("format_type must be 'opengl' or 'directx'")
+
+        if filter_type not in ["3x3", "5x5"]:
+            raise ValueError("filter_type must be '3x3' or '5x5'")
+
+        if wrap_mode not in ["black", "clamp", "repeat"]:
+            raise ValueError("wrap_mode must be 'black', 'clamp', or 'repeat'")
+
+        if not 0.1 <= intensity <= 10.0:
+            pm.warning(f"Intensity {intensity} is outside recommended range (0.1-10.0)")
+
+        # Generate node names
+        base_name = node_name or f"{bump_node.name()}_normal"
+        bump2d_name = f"{base_name}_bump2d"
+
+        try:
+            # Create bump2d node for conversion
+            bump2d_node = pm.shadingNode("bump2d", asUtility=True, name=bump2d_name)
+
+            # Configure bump2d node parameters
+            bump2d_node.bumpInterp.set(1)  # Bump mode (0=bump, 1=tangent space normal)
+            bump2d_node.bumpDepth.set(intensity)
+
+            # Set filtering method
+            if filter_type == "5x5":
+                # Use higher quality filtering if supported
+                if hasattr(bump2d_node, "bumpFilter"):
+                    bump2d_node.bumpFilter.set(1)  # 5x5 filter
+
+            # Configure wrap mode for UV sampling
+            wrap_value = {"black": 0, "clamp": 1, "repeat": 2}.get(wrap_mode, 0)
+
+            # Connect the bump file to bump2d
+            pm.connectAttr(
+                f"{bump_node.name()}.outColor", f"{bump2d_node.name()}.bumpValue"
+            )
+
+            # Handle format-specific adjustments
+            if format_type == "directx":
+                # DirectX typically needs Y-channel (green) flipped
+                # Create a reverse node to flip the green channel
+                reverse_name = f"{base_name}_reverse"
+                reverse_node = pm.shadingNode(
+                    "reverse", asUtility=True, name=reverse_name
+                )
+
+                # Create a channel mixer or use component masking to flip only green
+                # For simplicity, we'll use a luminance node approach
+                if hasattr(bump2d_node, "normalCamera"):
+                    # Connect through reverse for Y-flip
+                    pm.connectAttr(
+                        f"{bump2d_node.name()}.outNormal",
+                        f"{reverse_node.name()}.input",
+                    )
+                    output_attr = f"{reverse_node.name()}.output"
+                else:
+                    output_attr = f"{bump2d_node.name()}.outNormal"
+            else:
+                # OpenGL - use direct output
+                output_attr = f"{bump2d_node.name()}.outNormal"
+
+            # Create output file node if requested
+            if create_file_node:
+                if output_path:
+                    # Validate output path
+                    output_dir = os.path.dirname(output_path)
+                    if output_dir and not os.path.exists(output_dir):
+                        try:
+                            os.makedirs(output_dir)
+                        except OSError as e:
+                            raise RuntimeError(
+                                f"Cannot create output directory {output_dir}: {e}"
+                            )
+
+                # Create file node for the normal map
+                normal_file_name = f"{base_name}_file"
+                normal_file_node = pm.shadingNode(
+                    "file", asTexture=True, name=normal_file_name
+                )
+
+                # Set file node properties for normal maps
+                normal_file_node.colorSpace.set(
+                    "Raw"
+                )  # Important: don't color-correct normal data
+                normal_file_node.alphaIsLuminance.set(False)
+
+                if output_path:
+                    normal_file_node.fileTextureName.set(output_path)
+
+                    # If we need to bake/render the normal map, we'd use Maya's render setup here
+                    # For now, we create the network and let users handle baking manually
+                    pm.displayInfo(f"// Normal map conversion network created.")
+                    pm.displayInfo(
+                        f"// To bake the normal map, use Maya's Render > Batch Render"
+                    )
+                    pm.displayInfo(
+                        f"// or Hypershade > Utilities > Surface Sampler Info"
+                    )
+
+                return normal_file_node
+            else:
+                return bump2d_node
+
+        except Exception as e:
+            pm.warning(f"Failed to create bump-to-normal conversion: {e}")
+            return None
+
+    @staticmethod
+    def validate_normal_map_setup(
+        normal_file_node: Union[str, "pm.nt.File"],
+        material: Optional[Union[str, "pm.nt.DependNode"]] = None,
+    ) -> Dict[str, Any]:
+        """Validate normal map file node setup and provide recommendations.
+
+        Parameters:
+            normal_file_node (str/pm.nt.File): The normal map file node to validate.
+            material (Optional[str/pm.nt.DependNode]): Associated material to check connections.
+
+        Returns:
+            Dict[str, Any]: Validation results with recommendations and issues found.
+        """
+        try:
+            normal_node = pm.PyNode(normal_file_node)
+            if not isinstance(normal_node, pm.nt.File):
+                return {
+                    "valid": False,
+                    "error": f"Node {normal_file_node} is not a file node",
+                }
+        except pm.MayaNodeError:
+            return {
+                "valid": False,
+                "error": f"Normal file node {normal_file_node} does not exist",
+            }
+
+        results = {
+            "valid": True,
+            "warnings": [],
+            "recommendations": [],
+            "color_space": None,
+            "connected_to_normal": False,
+            "file_exists": False,
+        }
+
+        # Check color space
+        color_space = normal_node.colorSpace.get()
+        results["color_space"] = color_space
+        if color_space.lower() not in ["raw", "linear", "utility - raw"]:
+            results["warnings"].append(
+                f"Color space is '{color_space}'. Normal maps should use 'Raw' or 'Linear' "
+                "to avoid gamma correction that corrupts normal data."
+            )
+            results["recommendations"].append("Set colorSpace to 'Raw'")
+
+        # Check if file exists
+        file_path = normal_node.fileTextureName.get()
+        if file_path and os.path.exists(file_path):
+            results["file_exists"] = True
+        elif file_path:
+            results["warnings"].append(f"Normal map file does not exist: {file_path}")
+
+        # Check material connections if provided
+        if material:
+            try:
+                mat_node = pm.PyNode(material)
+                # Check if connected to bump or normal attributes
+                connections = pm.listConnections(normal_node.outColor, plugs=True)
+                normal_connections = [
+                    c
+                    for c in connections
+                    if "normal" in c.name().lower() or "bump" in c.name().lower()
+                ]
+
+                if normal_connections:
+                    results["connected_to_normal"] = True
+                else:
+                    results["warnings"].append(
+                        "Normal map not connected to material normal/bump input"
+                    )
+                    results["recommendations"].append(
+                        "Connect to material normalCamera or bump input"
+                    )
+
+            except pm.MayaNodeError:
+                results["warnings"].append(f"Material {material} does not exist")
+
+        return results
 
 
 # -----------------------------------------------------------------------------

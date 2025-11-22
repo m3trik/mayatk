@@ -2,6 +2,7 @@
 # coding=utf-8
 
 from mayatk.xform_utils._xform_utils import *
+from mayatk.xform_utils import matrices
 
 # --------------------------------------------------------------------------------------------
 

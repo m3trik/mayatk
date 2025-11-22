@@ -4,6 +4,7 @@ import os
 import sys
 from typing import Union, List, Callable, Any, Tuple, Optional
 from functools import wraps
+import contextlib
 
 try:
     import pymel.core as pm
@@ -14,8 +15,125 @@ import pythontk as ptk
 # Import package modules at class level to avoid circular imports.
 
 
-class CoreUtils(ptk.HelpMixin):
+class _CoreUtilsInternal(object):
+    @staticmethod
+    def _prepare_reparent(
+        nodes: List[object],
+    ) -> Tuple[Optional[object], Optional[object]]:
+        """Prepare reparenting by using a temporary null if needed."""
+        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
+        temp_null = None
+
+        # Determine if any of the nodes are the only child of their parent
+        for node in nodes:
+            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
+            if node_parent:
+                children = pm.listRelatives(node_parent, children=True) or []
+                if len(children) == 1:
+                    temp_null = pm.createNode("transform", n="tempTempNull")
+                    pm.parent(temp_null, node_parent)
+                    break
+
+        return parent, temp_null
+
+    @staticmethod
+    def _finalize_reparent(
+        new_node: Optional[object],
+        parent: Optional[object],
+        temp_null: Optional[object],
+    ) -> None:
+        """Clean up reparenting, handling the parent and temporary null."""
+        if parent and new_node:
+            try:
+                pm.parent(new_node, parent)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to re-parent combined mesh: {e}")
+        if temp_null:
+            try:
+                pm.delete(temp_null)
+            except pm.general.MayaNodeError as e:
+                pm.warning(f"Failed to delete temporary null: {e}")
+
+    @staticmethod
+    def _calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
+        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
+
+        Parameters:
+            mesh1: The first mesh to compare.
+            mesh2: The second mesh to compare.
+
+        Returns:
+            A float representing the similarity score, where higher means more similar.
+        """
+        # Get bounding box sizes
+        bbox1 = mesh1.getBoundingBox()
+        bbox2 = mesh2.getBoundingBox()
+
+        # Calculate volume of bounding boxes
+        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
+        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
+
+        # Get vertex counts
+        vertex_count1 = len(mesh1.getVertices())
+        vertex_count2 = len(mesh2.getVertices())
+
+        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
+        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
+        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
+            vertex_count1, vertex_count2
+        )
+
+        # Combine similarities (here, equally weighted for simplicity)
+        similarity_score = (volume_similarity + vertex_similarity) / 2
+
+        return similarity_score
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _temp_reparent(nodes):
+        """
+        Context manager to maintain hierarchy for nodes during operations that might reparent them.
+
+        Yields a container object with a 'result' attribute that should be set to the
+        resulting node of the operation if it needs to be reparented to the original parent.
+        """
+        parent, temp_null = _CoreUtilsInternal._prepare_reparent(nodes)
+
+        class Result:
+            def __init__(self):
+                self.result = None
+
+        container = Result()
+
+        try:
+            yield container
+        finally:
+            _CoreUtilsInternal._finalize_reparent(container.result, parent, temp_null)
+
+
+class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     """ """
+
+    @staticmethod
+    @contextlib.contextmanager
+    def temporarily_unlock_attributes(objects, attributes=None):
+        """
+        Context manager to temporarily unlock attributes on objects and restore their state afterwards.
+
+        Parameters:
+            objects (str/obj/list): The object(s) to unlock attributes on.
+            attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
+                             If None, unlocks all standard transform attributes.
+        """
+        from mayatk.rig_utils import RigUtils
+
+        # Get current lock state and unlock
+        lock_state = RigUtils.get_attr_lock_state(objects, unlock=True)
+
+        try:
+            yield
+        finally:
+            RigUtils.set_attr_lock_state(objects, lock_state=lock_state)
 
     def selected(func: Callable) -> Callable:
         """A decorator to pass the current selection to the first parameter if None is given."""
@@ -84,60 +202,14 @@ class CoreUtils(ptk.HelpMixin):
             if not mesh_nodes:
                 raise ValueError("No valid Maya nodes provided.")
 
-            parent, temp_null = CoreUtils.prepare_reparent(mesh_nodes)
-
-            try:
+            with CoreUtils._temp_reparent(mesh_nodes) as context:
                 if instance:
-                    result_node = func(instance, *node_args, **kwargs)
+                    context.result = func(instance, *node_args, **kwargs)
                 else:
-                    result_node = func(*node_args, **kwargs)
-            except Exception as e:  # Handle exception and perform necessary cleanup
-                CoreUtils.finalize_reparent(None, parent, temp_null)
-                raise e
-
-            CoreUtils.finalize_reparent(result_node, parent, temp_null)
-
-            return result_node
+                    context.result = func(*node_args, **kwargs)
+                return context.result
 
         return wrapped
-
-    @staticmethod
-    def prepare_reparent(
-        nodes: List[object],
-    ) -> Tuple[Optional[object], Optional[object]]:
-        """Prepare reparenting by using a temporary null if needed."""
-        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
-        temp_null = None
-
-        # Determine if any of the nodes are the only child of their parent
-        for node in nodes:
-            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
-            if node_parent:
-                children = pm.listRelatives(node_parent, children=True) or []
-                if len(children) == 1:
-                    temp_null = pm.createNode("transform", n="tempTempNull")
-                    pm.parent(temp_null, node_parent)
-                    break
-
-        return parent, temp_null
-
-    @staticmethod
-    def finalize_reparent(
-        new_node: Optional[object],
-        parent: Optional[object],
-        temp_null: Optional[object],
-    ) -> None:
-        """Clean up reparenting, handling the parent and temporary null."""
-        if parent and new_node:
-            try:
-                pm.parent(new_node, parent)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to re-parent combined mesh: {e}")
-        if temp_null:
-            try:
-                pm.delete(temp_null)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
     def wrap_control(control_name, container):
@@ -349,40 +421,6 @@ class CoreUtils(ptk.HelpMixin):
         for p, v in parameters.items():
             cmd(node, **{p: v})
 
-    @staticmethod
-    def calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
-        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
-
-        Parameters:
-            mesh1: The first mesh to compare.
-            mesh2: The second mesh to compare.
-
-        Returns:
-            A float representing the similarity score, where higher means more similar.
-        """
-        # Get bounding box sizes
-        bbox1 = mesh1.getBoundingBox()
-        bbox2 = mesh2.getBoundingBox()
-
-        # Calculate volume of bounding boxes
-        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
-        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
-
-        # Get vertex counts
-        vertex_count1 = len(mesh1.getVertices())
-        vertex_count2 = len(mesh2.getVertices())
-
-        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
-        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
-        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
-            vertex_count1, vertex_count2
-        )
-
-        # Combine similarities (here, equally weighted for simplicity)
-        similarity_score = (volume_similarity + vertex_similarity) / 2
-
-        return similarity_score
-
     @classmethod
     def build_mesh_similarity_mapping(
         cls,
@@ -414,7 +452,7 @@ class CoreUtils(ptk.HelpMixin):
             highest_similarity = 0
             best_match = None
             for target_child in target_group:
-                similarity = cls.calculate_mesh_similarity(source_child, target_child)
+                similarity = cls._calculate_mesh_similarity(source_child, target_child)
                 if similarity > highest_similarity and similarity >= tolerance:
                     highest_similarity = similarity
                     best_match = target_child
@@ -425,85 +463,106 @@ class CoreUtils(ptk.HelpMixin):
         return mapping
 
     @staticmethod
-    def get_selected_channels():
-        """Get any attributes (channels) that are selected in the channel box.
+    def filter_attributes(
+        attributes: List[str],
+        exclude: Union[str, List[str], None] = None,
+        include: Union[str, List[str], None] = None,
+        case_sensitive: bool = False,
+    ) -> List[str]:
+        """Filter attribute names based on inclusion and/or exclusion patterns.
 
-        Returns:
-            (str) list of any selected attributes as strings. (ie. ['tx', ry', 'sz'])
-        """
-        channelBox = pm.mel.eval(
-            "global string $gChannelBoxName; $temp=$gChannelBoxName;"
-        )  # fetch maya's main channelbox
-        attrs = pm.channelBox(channelBox, q=True, sma=True)
-
-        if attrs is None:
-            attrs = []
-        return attrs
-
-    @staticmethod
-    def get_channel_box_attributes(
-        objects,
-        *args,
-        include_locked=False,
-        include_nonkeyable=False,
-        include_object_name=False,
-    ):
-        """Retrieves the current values of specified attributes from the channel box for given objects.
+        This is a general-purpose utility for filtering attribute lists that can be used
+        throughout the toolkit. Supports both exact matching and pattern matching.
 
         Parameters:
-            objects (str/obj/list): Objects to query the attributes of.
-            *args (str, optional): Specific attribute(s) to query. If omitted, 'selected' attributes will be queried.
-            include_locked (bool, optional): Includes locked attributes in the results.
-            include_nonkeyable (bool, optional): Includes non-keyable attributes in the results.
-            include_object_name (bool, optional): Returns full attribute names including the object name if True.
+            attributes (list): List of attribute names to filter.
+            exclude (str/list, optional): Attribute name(s) or pattern(s) to exclude.
+                Can be exact names or patterns with wildcards (* and ?).
+                E.g., 'visibility', ['visibility', 'translate*'], or ['*X', '*Y'].
+            include (str/list, optional): Attribute name(s) or pattern(s) to include.
+                If specified, only attributes matching these patterns will be kept.
+                Can be exact names or patterns with wildcards (* and ?).
+            case_sensitive (bool): Whether to use case-sensitive matching. Default is False.
 
         Returns:
-            dict: Dictionary with attribute names as keys and their current values as values.
+            list: Filtered list of attribute names.
 
         Example:
-            selected_attributes = get_channel_box_attributes(objects, 'translateX', 'rotateY', include_object_name=True)
-            selected_attributes = get_channel_box_attributes(objects, include_object_name=False)
-        """
-        channel_box = pm.melGlobals["gChannelBoxName"]
-        attributes_dict = {}
+            >>> attrs = ['translateX', 'translateY', 'translateZ', 'rotateX', 'visibility']
 
-        for obj in pm.ls(objects):
-            # Determine the attributes to query
-            if args:
-                attrs = list(args)
+            # Exclude specific attributes
+            >>> filter_attributes(attrs, exclude='visibility')
+            ['translateX', 'translateY', 'translateZ', 'rotateX']
+
+            # Exclude using patterns
+            >>> filter_attributes(attrs, exclude='translate*')
+            ['rotateX', 'visibility']
+
+            # Include only specific patterns
+            >>> filter_attributes(attrs, include='translate*')
+            ['translateX', 'translateY', 'translateZ']
+
+            # Combine include and exclude
+            >>> filter_attributes(attrs, include='translate*', exclude='*Z')
+            ['translateX', 'translateY']
+
+            # Multiple patterns
+            >>> filter_attributes(attrs, exclude=['visibility', '*Z'])
+            ['translateX', 'translateY', 'rotateX']
+        """
+        import fnmatch
+
+        if not attributes:
+            return []
+
+        # Normalize exclude parameter to a list
+        if exclude is None:
+            exclude_patterns = []
+        elif isinstance(exclude, str):
+            exclude_patterns = [exclude]
+        else:
+            exclude_patterns = list(exclude)
+
+        # Normalize include parameter to a list
+        if include is None:
+            include_patterns = []
+        elif isinstance(include, str):
+            include_patterns = [include]
+        else:
+            include_patterns = list(include)
+
+        # Helper function for pattern matching
+        def matches_pattern(attr_name: str, pattern: str) -> bool:
+            """Check if attribute name matches the pattern."""
+            if not case_sensitive:
+                attr_name = attr_name.lower()
+                pattern = pattern.lower()
+
+            # Use fnmatch for wildcard support
+            if "*" in pattern or "?" in pattern:
+                return fnmatch.fnmatch(attr_name, pattern)
             else:
-                # Default to selected attributes if none are specified
-                attrs = pm.channelBox(channel_box, query=True, sma=True) or []
+                # Exact match
+                return attr_name == pattern
 
-            # Append locked and nonkeyable attributes if requested
-            if include_locked:
-                attrs += pm.listAttr(obj, locked=True)
-            if include_nonkeyable:
-                attrs += pm.listAttr(obj, keyable=False)
+        # Filter attributes
+        filtered = []
+        for attr in attributes:
+            # Check include patterns first (if specified)
+            if include_patterns:
+                if not any(
+                    matches_pattern(attr, pattern) for pattern in include_patterns
+                ):
+                    continue
 
-            # Fetch attribute values
-            for attr in attrs:
-                attr_name = f"{obj}.{attr}" if include_object_name else attr
-                value = pm.getAttr(f"{obj}.{attr}")
-                attributes_dict[attr_name] = value
+            # Check exclude patterns
+            if exclude_patterns:
+                if any(matches_pattern(attr, pattern) for pattern in exclude_patterns):
+                    continue
 
-        return attributes_dict
+            filtered.append(attr)
 
-    @staticmethod
-    def clear_scrollfield_reporters():
-        """Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
-
-        This function is useful for cleaning up the script output display in Maya's UI,
-        particularly before executing scripts or operations that generate a lot of output.
-        It iterates over all cmdScrollFieldReporter objects and clears them, ensuring a clean
-        slate for viewing new script or command output.
-        """
-        # Get a list of all UI objects of type "cmdScrollFieldReporter"
-        reporters = pm.lsUI(type="cmdScrollFieldReporter")
-
-        # If any reporters are found, clear them
-        for reporter in reporters:
-            pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
+        return filtered
 
     @staticmethod
     def get_mel_globals(keyword=None, ignore_case=True):
@@ -519,6 +578,172 @@ class CoreUtils(ptk.HelpMixin):
             )
         ]
         return variables
+
+    @staticmethod
+    def reorder_objects(objects=None, method="name", reverse=False):
+        """Reorder a given set of objects using various sorting methods.
+
+        Parameters:
+            objects (str, list, pm.PyNode, None): Objects to reorder.
+                Can be a string, list, PyNode, or None. If None, uses current selection.
+            method (str): Sorting method to use. Options:
+                'name' - Sort alphabetically by object name
+                'hierarchy' - Sort by hierarchy depth (root to leaf)
+                'x', 'y', 'z' - Sort by position along specified axis
+                'distance' - Sort by distance from origin
+                'volume' - Sort by bounding box volume
+                'vertex_count' - Sort by number of vertices
+                'random' - Randomize order
+                'creation_time' - Sort by creation time (oldest to newest)
+            reverse (bool): If True, reverse the sorting order. Default is False.
+
+        Returns:
+            list: List of reordered PyMEL objects
+
+        Example:
+            # Sort selected objects by name
+            sorted_objs = reorder_objects()
+
+            # Sort specific objects by Y position, reversed
+            sorted_objs = reorder_objects(['pCube1', 'pSphere1', 'pCylinder1'], method='y', reverse=True)
+
+            # Sort by hierarchy depth
+            sorted_objs = reorder_objects(method='hierarchy')
+
+            # Randomize selection order
+            sorted_objs = reorder_objects(method='random')
+        """
+        # Get objects - use pm.ls to handle strings, lists, etc.
+        if objects is None:
+            obj_list = pm.ls(selection=True, flatten=True)
+            if not obj_list:
+                pm.warning("No objects provided and nothing selected.")
+                return []
+        else:
+            obj_list = pm.ls(objects, flatten=True)
+
+        if not obj_list:
+            pm.warning("No valid objects to reorder.")
+            return []
+
+        # Sort based on method
+        if method == "name":
+            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+
+        elif method == "hierarchy":
+            # Sort by hierarchy depth (number of parents)
+            def get_hierarchy_depth(obj):
+                depth = 0
+                parent = obj.getParent()
+                while parent:
+                    depth += 1
+                    parent = parent.getParent()
+                return depth
+
+            sorted_objs = sorted(obj_list, key=get_hierarchy_depth)
+
+        elif method in ["x", "y", "z"]:
+            # Sort by position along specified axis
+            axis_map = {"x": 0, "y": 1, "z": 2}
+            axis_index = axis_map[method]
+
+            def get_position(obj):
+                try:
+                    # Try to get world space translation
+                    if hasattr(obj, "getTranslation"):
+                        return obj.getTranslation(space="world")[axis_index]
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_position)
+
+        elif method == "distance":
+            # Sort by distance from origin
+            def get_distance(obj):
+                try:
+                    if hasattr(obj, "getTranslation"):
+                        pos = obj.getTranslation(space="world")
+                        return (pos.x**2 + pos.y**2 + pos.z**2) ** 0.5
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_distance)
+
+        elif method == "volume":
+            # Sort by bounding box volume
+            def get_volume(obj):
+                try:
+                    if hasattr(obj, "getBoundingBox"):
+                        bbox = obj.getBoundingBox(space="world")
+                        width = bbox.width()
+                        height = bbox.height()
+                        depth = bbox.depth()
+                        return width * height * depth
+                    else:
+                        return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_volume)
+
+        elif method == "vertex_count":
+            # Sort by number of vertices
+            def get_vertex_count(obj):
+                try:
+                    # Try to get shape node if this is a transform
+                    shapes = []
+                    if hasattr(obj, "getShapes"):
+                        shapes = obj.getShapes()
+                    elif obj.nodeType() in ["mesh", "nurbsCurve", "nurbsSurface"]:
+                        shapes = [obj]
+
+                    if shapes:
+                        # Get vertex count from first shape
+                        shape = shapes[0]
+                        if shape.nodeType() == "mesh":
+                            return shape.numVertices()
+                        elif shape.nodeType() == "nurbsCurve":
+                            return shape.numCVs()
+                        elif shape.nodeType() == "nurbsSurface":
+                            return shape.numCVsInU() * shape.numCVsInV()
+                    return 0
+                except:
+                    return 0
+
+            sorted_objs = sorted(obj_list, key=get_vertex_count)
+
+        elif method == "random":
+            # Randomize order
+            import random
+
+            sorted_objs = list(obj_list)
+            random.shuffle(sorted_objs)
+
+        elif method == "creation_time":
+            # Sort by creation time (oldest to newest)
+            def get_creation_time(obj):
+                try:
+                    # Use the object's UUID as a proxy for creation order
+                    # Objects created earlier typically have lower UUID values
+                    return obj.uuid()
+                except:
+                    return ""
+
+            sorted_objs = sorted(obj_list, key=get_creation_time)
+
+        else:
+            pm.warning(f"Unknown sorting method: '{method}'. Using 'name' instead.")
+            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+
+        # Reverse if requested
+        if reverse:
+            sorted_objs = sorted_objs[::-1]
+
+        return sorted_objs
 
 
 # --------------------------------------------------------------------------------------------

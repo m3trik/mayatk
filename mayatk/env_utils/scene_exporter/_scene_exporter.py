@@ -389,7 +389,7 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.menu.add(
             self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb001",
+            setObjectName="cmb003",  # Renamed from cmb001 to avoid collision
             add=self._log_level_options,
             setCurrentIndex=1,  # Default to INFO
             setToolTip="Set the log level.",
@@ -400,31 +400,31 @@ class SceneExporterSlots(SceneExporter):
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Set the preset directory.",
                 setText="Set Preset Directory",
                 setObjectName="b005",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Open the preset directory.",
                 setText="Open Preset Directory",
                 setObjectName="b007",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Add an FBX export preset.",
                 setText="Add New Preset",
                 setObjectName="b003",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Delete the current FBX export preset.",
                 setText="Delete Current Preset",
                 setObjectName="b004",
             )
-            widget.menu.add(
+            widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Open the FBX export preset editor.",
                 setText="Edit Preset",
@@ -460,20 +460,20 @@ class SceneExporterSlots(SceneExporter):
 
     def txt000_init(self, widget) -> None:
         """Init Output Directory"""
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QPushButton",
             setToolTip="Set the output directory.",
             setText="Set Output Directory",
             setObjectName="b010",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QPushButton",
             setToolTip="Open the output directory.",
             setText="Open Output Directory",
             setObjectName="b006",
         )
         # Add the ComboBox for recent output directories
-        widget.menu.add(
+        widget.option_box.menu.add(
             self.sb.registered_widgets.ComboBox,
             setToolTip="Select from the last 10 output directories.",
             setObjectName="cmb004",
@@ -481,17 +481,21 @@ class SceneExporterSlots(SceneExporter):
         # Load previously saved output directories
         prev_output_dirs = self.get_recent_output_dirs()
         # Add directories to ComboBox with a unified method
-        self.ui.txt000.menu.cmb004.add(prev_output_dirs, header="Recent Output Dirs:")
+        # Access via option_box.menu (not standalone menu)
+        self.ui.txt000.option_box.menu.cmb004.add(
+            prev_output_dirs, header="Recent Output Dirs:"
+        )
 
     def txt001_init(self, widget) -> None:
         """Init Output Name"""
-        widget.menu.add(
+        widget.option_box.clear_option = True
+        widget.option_box.menu.add(
             "QCheckBox",
             setToolTip="Add a timestamp suffix to the output filename.",
             setText="Timestamp",
             setObjectName="chk004",
         )
-        widget.menu.add(
+        widget.option_box.menu.add(
             "QLineEdit",
             setToolTip=(
                 "Regex pattern for formatting the output name.\n\n"
@@ -505,10 +509,9 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
-    def b001_init(self, widget) -> None:
-        """Auto-generate Export Settings UI from task definitions."""
-        widget.menu.setTitle("TASKS:")
-        widget.menu.mode = "popup"
+    def cmb001_init(self, widget) -> None:
+        """Auto-generate Export Settings UI from task definitions using WidgetComboBox."""
+        widget_items = []
 
         for task_name, params in self.task_manager.task_definitions.items():
             widget_type = params.pop("widget_type", "QCheckBox")
@@ -521,18 +524,22 @@ class SceneExporterSlots(SceneExporter):
                 if widget_class is None:
                     raise ValueError(f"Unknown widget type: {widget_type}")
 
-            # Create the widget
-            created_widget = widget.menu.add(widget_class)
-
+            # Create the widget instance
+            created_widget = widget_class()
             self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
-    def b002_init(self, widget) -> None:
-        """Auto-generate Check Settings UI from check definitions."""
-        widget.menu.setTitle("VALIDATION CHECKS:")
-        widget.menu.mode = "popup"
+            # Add as (widget, label) tuple for the combo box
+            widget_items.append((created_widget, task_name))
+
+        # Add all widgets to the combo box with a header
+        widget.add(widget_items, header="Tasks", clear=True)
+
+    def cmb002_init(self, widget) -> None:
+        """Auto-generate Check Settings UI from check definitions using WidgetComboBox."""
+        widget_items = []
 
         for check_name, params in self.task_manager.check_definitions.items():
-            widget_type = params.pop("widget_type", "QCheckBox")
+            widget_type = params.get("widget_type", "QCheckBox")
             object_name = self.sb.convert_to_legal_name(check_name)
 
             # Dynamically resolve the widget class
@@ -542,10 +549,20 @@ class SceneExporterSlots(SceneExporter):
                 if widget_class is None:
                     raise ValueError(f"Unknown widget type: {widget_type}")
 
-            # Create the widget
-            created_widget = widget.menu.add(widget_class)
+            # Create the widget instance
+            created_widget = widget_class()
 
-            self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
+            # Create a copy of params without widget_type for set_attributes
+            params_copy = {k: v for k, v in params.items() if k != "widget_type"}
+            self.ui.set_attributes(
+                created_widget, setObjectName=object_name, **params_copy
+            )
+
+            # Add as (widget, label) tuple for the combo box
+            widget_items.append((created_widget, check_name))
+
+        # Add all widgets to the combo box with a header
+        widget.add(widget_items, header="Validation Checks", clear=True)
 
     def b000(self) -> None:
         """Export."""
@@ -606,26 +623,35 @@ class SceneExporterSlots(SceneExporter):
         self.logger.debug(f"Task parameters: {task_params}")
         self.logger.debug(f"Check parameters: {check_params}")
 
-        export_visible = task_params.pop("export_visible_objects", True)
+        export_mode = task_params.pop("export_visible_objects", "visible")
 
-        objects_to_export = lambda: (
-            DisplayUtils.get_visible_geometry(
-                consider_templated_visible=False, inherit_parent_visibility=True
-            )
-            if export_visible
-            else pm.selected()
-        )
+        def objects_to_export():
+            if export_mode == "visible":
+                return DisplayUtils.get_visible_geometry(
+                    consider_templated_visible=False, inherit_parent_visibility=True
+                )
+            elif export_mode == "selected":
+                return pm.selected()
+            elif export_mode == "all":
+                return pm.ls(transforms=True, geometry=True)
+            else:
+                # Default to visible if unknown mode
+                return DisplayUtils.get_visible_geometry(
+                    consider_templated_visible=False, inherit_parent_visibility=True
+                )
 
         export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset_file=self.ui.cmb000.currentData(),
-            export_visible=export_visible,
+            export_visible=(
+                export_mode != "selected"
+            ),  # True unless export mode is "selected"
             output_name=self.ui.txt001.text(),
             name_regex=self.ui.txt002.text(),
             timestamp=self.ui.chk004.isChecked(),
             create_log_file=self.ui.b011.isChecked(),
-            log_level=self.ui.cmb001.currentData(),
+            log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
             tasks={**task_params, **check_params},  # Pass both to perform_export
         )
 
@@ -749,9 +775,11 @@ class SceneExporterSlots(SceneExporter):
             unique_dirs = unique_dirs[-10:]
             self.ui.settings.setValue("prev_output_dirs", unique_dirs)
 
-            # Optionally update the ComboBox
-            self.ui.txt000.menu.cmb004.clear()
-            self.ui.txt000.menu.cmb004.add(unique_dirs, header="Recent Output Dirs:")
+            # Optionally update the ComboBox (access via option_box.menu)
+            self.ui.txt000.option_box.menu.cmb004.clear()
+            self.ui.txt000.option_box.menu.cmb004.add(
+                unique_dirs, header="Recent Output Dirs:"
+            )
 
 
 # -----------------------------------------------------------------------------

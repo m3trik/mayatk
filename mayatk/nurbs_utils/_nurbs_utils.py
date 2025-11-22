@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, components
+from mayatk.core_utils import CoreUtils, components, MashToolkit
 from mayatk.xform_utils import XformUtils
 
 
@@ -196,12 +196,11 @@ class NurbsUtils(ptk.HelpMixin):
         """
         # pm.undoInfo(openChunk=1)
         # create a MASH network
-        import MASH.api as mapi
-
-        mashNW = mapi.Network()
-        mashNW.MTcreateNetwork(
-            start, geometry=geometry, hideOnCreate=False
-        )  # mashtls module (derived from 'createNetwork')
+        mashNW, _waiter, instNode, distNode = MashToolkit.create_network(
+            objects=start,
+            geometry=geometry,
+            hideOnCreate=False,
+        )
 
         curveNode = pm.ls(mashNW.addNode("MASH_Curve").name)[0]
         pm.connectAttr(path.worldSpace[0], curveNode.inCurves[0], force=1)
@@ -213,14 +212,10 @@ class NurbsUtils(ptk.HelpMixin):
         pm.setAttr(curveNode.timeStep, 1)
         pm.setAttr(curveNode.curveLengthAffectsSpeed, 1)
 
-        distNode = pm.ls(mashNW.distribute)[0]
         pm.setAttr(distNode.pointCount, count)
         pm.setAttr(distNode.amplitudeX, 0)
 
-        instNode = pm.ls(mashNW.instancer)[0]
-        baked_curves = mashNW.MTbakeInstancer(
-            instNode
-        )  # mashtls module (derived from 'MASHbakeInstancer')
+        baked_curves = MashToolkit.bake_instancer(mashNW, instNode)
 
         result = [start]
         for curve in reversed(baked_curves):

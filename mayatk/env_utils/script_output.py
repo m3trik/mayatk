@@ -48,8 +48,15 @@ class ScriptOutput(QtWidgets.QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setFontFamily("Courier New")
+        # Ensure the widget reliably gets/keeps focus and supports selection
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
+
+        # Set up syntax highlighting
         rules = [
             ScriptHighlightRule((90, 90, 90), r"(//|#).+"),  # comment
             ScriptHighlightRule((205, 200, 120), r".*\bWarning\b.*"),  # warning
@@ -59,28 +66,74 @@ class ScriptOutput(QtWidgets.QTextEdit):
         ]
         self.highlighter = ScriptHighlighter(self.document(), rules)
 
-    def _context_menu(self, pos: QtCore.QPoint):
-        menu = QtWidgets.QMenu(self)
-        menu.addAction("Clear", self.clear)
-        menu.addAction("Copy", self.copy)
+    def keyPressEvent(self, event: QtGui.QKeyEvent):
+        """Let Qt handle all key events including copy"""
+        # Let parent handle all key events - Qt's built-in copy should work
+        super().keyPressEvent(event)
 
-        # Always ensure Script Editor is present
+    def _clear_script_editor(self):
+        """Clear both the widget and the actual Maya Script Editor output"""
+        # Clear this widget
+        self.clear()
+
+        # Clear the actual Maya Script Editor
+        try:
+            pm.mel.eval("cmdScrollFieldReporter -edit -clear cmdScrollFieldReporter1;")
+        except Exception as e:
+            print(f"Failed to clear Maya Script Editor: {e}")
+
+    def _context_menu(self, pos: QtCore.QPoint):
+        # Create a simple context menu
+        menu = QtWidgets.QMenu(self)
+
+        menu.addAction("Clear", self._clear_script_editor)
+        menu.addAction("Copy", self.copy)  # Qt's built-in copy
+
+        menu.addSeparator()  # Always ensure Script Editor is present
         ws_name = "scriptEditorPanel1Window"
         if not pm.workspaceControl(ws_name, exists=True):
             pm.mel.eval("ScriptEditor;")
             pm.workspaceControl(ws_name, edit=True, visible=True)
 
-        echo_all = bool(pm.scriptEditorInfo(query=True, echoAllCommands=True))
+        # Get current echo state using MEL for more reliability
+        try:
+            # Use the correct MEL command for echo all commands
+            echo_all = bool(pm.mel.eval("commandEcho -query -state"))
+        except Exception:
+            echo_all = False
+
         echo_action = menu.addAction("Echo All Commands")
         echo_action.setCheckable(True)
         echo_action.setChecked(echo_all)
 
         def on_toggled(checked):
-            pm.scriptEditorInfo(echoAllCommands=checked)
-            updated = bool(pm.scriptEditorInfo(query=True, echoAllCommands=True))
-            # Set the checkbox explicitly in case Maya lags updating
-            echo_action.setChecked(updated)
-            print(f"Echo All Commands is now {'ON' if updated else 'OFF'}.")
+            try:
+                # Use MEL commands for more reliable operation
+                if checked:
+                    pm.mel.eval("commandEcho -state on")
+                else:
+                    pm.mel.eval("commandEcho -state off")
+
+                print(f"Echo All Commands: {'ON' if checked else 'OFF'}")
+
+                # Verify the change took effect
+                actual_state = bool(pm.mel.eval("commandEcho -query -state"))
+
+                if actual_state != checked:
+                    print(
+                        f"Warning: Echo All Commands may not have updated correctly. Current state: {'ON' if actual_state else 'OFF'}"
+                    )
+                    # Update checkbox to reflect actual state
+                    echo_action.blockSignals(True)
+                    echo_action.setChecked(actual_state)
+                    echo_action.blockSignals(False)
+
+            except Exception as e:
+                print(f"Failed to toggle Echo All Commands: {e}")
+                # Revert checkbox state on failure
+                echo_action.blockSignals(True)
+                echo_action.setChecked(not checked)
+                echo_action.blockSignals(False)
 
         echo_action.toggled.connect(on_toggled)
         menu.exec(self.mapToGlobal(pos))

@@ -10,6 +10,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.display_utils import DisplayUtils
 from mayatk.core_utils import preview
+from mayatk.xform_utils import XformUtils
 
 
 class DuplicateLinear:
@@ -22,6 +23,8 @@ class DuplicateLinear:
         scale=(1, 1, 1),
         weight_bias=0.5,
         weight_curve=4,
+        pivot="object",
+        calculation_mode="weighted",
     ):
         weight_factor = (
             2 * (weight_bias - 0.5) if weight_bias >= 0.5 else 2 * (0.5 - weight_bias)
@@ -37,74 +40,49 @@ class DuplicateLinear:
             fn_transform = om.MFnTransform(mobj)
             original_matrix = fn_transform.transformation()
 
+            # Get the pivot point for transformations
+            pivot_pos = XformUtils.get_operation_axis_pos(node, pivot)
+            pivot_point = om.MPoint(pivot_pos[0], pivot_pos[1], pivot_pos[2])
+
             for i in range(num_copies):
                 dup = pm.instance(node)[0]
 
                 # After applying transformations, add the duplicate to the isolation set
                 DisplayUtils.add_to_isolation_set(dup)
 
-                x = (i + 1) / num_copies
-                f_x = ptk.lerp(
-                    x,
-                    (
-                        x**weight_curve
-                        if weight_bias >= 0.5
-                        else 1 - (1 - x) ** weight_curve
-                    ),
-                    weight_factor,
+                # Calculate the transformation factor using the selected method
+                f_x = ptk.ProgressionCurves.calculate_progression_factor(
+                    i, num_copies, weight_bias, weight_curve, calculation_mode
                 )
 
-                # Create new MTransformationMatrix object
-                new_matrix = om.MTransformationMatrix(original_matrix)
+                # Calculate transformations using PyMel (avoids OpenMaya compatibility issues)
+                translation_vector = [translate[j] * f_x for j in range(3)]
+                rotation_values = [rotate[j] * f_x for j in range(3)]
+                scale_factors = [(abs(s) ** f_x) * (-1 if s < 0 else 1) for s in scale]
 
-                # Calculate new transformations
-                new_translation = om.MVector(*translate) * f_x
-                new_rotation = om.MEulerRotation(
-                    rotate[0] * f_x, rotate[1] * f_x, rotate[2] * f_x
+                # Apply translation
+                current_pos = pm.xform(
+                    dup, query=True, worldSpace=True, translation=True
                 )
-
-                # Handle potential negative scale values
-                new_scale = [(abs(s) ** f_x) * (-1 if s < 0 else 1) for s in scale]
-
-                # Apply transformations
-                new_matrix.setTranslation(new_translation, om.MSpace.kTransform)
-                new_matrix.setRotation(new_rotation)
-                new_matrix.setScale(new_scale, om.MSpace.kTransform)
-
-                # Get existing transformation of duplicate
-                sel_list.add(str(dup))
-                mobj_dup = sel_list.getDependNode(1)
-                fn_transform_dup = om.MFnTransform(mobj_dup)
-                existing_matrix = fn_transform_dup.transformation()
-
-                # Extract existing transformation components
-                existing_translation = existing_matrix.translation(om.MSpace.kTransform)
-                existing_rotation = existing_matrix.rotation()
-                existing_scale = existing_matrix.scale(om.MSpace.kTransform)
-
-                # Combine existing and new transformations
-                combined_translation = existing_translation + new_translation
-                combined_rotation = om.MEulerRotation(
-                    existing_rotation.x + new_rotation.x,
-                    existing_rotation.y + new_rotation.y,
-                    existing_rotation.z + new_rotation.z,
-                )
-                combined_scale = [
-                    existing * new for existing, new in zip(existing_scale, new_scale)
+                new_translation = [
+                    current_pos[j] + translation_vector[j] for j in range(3)
                 ]
+                pm.xform(dup, worldSpace=True, translation=new_translation)
 
-                # Create a new MTransformationMatrix for the combined transformation
-                combined_matrix = om.MTransformationMatrix(existing_matrix)
-                combined_matrix.setTranslation(
-                    combined_translation, om.MSpace.kTransform
+                # Apply rotation (relative to current rotation)
+                current_rotation = pm.xform(
+                    dup, query=True, worldSpace=True, rotation=True
                 )
-                combined_matrix.setRotation(combined_rotation)
-                combined_matrix.setScale(combined_scale, om.MSpace.kTransform)
+                new_rotation = [
+                    current_rotation[j] + rotation_values[j] for j in range(3)
+                ]
+                pm.xform(dup, worldSpace=True, rotation=new_rotation)
 
-                # Apply combined transformation
-                fn_transform_dup.setTransformation(combined_matrix)
+                # Apply scale (multiplicative)
+                current_scale = pm.xform(dup, query=True, worldSpace=True, scale=True)
+                new_scale = [current_scale[j] * scale_factors[j] for j in range(3)]
+                pm.xform(dup, worldSpace=True, scale=new_scale)
 
-                sel_list.remove(1)
                 copies.append(dup)
 
             originals_to_copies[node] = copies
@@ -129,6 +107,20 @@ class DuplicateLinearSlots:
             "valueChanged",
             self.preview.refresh,
         )
+        # Connect pivot combobox to preview refresh
+        self.sb.connect_multi(
+            self.ui,
+            "cmb000",
+            "currentIndexChanged",
+            self.preview.refresh,
+        )
+        # Connect calculation mode combobox to preview refresh
+        self.sb.connect_multi(
+            self.ui,
+            "cmb001",
+            "currentIndexChanged",
+            self.preview.refresh,
+        )
         # Connect valueChanged signals to toggle_weight_ui using connect_multi
         self.sb.connect_multi(
             self.ui,
@@ -138,6 +130,30 @@ class DuplicateLinearSlots:
         )
         # Initialize the UI state
         self.toggle_weight_ui()
+
+    @staticmethod
+    def _resolve_pivot(pivot_index: int) -> str:
+        """Resolve pivot string from UI dropdown index."""
+        pivot_mapping = {
+            0: "object",  # Pivot: Object
+            1: "world",  # Pivot: World
+            2: "center",  # Pivot: Bounding Box (center)
+        }
+        return pivot_mapping.get(pivot_index, "object")
+
+    @staticmethod
+    def _resolve_calculation_mode(mode_index: int) -> str:
+        """Resolve calculation mode string from UI dropdown index."""
+        mode_mapping = {
+            0: "linear",  # Linear - even spacing
+            1: "ease_in",  # Ease In - accelerating spacing
+            2: "ease_out",  # Ease Out - decelerating spacing
+            3: "ease_in_out",  # Ease In-Out - S-curve spacing
+            4: "exponential",  # Exponential - rapid acceleration
+            5: "smooth_step",  # Smooth Step - alternative S-curve
+            6: "weighted",  # Weighted - original with bias control
+        }
+        return mode_mapping.get(mode_index, "linear")
 
     def toggle_weight_ui(self):
         """Disable weight UI components if rotate values are zero and scale values are one."""
@@ -173,6 +189,14 @@ class DuplicateLinearSlots:
         weight_bias = self.ui.s010.value()
         weight_curve = self.ui.s011.value()
 
+        # Get pivot from dropdown
+        pivot_index = self.ui.cmb000.currentIndex()
+        pivot = self._resolve_pivot(pivot_index)
+
+        # Get calculation mode from dropdown
+        mode_index = self.ui.cmb001.currentIndex()
+        calculation_mode = self._resolve_calculation_mode(mode_index)
+
         self.copies = DuplicateLinear.duplicate_linear(
             objects,
             num_copies,
@@ -181,6 +205,8 @@ class DuplicateLinearSlots:
             scale,
             weight_bias,
             weight_curve,
+            pivot,
+            calculation_mode,
         )
 
 
