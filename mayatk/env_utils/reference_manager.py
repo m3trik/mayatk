@@ -423,7 +423,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         is_current_scene = norm_fp == current_scene
 
         if is_current_scene:
-            # Disable the item completely to prevent selection and referencing
+            # Disable the item and set a tooltip
             item.setFlags(
                 item.flags()
                 & ~(
@@ -441,7 +441,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 item.flags()
                 | (self.sb.QtCore.Qt.ItemIsSelectable | self.sb.QtCore.Qt.ItemIsEnabled)
             )
-            item.setToolTip(f"Available for referencing\n{file_path}")
+            # Tooltip is now handled by TableWidget default behavior
             # Reset styling
             font = item.font()
             font.setItalic(False)
@@ -974,7 +974,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
             widget.verticalHeader().setVisible(False)
-            widget.setAlternatingRowColors(True)
+            widget.setAlternatingRowColors(False)
             widget.setWordWrap(False)
 
             # Connect double-click FIRST to ensure it gets priority

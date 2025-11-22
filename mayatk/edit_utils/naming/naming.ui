@@ -9,15 +9,9 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>375</width>
-    <height>163</height>
-   </rect>
-  </property>
-  <property name="minimumSize">
-   <size>
     <width>300</width>
-    <height>0</height>
-   </size>
+    <height>164</height>
+   </rect>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
@@ -31,7 +25,7 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>200</width>
+     <width>300</width>
      <height>0</height>
     </size>
    </property>
