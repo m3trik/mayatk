@@ -228,10 +228,13 @@ class _AnimUtilsMixin:
         if not clamped:
             return None
 
-        if group_range is not None:
-            clamped = ptk.clamp_range(clamped[0], clamped[1], *group_range)
+        if group_mode == "per_object" or group_range is None:
+            return clamped
 
-        return clamped
+        clamped_group = ptk.clamp_range(
+            clamped[0], clamped[1], group_range[0], group_range[1]
+        )
+        return clamped_group if clamped_group else None
 
     @classmethod
     def _collect_scale_targets(
@@ -1258,22 +1261,48 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             return f"{value} fps {key.upper()}"
 
     @staticmethod
-    def set_current_frame(time=1, update=True, relative=False):
-        """Set the current frame on the timeslider.
+    def set_current_frame(
+        time: Optional[float] = None,
+        update: bool = True,
+        relative: bool = False,
+        snap_mode: Optional[str] = None,
+        invert_snap: bool = False,
+    ) -> float:
+        """Set the current frame on the timeslider with optional snapping.
 
         Parameters:
-        time (int): The desired frame number.
-        update (bool): Change the current time, but do not update the world. (default=True)
-        relative (bool): If True; the frame will be moved relative to
-                    it's current position using the frame value as a move amount.
-        Example:
-            set_current_frame(24, relative=True, update=1)
-        """
-        currentTime = 0
-        if relative:
-            currentTime = pm.currentTime(query=True)
+            time: The desired frame number or offset. If None, uses current time.
+            update: Change the current time, but do not update the world.
+            relative: If True, the frame will be moved relative to its current position.
+            snap_mode: Snapping mode ('nearest', 'preferred', 'aggressive', etc.).
+            invert_snap: If True, inverts the snapping direction (for preferred/aggressive modes).
 
-        pm.currentTime(currentTime + time, edit=True, update=update)
+        Returns:
+            float: The final time that was set.
+        """
+        current_time = pm.currentTime(query=True)
+
+        # Determine base target time
+        if time is None:
+            target_time = current_time
+        elif relative:
+            target_time = current_time + time
+        else:
+            target_time = time
+
+        # Apply snapping
+        if snap_mode and snap_mode.lower() != "none":
+            # Handle alias for aggressive
+            mode = snap_mode.lower()
+            if mode == "aggressive":
+                mode = "aggressive_preferred"
+
+            target_time = ptk.MathUtils.round_value(
+                target_time, mode=mode, invert=invert_snap
+            )
+
+        pm.currentTime(target_time, edit=True, update=update)
+        return target_time
 
     @staticmethod
     @CoreUtils.undoable
@@ -2426,13 +2455,21 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def invert_keys(time=None, relative=True, delete_original=False):
+    def invert_keys(
+        time=None,
+        relative=True,
+        delete_original=False,
+        mode="horizontal",
+        value_pivot=0.0,
+    ):
         """Invert keyframes around the last key, preferring selected keys but falling back to all keys.
 
         Parameters:
             time (int, optional): Desired start time for inverted keys. If None, uses current time.
             relative (bool): When True, time is treated as an offset from the last key. Defaults to True.
             delete_original (bool): Delete the source keyframes after inversion. Defaults to False.
+            mode (str): Inversion mode. "horizontal" (time), "vertical" (value), or "both". Defaults to "horizontal".
+            value_pivot (float): Pivot value for vertical inversion. Defaults to 0.0.
         """
 
         selection = pm.selected()
@@ -2482,11 +2519,22 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         inversion_point = max_time + time if relative else time
 
         keyframe_data: List[
-            Tuple[Any, float, float, float, Optional[float], Optional[float]]
+            Tuple[Any, float, float, float, float, Optional[float], Optional[float]]
         ] = []
         for node, key_time in key_entries:
             key_value = pm.keyframe(node, query=True, time=(key_time,), eval=True)[0]
-            inverted_time = inversion_point - (key_time - max_time)
+
+            # Calculate inverted time
+            if mode in ("horizontal", "both"):
+                inverted_time = inversion_point - (key_time - max_time)
+            else:
+                inverted_time = key_time
+
+            # Calculate inverted value
+            if mode in ("vertical", "both"):
+                inverted_value = value_pivot - (key_value - value_pivot)
+            else:
+                inverted_value = key_value
 
             in_angle = None
             out_angle = None
@@ -2504,7 +2552,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 pass
 
             keyframe_data.append(
-                (node, key_time, key_value, inverted_time, in_angle, out_angle)
+                (
+                    node,
+                    key_time,
+                    key_value,
+                    inverted_time,
+                    inverted_value,
+                    in_angle,
+                    out_angle,
+                )
             )
 
         for (
@@ -2512,24 +2568,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             key_time,
             key_value,
             inverted_time,
+            inverted_value,
             in_angle,
             out_angle,
         ) in keyframe_data:
-            pm.setKeyframe(node, time=inverted_time, value=key_value)
+            pm.setKeyframe(node, time=inverted_time, value=inverted_value)
 
             if in_angle is not None and out_angle is not None:
+                new_in = in_angle
+                new_out = out_angle
+
+                if mode == "horizontal":
+                    new_in = -out_angle
+                    new_out = -in_angle
+                elif mode == "vertical":
+                    new_in = -in_angle
+                    new_out = -out_angle
+                elif mode == "both":
+                    new_in = out_angle
+                    new_out = in_angle
+
                 pm.keyTangent(
                     node,
                     edit=True,
                     time=(inverted_time,),
-                    inAngle=-out_angle,
-                    outAngle=-in_angle,
+                    inAngle=new_in,
+                    outAngle=new_out,
                 )
 
         if delete_original:
             inverted_positions = {
                 (str(node), round(inverted_time, 3))
-                for node, key_time, key_value, inverted_time, in_angle, out_angle in keyframe_data
+                for node, key_time, key_value, inverted_time, inverted_value, in_angle, out_angle in keyframe_data
             }
 
             for (
@@ -2537,6 +2607,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 key_time,
                 key_value,
                 inverted_time,
+                inverted_value,
                 in_angle,
                 out_angle,
             ) in keyframe_data:
