@@ -26,7 +26,7 @@ setuptools.setup(
     ],
     packages=setuptools.find_packages(exclude=["pymel", "pymel.*"]),
     include_package_data=True,
-    install_requires=ptk.update_requirements(exc=["pymel", "qtpy"]),
+    install_requires=ptk.PackageManager.update_requirements(exc=["pymel", "qtpy"]),
     data_files=ptk.get_dir_contents(
         __package__,
         "filepath",
