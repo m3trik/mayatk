@@ -70,6 +70,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "light_utils/hdr_manager.ui",
             "slot": "light_utils.hdr_manager.HdrManagerSlots",
         },
+        "image_tracer": {
+            "ui": "nurbs_utils/image_tracer.ui",
+            "slot": "nurbs_utils.image_tracer.ImageTracerSlots",
+        },
         "mirror": {
             "ui": "edit_utils/mirror.ui",
             "slot": "edit_utils.mirror.MirrorSlots",

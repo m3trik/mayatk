@@ -1,8 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
+from pythontk.core_utils.module_resolver import bootstrap_package
 
-from mayatk.ui_utils._ui_utils import *
-
+bootstrap_package(globals())
 
 # --------------------------------------------------------------------------------------------
 

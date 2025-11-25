@@ -2,6 +2,7 @@
 # coding=utf-8
 
 from mayatk.nurbs_utils._nurbs_utils import *
+from mayatk.nurbs_utils.image_tracer import ImageTracer
 
 # --------------------------------------------------------------------------------------------
 
