@@ -31,10 +31,14 @@ class EnvUtils(ptk.HelpMixin):
 
         Parameters:
             key (str): The key corresponding to the specific Maya information to fetch.
-
+                       Can be a single key or multiple keys separated by '|'.
         Returns:
             The corresponding information based on the key, or an error message if the key is invalid.
+            If multiple keys are provided, returns a list of values in the order of keys.
         """
+        if "|" in key:
+            return [EnvUtils.get_env_info(k) for k in key.split("|")]
+
         available_keys = {
             "install_path": lambda: os.environ.get("MAYA_LOCATION"),
             "version": lambda: pm.about(version=True),

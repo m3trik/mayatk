@@ -37,6 +37,12 @@ class TexturePathEditorSlots:
         )
         widget.menu.add(
             self.sb.registered_widgets.Label,
+            setText="Open Source Images",
+            setToolTip="Open the project's sourceimages directory in the file explorer.",
+            setObjectName="open_source_images",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
             setText="Set Texture Directory",
             setToolTip="Set the texture file paths for all file nodes in the scene.\nPaths will be relative if they reside within the project's sourceimages directory.",
             setObjectName="lbl010",
@@ -65,6 +71,14 @@ class TexturePathEditorSlots:
             setToolTip="Select the texture path cells in the table associated with the currently selected objects in the scene.",
             setObjectName="lbl014",
         )
+
+    def open_source_images(self):
+        """Open the project's sourceimages directory."""
+        path = EnvUtils.get_env_info("sourceimages")
+        if path and os.path.exists(path):
+            os.startfile(path)
+        else:
+            pm.warning(f"Source images directory not found: {path}")
 
     def lbl010(self):
         """Set Texture Paths for All File Nodes."""
@@ -118,6 +132,9 @@ class TexturePathEditorSlots:
         MatUtils.move_texture_files(
             found_files=found_textures, new_dir=dest_dir, delete_old=False
         )
+
+        # Remap the file nodes to the new directory
+        MatUtils.remap_texture_paths(file_nodes=all_file_nodes, new_dir=dest_dir)
 
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
@@ -213,6 +230,12 @@ class TexturePathEditorSlots:
             )
             widget.menu.add(
                 "QPushButton",
+                setText="Show in Hypershade",
+                setObjectName="row_show_in_hypershade",
+                setToolTip="Graph the selected file node in the Hypershade editor.",
+            )
+            widget.menu.add(
+                "QPushButton",
                 setText="Delete File Node",
                 setObjectName="delete_file_node",
                 setToolTip="Delete the selected file node from Maya",
@@ -235,6 +258,7 @@ class TexturePathEditorSlots:
             _bind_menu_action("remap_to_relative", self.remap_to_relative)
             _bind_menu_action("select_material", self.select_material)
             _bind_menu_action("select_file_node", self.select_file_node)
+            _bind_menu_action("row_show_in_hypershade", self.row_show_in_hypershade)
             _bind_menu_action("delete_file_node", self.delete_file_node)
 
             # Set up Maya scriptJob to refresh on scene changes
@@ -320,20 +344,16 @@ class TexturePathEditorSlots:
     def _refresh_table_content(self, widget):
         """Refresh the table content with current scene data."""
         widget.clear()
+        # Optimization: Request 'shader' object directly to avoid re-creating PyNodes
         rows = MatUtils.get_file_nodes(
-            return_type="shaderName|path|fileNodeName|fileNode", raw=True
+            return_type="shader|shaderName|path|fileNodeName|fileNode", raw=True
         )
         if not rows:
-            rows = [("", "", "No file nodes found", None)]
+            rows = [(None, "", "", "No file nodes found", None)]
 
         formatted = []
-        for shader_name, path, file_node_name, file_node in rows:
-            shader_node = None
-            if shader_name:
-                try:
-                    shader_node = pm.PyNode(shader_name)
-                except (pm.MayaNodeError, TypeError):
-                    pass
+        for shader_node, shader_name, path, file_node_name, file_node in rows:
+            # shader_node is already a PyNode or None (from MatUtils)
             formatted.append(
                 [(shader_name, shader_node), path, (file_node_name, file_node)]
             )
@@ -400,15 +420,22 @@ class TexturePathEditorSlots:
 
     def setup_formatting(self, widget):
         source_root = EnvUtils.get_env_info("workspace")
+        path_cache = {}  # Cache for file existence checks
 
         def format_if_invalid(item, value, row, col, *_):
             path = str(value).strip()
-            abs_path = (
-                os.path.normpath(os.path.join(source_root, path))
-                if not os.path.isabs(path)
-                else os.path.normpath(path)
-            )
-            exists = os.path.exists(abs_path)
+
+            if path in path_cache:
+                exists, abs_path = path_cache[path]
+            else:
+                abs_path = (
+                    os.path.normpath(os.path.join(source_root, path))
+                    if not os.path.isabs(path)
+                    else os.path.normpath(path)
+                )
+                exists = os.path.exists(abs_path)
+                path_cache[path] = (exists, abs_path)
+
             widget.set_action_color(item, "reset" if exists else "invalid", row, col)
             item.setToolTip("" if exists else f"Missing file:\n{abs_path}")
 
@@ -597,6 +624,27 @@ class TexturePathEditorSlots:
             pm.displayInfo(f"Selected {len(nodes_to_select)} file node(s).")
         except Exception as e:
             pm.displayError(f"Failed to select file nodes: {str(e)}")
+
+    def row_show_in_hypershade(self, selection=None):
+        """Graph the selected file node in the Hypershade."""
+        contexts = self._get_selected_contexts(selection)
+        if not contexts:
+            return
+
+        nodes_to_graph = []
+        for context in contexts:
+            file_node = context.get("file_node") or (
+                context["file_nodes"][0] if context["file_nodes"] else None
+            )
+            if file_node:
+                nodes_to_graph.append(file_node)
+
+        if not nodes_to_graph:
+            return
+
+        pm.select(nodes_to_graph, r=True)
+        pm.mel.eval("HypershadeWindow;")
+        pm.mel.eval("hypershade -graphInputOutput;")
 
     def select_material(self, selection=None):
         """Select the materials associated with the selected rows."""

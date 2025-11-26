@@ -18,10 +18,49 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils, components
 from mayatk.node_utils import NodeUtils
+from mayatk.xform_utils.matrices import Matrices
 
 
-class XformUtils(ptk.HelpMixin):
-    """ """
+class XformUtilsInternals:
+    """Internal helper methods for XformUtils.
+
+    This class encapsulates implementation details that should not be part of
+    the public API. XformUtils inherits from this class to access these helpers.
+    """
+
+    @staticmethod
+    def _apply_freeze_deltas(obj, axes_to_freeze):
+        """Apply freeze transformations using Maya's native makeIdentity.
+
+        Maya's makeIdentity automatically preserves world-space pivot positions
+        by adjusting rotatePivotTranslate/scalePivotTranslate as needed.
+
+        Parameters:
+            obj: The transform node to freeze.
+            axes_to_freeze (set): Set of axes to freeze (e.g., {'tx', 'ty', 'tz', 'rx', ...}).
+
+        Returns:
+            bool: True if successful, False if skipped due to error.
+        """
+        freeze_t = not axes_to_freeze.isdisjoint({"tx", "ty", "tz"})
+        freeze_r = not axes_to_freeze.isdisjoint({"rx", "ry", "rz"})
+        freeze_s = not axes_to_freeze.isdisjoint({"sx", "sy", "sz"})
+
+        try:
+            pm.makeIdentity(
+                obj, apply=True, t=freeze_t, r=freeze_r, s=freeze_s, pn=True
+            )
+        except RuntimeError:
+            pm.warning(
+                f"XformUtils.freeze_transforms: Skipping '{obj}' due to makeIdentity error."
+            )
+            return False
+
+        return True
+
+
+class XformUtils(XformUtilsInternals, ptk.HelpMixin):
+    """Transform utilities for Maya objects."""
 
     @staticmethod
     def convert_axis(value, invert=False, ortho=False, to_integer=False):
@@ -274,32 +313,80 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def store_transforms(objects, prefix="original"):
+    def store_transforms(objects, prefix="original", accumulate=True):
+        """Store the current world-space transforms as custom attributes.
+
+        This captures the object's world matrix and pivot positions so they can
+        be restored later using `restore_transforms`. When `accumulate=True`,
+        subsequent calls will compose with the previously stored matrix, allowing
+        you to freeze transforms multiple times while still being able to restore
+        to the very first original position.
+
+        Parameters:
+            objects (str/obj/list): Transform nodes to store transforms for.
+            prefix (str): Attribute name prefix (default: "original").
+            accumulate (bool): If True and attributes already exist, compose the
+                current local transforms with the stored matrix. If False, overwrite.
+        """
         for obj in pm.ls(objects, type="transform"):
-            # Store the world matrix and pivot points
-            world_matrix = pm.xform(obj, query=True, matrix=True, worldSpace=True)
+            # Get current world matrix and pivots
+            current_world_matrix = pm.dt.Matrix(
+                pm.xform(obj, query=True, matrix=True, worldSpace=True)
+            )
             rotate_pivot = pm.xform(obj, query=True, rotatePivot=True, worldSpace=True)
             scale_pivot = pm.xform(obj, query=True, scalePivot=True, worldSpace=True)
 
-            # Check if attributes already exist, if not then add them
-            if not pm.hasAttr(obj, f"{prefix}_worldMatrix"):
-                pm.addAttr(obj, ln=f"{prefix}_worldMatrix", at="matrix", k=True)
-            if not pm.hasAttr(obj, f"{prefix}_rotatePivot"):
-                pm.addAttr(obj, ln=f"{prefix}_rotatePivot", dt="double3", k=True)
-            if not pm.hasAttr(obj, f"{prefix}_scalePivot"):
-                pm.addAttr(obj, ln=f"{prefix}_scalePivot", dt="double3", k=True)
+            # Check if attributes already exist
+            has_existing = pm.hasAttr(obj, f"{prefix}_worldMatrix")
 
-            # Set the stored values
-            pm.setAttr(f"{obj}.{prefix}_worldMatrix", type="matrix", *world_matrix)
-            pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
-            pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
+            if has_existing and accumulate:
+                # Get the previously stored matrix
+                stored_matrix_list = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
+                # Flatten if nested (matrix attr returns as 4x4 list of lists)
+                if stored_matrix_list and isinstance(
+                    stored_matrix_list[0], (list, tuple)
+                ):
+                    stored_matrix_flat = [v for row in stored_matrix_list for v in row]
+                else:
+                    stored_matrix_flat = list(stored_matrix_list)
+                stored_matrix = pm.dt.Matrix(stored_matrix_flat)
+
+                # Compose: new total = current * stored
+                # This means: starting from identity, first apply stored, then current
+                accumulated = current_world_matrix * stored_matrix
+
+                # Store the accumulated matrix
+                accum_flat = [accumulated[r][c] for r in range(4) for c in range(4)]
+                pm.setAttr(f"{obj}.{prefix}_worldMatrix", accum_flat, type="matrix")
+                pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
+                pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
+
+            else:
+                # Create attributes if they don't exist
+                if not pm.hasAttr(obj, f"{prefix}_worldMatrix"):
+                    pm.addAttr(obj, ln=f"{prefix}_worldMatrix", at="matrix", k=True)
+                if not pm.hasAttr(obj, f"{prefix}_rotatePivot"):
+                    pm.addAttr(obj, ln=f"{prefix}_rotatePivot", dt="double3", k=True)
+                if not pm.hasAttr(obj, f"{prefix}_scalePivot"):
+                    pm.addAttr(obj, ln=f"{prefix}_scalePivot", dt="double3", k=True)
+
+                # Store the current world matrix and pivots
+                # Matrix needs to be a flat list of 16 values
+                matrix_flat = pm.xform(obj, query=True, matrix=True, worldSpace=True)
+                pm.setAttr(
+                    f"{obj}.{prefix}_worldMatrix",
+                    matrix_flat,
+                    type="matrix",
+                )
+                pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
+                pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
 
     @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
         cls,
         objects,
-        center_pivot=False,
+        center_pivot=0,
         force=True,
         delete_history=False,
         freeze_children=False,
@@ -312,7 +399,10 @@ class XformUtils(ptk.HelpMixin):
 
         Parameters:
             objects (list): List of transform nodes.
-            center_pivot (bool): If True, centers the pivot.
+            center_pivot (int/bool): Controls pivot centering behavior.
+                0 or False: Don't center pivot.
+                1: Center pivot on mesh objects only.
+                2 or True: Center pivot on all objects.
             force (bool): If True, unlocks locked transform attributes and restores them after.
             delete_history (bool): If True, deletes construction history after freeze.
             freeze_children (bool): If True, also freeze descendant transforms.
@@ -323,11 +413,13 @@ class XformUtils(ptk.HelpMixin):
                 "delete" -> break incoming connections and delete their source nodes when possible.
                 Note: "preserve" skips affected objects (reported at the end); "disconnect"/"delete" modify shared drivers, so downstream instances will also lose those connections.
             from_channel_box (bool): If True, use the selected attributes in the channel box to determine what to freeze.
-            **kwargs: Passed to pm.makeIdentity (e.g., t=True, r=True, s=True, n=0)
+            **kwargs: Flags passed to determine what to freeze (t=True, r=True, s=True).
         """
-        from mayatk.rig_utils import RigUtils
-        import math
-
+        # Normalize center_pivot to int (handle bool for backwards compatibility)
+        if center_pivot is True:
+            center_pivot = 2  # True means "All"
+        elif center_pivot is False:
+            center_pivot = 0  # False means "None"
         # Determine which axes to freeze
         axes_to_freeze = set()
 
@@ -445,8 +537,17 @@ class XformUtils(ptk.HelpMixin):
             if not pm.objExists(obj):
                 continue
 
-            if center_pivot:
+            # Handle center_pivot: 0=None, 1=Mesh only, 2=All
+            if center_pivot == 2:
+                # Center pivot on all objects
                 pm.xform(obj, centerPivots=True)
+            elif center_pivot == 1:
+                # Center pivot on mesh objects only
+                shapes = pm.listRelatives(
+                    obj, shapes=True, noIntermediate=True, type="mesh"
+                )
+                if shapes:
+                    pm.xform(obj, centerPivots=True)
 
             shapes = (
                 pm.listRelatives(obj, shapes=True, noIntermediate=False, fullPath=True)
@@ -473,12 +574,12 @@ class XformUtils(ptk.HelpMixin):
 
             with CoreUtils.temporarily_unlock_attributes(nodes_to_unlock):
                 try:
-                    # Delete history if requested
                     if delete_history:
                         pm.delete(obj, constructionHistory=True)
 
-                    # Perform Freeze using helper
-                    if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                    # Freeze using Maya's native makeIdentity which preserves
+                    # world-space pivot positions automatically.
+                    if cls._apply_freeze_deltas(obj, axes_to_freeze):
                         frozen_objects.append(obj.name())
 
                 except RuntimeError as exc:
@@ -530,7 +631,7 @@ class XformUtils(ptk.HelpMixin):
 
                         # Retry freeze after clearing connections
                         try:
-                            if cls._apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
+                            if cls._apply_freeze_deltas(obj, axes_to_freeze):
                                 frozen_objects.append(obj.name())
                         except RuntimeError as retry_exc:
                             skipped_connections.append((obj.name(), blockers))
@@ -553,35 +654,261 @@ class XformUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def restore_transforms(objects, prefix="original"):
-        for obj in pm.ls(objects, type="transform"):
-            # Check if the transform attributes are at their default values
-            if not (
-                pm.xform(obj, query=True, translation=True) == [0.0, 0.0, 0.0]
-                and pm.xform(obj, query=True, rotation=True) == [0.0, 0.0, 0.0]
-                and pm.xform(obj, query=True, scale=True) == [1.0, 1.0, 1.0]
-            ):
-                print(
-                    f"Attributes are not frozen for {obj}, or have been changed since being frozen, skipping."
-                )
-                continue  # Skip to next object if default values are not met
+    def freeze_to_opm(
+        objects,
+        reset_rotate_axis: bool = False,
+        reset_joint_orient: bool = False,
+    ) -> None:
+        """Freeze transforms into offsetParentMatrix while preserving pivot placement.
 
-            # Retrieve and print the stored world matrix
-            stored_world_matrix = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
-            # Calculate the inverse of the stored world matrix
-            stored_matrix_obj = pm.dt.Matrix(stored_world_matrix)
-            inverse_matrix = stored_matrix_obj.inverse()
-            # Apply the inverse matrix to negate current transformations
-            pm.xform(obj, matrix=inverse_matrix, worldSpace=True)
-            # Freeze transformations to reset them
-            pm.makeIdentity(obj, apply=True, translate=True, rotate=True, scale=True)
-            # Apply the original stored world matrix
-            pm.xform(obj, matrix=stored_world_matrix, worldSpace=True)
-            # Restore the pivot points
-            rotate_pivot = pm.getAttr(f"{obj}.{prefix}_rotatePivot")
-            scale_pivot = pm.getAttr(f"{obj}.{prefix}_scalePivot")
-            pm.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
-            pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+        Parameters:
+            objects (str/obj/list): Transform nodes to process.
+            reset_rotate_axis (bool): Zero rotateAxis after the bake. Default keeps current values.
+            reset_joint_orient (bool): Zero jointOrient after the bake. Default keeps current values.
+        """
+
+        transforms = pm.ls(objects, type="transform", flatten=True)
+        if not transforms:
+            return
+
+        identity_matrix = pm.datatypes.Matrix()
+
+        for obj in transforms:
+            if not pm.objExists(obj):
+                continue
+
+            obj = pm.PyNode(obj)
+
+            with CoreUtils.temporarily_unlock_attributes([obj]):
+                rotate_pivot_ws = pm.xform(obj, q=True, ws=True, rp=True)
+                scale_pivot_ws = pm.xform(obj, q=True, ws=True, sp=True)
+
+                rotate_pivot_translate = (
+                    obj.rotatePivotTranslate.get()
+                    if obj.hasAttr("rotatePivotTranslate")
+                    else None
+                )
+                scale_pivot_translate = (
+                    obj.scalePivotTranslate.get()
+                    if obj.hasAttr("scalePivotTranslate")
+                    else None
+                )
+
+                original_local = pm.datatypes.Matrix(
+                    pm.xform(obj, q=True, matrix=True, objectSpace=True)
+                )
+
+                temp = pm.duplicate(obj, parentOnly=True)[0]
+                try:
+                    temp.offsetParentMatrix.set(identity_matrix)
+                    temp.translate.set((0.0, 0.0, 0.0))
+                    temp.rotate.set((0.0, 0.0, 0.0))
+                    temp.scale.set((1.0, 1.0, 1.0))
+                    if temp.hasAttr("shear"):
+                        temp.shear.set((0.0, 0.0, 0.0))
+
+                    rest_matrix = pm.datatypes.Matrix(
+                        pm.xform(temp, q=True, matrix=True, objectSpace=True)
+                    )
+                finally:
+                    pm.delete(temp)
+
+                try:
+                    compensation = rest_matrix.inverse()
+                except RuntimeError:
+                    pm.warning(
+                        f"XformUtils.freeze_to_opm: Skipping '{obj}' due to singular pivot matrix."
+                    )
+                    continue
+
+                opm_matrix = compensation * original_local
+                obj.offsetParentMatrix.set(opm_matrix)
+
+                obj.translate.set((0.0, 0.0, 0.0))
+                obj.rotate.set((0.0, 0.0, 0.0))
+                obj.scale.set((1.0, 1.0, 1.0))
+                if obj.hasAttr("shear"):
+                    obj.shear.set((0.0, 0.0, 0.0))
+
+                pm.xform(obj, ws=True, rp=rotate_pivot_ws, preserve=True)
+                pm.xform(obj, ws=True, sp=scale_pivot_ws, preserve=True)
+
+                if rotate_pivot_translate is not None:
+                    obj.rotatePivotTranslate.set(rotate_pivot_translate)
+                if scale_pivot_translate is not None:
+                    obj.scalePivotTranslate.set(scale_pivot_translate)
+
+                if reset_rotate_axis and obj.hasAttr("rotateAxis"):
+                    obj.rotateAxis.set((0.0, 0.0, 0.0))
+
+                if reset_joint_orient and obj.hasAttr("jointOrient"):
+                    obj.jointOrient.set((0.0, 0.0, 0.0))
+
+    @staticmethod
+    @CoreUtils.undoable
+    def restore_transforms(objects, prefix="original", delete_attrs=False):
+        """Restore transforms from stored custom attributes.
+
+        This restores the object's world-space position, orientation, and scale
+        to the values captured by `store_transforms`. The geometry will be
+        transformed to maintain its current world-space vertex positions.
+
+        Parameters:
+            objects (str/obj/list): Transform nodes to restore.
+            prefix (str): Attribute name prefix (default: "original").
+            delete_attrs (bool): If True, remove the stored attributes after restore.
+
+        Returns:
+            list: Objects that were successfully restored.
+        """
+        restored = []
+
+        for obj in pm.ls(objects, type="transform"):
+            # Check if stored attributes exist
+            matrix_attr = f"{prefix}_worldMatrix"
+            rp_attr = f"{prefix}_rotatePivot"
+            sp_attr = f"{prefix}_scalePivot"
+
+            if not pm.hasAttr(obj, matrix_attr):
+                pm.warning(
+                    f"restore_transforms: '{obj}' has no stored transforms "
+                    f"(missing {matrix_attr} attribute). Skipping."
+                )
+                continue
+
+            # Get the stored original matrix and current matrix
+            stored_matrix_list = pm.getAttr(f"{obj}.{matrix_attr}")
+            stored_matrix = pm.dt.Matrix(stored_matrix_list)
+
+            # Flatten matrix for xform command (needs 16 floats, not 4x4)
+            stored_matrix_flat = [
+                stored_matrix[r][c] for r in range(4) for c in range(4)
+            ]
+
+            # To restore transforms while preserving vertex world positions:
+            # After setting matrix to M, vertex world pos = v_local * M
+            # Current vertex world pos = v_current_local * C (current matrix)
+            # We want: v_new_local * M = v_current_local * C (preserve world pos)
+            # So: v_new_local = v_current_local * C * M.inverse()
+            # Since v_world = v_current_local * C:
+            # v_new_local = v_world * M.inverse()
+            try:
+                inverse_stored = stored_matrix.inverse()
+            except Exception:
+                pm.warning(
+                    f"restore_transforms: '{obj}' has singular matrix. Skipping."
+                )
+                continue
+
+            # Get shapes to transform their geometry
+            shapes = pm.listRelatives(obj, shapes=True, noIntermediate=True) or []
+
+            # For mesh shapes, transform the vertices by M.inverse()
+            for shape in shapes:
+                if shape.nodeType() == "mesh":
+                    # Get all vertices
+                    verts = shape.vtx[:]
+                    for vert in verts:
+                        pos = pm.dt.Point(vert.getPosition(space="world"))
+                        new_local = pos * inverse_stored
+                        # Set in object space since we calculated local coords
+                        vert.setPosition(list(new_local)[:3], space="object")
+
+                elif shape.nodeType() == "nurbsCurve":
+                    # Transform CVs for NURBS curves
+                    cvs = shape.cv[:]
+                    for cv in cvs:
+                        pos = pm.dt.Point(pm.xform(cv, q=True, ws=True, t=True))
+                        new_local = pos * inverse_stored
+                        pm.xform(cv, os=True, t=list(new_local)[:3])
+
+                elif shape.nodeType() == "nurbsSurface":
+                    # Transform CVs for NURBS surfaces
+                    num_u = shape.numCVsInU()
+                    num_v = shape.numCVsInV()
+                    for u in range(num_u):
+                        for v in range(num_v):
+                            cv = shape.cv[u][v]
+                            pos = pm.dt.Point(pm.xform(cv, q=True, ws=True, t=True))
+                            new_local = pos * inverse_stored
+                            pm.xform(cv, os=True, t=list(new_local)[:3])
+
+            # Apply the stored world matrix (as flat list)
+            pm.xform(obj, matrix=stored_matrix_flat, worldSpace=True)
+
+            # Restore pivots if stored
+            if pm.hasAttr(obj, rp_attr):
+                rotate_pivot = pm.getAttr(f"{obj}.{rp_attr}")
+                pm.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
+
+            if pm.hasAttr(obj, sp_attr):
+                scale_pivot = pm.getAttr(f"{obj}.{sp_attr}")
+                pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+
+            # Optionally delete the stored attributes
+            if delete_attrs:
+                for attr in [matrix_attr, rp_attr, sp_attr]:
+                    if pm.hasAttr(obj, attr):
+                        pm.deleteAttr(f"{obj}.{attr}")
+
+            restored.append(obj)
+
+        if restored:
+            pm.displayInfo(f"restore_transforms: Restored {len(restored)} object(s).")
+
+        return restored
+
+    @staticmethod
+    def has_stored_transforms(objects, prefix="original"):
+        """Check if objects have stored transform attributes.
+
+        Parameters:
+            objects (str/obj/list): Transform nodes to check.
+            prefix (str): Attribute name prefix (default: "original").
+
+        Returns:
+            dict: Mapping of object names to bool (True if has stored transforms).
+        """
+        result = {}
+        for obj in pm.ls(objects, type="transform"):
+            has_stored = pm.hasAttr(obj, f"{prefix}_worldMatrix")
+            result[obj.name()] = has_stored
+        return result
+
+    @staticmethod
+    @CoreUtils.undoable
+    def clear_stored_transforms(objects, prefix="original"):
+        """Remove stored transform attributes from objects.
+
+        Parameters:
+            objects (str/obj/list): Transform nodes to clear.
+            prefix (str): Attribute name prefix (default: "original").
+
+        Returns:
+            list: Objects that had attributes removed.
+        """
+        cleared = []
+        attrs = [
+            f"{prefix}_worldMatrix",
+            f"{prefix}_rotatePivot",
+            f"{prefix}_scalePivot",
+        ]
+
+        for obj in pm.ls(objects, type="transform"):
+            had_attrs = False
+            for attr in attrs:
+                if pm.hasAttr(obj, attr):
+                    pm.deleteAttr(f"{obj}.{attr}")
+                    had_attrs = True
+            if had_attrs:
+                cleared.append(obj)
+
+        if cleared:
+            pm.displayInfo(
+                f"clear_stored_transforms: Cleared {len(cleared)} object(s)."
+            )
+
+        return cleared
 
     @classmethod
     @CoreUtils.undoable
@@ -835,8 +1162,6 @@ class XformUtils(ptk.HelpMixin):
         else:
             objs = pm.ls(objects, type="transform", flatten=True)
 
-        if not objs:
-            pm.warning("No valid transform objects given for reset pivot transforms.")
             return
 
         for obj in objs:
@@ -844,40 +1169,19 @@ class XformUtils(ptk.HelpMixin):
             pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
 
     @staticmethod
-    def world_aligned_pivot(objects=None, mode="set", pivot_type="manip"):
-        """Get or set world-aligned pivot for objects.
-
-        This function helps manipulate objects with strangely oriented pivots by getting
-        or setting a world-aligned orientation (Y-up, X on X-axis, Z on Z-axis).
+    def world_align_pivot(
+        objects: Optional[List[Union[str, object]]] = None,
+        pivot_type: str = "object",
+        mode: str = "set",
+    ) -> Optional[Union[bool, Dict[str, Any]]]:
+        """Get or set a world-aligned pivot for the specified objects.
 
         Parameters:
-            objects (str/obj/list/None): The object(s) to work with.
-                                         If None, uses current selection.
-            mode (str): Operation mode:
-                        "get" - Returns the world-aligned pivot position and orientation
-                        "set" - Sets the pivot to world-aligned orientation (default)
-            pivot_type (str): Type of pivot to work with:
-                             "manip" - Temporary manipulator pivot (resets on deselect, default)
-                             "object" - Actual object pivot (permanent until reset)
-
-        Returns:
-            dict/bool: If mode="get", returns dict with 'position' and 'orientation'.
-                      If mode="set", returns True if successful, False otherwise.
-
-        Example:
-            # Get world-aligned pivot info
-            info = world_aligned_pivot(mode="get")
-
-            # Set temporary manip pivot to world-aligned (most common use)
-            world_aligned_pivot()
-
-            # Set actual object pivot to world-aligned
-            world_aligned_pivot(mode="set", pivot_type="object")
-
-            # Work with specific objects
-            world_aligned_pivot(['pCube1', 'pCube2'], mode="set")
+            objects: Transform nodes to operate on. Defaults to current selection.
+            pivot_type: Either "manip" to adjust the manipulator pivot only or "object" to bake into objects.
+            mode: "get" returns pivot info, "set" applies the alignment.
         """
-        # Get the objects
+
         if objects is None:
             selected = pm.selected()
             if not selected:
@@ -891,69 +1195,45 @@ class XformUtils(ptk.HelpMixin):
             pm.warning("No valid objects found.")
             return False if mode == "set" else None
 
-        # Store the original selection
         original_selection = pm.selected()
-
-        # Ensure all objects are selected
         pm.select(objects, replace=True)
 
-        # Get the center pivot position from all selected objects
         pivot_positions = [
             pm.xform(obj, q=True, rotatePivot=True, worldSpace=True) for obj in objects
         ]
         avg_pivot_pos = [sum(coords) / len(coords) for coords in zip(*pivot_positions)]
 
         if mode == "get":
-            # Return the world-aligned pivot information
             result = {
                 "position": avg_pivot_pos,
-                "orientation": [0, 0, 0],  # World-aligned orientation
+                "orientation": [0, 0, 0],
                 "objects": [str(obj) for obj in objects],
             }
             pm.select(original_selection, replace=True)
             return result
 
-        elif mode == "set":
+        if mode == "set":
             if pivot_type == "manip":
-                # Set temporary manipulator pivot to world-aligned orientation
-                # Note: We must keep the selection active for manipPivot to work
                 pm.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
-                # DO NOT restore selection here - manipPivot needs active selection
                 return True
 
-            elif pivot_type == "object":
-                # Set actual object pivot to world-aligned orientation
+            if pivot_type == "object":
                 for obj in objects:
-                    # Get current pivot position
                     pivot_pos = pm.xform(obj, q=True, rotatePivot=True, worldSpace=True)
-
-                    # Reset pivot orientation to world space
-                    pm.xform(
-                        obj,
-                        worldSpace=True,
-                        pivots=pivot_pos,
-                        preserve=True,
-                    )
-
-                    # Explicitly set rotation pivot orientation to world aligned
+                    pm.xform(obj, worldSpace=True, pivots=pivot_pos, preserve=True)
                     pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
                     pm.xform(obj, preserve=True, rotateOrient=(0, 0, 0))
 
-                # Restore selection for object pivot mode
                 pm.select(original_selection, replace=True)
                 return True
 
-            else:
-                pm.warning(
-                    f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'."
-                )
-                pm.select(original_selection, replace=True)
-                return False
-
-        else:
-            pm.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
+            pm.warning(f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'.")
             pm.select(original_selection, replace=True)
             return False
+
+        pm.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
+        pm.select(original_selection, replace=True)
+        return False
 
     @staticmethod
     @CoreUtils.undoable
@@ -1697,83 +1977,6 @@ class XformUtils(ptk.HelpMixin):
 
         if selectTypeEdge:
             pm.selectType(edge=True)
-
-    @staticmethod
-    def _apply_freeze_deltas(obj, axes_to_freeze, **kwargs):
-        """Helper to calculate and apply freeze deltas.
-
-        Returns:
-            bool: True if successful, False if skipped (e.g. singular matrix).
-        """
-        # 1. Get current matrix and TRS
-        current_matrix = pm.dt.TransformationMatrix(obj.getMatrix(objectSpace=True))
-        t = obj.translate.get()
-        r = obj.rotate.get()  # Vector (degrees)
-        s = obj.scale.get()
-
-        # 2. Determine target TRS based on frozen axes
-        target_t = pm.dt.Vector(t)
-        target_r = pm.dt.Vector(r)
-        target_s = pm.dt.Vector(s)
-
-        if "tx" in axes_to_freeze:
-            target_t.x = 0.0
-        if "ty" in axes_to_freeze:
-            target_t.y = 0.0
-        if "tz" in axes_to_freeze:
-            target_t.z = 0.0
-
-        if "rx" in axes_to_freeze:
-            target_r.x = 0.0
-        if "ry" in axes_to_freeze:
-            target_r.y = 0.0
-        if "rz" in axes_to_freeze:
-            target_r.z = 0.0
-
-        if "sx" in axes_to_freeze:
-            target_s.x = 1.0
-        if "sy" in axes_to_freeze:
-            target_s.y = 1.0
-        if "sz" in axes_to_freeze:
-            target_s.z = 1.0
-
-        # 3. Construct target matrix
-        target_matrix = pm.dt.TransformationMatrix(current_matrix)
-        target_matrix.setTranslation(target_t, pm.dt.Space.kObject)
-        # Convert degrees to radians for TransformationMatrix
-        target_euler = pm.dt.EulerRotation(target_r, unit="degrees")
-        # Preserve rotation order
-        target_euler.order = current_matrix.rotationOrder()
-        target_matrix.setRotation(target_euler)
-        target_matrix.setScale(target_s, pm.dt.Space.kObject)
-
-        # 4. Calculate delta matrix (the difference to bake)
-        # delta * target = current  => delta = current * target^-1
-        try:
-            # Convert to standard Matrix to ensure inverse() works reliably
-            curr_m = current_matrix.asMatrix()
-            targ_m = target_matrix.asMatrix()
-            delta_matrix = curr_m * targ_m.inverse()
-        except (ValueError, ZeroDivisionError, AttributeError):
-            pm.warning(
-                f"XformUtils.freeze_transforms: Skipping '{obj}' because it has a singular matrix (likely zero scale)."
-            )
-            return False
-
-        # 5. Apply delta
-        obj.setMatrix(delta_matrix)
-
-        # 6. Bake everything (push delta into geometry)
-        bake_kwargs = kwargs.copy()
-        bake_kwargs.update({"t": True, "r": True, "s": True, "apply": True})
-        pm.makeIdentity(obj, **bake_kwargs)
-
-        # 7. Restore target transform (the frozen state)
-        obj.translate.set(target_t)
-        obj.rotate.set(target_r)
-        obj.scale.set(target_s)
-
-        return True
 
 
 # -----------------------------------------------------------------------------
