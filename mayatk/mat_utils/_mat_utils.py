@@ -343,6 +343,21 @@ class MatUtils(MatUtilsInternals):
         workspace_dir = pm.workspace(q=True, rd=True)
         file_info = []
 
+        # Optimization: Pre-calculate file_node -> shader mapping
+        file_to_shader = {}
+        for sg in pm.ls(type="shadingEngine"):
+            for attr_name in ["surfaceShader", "volumeShader", "displacementShader"]:
+                try:
+                    connections = getattr(sg, attr_name).inputs()
+                    if connections:
+                        shader = connections[0]
+                        # Use listHistory to find all upstream file nodes efficiently
+                        for fn in pm.listHistory(shader, type="file"):
+                            if fn not in file_to_shader:
+                                file_to_shader[fn] = shader
+                except (AttributeError, Exception):
+                    pass
+
         for file_node in file_nodes:
             file_path = file_node.fileTextureName.get()
             if raw and file_path.startswith(workspace_dir):
@@ -350,9 +365,8 @@ class MatUtils(MatUtilsInternals):
             else:
                 file_path_out = file_path
 
-            shaders = cls.get_connected_shaders(file_node)
-            shader = shaders[0] if shaders else None
-            shader_name = shaders[0].name() if shader else ""
+            shader = file_to_shader.get(file_node)
+            shader_name = shader.name() if shader else ""
 
             columns = return_type.split("|")
             row = []
@@ -666,7 +680,7 @@ class MatUtils(MatUtilsInternals):
             set(pm.ls(limit_to_nodes, type="file")) if limit_to_nodes else None
         )
 
-        file_nodes: Dict[str, pm.nt.File] = {}
+        file_nodes: Dict[str, List[pm.nt.File]] = {}
 
         # Build lookup: rel path if under sourceimages, else just filename
         for fn in pm.ls(type="file"):
@@ -676,30 +690,36 @@ class MatUtils(MatUtilsInternals):
             if not file_path:
                 continue
             file_path_norm = os.path.normpath(file_path).replace("\\", "/")
+
+            key = None
             if file_path_norm.lower().startswith(sourceimages_dir_norm.lower()):
-                rel_key = (
+                key = (
                     os.path.relpath(file_path_norm, sourceimages_dir_norm)
                     .replace("\\", "/")
                     .lower()
                 )
-                file_nodes[rel_key] = fn
             else:
-                filename = os.path.basename(file_path_norm).lower()
-                file_nodes[filename] = fn
+                key = os.path.basename(file_path_norm).lower()
+
+            if key:
+                if key not in file_nodes:
+                    file_nodes[key] = []
+                file_nodes[key].append(fn)
 
         remapped_nodes: List[pm.nt.File] = []
         remap_data = ptk.remap_file_paths(file_paths, target_dir, sourceimages_dir)
 
         for key, new_full_path, maya_path in remap_data:
             if key in file_nodes:
-                if not silent:
-                    pm.displayInfo(f"\n[Remap Attempt]")
-                    pm.displayInfo(f"  original path: {new_full_path}")
-                    pm.displayInfo(f"  lookup key:    {key}")
-                    pm.displayInfo(f"  maya path:     {maya_path}")
-                    pm.displayInfo(f"  remapped:      {file_nodes[key].name()}")
-                file_nodes[key].fileTextureName.set(maya_path)
-                remapped_nodes.append(file_nodes[key])
+                for fn in file_nodes[key]:
+                    if not silent:
+                        pm.displayInfo(f"\n[Remap Attempt]")
+                        pm.displayInfo(f"  original path: {new_full_path}")
+                        pm.displayInfo(f"  lookup key:    {key}")
+                        pm.displayInfo(f"  maya path:     {maya_path}")
+                        pm.displayInfo(f"  remapped:      {fn.name()}")
+                    fn.fileTextureName.set(maya_path)
+                    remapped_nodes.append(fn)
             else:
                 pm.warning(
                     f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"

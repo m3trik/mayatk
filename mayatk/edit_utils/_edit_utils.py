@@ -19,44 +19,11 @@ from mayatk.xform_utils import XformUtils
 class EditUtils(ptk.HelpMixin):
     """ """
 
-    @staticmethod
-    @CoreUtils.undoable
-    def snap_closest_verts(obj1, obj2, tolerance=10.0, freeze_transforms=False):
-        """Snap the vertices from object one to the closest verts on object two.
+    # Backward compatibility aliases - these methods have moved to Snap class
+    from mayatk.edit_utils.snap import Snap
 
-        Parameters:
-            obj1 (obj): The object in which the vertices are moved from.
-            obj2 (obj): The object in which the vertices are moved to.
-            tolerance (float) = Maximum search distance.
-            freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
-        """
-        vertices = components.Components.get_components(obj1, "vertices")
-        closestVerts = components.Components.get_closest_vertex(
-            vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
-        )
-
-        progressBar = "mainProgressBar"
-        pm.progressBar(
-            progressBar,
-            edit=True,
-            beginProgress=True,
-            isInterruptable=True,
-            status="Snapping Vertices ...",
-            maxValue=len(closestVerts),
-        )
-
-        pm.undoInfo(openChunk=True)
-        for v1, v2 in closestVerts.items():
-            if pm.progressBar(progressBar, query=True, isCancelled=True):
-                break
-
-            v2Pos = pm.pointPosition(v2, world=True)
-            pm.xform(v1, translation=v2Pos, worldSpace=True)
-
-            pm.progressBar(progressBar, edit=True, step=1)
-        pm.undoInfo(closeChunk=True)
-
-        pm.progressBar(progressBar, edit=True, endProgress=True)
+    snap_closest_verts = staticmethod(Snap.snap_to_closest_vertex)
+    conform_to_surface = staticmethod(Snap.snap_to_surface)
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):
@@ -919,7 +886,7 @@ class EditUtils(ptk.HelpMixin):
         import maya.OpenMaya as om
 
         result = []
-        for mfnMesh in CoreUtils.mfn_mesh_generator(objects):
+        for mfnMesh in CoreUtils.get_mfn_mesh(objects, api_version=1):
             points = om.MPointArray()
             mfnMesh.getPoints(points, om.MSpace.kWorld)
 

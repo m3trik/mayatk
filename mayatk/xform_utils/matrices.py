@@ -53,8 +53,9 @@ else:
 
 import pythontk as ptk
 
-SPACE_OBJECT = MSpace.kObject if "MSpace" in locals() and MSpace is not None else 0
-SPACE_WORLD = MSpace.kWorld if "MSpace" in locals() and MSpace is not None else 0
+# Space constants - fall back to 0 if Maya API unavailable
+SPACE_OBJECT = MSpace.kObject if MSpace is not None else 0
+SPACE_WORLD = MSpace.kWorld if MSpace is not None else 0
 
 
 def _quat_to_euler_xyz_deg(quat: "MQuaternion") -> Tuple[float, float, float]:
@@ -112,20 +113,52 @@ class _MatrixMath:
     """Pure math operations using Maya API (no nodes created)."""
 
     @staticmethod
-    def to_mmatrix(node: "pm.nt.Transform") -> "MMatrix":
-        """Convert a PyMEL transform's world matrix to MMatrix.
-
-        Parameters:
-            node: PyMEL transform node.
+    def identity() -> "MMatrix":
+        """Return a 4x4 identity matrix.
 
         Returns:
-            World matrix as MMatrix.
+            Identity MMatrix.
+
+        Example:
+            >>> mx = Matrices.identity()
+        """
+        return MMatrix()
+
+    @staticmethod
+    def to_mmatrix(
+        matrix_like: Union["pm.nt.Transform", "pm.datatypes.Matrix", "MMatrix", list],
+    ) -> "MMatrix":
+        """Convert various matrix representations to MMatrix.
+
+        Parameters:
+            matrix_like: Transform node, PyMEL Matrix, MMatrix, or 16-element list.
+
+        Returns:
+            MMatrix representation.
 
         Example:
             >>> node = pm.PyNode("pCube1")
             >>> world_mx = Matrices.to_mmatrix(node)
+            >>> # Or from PyMEL matrix:
+            >>> pm_mx = node.worldMatrix.get()
+            >>> api_mx = Matrices.to_mmatrix(pm_mx)
         """
-        return MMatrix(node.worldMatrix.get())
+        # Already an MMatrix
+        if isinstance(matrix_like, MMatrix):
+            return matrix_like
+        # PyMEL Matrix
+        if hasattr(matrix_like, "__melobject__"):
+            return MMatrix(matrix_like)
+        # Transform node - get world matrix
+        if hasattr(matrix_like, "worldMatrix"):
+            return MMatrix(matrix_like.worldMatrix.get())
+        # List/tuple of 16 values
+        if hasattr(matrix_like, "__len__") and len(matrix_like) == 16:
+            return MMatrix(matrix_like)
+        raise TypeError(
+            f"Cannot convert {type(matrix_like).__name__} to MMatrix. "
+            "Expected Transform, pm.datatypes.Matrix, MMatrix, or 16-element list."
+        )
 
     @staticmethod
     def local_matrix(node: "pm.nt.Transform") -> "MMatrix":
@@ -186,15 +219,17 @@ class _MatrixMath:
     @staticmethod
     def decompose(
         m: "MMatrix",
+        rotate_order: str = "xyz",
     ) -> Tuple[
         Tuple[float, float, float],
         Tuple[float, float, float],
         Tuple[float, float, float],
     ]:
-        """Decompose an MMatrix into translation, rotation (degrees XYZ), and scale components.
+        """Decompose an MMatrix into translation, rotation (degrees), and scale components.
 
         Parameters:
             m: MMatrix to decompose.
+            rotate_order: Rotation order ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx").
 
         Returns:
             Tuple of (translation, rotation_degrees, scale) where each is a 3-tuple of floats.
@@ -208,12 +243,29 @@ class _MatrixMath:
         t = tm.translation(SPACE_OBJECT)
         s = tm.scale(SPACE_OBJECT)
 
-        try:
-            quat = tm.rotation(asQuaternion=True)
-        except Exception:
-            quat = None
-
-        rotation_deg = _quat_to_euler_xyz_deg(quat)
+        # Get rotation - prefer euler via OpenMaya API if available
+        if MEulerRotation is not None:
+            try:
+                euler = tm.rotation()
+                rotation_deg = (
+                    math.degrees(euler.x),
+                    math.degrees(euler.y),
+                    math.degrees(euler.z),
+                )
+            except Exception:
+                # Fallback to quaternion conversion
+                try:
+                    quat = tm.rotation(asQuaternion=True)
+                    rotation_deg = _quat_to_euler_xyz_deg(quat)
+                except Exception:
+                    rotation_deg = (0.0, 0.0, 0.0)
+        else:
+            # MEulerRotation not available - use quaternion fallback
+            try:
+                quat = tm.rotation(asQuaternion=True)
+                rotation_deg = _quat_to_euler_xyz_deg(quat)
+            except Exception:
+                rotation_deg = (0.0, 0.0, 0.0)
 
         return (t.x, t.y, t.z), rotation_deg, (s[0], s[1], s[2])
 
@@ -260,6 +312,91 @@ class _MatrixMath:
             result = result * m
         return result
 
+    @staticmethod
+    def world_to_local(
+        world_matrix: "MMatrix", parent_world_matrix: "MMatrix"
+    ) -> "MMatrix":
+        """Convert a world-space matrix to local space relative to a parent.
+
+        Formula: local = world * inverse(parent_world)
+
+        Parameters:
+            world_matrix: Matrix in world space.
+            parent_world_matrix: Parent's world matrix.
+
+        Returns:
+            Matrix in local space.
+
+        Example:
+            >>> child_world = Matrices.to_mmatrix(pm.PyNode("child"))
+            >>> parent_world = Matrices.to_mmatrix(pm.PyNode("parent"))
+            >>> child_local = Matrices.world_to_local(child_world, parent_world)
+        """
+        return world_matrix * parent_world_matrix.inverse()
+
+    @staticmethod
+    def local_to_world(
+        local_matrix: "MMatrix", parent_world_matrix: "MMatrix"
+    ) -> "MMatrix":
+        """Convert a local-space matrix to world space.
+
+        Formula: world = local * parent_world
+
+        Parameters:
+            local_matrix: Matrix in local space.
+            parent_world_matrix: Parent's world matrix.
+
+        Returns:
+            Matrix in world space.
+
+        Example:
+            >>> child_local = Matrices.local_matrix(pm.PyNode("child"))
+            >>> parent_world = Matrices.to_mmatrix(pm.PyNode("parent"))
+            >>> child_world = Matrices.local_to_world(child_local, parent_world)
+        """
+        return local_matrix * parent_world_matrix
+
+    @staticmethod
+    def extract_translation(m: "MMatrix") -> Tuple[float, float, float]:
+        """Extract just the translation component from a matrix.
+
+        Parameters:
+            m: MMatrix to extract translation from.
+
+        Returns:
+            Translation as (x, y, z) tuple.
+
+        Example:
+            >>> mx = Matrices.from_srt(translate=(5, 10, 15))
+            >>> t = Matrices.extract_translation(mx)
+            >>> print(t)  # (5.0, 10.0, 15.0)
+        """
+        tm = MTransformationMatrix(m)
+        t = tm.translation(SPACE_OBJECT)
+        return (t.x, t.y, t.z)
+
+    @staticmethod
+    def is_identity(m: "MMatrix", tolerance: float = 1e-9) -> bool:
+        """Check if a matrix is approximately equal to the identity matrix.
+
+        Parameters:
+            m: MMatrix to check.
+            tolerance: Maximum difference allowed per element.
+
+        Returns:
+            True if matrix is identity within tolerance.
+
+        Example:
+            >>> mx = Matrices.identity()
+            >>> Matrices.is_identity(mx)  # True
+        """
+        identity = MMatrix()
+        for i in range(4):
+            for j in range(4):
+                if abs(m.getElement(i, j) - identity.getElement(i, j)) > tolerance:
+                    return False
+        return True
+
     # --------------------------------------------------------------------------------------------
     # DAG Transform Utilities
     # --------------------------------------------------------------------------------------------
@@ -287,33 +424,56 @@ class _DagTransforms:
         node.offsetParentMatrix.set(pm.datatypes.Matrix(m))
 
     @staticmethod
-    def bake_world_matrix_to_transform(node: "pm.nt.Transform", m: "MMatrix") -> None:
+    def bake_world_matrix_to_transform(
+        node: "pm.nt.Transform",
+        m: Union["MMatrix", "pm.datatypes.Matrix", list],
+        reset_offset_parent_matrix: bool = True,
+    ) -> None:
         """Set a node's translate, rotate, and scale so its worldMatrix matches the given matrix.
-
-        Resets offsetParentMatrix to identity first.
 
         Parameters:
             node: PyMEL transform node.
-            m: Target world MMatrix.
+            m: Target world matrix (MMatrix, PyMEL Matrix, or 16-element list).
+            reset_offset_parent_matrix: If True, resets offsetParentMatrix to identity first.
 
         Example:
             >>> node = pm.PyNode("pCube1")
             >>> target_mx = Matrices.from_srt(translate=(10, 0, 0))
             >>> Matrices.bake_world_matrix_to_transform(node, target_mx)
         """
-        # Reset offsetParentMatrix
-        node.offsetParentMatrix.set(pm.datatypes.Matrix())
+        # Convert to MMatrix if needed
+        if not isinstance(m, MMatrix):
+            m = _MatrixMath.to_mmatrix(m)
+
+        # Reset offsetParentMatrix if requested
+        if reset_offset_parent_matrix:
+            node.offsetParentMatrix.set(pm.datatypes.Matrix())
 
         tm = MTransformationMatrix(m)
         t = tm.translation(SPACE_WORLD)
         s = tm.scale(SPACE_WORLD)
 
-        try:
-            quat = tm.rotation(asQuaternion=True)
-        except Exception:
-            quat = None
-
-        rotation_deg = _quat_to_euler_xyz_deg(quat)
+        # Get rotation - prefer euler via OpenMaya API if available
+        if MEulerRotation is not None:
+            try:
+                euler = tm.rotation()
+                rotation_deg = (
+                    math.degrees(euler.x),
+                    math.degrees(euler.y),
+                    math.degrees(euler.z),
+                )
+            except Exception:
+                try:
+                    quat = tm.rotation(asQuaternion=True)
+                    rotation_deg = _quat_to_euler_xyz_deg(quat)
+                except Exception:
+                    rotation_deg = (0.0, 0.0, 0.0)
+        else:
+            try:
+                quat = tm.rotation(asQuaternion=True)
+                rotation_deg = _quat_to_euler_xyz_deg(quat)
+            except Exception:
+                rotation_deg = (0.0, 0.0, 0.0)
 
         node.t.set((t.x, t.y, t.z))
         node.r.set(rotation_deg)

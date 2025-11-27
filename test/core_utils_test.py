@@ -33,9 +33,9 @@ class CoreUtilsTest(unittest.TestCase):
         # Update the assertion with the returned value
         self.assertIsNotNone(mtk.get_main_window())
 
-    def test_mfn_mesh_generator(self):
+    def test_(self):
         self.assertEqual(
-            str(next(mtk.mfn_mesh_generator("cyl"))).split(";")[0],
+            str(next(mtk.("cyl"))).split(";")[0],
             "<maya.OpenMaya.MFnMesh",
         )
 

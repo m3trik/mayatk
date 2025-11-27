@@ -1123,6 +1123,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
 
         if not widget.is_initialized:
+            widget.option_box.pin(
+                settings_key="reference_manager_directories",
+                single_click_restore=True,
+            )
+
             widget.option_box.menu.add(
                 "QPushButton",
                 setText="Browse",

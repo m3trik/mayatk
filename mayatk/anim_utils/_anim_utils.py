@@ -4261,12 +4261,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # Determine the keyframe range
         if absolute:  # Use the absolute start and end keyframes of all objects
-            start_frame, end_frame = AnimUtils.get_keyframe_times(
-                objects, as_range=True
-            )
-            if start_frame is None:
+            range_result = AnimUtils.get_keyframe_times(objects, as_range=True)
+            if range_result is None:
                 pm.warning("No keyframes found on any objects.")
                 return
+            start_frame, end_frame = range_result
         else:  # Use the start and end frames of the entire scene's playback range
             start_frame = pm.playbackOptions(query=True, minTime=True)
             end_frame = pm.playbackOptions(query=True, maxTime=True)
