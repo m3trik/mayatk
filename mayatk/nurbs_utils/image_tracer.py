@@ -294,6 +294,8 @@ class ImageTracer(object):
 
 
 class ImageTracerSlots:
+    """UI slots for the Image Tracer tool."""
+
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.image_tracer

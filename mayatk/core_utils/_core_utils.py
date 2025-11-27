@@ -270,28 +270,61 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return existing, non_existing
 
     @staticmethod
-    def mfn_mesh_generator(objects):
-        """Generate mfn mesh from the given list of objects.
+    def get_mfn_mesh(objects, api_version: int = 2):
+        """Get MFnMesh function set(s) from transform or shape node(s).
 
         Parameters:
-            objects (str)(obj(list): The objects to convert to mfn mesh.
+            objects: A mesh transform, shape node, string name, or list of these.
+            api_version: Which Maya API to use:
+                - 1: Maya API 1.0 (maya.OpenMaya) - legacy, returns generator
+                - 2: Maya API 2.0 (maya.api.OpenMaya) - modern, better performance
 
         Returns:
-            (generator)
+            If api_version=1: Generator yielding MFnMesh objects (API 1.0)
+            If api_version=2: Single MFnMesh (API 2.0) if single object passed,
+                             or list of MFnMesh if multiple objects passed.
+
+        Raises:
+            RuntimeError: If the node is not a valid mesh.
+            ValueError: If api_version is not 1 or 2.
         """
-        import maya.OpenMaya as om
         from mayatk.node_utils import NodeUtils
 
-        selectionList = om.MSelectionList()
-        for mesh in NodeUtils.get_shape_node(pm.ls(objects)):
-            selectionList.add(mesh)
+        if api_version == 1:
+            import maya.OpenMaya as om
 
-        for i in range(selectionList.length()):
-            dagPath = om.MDagPath()
-            selectionList.getDagPath(i, dagPath)
-            # print (dagPath.fullPathName()) #debug
-            mfnMesh = om.MFnMesh(dagPath)
-            yield mfnMesh
+            selectionList = om.MSelectionList()
+            for mesh in NodeUtils.get_shape_node(pm.ls(objects)):
+                selectionList.add(mesh)
+
+            def _generator():
+                for i in range(selectionList.length()):
+                    dagPath = om.MDagPath()
+                    selectionList.getDagPath(i, dagPath)
+                    yield om.MFnMesh(dagPath)
+
+            return _generator()
+
+        elif api_version == 2:
+            import maya.api.OpenMaya as om2
+
+            def _get_single(node):
+                node = pm.PyNode(node)
+                if node.type() == "transform":
+                    shapes = node.getShapes(noIntermediate=True)
+                    if shapes:
+                        node = shapes[0]
+                dag = om2.MGlobal.getSelectionListByName(str(node)).getDagPath(0)
+                return om2.MFnMesh(dag)
+
+            # Handle single vs multiple objects
+            if isinstance(objects, (list, tuple)):
+                return [_get_single(obj) for obj in objects]
+            else:
+                return _get_single(objects)
+
+        else:
+            raise ValueError(f"api_version must be 1 or 2, got {api_version}")
 
     @staticmethod
     def get_array_type(array):

@@ -18,7 +18,6 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils import CoreUtils, components
 from mayatk.node_utils import NodeUtils
-from mayatk.xform_utils.matrices import Matrices
 
 
 class XformUtilsInternals:
@@ -1836,7 +1835,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
 
         result = []
-        for mesh in CoreUtils.mfn_mesh_generator(objects):
+        for mesh in CoreUtils.get_mfn_mesh(objects, api_version=1):
             points = om.MPointArray()
             mesh.getPoints(points, space)
 

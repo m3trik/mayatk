@@ -86,6 +86,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "env_utils/reference_manager.ui",
             "slot": "env_utils.reference_manager.ReferenceManagerSlots",
         },
+        "snap": {
+            "ui": "edit_utils/snap.ui",
+            "slot": "edit_utils.snap.SnapSlots",
+        },
         "stingray_arnold_shader": {
             "ui": "mat_utils/stingray_arnold_shader.ui",
             "slot": "mat_utils.stingray_arnold_shader.StingrayArnoldShaderSlots",
