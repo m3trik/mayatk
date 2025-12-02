@@ -21,7 +21,7 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
 
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(0)
 
         # Create a QWidgetAction to host the menu
@@ -33,7 +33,19 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
         toolbar.addAction(menu_action)
 
         layout.addWidget(toolbar)
-        self.layout().update()
+
+        # Add stretch to push content to top and allow proper expansion
+        layout.addStretch(1)
+
+        # Set size policies to allow proper expansion within MainWindow
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+
+        # Enable stylesheet background painting (required for QWidget to paint backgrounds from QSS)
+        from qtpy.QtCore import Qt
+
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
 
 class MayaMenuHandler(ptk.LoggingMixin):

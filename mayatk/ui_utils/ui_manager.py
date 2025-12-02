@@ -245,6 +245,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
 
         ui.set_attributes(WA_TranslucentBackground=True)
         ui.set_flags(FramelessWindowHint=True)
+        ui.style.set(theme="dark", style_class="translucentBgWithBorder")
         ui.lock_style = True  # Prevent style changes
 
         return ui
