@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mayatk"
+dynamic = ["version", "readme"]
+description = "A comprehensive toolkit for Autodesk Maya providing utilities for modeling, animation, rigging, and UI management."
+authors = [{name = "Ryan Simpson", email = "m3trik@outlook.com"}]
+license = {text = "MIT"}
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# Dependencies - exclude optional system deps (pymel, qtpy)
+dependencies = [
+    "pythontk>=0.7.34",
+    "uitk>=1.0.35",
+]
+
+[project.urls]
+Homepage = "https://github.com/m3trik/mayatk"
+Repository = "https://github.com/m3trik/mayatk"
+
+[tool.setuptools.dynamic]
+version = {attr = "mayatk.__version__"}
+readme = {file = "docs/README.md", content-type = "text/markdown"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mayatk*"]
+exclude = ["pymel", "pymel.*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.ui", "*.json", "*.txt", "*.md"]

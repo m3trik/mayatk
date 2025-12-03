@@ -34,6 +34,15 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
 
         layout.addWidget(toolbar)
 
+        # Apply stylesheet to slightly increase menu item height
+        self.menu.setStyleSheet(
+            """
+            QMenu::item {
+                padding: 2px 18px 2px 18px;
+            }
+            """
+        )
+
         # Add stretch to push content to top and allow proper expansion
         layout.addStretch(1)
 
@@ -41,6 +50,9 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
+
+        # Set minimum size to ensure menu is usable
+        self.setMinimumSize(200, 100)
 
         # Enable stylesheet background painting (required for QWidget to paint backgrounds from QSS)
         from qtpy.QtCore import Qt

@@ -4,6 +4,7 @@ import sys, os
 import importlib
 from typing import Optional, Callable, Any, TYPE_CHECKING
 import pythontk as ptk
+from tentacle import ui
 from uitk import Switchboard
 
 if TYPE_CHECKING:
@@ -235,6 +236,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             name=menu_key,
             tags={"maya", "menu"},
             overwrite=overwrite,
+            add_footer=False,  # Disable size grip for Maya menus
         )
 
         if header:
@@ -242,6 +244,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.header.setTitle(ui.objectName().upper())
             ui.header.attach_to(ui.centralWidget())
             ui.style.set(ui.header, "dark", "Header")
+            ui.header.config_buttons("menu", "collapse", "pin")
 
         ui.set_attributes(WA_TranslucentBackground=True)
         ui.set_flags(FramelessWindowHint=True)
