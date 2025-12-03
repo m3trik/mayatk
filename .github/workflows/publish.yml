@@ -6,6 +6,7 @@ on:
     paths:
       - 'mayatk/**'
       - 'pyproject.toml'
+      - '.github/workflows/**'
   
   workflow_dispatch:
 
