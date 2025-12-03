@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.9.48"
+__version__ = "0.9.49"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -68,4 +68,4 @@ bootstrap_package(
 # --------------------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
-# Test: 220854
+# Test: 222117

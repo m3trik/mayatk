@@ -24,24 +24,7 @@ pip install mayatk
 - Autodesk Maya 2025+
 - PyMEL (included with Maya)
 
-## Quick Start
 
-```python
-import mayatk as mtk
-
-# Access utilities directly
-selected = mtk.get_selected()
-mtk.create_instance(obj)
-mtk.freeze_transforms(objects)
-
-# Or use specific modules
-from mayatk import CoreUtils, EditUtils, NodeUtils
-
-# Work with transforms
-CoreUtils.snap_to_position(source, target)
-EditUtils.merge_vertices(mesh, threshold=0.001)
-NodeUtils.connect_attr(source, target, attr_name)
-```
 
 ## Package Structure
 
@@ -69,50 +52,7 @@ NodeUtils.connect_attr(source, target, attr_name)
 | **nurbs_utils** | NURBS surfaces and curve operations |
 | **ui_utils** | User interface components and utilities |
 
-## Key Features
 
-- **Dynamic Attribute Access** - Direct access to utilities from package level
-- **Automatic Undo Support** - Built-in decorators for undo queue management
-- **Selection Handling** - Automatic selection preservation and restoration
-- **PyMEL Integration** - Seamless integration with Maya's Python API
-- **Production Tested** - Battle-tested in professional 3D production
-
-## Documentation
-
-- **[Getting Started](GETTING_STARTED.md)** - Installation and basic usage
-- **[API Reference](API_REFERENCE.md)** - Complete function documentation
-- **[Examples](EXAMPLES.md)** - Real-world usage examples
-- **[Developer Guide](DEVELOPER_GUIDE.md)** - Contributing and extending
-- **[Changelog](CHANGELOG.md)** - Version history
-
-## Example Workflows
-
-### Mesh Operations
-```python
-import mayatk as mtk
-
-# Combine meshes and clean up
-result = mtk.combine_meshes(mesh_list)
-mtk.delete_history(result)
-mtk.center_pivot(result)
-```
-
-### Transform Management
-```python
-# Freeze transforms while preserving position
-mtk.freeze_transforms(objects, preserve_normals=True)
-
-# Align objects
-mtk.align_objects(source, target, axes=['x', 'y'])
-```
-
-### Scene Organization
-```python
-# Group and organize
-group = mtk.group_objects(objects, name="my_group")
-mtk.parent_objects(children, parent)
-mtk.create_display_layer(objects, "geometry_layer")
-```
 
 ## License
 
