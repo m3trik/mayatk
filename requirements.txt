@@ -1,4 +1,4 @@
 qtpy
 pymel
-pythontk==0.7.40
-uitk==1.0.42
+pythontk==0.7.44
+uitk==1.0.44
