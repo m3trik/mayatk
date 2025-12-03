@@ -4,6 +4,7 @@ import sys, os
 import importlib
 from typing import Optional, Callable, Any, TYPE_CHECKING
 import pythontk as ptk
+from tentacle import ui
 from uitk import Switchboard
 
 if TYPE_CHECKING:
@@ -197,7 +198,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.set_attributes(WA_TranslucentBackground=True)
             ui.set_flags(FramelessWindowHint=True)
             ui.style.set(theme="dark", style_class="translucentBgWithBorder")
-            ui.header.config_buttons("menu_button", "hide_button")
+            ui.header.config_buttons("menu", "collapse", "hide")
             ui.edit_tags(add="mayatk")
             return ui
 
@@ -235,6 +236,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             name=menu_key,
             tags={"maya", "menu"},
             overwrite=overwrite,
+            add_footer=False,  # Disable size grip for Maya menus
         )
 
         if header:
@@ -242,9 +244,11 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             ui.header.setTitle(ui.objectName().upper())
             ui.header.attach_to(ui.centralWidget())
             ui.style.set(ui.header, "dark", "Header")
+            ui.header.config_buttons("menu", "collapse", "pin")
 
         ui.set_attributes(WA_TranslucentBackground=True)
         ui.set_flags(FramelessWindowHint=True)
+        ui.style.set(theme="dark", style_class="translucentBgWithBorder")
         ui.lock_style = True  # Prevent style changes
 
         return ui
@@ -258,7 +262,7 @@ if __name__ == "__main__":
     CoreUtils.clear_scrollfield_reporters()
 
     ui = UiManager.instance().get("scene_exporter", reload=True)
-    ui.header.config_buttons("hide_button")
+    ui.header.config_buttons("hide")
     ui.show(pos="screen", app_exec=True)
 
 # --------------------------------------------------------------------------------------------
