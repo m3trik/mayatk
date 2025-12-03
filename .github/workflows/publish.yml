@@ -67,6 +67,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          git checkout dev
+          git pull origin dev
+          
           python -c "
           import re
           from pathlib import Path
@@ -83,7 +86,7 @@ jobs:
           
           git add mayatk/__init__.py requirements.txt
           git commit -m "Bump version [skip ci]"
-          git push
+          git push origin dev
       
       - name: Summary
         run: |
