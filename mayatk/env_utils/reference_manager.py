@@ -736,12 +736,55 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug(f"Filtering file list with filter: {filter_text}")
             file_list = ptk.filter_list(file_list, inc=filter_text, basename_only=True)
 
+        # Identify and include external references
+        current_refs = self.current_references
+        external_refs_paths = []
+
+        # Get all files in current workspace to check against (unfiltered)
+        full_workspace_files = self.workspace_files.get(workspace_path, [])
+        full_workspace_files_set = set(
+            os.path.normpath(f) for f in full_workspace_files
+        )
+
+        for ref in current_refs:
+            try:
+                path = os.path.normpath(ref.path)
+                # If path is not in the current workspace, it's external
+                if path not in full_workspace_files_set:
+                    # Avoid duplicates in external list
+                    if path not in [os.path.normpath(p) for p in external_refs_paths]:
+                        external_refs_paths.append(ref.path)
+            except Exception:
+                continue
+
+        # Prepend external references to the file list
+        if external_refs_paths:
+            self.logger.debug(
+                f"Adding {len(external_refs_paths)} external references to table."
+            )
+            file_list = external_refs_paths + file_list
+
         if not file_list:
             self.logger.warning(f"No scene files found in workspace: {workspace_path}")
         else:
             self.logger.debug(f"Found {len(file_list)} scenes to populate in table.")
 
-        file_names = [os.path.basename(f) for f in file_list]
+        # Generate file names, marking external references
+        file_names = []
+        for f in file_list:
+            name = os.path.basename(f)
+            if f in external_refs_paths:
+                # Try to find the workspace name for the external reference
+                try:
+                    workspace_path = EnvUtils.find_workspace_using_path(f)
+                    if workspace_path:
+                        workspace_name = os.path.basename(workspace_path)
+                        name = f"{name} ({workspace_name})"
+                    else:
+                        name = f"{name} (External)"
+                except Exception:
+                    name = f"{name} (External)"
+            file_names.append(name)
 
         # Check if name stripping is enabled via checkbox
         strip_enabled = getattr(self.ui, "chk_strip_names", None)
@@ -803,9 +846,29 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             self.format_table_item(item, file_path)
 
+            # Column 1: Notes (Metadata)
+            item_notes = t.item(row, 1)
+            if not item_notes:
+                item_notes = self.sb.QtWidgets.QTableWidgetItem()
+                item_notes.setFlags(
+                    item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
+                )
+                t.setItem(row, 1, item_notes)
+
+            # Store file path in notes item too for easy access during edit
+            item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
+
+            # Fetch metadata (Comments)
+            try:
+                metadata = ptk.Metadata.get(file_path, "Comments")
+                comments = metadata.get("Comments") or ""
+                if item_notes.text() != comments:
+                    item_notes.setText(comments)
+            except Exception:
+                pass
+
         # Apply table formatting
         t.apply_formatting()
-        t.stretch_column_to_fill(0)  # Stretch the Files column (at index 0)
 
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.
@@ -967,15 +1030,19 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:
-            widget.setColumnCount(1)
-            widget.setHorizontalHeaderLabels(["Reference"])
+            widget.setColumnCount(2)
+            widget.setHorizontalHeaderLabels(["FILES:", "NOTES:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
             widget.verticalHeader().setVisible(False)
+
+            # Make the Notes column (index 1) non-selecting so clicking it doesn't trigger reference logic
+            widget.set_column_selectable(1, False)
             widget.setAlternatingRowColors(False)
             widget.setWordWrap(False)
+            widget.set_stretch_column(0)
 
             # Connect double-click FIRST to ensure it gets priority
             widget.itemDoubleClicked.connect(self.tbl000_item_double_clicked)
@@ -1015,27 +1082,42 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             table = self.ui.tbl000
             table.editItem(item)
 
+        elif item and item.column() == 1:  # Notes column
+            self.logger.debug(f"Starting edit for notes: {item.text()}")
+            table = self.ui.tbl000
+            table.editItem(item)
+
     def tbl000_item_changed(self, item):
         """Handle item changes when user renames a file."""
-        if item.column() != 0:  # Only handle the filename column (at index 0)
-            return
+        if item.column() == 0:  # Only handle the filename column (at index 0)
+            # Only process if this item is being edited
+            if not self.controller.is_item_being_edited(item):
+                return
 
-        # Only process if this item is being edited
-        if not self.controller.is_item_being_edited(item):
-            return
+            new_name = item.text().strip()
+            if not new_name:
+                # If empty, restore the original display name
+                self.controller.restore_item_display(item)
+                return
 
-        new_name = item.text().strip()
-        if not new_name:
-            # If empty, restore the original display name
-            self.controller.restore_item_display(item)
-            return
+            # For now, just update the display name
+            # In a real implementation, you might want to rename the actual file
+            self.logger.info(f"File renamed to: {new_name}")
 
-        # For now, just update the display name
-        # In a real implementation, you might want to rename the actual file
-        self.logger.info(f"File renamed to: {new_name}")
+            # Update the stored display name
+            item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
 
-        # Update the stored display name
-        item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
+        elif item.column() == 1:  # Notes column
+            file_path = item.data(self.sb.QtCore.Qt.UserRole)
+            if not file_path:
+                return
+
+            new_comments = item.text()
+            try:
+                ptk.Metadata.set(file_path, Comments=new_comments)
+                self.logger.info(f"Updated comments for {file_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to set metadata for {file_path}: {e}")
 
     def tbl000_editor_closed(self, editor, hint):
         """Handle when the rename editor is closed."""

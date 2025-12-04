@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
-    <height>442</height>
+    <width>600</width>
+    <height>445</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -25,8 +25,8 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>800</width>
-     <height>400</height>
+     <width>600</width>
+     <height>445</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">

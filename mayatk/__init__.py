@@ -44,6 +44,7 @@ DEFAULT_INCLUDE = {
     "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],
     "env_utils.hierarchy_manager.swapper": "ObjectSwapper",
     # Diagnostics utilities
+    "core_utils.diagnostic": "Diagnostics",
     "core_utils.diagnostic.mesh": "MeshDiagnostics",
     "core_utils.diagnostic.animation": "AnimCurveDiagnostics",
     # Examples of wildcard usage:

@@ -2,7 +2,6 @@
 # coding=utf-8
 """Animation-curve diagnostics and optional repair helpers."""
 from __future__ import annotations
-
 from typing import Any, Dict, List, Optional, Sequence, Union
 import math
 
@@ -320,13 +319,3 @@ class AnimCurveDiagnostics:
             if not quiet:
                 pm.warning(f"Failed to repair curve keys: {str(exc)}")
             return False
-
-
-def repair_corrupted_curves(**kwargs) -> Dict[str, Any]:
-    """Module-level helper mirroring :meth:`AnimCurveDiagnostics.repair_corrupted_curves`."""
-
-    return AnimCurveDiagnostics.repair_corrupted_curves(**kwargs)
-
-
-# Compatibility alias for legacy imports
-AnimCurveRepair = AnimCurveDiagnostics
