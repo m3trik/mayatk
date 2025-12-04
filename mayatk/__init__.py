@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.9.49"
+__version__ = "0.9.50"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -44,6 +44,7 @@ DEFAULT_INCLUDE = {
     "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],
     "env_utils.hierarchy_manager.swapper": "ObjectSwapper",
     # Diagnostics utilities
+    "core_utils.diagnostic": "Diagnostics",
     "core_utils.diagnostic.mesh": "MeshDiagnostics",
     "core_utils.diagnostic.animation": "AnimCurveDiagnostics",
     # Examples of wildcard usage:

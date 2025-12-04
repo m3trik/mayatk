@@ -736,9 +736,9 @@ class EditMacros:
             b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
 
         if repair_mesh:  # Clean any n-gons before running the boolean
-            from mayatk.core_utils.diagnostic import clean_geometry
+            from mayatk.core_utils import Diagnostics
 
-            clean_geometry(
+            Diagnostics.clean_geometry(
                 objects=a,
                 repair=True,
                 nonmanifold=True,

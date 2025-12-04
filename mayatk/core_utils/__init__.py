@@ -4,13 +4,10 @@
 from mayatk.core_utils._core_utils import *  # noqa: F401,F403
 from mayatk.core_utils.auto_instancer import AutoInstancer
 from mayatk.core_utils.mash import MashToolkit, MashNetworkNodes
+from mayatk.core_utils.diagnostics import Diagnostics
 
-try:
-    from mayatk.core_utils._core_utils import __all__ as _core_all
-except ImportError:
-    _core_all = []
 
-__all__ = list(_core_all) + [
+__all__ = [
     "MashToolkit",
     "MashNetworkNodes",
     "AutoInstancer",
@@ -21,6 +18,7 @@ __all__ = list(_core_all) + [
     "AssemblyTemplateSlot",
     "InstanceGroup",
     "InstancePayload",
+    "Diagnostics",
 ]
 
 # --------------------------------------------------------------------------------------------

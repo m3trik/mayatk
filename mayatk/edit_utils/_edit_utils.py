@@ -8,9 +8,8 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk.core_utils import CoreUtils, components
-from mayatk.core_utils.diagnostic import MeshDiagnostics as MeshRepair
 from mayatk.display_utils import DisplayUtils
 from mayatk.node_utils import NodeUtils
 from mayatk.xform_utils import XformUtils

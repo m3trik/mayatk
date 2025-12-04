@@ -2,7 +2,6 @@
 # coding=utf-8
 """Mesh diagnostics and repair helpers."""
 from __future__ import annotations
-
 from typing import Optional, Sequence, Union
 
 try:
@@ -101,19 +100,3 @@ class MeshDiagnostics:
             pm.polyQuad(n_gons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
 
         return n_gons
-
-
-def clean_geometry(**kwargs) -> None:
-    """Module-level helper mirroring :meth:`MeshDiagnostics.clean_geometry`."""
-
-    return MeshDiagnostics.clean_geometry(**kwargs)
-
-
-def get_ngons(objects: Optional[PyNodeSeq], repair: bool = False):
-    """Module-level helper mirroring :meth:`MeshDiagnostics.get_ngons`."""
-
-    return MeshDiagnostics.get_ngons(objects=objects, repair=repair)
-
-
-# Compatibility alias for legacy imports
-MeshRepair = MeshDiagnostics

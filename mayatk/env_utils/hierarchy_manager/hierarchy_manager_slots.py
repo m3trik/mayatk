@@ -21,9 +21,6 @@ from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
     NodeFilterUtilities,
 )
 
-# Import tree path matcher functionality from pythontk
-from pythontk.core_utils.hierarchy_utils import HierarchyIndexer, HierarchyMatching
-
 
 class HierarchyManagerController(ptk.LoggingMixin):
     """Controller for hierarchy management operations."""
@@ -927,10 +924,8 @@ class HierarchyManagerController(ptk.LoggingMixin):
     def _store_tree_selection(self, tree_widget):
         """Store the current selection state of a tree widget."""
         try:
-            from qtpy import QtWidgets
-
             selected_paths = []
-            iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+            iterator = self.sb.QtWidgets.QTreeWidgetItemIterator(tree_widget)
             while iterator.value():
                 item = iterator.value()
                 if item.isSelected():
@@ -968,10 +963,8 @@ class HierarchyManagerController(ptk.LoggingMixin):
     def _find_item_by_path(self, tree_widget, path):
         """Find a tree item by its hierarchical path."""
         try:
-            from qtpy import QtWidgets
-
             path_parts = path.split("|")
-            iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+            iterator = self.sb.QtWidgets.QTreeWidgetItemIterator(tree_widget)
 
             while iterator.value():
                 item = iterator.value()
@@ -993,10 +986,8 @@ class HierarchyManagerController(ptk.LoggingMixin):
     def _get_tree_structure(self, tree_widget):
         """Get a simplified structure representation of the tree for comparison."""
         try:
-            from qtpy import QtWidgets
-
             structure = []
-            iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+            iterator = self.sb.QtWidgets.QTreeWidgetItemIterator(tree_widget)
 
             while iterator.value():
                 item = iterator.value()
@@ -1229,9 +1220,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         """Initialize the reference/imported hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
             # Enable multi-selection for auto-select functionality
-            from qtpy import QtWidgets
-
-            widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+            widget.setSelectionMode(
+                self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
+            )
 
             widget.menu.setTitle("Reference Hierarchy:")
             widget.menu.add(
@@ -1268,9 +1259,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         """Initialize the current scene hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
             # Enable multi-selection for auto-select functionality
-            from qtpy import QtWidgets
-
-            widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+            widget.setSelectionMode(
+                self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
+            )
 
             widget.menu.setTitle("Current Scene Hierarchy:")
             widget.menu.add(
@@ -2110,9 +2101,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         )
                         # Show what last components we do have available
                         sample_items = []
-                        from qtpy import QtWidgets as _QtWidgets
-
-                        it_sample = _QtWidgets.QTreeWidgetItemIterator(tree000)
+                        it_sample = self.sb.QtWidgets.QTreeWidgetItemIterator(tree000)
                         while it_sample.value() and len(sample_items) < 10:
                             item_sample = it_sample.value()
                             if not item_sample.parent():  # Only top-level for brevity
@@ -2336,9 +2325,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 return count
 
             # Select children in reference tree
-            from qtpy import QtWidgets as _QtW
-
-            it_ref = _QtW.QTreeWidgetItemIterator(tree000)
+            it_ref = self.sb.QTreeWidgetItemIterator(tree000)
             while it_ref.value():
                 item = it_ref.value()
                 if item.isSelected() and item.childCount() > 0:
@@ -2346,7 +2333,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 it_ref += 1
 
             # Select children in current tree
-            it_cur = _QtW.QTreeWidgetItemIterator(tree001)
+            it_cur = self.sb.QtWidgets.QTreeWidgetItemIterator(tree001)
             while it_cur.value():
                 item = it_cur.value()
                 if item.isSelected() and item.childCount() > 0:
@@ -2371,11 +2358,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
             # Immediate selection verification before any further processing
             try:
-                from qtpy import QtWidgets as _QtW
-
                 # Count actually selected items in reference tree immediately
                 ref_selected_count = 0
-                it_verify = _QtW.QTreeWidgetItemIterator(tree000)
+                it_verify = self.sb.QTreeWidgetItemIterator(tree000)
                 while it_verify.value():
                     if it_verify.value().isSelected():
                         ref_selected_count += 1
@@ -2383,7 +2368,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
                 # Count actually selected items in current tree
                 cur_selected_count = 0
-                it_cur_verify = _QtW.QTreeWidgetItemIterator(tree001)
+                it_cur_verify = self.sb.QTreeWidgetItemIterator(tree001)
                 while it_cur_verify.value():
                     if it_cur_verify.value().isSelected():
                         cur_selected_count += 1
@@ -2422,9 +2407,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
                 # Process any pending events before visual updates
                 try:
-                    from qtpy import QtWidgets as _QtWidgets, QtCore as _QtCore
-
-                    _QtWidgets.QApplication.processEvents()
+                    self.sb.QtWidgets.QApplication.processEvents()
                 except:
                     pass
 
@@ -2438,12 +2421,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 tree000.setFocus()
                 tree000.viewport().update()
                 tree000.repaint()
-                _QtWidgets.QApplication.processEvents()
+                self.sb.QtWidgets.QApplication.processEvents()
 
                 tree001.setFocus()
                 tree001.viewport().update()
                 tree001.repaint()
-                _QtWidgets.QApplication.processEvents()
+                self.sb.QtWidgets.QApplication.processEvents()
 
                 # Final focus on the tree with more selections, or current tree as default
                 if ref_selected_count >= cur_selected_count:
@@ -2496,7 +2479,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Post-selection debug: enumerate actually selected items in reference tree
             try:
                 ref_selected = []
-                it = _QtW.QTreeWidgetItemIterator(tree000)
+                it = self.sb.QtWidgets.QTreeWidgetItemIterator(tree000)
                 while it.value():
                     item = it.value()
                     if item.isSelected():
@@ -2569,7 +2552,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         unresolved_missing = still_unresolved
                         # Rebuild enumeration after fuzzy variant pass
                         ref_selected = []
-                        it_rv = _QtW.QTreeWidgetItemIterator(tree000)
+                        it_rv = self.sb.QtWidgets.QTreeWidgetItemIterator(tree000)
                         while it_rv.value():
                             item_rv = it_rv.value()
                             if item_rv.isSelected():
@@ -2605,7 +2588,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Expand reference-only (missing) paths in reference tree
             for missing_path in self.controller._current_diff_result.get("missing", []):
                 node_name = missing_path.split("|")[-1]
-                items = tree000.findItems(node_name, QtCore.Qt.MatchRecursive)
+                items = tree000.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                 for item in items:
                     if self._matches_hierarchy_path(item, missing_path):
                         parent = item.parent()
@@ -2618,7 +2601,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Expand current-only (extra) paths in current tree
             for extra_path in self.controller._current_diff_result.get("extra", []):
                 node_name = extra_path.split("|")[-1]
-                items = tree001.findItems(node_name, QtCore.Qt.MatchRecursive)
+                items = tree001.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                 for item in items:
                     if self._matches_hierarchy_path(item, extra_path):
                         parent = item.parent()
@@ -2634,17 +2617,15 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Final selection summary for user clarity
         if auto_select:
             try:
-                from qtpy import QtWidgets as _QtW
-
                 final_ref_count = 0
-                it_final = _QtW.QTreeWidgetItemIterator(tree000)
+                it_final = self.sb.QtWidgets.QTreeWidgetItemIterator(tree000)
                 while it_final.value():
                     if it_final.value().isSelected():
                         final_ref_count += 1
                     it_final += 1
 
                 final_cur_count = 0
-                it_final_cur = _QtW.QTreeWidgetItemIterator(tree001)
+                it_final_cur = self.sb.QtWidgets.QTreeWidgetItemIterator(tree001)
                 while it_final_cur.value():
                     if it_final_cur.value().isSelected():
                         final_cur_count += 1
@@ -2739,10 +2720,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
     def count_tree_items(self, tree_widget):
         """Count total items in a tree widget for debugging"""
         try:
-            from qtpy import QtWidgets as _QtWidgets
-
             count = 0
-            iterator = _QtWidgets.QTreeWidgetItemIterator(tree_widget)
+            iterator = self.sb.QtWidgets.QTreeWidgetItemIterator(tree_widget)
             while iterator.value():
                 count += 1
                 iterator += 1
