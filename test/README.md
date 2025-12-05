@@ -2,45 +2,95 @@
 
 This directory contains unit tests for the mayatk package and utilities for running them in Maya.
 
-## Overview
-
-The test infrastructure supports two execution modes:
-
-1. **Direct execution in Maya** - Run tests directly in Maya's Script Editor or mayapy
-2. **Remote execution via command port** - Run tests from your IDE/terminal while Maya is running
-
 ## Quick Start
 
-### Option 1: Remote Execution (Recommended)
+### Windows PowerShell Script (Easiest)
 
-This allows you to run tests from your IDE while Maya is open:
+Simply use the provided Windows script for all common operations:
 
-**Step 1: Setup Maya** (one-time setup)
+```powershell
+# From the test directory:
+cd O:\Cloud\Code\_scripts\mayatk\test
+
+# Run default core tests (8 modules)
+.\test.ps1
+
+# List all available test modules
+.\test.ps1 -List
+
+# Run quick validation test
+.\test.ps1 -Quick
+
+# Run ALL test modules (17 modules)
+.\test.ps1 -All
+
+# Run specific modules
+.\test.ps1 core components
+.\test.ps1 edit xform mat
+
+# View last test results
+.\test.ps1 -Results
+
+# Monitor tests in real-time
+.\test.ps1 -Watch
+
+# Test Maya connection
+.\test.ps1 -Connect
+
+# Get help
+.\test.ps1 -Help
+```
+
+Or use the batch file wrapper:
+```cmd
+test.bat -List
+test.bat core edit
+```
+
+### Python Direct (Advanced)
+
+Use the Python runner directly for more control:
+
+```powershell
+# Run default core tests
+python run_tests.py
+
+# Run specific modules
+python run_tests.py core_utils components
+
+# Run ALL test modules
+python run_tests.py --all
+
+# List available tests
+python run_tests.py --list
+
+# Quick validation test
+python run_tests.py --quick
+
+# Dry run (validate without running)
+python run_tests.py --dry-run
+```
+
+## Overview
+
+The test infrastructure supports execution via Maya's command port:
+
+1. **Remote execution** - Run tests from terminal/IDE while Maya is running
+2. **Unified test runner** - Single runner for all test modules
+3. **Real-time monitoring** - See progress in Maya Script Editor and terminal
+4. **Results tracking** - Results saved to `test_results.txt`
+
+## Setup
+
+### One-Time Maya Setup
 
 In Maya's Script Editor, run:
 ```python
-import sys
-sys.path.insert(0, r'O:\Cloud\Code\_scripts\mayatk\test')
-import setup_maya_for_tests
-setup_maya_for_tests.setup()
+import mayatk
+mayatk.ensure_command_ports()
 ```
 
-**Step 2: Run Tests from IDE/Terminal**
-
-```powershell
-# Run all tests
-python O:\Cloud\Code\_scripts\mayatk\test\maya_test_runner.py
-
-# Run specific test files
-python maya_test_runner.py core_utils_test.py mat_utils_test.py
-
-# Connect to Maya on different host/port
-python maya_test_runner.py --host 192.168.1.100 --port 7003
-```
-
-### Option 2: Direct Execution in Maya
-
-In Maya's Script Editor:
+This opens the Python command port on port 7002 (default).
 
 ```python
 import unittest
