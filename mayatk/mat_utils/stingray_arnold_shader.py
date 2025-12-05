@@ -35,6 +35,7 @@ class StingrayArnoldShader:
         create_arnold: bool = False,
         albedo_transparency: bool = False,
         metallic_smoothness: bool = False,
+        output_extension: str = "png",
         callback: Callable = print,
     ) -> Optional[object]:
         """ """
@@ -45,7 +46,9 @@ class StingrayArnoldShader:
             return None
 
         textures = self.filter_for_correct_base_color_map(textures, albedo_transparency)
-        textures = self.filter_for_correct_metallic_map(textures, metallic_smoothness)
+        textures = self.filter_for_correct_metallic_map(
+            textures, metallic_smoothness, output_extension
+        )
         textures = self.filter_for_correct_normal_map(textures, normal_type)
 
         opacity_map = ptk.filter_images_by_type(
@@ -445,7 +448,10 @@ class StingrayArnoldShader:
         return other_textures
 
     def filter_for_correct_metallic_map(
-        self, textures: List[str], use_metallic_smoothness: bool
+        self,
+        textures: List[str],
+        use_metallic_smoothness: bool,
+        output_extension: str = "png",
     ) -> List[str]:
         """Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothness parameter.
         Prioritizes a metallic smoothness map over separate metallic and roughness maps when use_metallic_smoothness is True.
@@ -489,8 +495,12 @@ class StingrayArnoldShader:
                 base_name = ptk.get_base_texture_name(specular_map[0])
                 out_dir = os.path.dirname(specular_map[0])
 
-                rough_path = os.path.join(out_dir, f"{base_name}_Roughness.png")
-                metal_path = os.path.join(out_dir, f"{base_name}_Metallic.png")
+                rough_path = os.path.join(
+                    out_dir, f"{base_name}_Roughness.{output_extension}"
+                )
+                metal_path = os.path.join(
+                    out_dir, f"{base_name}_Metallic.{output_extension}"
+                )
 
                 created_roughness_map.save(rough_path)
                 created_metallic_map.save(metal_path)
@@ -652,6 +662,16 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         text = self.ui.cmb001.currentText()
         return text
 
+    @property
+    def output_extension(self) -> str:
+        """Get the output map extension from the comboBox current text.
+
+        Returns:
+            (str) The file extension in lowercase (e.g., 'png', 'jpg')
+        """
+        text = self.ui.cmb003.currentText()
+        return text.lower()
+
     def b000(self):
         """Create network."""
         if self.image_files:
@@ -679,6 +699,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                 create_arnold=create_arnold,
                 albedo_transparency=albedo_transparency,
                 metallic_smoothness=metallic_smoothness,
+                output_extension=self.output_extension,
                 callback=self.callback,
             )
 

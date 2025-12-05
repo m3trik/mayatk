@@ -1,0 +1,2 @@
+Maya command port is working!
+Tests can execute successfully
