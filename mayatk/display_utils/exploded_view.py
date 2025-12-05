@@ -10,9 +10,9 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk import core_utils
-from mayatk import xform_utils
-from mayatk import node_utils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.xform_utils._xform_utils import XformUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class ExplodedView:
@@ -60,7 +60,7 @@ class ExplodedView:
             pm.warning("No objects provided or selected.")
             return []
 
-        children = node_utils.NodeUtils.get_unique_children(self.objects)
+        children = NodeUtils.get_unique_children(self.objects)
 
         if exploded:
             result = [
@@ -128,8 +128,7 @@ class ExplodedView:
             return 0
 
         node_data = [
-            xform_utils.XformUtils.get_bounding_box(node, "center|maxsize")
-            for node in nodes
+            XformUtils.get_bounding_box(node, "center|maxsize") for node in nodes
         ]
         positions = np.array([data[0] for data in node_data])
         sizes = np.array([data[1] for data in node_data])
@@ -162,7 +161,7 @@ class ExplodedView:
         }
         return iteration_count
 
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     @_inject_objects_if_given
     def explode(self):
         """Explode the objects.
@@ -174,13 +173,11 @@ class ExplodedView:
 
         for obj in objects:
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
-            node_utils.NodeUtils.set_node_attributes(
-                obj, create=True, original_position=pos
-            )
+            NodeUtils.set_node_attributes(obj, create=True, original_position=pos)
 
         self.arrange_objects(objects)
 
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     @_inject_objects_if_given
     def un_explode(self):
         """Un-explode the objects.
@@ -212,7 +209,7 @@ class ExplodedView:
         else:
             self.explode()
 
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def un_explode_all(self):
         """Un-explode all"""
         all_objects_with_original_position = pm.ls("*.original_position")

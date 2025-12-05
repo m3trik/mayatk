@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Lighting utilities for Maya.
 
-from mayatk.light_utils._light_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import LightUtils
+"""
 
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

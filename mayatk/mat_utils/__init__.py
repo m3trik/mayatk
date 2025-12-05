@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Material utilities for Maya.
 
-from mayatk.mat_utils._mat_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import MatUtils
+"""
 
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

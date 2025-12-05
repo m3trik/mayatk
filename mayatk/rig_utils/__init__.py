@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Rigging utilities for Maya.
 
-from mayatk.rig_utils._rig_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import RigUtils
+"""
 
-# --------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

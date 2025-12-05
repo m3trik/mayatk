@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class GetComponentsMixin:
@@ -334,7 +334,7 @@ class GetComponentsMixin:
         components = pm.polyListComponentConversion(
             components, **{d[typ.lower()]: True}
         )
-        return core_utils.CoreUtils.convert_array_type(
+        return CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
 
@@ -400,7 +400,7 @@ class GetComponentsMixin:
         else:
             result = ["{}.{}[{}]".format(objName, component_type, c) for c in integers]
 
-        return core_utils.CoreUtils.convert_array_type(
+        return CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -423,9 +423,9 @@ class GetComponentsMixin:
             filter_components('cyl.f[:]', range(2), range(1, 23)) #returns: ['cyl.f[0]']
         """
         typ = cls.get_component_type(components)
-        etyp = core_utils.CoreUtils.get_array_type(components)
-        etyp_inc = core_utils.CoreUtils.get_array_type(inc)
-        etyp_exc = core_utils.CoreUtils.get_array_type(exc)
+        etyp = CoreUtils.get_array_type(components)
+        etyp_inc = CoreUtils.get_array_type(inc)
+        etyp_exc = CoreUtils.get_array_type(exc)
 
         if etyp_inc == "int" or etyp_exc == "int":
             try:
@@ -447,7 +447,7 @@ class GetComponentsMixin:
         components = pm.ls(components, flatten=True)
 
         filtered = ptk.filter_list(components, inc=inc, exc=exc)
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             filtered, returned_type=etyp, flatten=flatten
         )
         return result
@@ -494,7 +494,7 @@ class GetComponentsMixin:
         if randomize:
             components = randomize(pm.ls(components, flatten=1), randomize)
 
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
         )
         return result
@@ -776,7 +776,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             else:
                 raise ValueError(f"Unrecognized component_type: {component_type}")
 
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             border_components, returned_type=returned_type
         )
         return result
@@ -825,12 +825,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         """
         from operator import itemgetter
 
-        a = core_utils.CoreUtils.convert_array_type(
-            a, returned_type="str", flatten=True
-        )
-        b = core_utils.CoreUtils.convert_array_type(
-            b, returned_type="str", flatten=True
-        )
+        a = CoreUtils.convert_array_type(a, returned_type="str", flatten=True)
+        b = CoreUtils.convert_array_type(b, returned_type="str", flatten=True)
         vertPairsAndDistance = {}
         for v1 in a:
             v1Pos = pm.pointPosition(v1, world=1)
@@ -846,7 +842,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return vertPairs
 
     @classmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def get_closest_vertex(
         cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type="str"
     ):
@@ -868,7 +864,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             get_closest_vertex('plnShape.vtx[0]', 'cyl') #returns: {'plnShape.vtx[0]': 'cylShape.vtx[3]'},
             get_closest_vertex('plnShape.vtx[2:3]', 'cyl') #returns: {'plnShape.vtx[2]': 'cylShape.vtx[2]', 'plnShape.vtx[3]': 'cylShape.vtx[1]'}
         """
-        vertices = core_utils.CoreUtils.convert_array_type(
+        vertices = CoreUtils.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
 
@@ -901,7 +897,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             v2Pos = pm.pointPosition(v2, world=True)
             distance = ptk.distance_between_points(v1Pos, v2Pos)
 
-            v2_convertedType = core_utils.CoreUtils.convert_array_type(
+            v2_convertedType = CoreUtils.convert_array_type(
                 v2, returned_type=returned_type
             )[0]
             if not tolerance:
@@ -997,7 +993,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return dist
 
     @staticmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def bridge_connected_edges(edges: Union[str, object, list]) -> None:
         """Bridges two connected edges by extruding one edge, then moving and merging
         the new vertices with the corresponding vertices of the second edge.
@@ -1127,7 +1123,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         result = ptk.remove_duplicates(
             ["{}.e[{}]".format(objName, e) for e in edgesLong]
         )
-        return core_utils.CoreUtils.convert_array_type(
+        return CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=flatten
         )
 
@@ -1345,7 +1341,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return filtered_edges
 
     @classmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def set_edge_hardness(
         cls,
         objects: Union[str, object, List],
@@ -1454,7 +1450,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return similar_faces
 
     @classmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def average_normals(cls, objects, by_uv_shell=False):
         """Average the normals of the given objects.
 
@@ -1478,7 +1474,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                     pm.polySoftEdge(obj, a=180)
 
     @staticmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def transfer_normals(objects: list[str], space: str = "world"):
         """Transfer vertex normals from source mesh to target meshes.
 
@@ -1567,9 +1563,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             if n >= lowRange and n <= highRange:
                 result.append(c)
 
-        result = core_utils.CoreUtils.convert_array_type(
-            result, returned_type=returned_type
-        )
+        result = CoreUtils.convert_array_type(result, returned_type=returned_type)
         return result
 
     @classmethod
@@ -1594,7 +1588,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         dagPath = selectionList.getDagPath(0)  # create empty dag path object.
         mesh = om.MFnMesh(dagPath)  # get mesh.
 
-        vtxID = core_utils.CoreUtils.convert_array_type(vertex, "int")[0]
+        vtxID = CoreUtils.convert_array_type(vertex, "int")[0]
         # get vertex normal and use om.MSpace.kObject for object space.
         return mesh.getVertexNormal(vtxID, angle_weighted, space=om.MSpace.kWorld)
 
@@ -1639,6 +1633,12 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             else:
                 # Edge selection mode: Use the current edge selection
                 edges = pm.ls(sl=True, fl=True)
+
+        # Ensure edges are flattened for polyCrease and polySoftEdge
+        edges = pm.ls(edges, flatten=True)
+
+        if not edges:
+            return
 
         # Apply crease if specified
         if amount is not None:

@@ -16,8 +16,9 @@ except Exception:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, components
-from mayatk.node_utils import NodeUtils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components as components
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class XformUtilsInternals:
@@ -451,7 +452,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         }
 
         if from_channel_box:
-            from mayatk.ui_utils import UiUtils
+            from mayatk.ui_utils._ui_utils import UiUtils
 
             selected_channels = set(UiUtils.get_selected_channels() or [])
             for ch in selected_channels:

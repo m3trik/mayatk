@@ -5,15 +5,15 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk import core_utils
-from mayatk.edit_utils import EditUtils
-from mayatk.node_utils import NodeUtils
-from mayatk.core_utils import preview
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.edit_utils._edit_utils import EditUtils
+from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.core_utils.preview import Preview
 
 
 class CutOnAxis:
     @staticmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def perform_cut_on_axis(
         objects,
         axis="-x",
@@ -58,7 +58,7 @@ class CutOnAxisSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.cut_on_axis
 
-        self.preview = preview.Preview(
+        self.preview = Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
 

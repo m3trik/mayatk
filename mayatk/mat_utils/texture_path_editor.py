@@ -6,8 +6,8 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from mayatk.env_utils import EnvUtils
-from mayatk.mat_utils import MatUtils
+from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 from uitk.widgets.footer import FooterStatusController
 
 

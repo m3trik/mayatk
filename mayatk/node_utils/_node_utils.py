@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class NodeUtils(ptk.HelpMixin):
@@ -265,7 +265,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=True, hasData=True)
 
         # Convert element type and apply filters
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         result = ptk.filter_list(result, inc, exc)
@@ -307,7 +307,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -353,7 +353,7 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = core_utils.CoreUtils.convert_array_type(
+        result = CoreUtils.convert_array_type(
             result, returned_type=returned_type, flatten=True
         )
         # filter
@@ -811,7 +811,7 @@ class NodeUtils(ptk.HelpMixin):
         return instances
 
     @classmethod
-    @core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def replace_with_instances(
         cls,
         objects=None,

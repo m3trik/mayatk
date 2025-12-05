@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Camera utilities for Maya.
 
-from mayatk.cam_utils._cam_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import CamUtils
+"""
 
-# --------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

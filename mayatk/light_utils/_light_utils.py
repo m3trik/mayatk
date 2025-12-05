@@ -10,9 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-# from mayatk.core_utils import CoreUtils
-# from mayatk.node_utils import NodeUtils
-# from mayatk.env_utils import EnvUtils
+# (no imports currently needed)
 
 
 class LightUtils(ptk.HelpMixin): ...

@@ -11,7 +11,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.env_utils import EnvUtils
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 
 

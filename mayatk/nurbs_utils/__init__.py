@@ -1,12 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""NURBS utilities for Maya.
 
-from mayatk.nurbs_utils._nurbs_utils import *
-from mayatk.nurbs_utils.image_tracer import ImageTracer
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import NurbsUtils, ImageTracer
+"""
 
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

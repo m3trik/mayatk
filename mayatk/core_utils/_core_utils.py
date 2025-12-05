@@ -125,7 +125,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
                              If None, unlocks all standard transform attributes.
         """
-        from mayatk.rig_utils import RigUtils
+        from mayatk.rig_utils._rig_utils import RigUtils
 
         # Get current lock state and unlock
         lock_state = RigUtils.get_attr_lock_state(objects, unlock=True)
@@ -288,7 +288,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             RuntimeError: If the node is not a valid mesh.
             ValueError: If api_version is not 1 or 2.
         """
-        from mayatk.node_utils import NodeUtils
+        from mayatk.node_utils._node_utils import NodeUtils
 
         if api_version == 1:
             import maya.OpenMaya as om
@@ -337,7 +337,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         Returns:
             (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
         """
-        from mayatk.node_utils import NodeUtils
+        from mayatk.node_utils._node_utils import NodeUtils
 
         try:
             o = ptk.make_iterable(array)[0]
@@ -475,7 +475,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         Returns:
             dict: A dictionary mapping the names of source meshes to their most similar target mesh names.
         """
-        from mayatk.node_utils import NodeUtils
+        from mayatk.node_utils._node_utils import NodeUtils
 
         source_group = NodeUtils.get_unique_children(source)
         target_group = NodeUtils.get_unique_children(target)

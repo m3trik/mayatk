@@ -9,7 +9,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, components
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components as components
 
 
 class Snap(ptk.HelpMixin):

@@ -10,7 +10,7 @@ import pymel.core as pm
 import pythontk as ptk
 
 # From this package:
-from mayatk import ui_utils
+from mayatk.ui_utils._ui_utils import UiUtils
 
 
 class EmbeddedMenuWidget(QtWidgets.QWidget):
@@ -296,9 +296,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
         pm.refresh()
 
         # Create a placeholder menu UI
-        placeholder_menu = QtWidgets.QMenu(
-            maya_menu_name, ui_utils.UiUtils.get_main_window()
-        )
+        placeholder_menu = QtWidgets.QMenu(maya_menu_name, UiUtils.get_main_window())
         placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
         placeholder_widget.setObjectName(menu_key)
         self.menus[menu_key] = placeholder_widget
@@ -322,7 +320,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
         """Properly deferred function to duplicate and populate a Maya menu in UI."""
 
         def _populate_menu():
-            main_window = ui_utils.UiUtils.get_main_window()
+            main_window = UiUtils.get_main_window()
             menu_bar = main_window.menuBar()
 
             target_menu = None

@@ -28,45 +28,56 @@ DEFAULT_INCLUDE = {
     "_ui_utils": "*",
     "_uv_utils": "*",
     "_xform_utils": "*",
-    # Specific classes from modules
-    "components": "Components",
-    "matrices": "Matrices",
-    "macros": "Macros",
-    # Nested ui_utils mappings (explicit for clarity and robustness)
+    "_nurbs_utils": "*",
+    "_light_utils": "*",
+    # Core utils - specific classes
+    "core_utils.components": "Components",
+    "core_utils.auto_instancer": "AutoInstancer",
+    "core_utils.mash->Mash": ["MashToolkit", "MashNetworkNodes"],
+    "core_utils.preview->Preview": "*",
+    "core_utils.diagnostics->Diagnostics": "*",
+    # Edit utils - specific classes
+    "edit_utils.selection": "*",
+    "edit_utils.naming": "*",
+    "edit_utils.primitives": "*",
+    "edit_utils.snap": "*",
+    "edit_utils.macros": "Macros",
+    "edit_utils.bevel": "*",
+    "edit_utils.bridge": "*",
+    "edit_utils.cut_on_axis": "*",
+    "edit_utils.duplicate_grid": "*",
+    "edit_utils.duplicate_linear": "*",
+    "edit_utils.duplicate_radial": "*",
+    "edit_utils.dynamic_pipe": "*",
+    "edit_utils.mirror": "*",
+    "edit_utils.mesh_graph": "*",
+    # Environment utilities
+    "env_utils.command_port": "*",
+    "env_utils.workspace_manager": "WorkspaceManager",
+    "env_utils.workspace_map": "WorkspaceMap",
+    "env_utils.namespace_sandbox": "*",
+    "env_utils.reference_manager": "*",
+    "env_utils.script_output": "*",
+    "env_utils.hierarchy_manager": "*",
+    # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",
-    "naming": "Naming",
     "ui_utils.ui_manager": "UiManager",
-    # Selection utilities
-    "edit_utils.selection": "Selection",
-    "edit_utils.primitives": "Primitives",
-    # Add hierarchy manager support (these will now work!):
-    "env_utils.hierarchy_manager.manager": "HierarchyManager",
-    "env_utils.hierarchy_manager.core": ["DiffResult", "RepairAction", "FileFormat"],
-    "env_utils.hierarchy_manager.swapper": "ObjectSwapper",
-    # Diagnostics utilities
-    "core_utils.diagnostic": "Diagnostics",
-    "core_utils.diagnostic.mesh": "MeshDiagnostics",
-    "core_utils.diagnostic.animation": "AnimCurveDiagnostics",
-    # Examples of wildcard usage:
-    # "some_module": ["*"],  # Expose all classes from some_module
+    # Transform utils
+    "xform_utils.matrices": "Matrices",
+    # NURBS utils
+    "nurbs_utils.image_tracer": "ImageTracer",
 }
-
-DEFAULT_FALLBACKS = {
-    "UiManager": "mayatk.ui_utils.ui_manager",
-    "MayaMenuHandler": "mayatk.ui_utils.maya_menu_handler",
-    "clean_geometry": "mayatk.core_utils.diagnostic.mesh",
-    "get_ngons": "mayatk.core_utils.diagnostic.mesh",
-    "repair_corrupted_curves": "mayatk.core_utils.diagnostic.animation",
-}
-
 
 bootstrap_package(
     globals(),
     include=DEFAULT_INCLUDE,
-    fallbacks=DEFAULT_FALLBACKS,
 )
 
+
 # --------------------------------------------------------------------------------------------
+# Notes
+# --------------------------------------------------------------------------------------------
+# Test: 222117--------------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------------------------
 # Test: 222117

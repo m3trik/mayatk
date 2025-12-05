@@ -4,8 +4,8 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-from mayatk.display_utils import DisplayUtils
-from mayatk.core_utils import preview
+from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.core_utils.preview import Preview
 
 
 class DuplicateGrid:
@@ -78,7 +78,7 @@ class DuplicateGridSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_grid
 
-        self.preview = preview.Preview(
+        self.preview = Preview(
             self,
             self.ui.chk000,
             self.ui.b000,

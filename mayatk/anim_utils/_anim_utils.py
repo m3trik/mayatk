@@ -11,7 +11,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 DEBUG_SPEED_RETIME = os.environ.get("MTK_SPEED_RETIME_DEBUG", "1").lower() not in {

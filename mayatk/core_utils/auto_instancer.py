@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence
 
-import pymel.core as pm
+try:
+    import pymel.core as pm
+except ImportError as error:
+    print(__file__, error)
 import pythontk as ptk
 
 # from mayatk.core_utils.instance_separator import (

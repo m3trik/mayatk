@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Node utilities for Maya.
 
-from mayatk.node_utils._node_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import NodeUtils
+"""
 
-# --------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

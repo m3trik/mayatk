@@ -5,8 +5,8 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk.core_utils import preview
-from mayatk.core_utils import components
+from mayatk.core_utils.preview import Preview
+from mayatk.core_utils.components import Components as components
 
 
 class Bridge:
@@ -81,7 +81,7 @@ class BridgeSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.bridge
 
-        self.preview = preview.Preview(
+        self.preview = Preview(
             self,
             self.ui.chk000,
             self.ui.b000,

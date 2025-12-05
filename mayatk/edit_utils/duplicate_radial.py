@@ -9,7 +9,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 # from this package:
-from mayatk import core_utils
+from mayatk.core_utils.preview import Preview
 from mayatk import DisplayUtils
 from mayatk import XformUtils
 from mayatk.edit_utils.naming import Naming
@@ -301,7 +301,7 @@ class DuplicateRadialSlots:
         self.logger.setLevel(log_level)
         self.logger.set_log_prefix(f"[duplicate radial] ")
 
-        self.preview = core_utils.preview.Preview(
+        self.preview = Preview(
             self,
             self.ui.chk000,
             self.ui.b000,

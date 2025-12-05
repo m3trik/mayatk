@@ -12,7 +12,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.env_utils import EnvUtils
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 
 
@@ -860,7 +860,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             # Fetch metadata (Comments)
             try:
-                metadata = ptk.Metadata.get(file_path, "Comments")
+                use_sidecar = self.slot.ui.header.menu.chk_use_sidecar.isChecked()
+                metadata = ptk.Metadata.get(
+                    file_path, "Comments", use_sidecar=use_sidecar
+                )
                 comments = metadata.get("Comments") or ""
                 if item_notes.text() != comments:
                     item_notes.setText(comments)
@@ -1027,6 +1030,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
         widget.menu.setTitle("Global Settings:")
+        widget.menu.add(
+            "QCheckBox",
+            setText="Use Metadata Sidecar",
+            setObjectName="chk_use_sidecar",
+            setChecked=True,
+            setToolTip="Store file metadata (notes/comments) in external .xmp sidecar files instead of embedding in Maya scene files. Sidecar files are safer and faster but require keeping them with the scene files.",
+        )
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:
@@ -1114,7 +1124,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             new_comments = item.text()
             try:
-                ptk.Metadata.set(file_path, Comments=new_comments)
+                use_sidecar = self.ui.header.menu.chk_use_sidecar.isChecked()
+                ptk.Metadata.set(
+                    file_path, Comments=new_comments, use_sidecar=use_sidecar
+                )
                 self.logger.info(f"Updated comments for {file_path}")
             except Exception as e:
                 self.logger.error(f"Failed to set metadata for {file_path}: {e}")
