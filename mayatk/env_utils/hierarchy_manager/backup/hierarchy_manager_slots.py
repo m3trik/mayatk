@@ -10,7 +10,7 @@ import pythontk as ptk
 import pymel.core as pm
 
 # From this package
-from mayatk.env_utils import EnvUtils
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
     HierarchyManager,

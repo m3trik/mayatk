@@ -5,8 +5,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 # From this package
-from mayatk import core_utils
-from mayatk import node_utils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class Curve:

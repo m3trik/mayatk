@@ -10,10 +10,10 @@ from typing import Optional, List
 
 # Import required utilities
 try:
-    from mayatk.core_utils import CoreUtils
-    from mayatk.display_utils import DisplayUtils
-    from mayatk.node_utils import NodeUtils
-    from mayatk.xform_utils import XformUtils
+    from mayatk.core_utils._core_utils import CoreUtils
+    from mayatk.display_utils._display_utils import DisplayUtils
+    from mayatk.node_utils._node_utils import NodeUtils
+    from mayatk.xform_utils._xform_utils import XformUtils
 except ImportError:
     # Fallback for development/testing
     pass

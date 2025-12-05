@@ -1,17 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Environment utilities for Maya.
 
-from mayatk.env_utils._env_utils import *
-from mayatk.env_utils.workspace_manager import WorkspaceManager
-from mayatk.env_utils.workspace_map import (
-    WorkspaceMap,
-    WorkspaceMapController,
-    WorkspaceMapSlots,
-)
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import EnvUtils, WorkspaceManager, openPorts, etc.
+"""
 
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

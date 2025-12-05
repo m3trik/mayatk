@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""UV utilities for Maya.
 
-from mayatk.ui_utils._ui_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import UvUtils
+"""
 
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

@@ -9,7 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package
-from mayatk.node_utils import NodeUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class Selection(ptk.LoggingMixin, ptk.HelpMixin):

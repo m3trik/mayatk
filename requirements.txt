@@ -1,8 +1,13 @@
 qtpy
 pymel
 <<<<<<< HEAD
+<<<<<<< HEAD
 pythontk==0.7.49
 uitk==1.0.48
+=======
+pythontk==0.7.49
+uitk==1.0.48
+>>>>>>> dev
 =======
 pythontk==0.7.49
 uitk==1.0.48

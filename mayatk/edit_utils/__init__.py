@@ -1,15 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Edit utilities for Maya.
 
-from mayatk.edit_utils._edit_utils import *
-from mayatk.edit_utils.selection import *
-from mayatk.edit_utils.naming import *
-from mayatk.edit_utils.primitives import *
-from mayatk.edit_utils.snap import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import EditUtils, Selection, Primitives, etc.
+"""
 
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

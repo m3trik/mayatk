@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from qtpy import QtWidgets
 
 # From this package:
-from mayatk import ui_utils
+from mayatk.ui_utils import maya_menu_handler
 
 
 class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
@@ -146,7 +146,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             return self.sb.loaded_ui[name]
 
         # print(f"[UiManager.get] Loading UI: {name}")
-        if name in ui_utils.maya_menu_handler.MayaMenuHandler.MENU_MAPPING:
+        if name in maya_menu_handler.MayaMenuHandler.MENU_MAPPING:
             return self._load_maya_ui(menu_key=name, **kwargs)
 
         return self._load_ui(name, reload=reload, **kwargs)
@@ -220,7 +220,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         """
         # Lazy init handler
         if not hasattr(self, "_maya_menu_handler"):
-            self._maya_menu_handler = ui_utils.maya_menu_handler.MayaMenuHandler()
+            self._maya_menu_handler = maya_menu_handler.MayaMenuHandler()
         handler = self._maya_menu_handler
 
         if not overwrite and menu_key in self.sb.loaded_ui:
@@ -257,7 +257,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
 # --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from mayatk import CoreUtils
+    from mayatk.core_utils._core_utils import CoreUtils
 
     CoreUtils.clear_scrollfield_reporters()
 

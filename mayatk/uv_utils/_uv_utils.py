@@ -10,8 +10,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, components
-from mayatk.node_utils import NodeUtils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components as components
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class UvUtils(ptk.HelpMixin):

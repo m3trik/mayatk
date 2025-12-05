@@ -7,8 +7,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
-from mayatk.ui_utils import UiUtils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.ui_utils._ui_utils import UiUtils
 
 
 class CamUtils(ptk.HelpMixin):

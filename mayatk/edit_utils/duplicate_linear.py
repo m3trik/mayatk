@@ -8,9 +8,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.display_utils import DisplayUtils
-from mayatk.core_utils import preview
-from mayatk.xform_utils import XformUtils
+from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.core_utils.preview import Preview
+from mayatk.xform_utils._xform_utils import XformUtils
 
 
 class DuplicateLinear:
@@ -95,7 +95,7 @@ class DuplicateLinearSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_linear
 
-        self.preview = preview.Preview(
+        self.preview = Preview(
             self,
             self.ui.chk000,
             self.ui.b000,

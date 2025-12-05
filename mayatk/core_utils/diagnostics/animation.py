@@ -10,7 +10,7 @@ try:
 except ImportError as error:  # pragma: no cover - Maya runtime specific
     print(__file__, error)
 
-from mayatk.core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils
 
 PyNodeLike = Union[str, "pm.PyNode"]
 

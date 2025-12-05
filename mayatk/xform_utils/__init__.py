@@ -1,11 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Transform utilities for Maya.
 
-from mayatk.xform_utils._xform_utils import *
-from mayatk.xform_utils import matrices
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import XformUtils, Matrices
+"""
 
-# --------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

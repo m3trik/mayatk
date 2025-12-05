@@ -16,8 +16,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.env_utils import EnvUtils
-from mayatk.display_utils import DisplayUtils
+from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
 

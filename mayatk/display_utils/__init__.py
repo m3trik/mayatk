@@ -1,11 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Display utilities for Maya.
 
-from mayatk.display_utils._display_utils import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import DisplayUtils
+"""
 
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

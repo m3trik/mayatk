@@ -1,29 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Core utilities for Maya.
 
-from mayatk.core_utils._core_utils import *  # noqa: F401,F403
-from mayatk.core_utils.auto_instancer import AutoInstancer
-from mayatk.core_utils.mash import MashToolkit, MashNetworkNodes
-from mayatk.core_utils.diagnostics import Diagnostics
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import CoreUtils, MeshDiagnostics, etc.
+"""
 
-
-__all__ = [
-    "MashToolkit",
-    "MashNetworkNodes",
-    "AutoInstancer",
-    "InstanceSeparator",
-    "InstanceSeparationResult",
-    "AssemblyDescriptor",
-    "AssemblyGroup",
-    "AssemblyTemplateSlot",
-    "InstanceGroup",
-    "InstancePayload",
-    "Diagnostics",
-]
-
-# --------------------------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed

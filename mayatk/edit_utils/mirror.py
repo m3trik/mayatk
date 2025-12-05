@@ -5,8 +5,8 @@
 # except ImportError as error:
 #     print(__file__, error)
 # from this package:
-from mayatk.core_utils import preview
-from mayatk.edit_utils import EditUtils
+from mayatk.core_utils.preview import Preview
+from mayatk.edit_utils._edit_utils import EditUtils
 
 
 class MirrorSlots:
@@ -14,7 +14,7 @@ class MirrorSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.mirror
 
-        self.preview = preview.Preview(
+        self.preview = Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )
 

@@ -9,8 +9,10 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils, components, MashToolkit
-from mayatk.xform_utils import XformUtils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.mash import MashToolkit
+from mayatk.xform_utils._xform_utils import XformUtils
 
 
 class NurbsUtils(ptk.HelpMixin):

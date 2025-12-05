@@ -14,7 +14,7 @@ except ImportError:
     pm = None
 
 # From this package:
-from mayatk.core_utils import _core_utils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class ImageTracer(object):
@@ -40,7 +40,7 @@ class ImageTracer(object):
         if not os.path.exists(self.image_path):
             raise FileNotFoundError("Image not found: {}".format(self.image_path))
 
-    @_core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def trace_curves(self):
         # type: () -> List[pm.nt.NurbsCurve]
         """Traces the image and returns a list of created NURBS curves."""
@@ -76,7 +76,7 @@ class ImageTracer(object):
 
         return created_curves
 
-    @_core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def create_mesh(
         self,
         curves=None,  # type: Optional[List[pm.nt.NurbsCurve]]
@@ -141,7 +141,7 @@ class ImageTracer(object):
 
         return result
 
-    @_core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def create_negative_space_mesh(
         self,
         curves=None,  # type: Optional[List[pm.nt.NurbsCurve]]
@@ -232,7 +232,7 @@ class ImageTracer(object):
 
         return result
 
-    @_core_utils.CoreUtils.undoable
+    @CoreUtils.undoable
     def project_on_plane(
         self,
         curves=None,  # type: Optional[List[pm.nt.NurbsCurve]]

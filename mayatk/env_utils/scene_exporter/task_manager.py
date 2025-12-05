@@ -10,12 +10,12 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.edit_utils import EditUtils
-from mayatk.anim_utils import AnimUtils
-from mayatk.env_utils import EnvUtils
-from mayatk.mat_utils import MatUtils
-from mayatk.xform_utils import XformUtils
-from mayatk.node_utils import NodeUtils
+from mayatk.edit_utils._edit_utils import EditUtils
+from mayatk.anim_utils._anim_utils import AnimUtils
+from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.xform_utils._xform_utils import XformUtils
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils.scene_exporter.task_factory import TaskFactory
 
 

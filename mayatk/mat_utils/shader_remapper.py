@@ -5,7 +5,7 @@ import pymel.core as pm
 import pythontk as ptk
 
 # From this package
-from mayatk.mat_utils import MatUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 

@@ -9,12 +9,12 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils import CoreUtils
-from mayatk.node_utils import NodeUtils
-from mayatk.edit_utils import EditUtils
-from mayatk.mat_utils import MatUtils
-from mayatk.display_utils import DisplayUtils
-from mayatk.ui_utils import UiUtils
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.edit_utils._edit_utils import EditUtils
+from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.ui_utils._ui_utils import UiUtils
 
 
 class MacroManager(ptk.HelpMixin):
@@ -736,9 +736,9 @@ class EditMacros:
             b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
 
         if repair_mesh:  # Clean any n-gons before running the boolean
-            from mayatk.core_utils import Diagnostics
+            from mayatk import MeshDiagnostics
 
-            Diagnostics.clean_geometry(
+            MeshDiagnostics.clean_geometry(
                 objects=a,
                 repair=True,
                 nonmanifold=True,

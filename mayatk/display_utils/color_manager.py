@@ -7,7 +7,7 @@ except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
-from mayatk import mat_utils
+from mayatk.mat_utils._mat_utils import MatUtils
 
 
 class ColorUtils:
@@ -21,9 +21,7 @@ class ColorUtils:
         # Check if the material already exists
         if not pm.objExists(material_name):
             # Create a new material and shading group
-            material = mat_utils.MatUtils.create_mat(
-                "lambert", prefix="ID_", name=color_name
-            )
+            material = MatUtils.create_mat("lambert", prefix="ID_", name=color_name)
             pm.setAttr(
                 f"{material}.color", color[0], color[1], color[2], type="double3"
             )
@@ -31,7 +29,7 @@ class ColorUtils:
             material = pm.PyNode(material_name)
 
         # Assign the material to the object
-        mat_utils.MatUtils.assign_mat(obj, material_name)
+        MatUtils.assign_mat(obj, material_name)
         return material
 
     @classmethod
@@ -280,10 +278,10 @@ class ColorManager(ColorUtils):
                     pm.warning(f"{obj} has no attribute 'overrideEnabled'.")
 
             if reset_material:
-                mats = mat_utils.MatUtils.get_mats(obj)
-                mat_utils.MatUtils.assign_mat(obj, "lambert1")
+                mats = MatUtils.get_mats(obj)
+                MatUtils.assign_mat(obj, "lambert1")
                 for mat in mats:
-                    mat_utils.MatUtils.is_connected(mat, delete=True)
+                    MatUtils.is_connected(mat, delete=True)
 
         if reset_vertex:
             cls.reset_vertex_colors(objects)

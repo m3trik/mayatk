@@ -1,11 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-from pythontk.core_utils.module_resolver import bootstrap_package
+"""UI utilities for Maya.
 
-bootstrap_package(globals())
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import UiUtils, UiManager, MayaMenuHandler, etc.
+"""
 
-# --------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed
