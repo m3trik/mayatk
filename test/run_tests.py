@@ -205,6 +205,9 @@ except Exception as e:
 
         # Generate test execution code
         test_code = f"""
+with open(r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\test\\\\runner_debug.log', 'w') as f:
+    f.write("DEBUG: STARTING TEST RUNNER SCRIPT\\n")
+
 import sys
 import os
 sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\test')
@@ -213,32 +216,72 @@ sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts')
 import unittest
 import importlib.util
 
-# Reload critical modules to ensure latest code
+# Reload critical modules using ModuleReloader to ensure latest code
 try:
+    # CRITICAL: Invalidate import caches first
     import importlib
+    importlib.invalidate_caches()
     
-    reload_count = 0
-    modules_to_reload = [
-        'pythontk.img_utils.texture_map_factory',
-        'mayatk.mat_utils.stingray_arnold_shader',
+    # First, clear any cached bytecode
+    import os
+    import glob
+    
+    cache_dirs = [
+        r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\pythontk\\\\pythontk\\\\img_utils\\\\__pycache__',
+        r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\mayatk\\\\mat_utils\\\\__pycache__',
     ]
     
-    for module_name in modules_to_reload:
+    for cache_dir in cache_dirs:
+        if os.path.exists(cache_dir):
+            for pyc_file in glob.glob(os.path.join(cache_dir, '*.pyc')):
+                try:
+                    os.remove(pyc_file)
+                except:
+                    pass
+    
+    from pythontk.core_utils.module_reloader import ModuleReloader
+    
+    # Create reloader with submodules enabled and verbose output
+    reloader = ModuleReloader(include_submodules=True, verbose=2)
+    
+    # Reload TOP-LEVEL packages first, then subpackages
+    packages_to_reload = ['pythontk', 'mayatk']
+    total_reloaded = 0
+    
+    for package_name in packages_to_reload:
+        if package_name in sys.modules:
+            try:
+                print(f"\\nReloading {{package_name}} and all submodules...\\n")
+                reloaded_modules = reloader.reload(package_name)
+                count = len(reloaded_modules)
+                total_reloaded += count
+                print(f"[OK] Reloaded {{count}} modules from {{package_name}}\\n")
+            except Exception as e:
+                print(f"[WARNING] Failed to reload {{package_name}}: {{e}}\\n")
+                import traceback
+                traceback.print_exc()
+    
+    if total_reloaded > 0:
+        print(f"[SUCCESS] Total {{total_reloaded}} module(s) reloaded\\n")
+    else:
+        print("[INFO] No modules needed reloading\\n")
+
+        
+except ImportError as e:
+    print(f"[WARNING] Could not import ModuleReloader: {{e}}\\n")
+    print("[INFO] Falling back to basic reload\\n")
+    # Fallback to basic reload
+    import importlib
+    importlib.invalidate_caches()
+    for module_name in ['pythontk.img_utils.texture_map_factory', 'mayatk.mat_utils.stingray_arnold_shader']:
         if module_name in sys.modules:
             try:
                 importlib.reload(sys.modules[module_name])
-                reload_count += 1
                 print(f"[OK] Reloaded {{module_name}}\\n")
             except Exception as e:
                 print(f"[WARNING] Failed to reload {{module_name}}: {{e}}\\n")
-    
-    if reload_count > 0:
-        print(f"[OK] Reloaded {{reload_count}} module(s)\\n")
-    else:
-        print("[INFO] No modules needed reloading\\n")
-        
 except Exception as e:
-    print(f"[WARNING] Module reload failed: {{e}}\\n")
+    print(f"[ERROR] Module reload failed: {{e}}\\n")
     import traceback
     traceback.print_exc()
 
@@ -351,9 +394,37 @@ if total_failures == 0 and total_errors == 0:
     print("\\n[PASS] ALL TESTS PASSED!")
 """
 
-        print("\nSending test code to Maya...")
+        # Write test code to a temporary file to avoid command port size limits
+        temp_runner_path = self.test_dir / "_temp_test_runner.py"
+        try:
+            with open(temp_runner_path, "w", encoding="utf-8") as f:
+                f.write(test_code)
+        except Exception as e:
+            print(f"[ERROR] Failed to write temp runner file: {e}")
+            return False
 
-        if self.send_code(test_code):
+        # Generate execution code (small payload)
+        exec_code = f"""
+import sys
+import os
+runner_dir = r'{str(self.test_dir).replace(chr(92), chr(92)*4)}'
+if runner_dir not in sys.path:
+    sys.path.insert(0, runner_dir)
+
+# Force reload/execution of the temp runner
+try:
+    import _temp_test_runner
+    import importlib
+    importlib.reload(_temp_test_runner)
+except Exception as e:
+    print(f"Error executing test runner: {{e}}")
+    import traceback
+    traceback.print_exc()
+"""
+
+        print("\nSending test code to Maya (via file)...")
+
+        if self.send_code(exec_code):
             print("[OK] Test code sent successfully")
             print("\n" + "=" * 70)
             print("TESTS ARE RUNNING IN MAYA")
@@ -457,7 +528,7 @@ if total_failures == 0 and total_errors == 0:
             Tuple of (passed, failed) where failed = failures + errors
         """
         if not self.results_file.exists():
-            return (0, 0, 0)
+            return (0, 0)
 
         content = self.results_file.read_text(encoding="utf-8")
 

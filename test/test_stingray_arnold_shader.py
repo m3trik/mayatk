@@ -994,6 +994,7 @@ class StingrayArnoldShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Metallic.png"),
             os.path.join(self.test_assets, "model_Roughness.png"),
             os.path.join(self.test_assets, "model_AO.png"),
+            os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
         result = self.shader.create_network(
@@ -1034,6 +1035,88 @@ class StingrayArnoldShaderTest(unittest.TestCase):
             ao_conn[0].name(),
             "Metallic and AO should connect to same texture node for MSAO",
         )
+
+    def test_texture_factory_integration_with_normal_map(self):
+        """Test that normal maps are properly processed and connected."""
+        textures = [
+            os.path.join(self.test_assets, "model_BaseColor.png"),
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+            os.path.join(self.test_assets, "model_AO.png"),
+            os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
+        ]
+
+        result = self.shader.create_network(
+            textures,
+            name="test_with_normal",
+            mask_map=True,
+            callback=self._test_callback,
+        )
+
+        self.assertTrue(pm.objExists("test_with_normal"))
+
+        # DEBUG: Print all messages received
+        print("\\n=== CALLBACK MESSAGES RECEIVED ===")
+        for i, msg in enumerate(self.test_messages, 1):
+            print(f"{i}. {msg[:100]}")  # First 100 chars of each message
+        print("=== END MESSAGES ===\\n")
+
+        # Verify normal map was mentioned in output
+        self.assertTrue(
+            any("Normal" in msg or "normal" in msg for msg in self.test_messages),
+            "Normal map should be mentioned in callback messages",
+        )
+
+        # Verify normal map connection
+        shader_node = pm.PyNode("test_with_normal")
+        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        self.assertIsNotNone(normal_conn, "Normal map should be connected to shader")
+
+    def test_texture_factory_integration_complete_pbr_set(self):
+        """Test complete PBR texture set with all map types."""
+        print("STARTING test_texture_factory_integration_complete_pbr_set")
+        textures = [
+            os.path.join(self.test_assets, "model_BaseColor.png"),
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+            os.path.join(self.test_assets, "model_AO.png"),
+            os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
+        ]
+
+        result = self.shader.create_network(
+            textures,
+            name="test_complete_pbr",
+            callback=self._test_callback,
+        )
+
+        self.assertTrue(pm.objExists("test_complete_pbr"))
+        shader_node = pm.PyNode("test_complete_pbr")
+
+        # Verify all critical connections
+        connections_to_verify = {
+            "Base_Color": shader_node.TEX_color_map,
+            "Metallic": shader_node.TEX_metallic_map,
+            "Roughness": shader_node.TEX_roughness_mapX,
+            "AO": shader_node.TEX_ao_map,
+            "Normal": shader_node.TEX_normal_map,
+        }
+
+        for map_name, attr in connections_to_verify.items():
+            with self.subTest(map_type=map_name):
+                conn = pm.listConnections(attr)
+                self.assertIsNotNone(conn, f"{map_name} should be connected to shader")
+                # Verify it's mentioned in callback
+                search_terms = [map_name]
+                if map_name == "AO":
+                    search_terms.append("Ambient_Occlusion")
+
+                found = any(
+                    term in msg for msg in self.test_messages for term in search_terms
+                )
+                self.assertTrue(
+                    found,
+                    f"{map_name} (or aliases) should be mentioned in callback messages",
+                )
 
     def test_unity_hdrp_with_standard_surface(self):
         """Test Unity HDRP workflow with Standard Surface shader."""
@@ -1137,6 +1220,45 @@ class StingrayArnoldShaderTest(unittest.TestCase):
         )
 
         self.assertTrue(pm.objExists("test_normal_convert"))
+
+        # Verify normal map connection exists
+        shader_node = pm.PyNode("test_normal_convert")
+        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        self.assertIsNotNone(
+            normal_conn, "Normal map should be connected after conversion"
+        )
+
+        # Verify callback mentioned normal map
+        self.assertTrue(
+            any("Normal" in msg for msg in self.test_messages),
+            "Normal map conversion should be mentioned in callback",
+        )
+
+    def test_texture_factory_normal_passthrough(self):
+        """Test that generic Normal maps pass through correctly."""
+        textures = [
+            os.path.join(self.test_assets, "model_BaseColor.png"),
+            os.path.join(self.test_assets, "model_Normal.png"),  # Generic normal
+        ]
+
+        result = self.shader.create_network(
+            textures,
+            name="test_normal_passthrough",
+            callback=self._test_callback,
+        )
+
+        self.assertTrue(pm.objExists("test_normal_passthrough"))
+        shader_node = pm.PyNode("test_normal_passthrough")
+
+        # Verify normal connection
+        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        self.assertIsNotNone(normal_conn, "Generic normal map should be connected")
+
+        # Verify it was processed
+        normal_messages = [msg for msg in self.test_messages if "Normal" in msg]
+        self.assertGreater(
+            len(normal_messages), 0, "Normal map should be mentioned in callback output"
+        )
 
     # -------------------------------------------------------------------------
     # Test Shader Type Parameter
