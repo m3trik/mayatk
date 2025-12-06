@@ -1,1 +1,15 @@
-======================================================================\nMAYATK TEST RESULTS\n======================================================================\n\n\ntest_core_utils: PASS\n  Tests: 27, Failures: 0, Errors: 0, Skipped: 5\n\ntest_components: PASS\n  Tests: 18, Failures: 0, Errors: 0, Skipped: 1\n\ntest_node_utils: PASS\n  Tests: 37, Failures: 0, Errors: 0, Skipped: 2\n\ntest_edit_utils: PASS\n  Tests: 34, Failures: 0, Errors: 0, Skipped: 3\n\ntest_mat_utils: PASS\n  Tests: 17, Failures: 0, Errors: 0, Skipped: 1\n\ntest_xform_utils: PASS\n  Tests: 17, Failures: 0, Errors: 0, Skipped: 0\n\ntest_rig_utils: PASS\n  Tests: 4, Failures: 0, Errors: 0, Skipped: 0\n\ntest_env_utils: PASS\n  Tests: 3, Failures: 0, Errors: 0, Skipped: 3\n\n======================================================================\nSUMMARY\n======================================================================\n  test_core_utils: PASS (27 tests, 0 failures, 0 errors)\n  test_components: PASS (18 tests, 0 failures, 0 errors)\n  test_node_utils: PASS (37 tests, 0 failures, 0 errors)\n  test_edit_utils: PASS (34 tests, 0 failures, 0 errors)\n  test_mat_utils: PASS (17 tests, 0 failures, 0 errors)\n  test_xform_utils: PASS (17 tests, 0 failures, 0 errors)\n  test_rig_utils: PASS (4 tests, 0 failures, 0 errors)\n  test_env_utils: PASS (3 tests, 0 failures, 0 errors)\n======================================================================\nTotal: 157 tests, 0 failures, 0 errors, 15 skipped\n======================================================================\n
+======================================================================
+MAYATK TEST RESULTS
+======================================================================
+
+
+test_stingray_arnold_shader: PASS
+  Tests: 82, Failures: 0, Errors: 0, Skipped: 4
+
+======================================================================
+SUMMARY
+======================================================================
+  test_stingray_arnold_shader: PASS (82 tests, 0 failures, 0 errors)
+======================================================================
+Total: 82 tests, 0 failures, 0 errors, 4 skipped
+======================================================================

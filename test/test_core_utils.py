@@ -124,10 +124,6 @@ class TestCoreUtils(MayaTkTestCase):
         with self.assertRaises(RuntimeError):
             mtk.get_panel()
 
-    def test_get_panel_with_valid_panel_type(self):
-        """Test getting panel by type (moved to ui_utils tests)."""
-        self.skipTest("get_panel is in ui_utils, not core_utils")
-
     # -------------------------------------------------------------------------
     # Channel and Selection Tests
     # -------------------------------------------------------------------------
@@ -262,14 +258,6 @@ class TestCoreUtils(MayaTkTestCase):
     # -------------------------------------------------------------------------
     # Utility Tests
     # -------------------------------------------------------------------------
-
-    def test_clear_scrollfield_reporters(self):
-        """Test clearing scrollfield reporters."""
-        try:
-            # Should not raise an error
-            mtk.clear_scrollfield_reporters()
-        except AttributeError:
-            self.skipTest("clear_scrollfield_reporters not available")
 
 
 class TestCoreUtilsEdgeCases(MayaTkTestCase):

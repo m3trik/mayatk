@@ -19,33 +19,17 @@ from base_test import MayaTkTestCase
 class TestEnvUtils(MayaTkTestCase):
     """Tests for EnvUtils class."""
 
-    def test_get_maya_version(self):
-        """Test getting Maya version."""
-        try:
-            version = mtk.get_maya_version()
-            self.assertIsNotNone(version)
-            self.assertIsInstance(version, (str, int, float))
-        except AttributeError:
-            self.skipTest("get_maya_version not implemented")
+    def test_get_env_info_version(self):
+        """Test getting Maya version via get_env_info."""
+        version = mtk.EnvUtils.get_env_info("version")
+        self.assertIsNotNone(version)
+        self.assertIsInstance(version, str)
 
-    def test_get_workspace(self):
-        """Test getting current workspace."""
-        try:
-            workspace = mtk.get_workspace()
-            self.assertIsNotNone(workspace)
-            self.assertIsInstance(workspace, str)
-        except AttributeError:
-            self.skipTest("get_workspace not implemented")
-
-    def test_command_port_open(self):
-        """Test opening command port."""
-        try:
-            port = 7003  # Use different port than 7002
-            result = mtk.open_command_port(port)
-            if result:
-                mtk.close_command_port(port)
-        except AttributeError:
-            self.skipTest("command_port operations not implemented")
+    def test_get_env_info_workspace(self):
+        """Test getting workspace via get_env_info."""
+        workspace = mtk.EnvUtils.get_env_info("workspace")
+        self.assertIsNotNone(workspace)
+        self.assertIsInstance(workspace, str)
 
 
 if __name__ == "__main__":

@@ -185,7 +185,7 @@ class TestComponents(MayaTkTestCase):
             if result is not None:
                 self.assertIsInstance(result, (list, dict))
         except (AttributeError, RuntimeError):
-            self.skipTest("get_masked_components not available")
+            self.skipTest("get_border_components not available")
 
 
 class TestComponentsEdgeCases(MayaTkTestCase):

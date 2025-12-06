@@ -9,7 +9,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>600</width>
+    <width>650</width>
     <height>445</height>
    </rect>
   </property>
@@ -25,7 +25,7 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>600</width>
+     <width>650</width>
      <height>445</height>
     </size>
    </property>

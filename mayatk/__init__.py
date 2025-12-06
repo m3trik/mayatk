@@ -60,7 +60,7 @@ DEFAULT_INCLUDE = {
     "env_utils.script_output": "ScriptOutput",
     "env_utils.hierarchy_manager": "HierarchyManager",
     # Material utils
-    "mat_utils.stingray_arnold_shader": "StingrayArnoldShader",
+    "mat_utils.stingray_arnold_shader": "*",
     "mat_utils.texture_path_editor": "TexturePathEditor",
     # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",

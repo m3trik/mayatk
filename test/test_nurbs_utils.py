@@ -35,11 +35,11 @@ class TestNurbsUtils(MayaTkTestCase):
     def test_create_curve_between_two_objects(self):
         """Test creating curve between objects."""
         try:
-            curve = mtk.createCurveBetweenTwoObjects(self.sphere1, self.sphere2)
+            curve = mtk.create_curve_between_two_objs(self.sphere1, self.sphere2)
             if curve:
                 self.assertIsNotNone(curve)
         except (AttributeError, RuntimeError):
-            self.skipTest("createCurveBetweenTwoObjects not available")
+            self.skipTest("create_curve_between_two_objs not available")
 
 
 if __name__ == "__main__":

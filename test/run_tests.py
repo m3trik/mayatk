@@ -6,6 +6,7 @@ MayaTk Test Runner
 Unified test runner for executing mayatk tests via Maya command port.
 Tests run in Maya and output is displayed in Script Editor.
 Results are saved to test_results.txt for review.
+README badge is automatically updated with test results.
 
 Usage:
     python run_tests.py                          # Run default core tests
@@ -14,7 +15,9 @@ Usage:
     python run_tests.py --dry-run                # Validate test setup without running
     python run_tests.py --quick                  # Run quick validation test
     python run_tests.py --list                   # List available test modules
+    python run_tests.py --no-badge               # Skip README badge update
 """
+import re
 import socket
 import sys
 import time
@@ -41,10 +44,10 @@ class MayaTestRunner:
             client.sendall(b'print("MAYA_TEST_READY")\\n')
             client.close()
 
-            print(f"✓ Connected to Maya on {self.host}:{self.port}")
+            print(f"[OK] Connected to Maya on {self.host}:{self.port}")
             return True
         except Exception as e:
-            print(f"✗ Connection failed: {e}")
+            print(f"[ERROR] Connection failed: {e}")
             print("\nMake sure Maya is running with command ports open.")
             print("In Maya, run: import mayatk; mayatk.ensure_command_ports()")
             return False
@@ -59,13 +62,15 @@ class MayaTestRunner:
             client.close()
             return True
         except socket.timeout:
-            print(f"✗ Timeout: Maya didn't respond within 10 seconds")
+            print(f"[ERROR] Timeout: Maya didn't respond within 10 seconds")
             return False
         except ConnectionRefusedError:
-            print(f"✗ Connection refused: Is Maya running with command ports open?")
+            print(
+                f"[ERROR] Connection refused: Is Maya running with command ports open?"
+            )
             return False
         except Exception as e:
-            print(f"✗ Failed to send code: {e}")
+            print(f"[ERROR] Failed to send code: {e}")
             return False
 
     def discover_tests(self):
@@ -129,13 +134,13 @@ try:
                 
                 print("\\\\n" + "-"*70)
                 if result.wasSuccessful():
-                    print(f"✓ {attr_name}: ALL {result.testsRun} TESTS PASSED")
+                    print(f"[PASS] {attr_name}: ALL {result.testsRun} TESTS PASSED")
                 else:
-                    print(f"✗ {attr_name}: {len(result.failures + result.errors)} FAILURES")
+                    print(f"[FAIL] {attr_name}: {len(result.failures + result.errors)} FAILURES")
                 print("-"*70)
                 break
 except Exception as e:
-    print(f"✗ ERROR: {e}")
+    print(f"[ERROR] {e}")
     import traceback
     traceback.print_exc()
 """
@@ -144,7 +149,7 @@ except Exception as e:
         print("Check Maya Script Editor for detailed output\n")
 
         if self.send_code(code):
-            print("✓ Test code sent successfully")
+            print("[OK] Test code sent successfully")
             return True
         return False
 
@@ -188,9 +193,9 @@ except Exception as e:
         if dry_run:
             print("\nDry run - no tests will be executed.")
             print("This validates:")
-            print("  ✓ Module names are correct")
-            print("  ✓ Test files exist")
-            print("  ✓ Test runner configuration is valid")
+            print("  [OK] Module names are correct")
+            print("  [OK] Test files exist")
+            print("  [OK] Test runner configuration is valid")
             print("\nTo actually run tests, omit --dry-run flag")
             return True
 
@@ -208,14 +213,43 @@ sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts')
 import unittest
 import importlib.util
 
+# Reload critical modules to ensure latest code
+try:
+    import importlib
+    
+    reload_count = 0
+    modules_to_reload = [
+        'pythontk.img_utils.texture_map_factory',
+        'mayatk.mat_utils.stingray_arnold_shader',
+    ]
+    
+    for module_name in modules_to_reload:
+        if module_name in sys.modules:
+            try:
+                importlib.reload(sys.modules[module_name])
+                reload_count += 1
+                print(f"[OK] Reloaded {{module_name}}\\n")
+            except Exception as e:
+                print(f"[WARNING] Failed to reload {{module_name}}: {{e}}\\n")
+    
+    if reload_count > 0:
+        print(f"[OK] Reloaded {{reload_count}} module(s)\\n")
+    else:
+        print("[INFO] No modules needed reloading\\n")
+        
+except Exception as e:
+    print(f"[WARNING] Module reload failed: {{e}}\\n")
+    import traceback
+    traceback.print_exc()
+
 # Setup results file
 output_file = r'{str(self.results_file).replace(chr(92), chr(92)*4)}'
 with open(output_file, 'w', encoding='utf-8') as f:
-    f.write("="*70 + "\\\\n")
-    f.write("MAYATK TEST RESULTS\\\\n")
-    f.write("="*70 + "\\\\n\\\\n")
+    f.write("="*70 + "\\n")
+    f.write("MAYATK TEST RESULTS\\n")
+    f.write("="*70 + "\\n\\n")
 
-print("\\\\n" + "="*70)
+print("\\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
@@ -227,9 +261,9 @@ total_skipped = 0
 results_summary = []
 
 for module_name in test_modules:
-    print(f"\\\\n{{'-'*70}}")
+    print(f"\\n{{'-'*70}}")
     print(f"Testing: {{module_name}}")
-    print({{'-'*70}})
+    print(('-'*70))
     
     try:
         spec = importlib.util.spec_from_file_location(
@@ -265,30 +299,30 @@ for module_name in test_modules:
         
         # Write to results file
         with open(output_file, 'a', encoding='utf-8') as f:
-            f.write(f"\\\\n{{module_name}}: {{status}}\\\\n")
+            f.write(f"\\n{{module_name}}: {{status}}\\n")
             f.write(f"  Tests: {{result.testsRun}}, Failures: {{len(result.failures)}}, "
-                   f"Errors: {{len(result.errors)}}, Skipped: {{len(result.skipped)}}\\\\n")
+                   f"Errors: {{len(result.errors)}}, Skipped: {{len(result.skipped)}}\\n")
             
             if result.failures:
-                for test, trace in result.failures[:3]:  # First 3 failures
-                    f.write(f"\\\\n  FAILURE: {{test}}\\\\n")
-                    f.write(f"  {{trace[:300]}}...\\\\n")
+                for test, trace in result.failures:  # All failures
+                    f.write(f"\\n  FAILURE: {{test}}\\n")
+                    f.write(f"  {{trace}}\\n")
             
             if result.errors:
-                for test, trace in result.errors[:3]:  # First 3 errors
-                    f.write(f"\\\\n  ERROR: {{test}}\\\\n")
-                    f.write(f"  {{trace[:300]}}...\\\\n")
+                for test, trace in result.errors:  # All errors
+                    f.write(f"\\n  ERROR: {{test}}\\n")
+                    f.write(f"  {{trace}}\\n")
         
     except Exception as e:
-        print(f"✗ Error loading {{module_name}}: {{e}}")
+        print(f"[ERROR] Error loading {{module_name}}: {{e}}")
         results_summary.append(f"{{module_name}}: LOAD ERROR - {{str(e)[:50]}}")
         
         with open(output_file, 'a', encoding='utf-8') as f:
-            f.write(f"\\\\n{{module_name}}: LOAD ERROR\\\\n")
-            f.write(f"  {{str(e)}}\\\\n")
+            f.write(f"\\n{{module_name}}: LOAD ERROR\\n")
+            f.write(f"  {{str(e)}}\\n")
 
 # Print final summary
-print("\\\\n" + "="*70)
+print("\\n" + "="*70)
 print("TEST SUMMARY")
 print("="*70)
 for result_line in results_summary:
@@ -300,27 +334,27 @@ print("="*70)
 
 # Write summary to file
 with open(output_file, 'a', encoding='utf-8') as f:
-    f.write("\\\\n" + "="*70 + "\\\\n")
-    f.write("SUMMARY\\\\n")
-    f.write("="*70 + "\\\\n")
+    f.write("\\n" + "="*70 + "\\n")
+    f.write("SUMMARY\\n")
+    f.write("="*70 + "\\n")
     for result_line in results_summary:
-        f.write(f"  {{result_line}}\\\\n")
-    f.write("="*70 + "\\\\n")
+        f.write(f"  {{result_line}}\\n")
+    f.write("="*70 + "\\n")
     f.write(f"Total: {{total_tests}} tests, {{total_failures}} failures, "
-           f"{{total_errors}} errors, {{total_skipped}} skipped\\\\n")
-    f.write("="*70 + "\\\\n")
+           f"{{total_errors}} errors, {{total_skipped}} skipped\\n")
+    f.write("="*70 + "\\n")
 
-print(f"\\\\nResults saved to: {{output_file}}")
+print(f"\\nResults saved to: {{output_file}}")
 
 # Final status
 if total_failures == 0 and total_errors == 0:
-    print("\\\\n✓ ALL TESTS PASSED!")
+    print("\\n[PASS] ALL TESTS PASSED!")
 """
 
         print("\nSending test code to Maya...")
 
         if self.send_code(test_code):
-            print("✓ Test code sent successfully")
+            print("[OK] Test code sent successfully")
             print("\n" + "=" * 70)
             print("TESTS ARE RUNNING IN MAYA")
             print("=" * 70)
@@ -341,10 +375,105 @@ if total_failures == 0 and total_errors == 0:
             print("\nTo monitor progress:")
             print(f"  Get-Content {self.results_file.name} -Wait")
             print("=" * 70)
+
+            # Store estimated time for badge update waiting
+            self.estimated_wait_time = estimated_seconds
             return True
         else:
-            print("✗ Failed to send test code")
+            print("[ERROR] Failed to send test code")
             return False
+
+    def update_readme_badge(self, passed: int, failed: int) -> bool:
+        """Update the README with a test status badge.
+
+        Parameters:
+            passed: Number of passed tests.
+            failed: Number of failed tests.
+
+        Returns:
+            True if README was updated successfully.
+        """
+        readme_path = self.test_dir.parent / "docs" / "README.md"
+
+        if not readme_path.exists():
+            print(f"README not found at {readme_path}")
+            return False
+
+        content = readme_path.read_text(encoding="utf-8")
+
+        total = passed + failed
+        if failed == 0:
+            color = "brightgreen"
+            status = f"{passed} passed"
+        elif passed == 0:
+            color = "red"
+            status = f"{failed} failed"
+        else:
+            color = "orange"
+            status = f"{passed} passed, {failed} failed"
+
+        # Create the new badge
+        new_badge = f"[![Tests](https://img.shields.io/badge/Tests-{status.replace(' ', '%20').replace(',', '')}-{color}.svg)](test/)"
+
+        # Check if a Tests badge already exists and replace it
+        tests_badge_pattern = (
+            r"\[!\[Tests\]\(https://img\.shields\.io/badge/Tests-[^\)]+\)\]\([^\)]+\)"
+        )
+
+        if re.search(tests_badge_pattern, content):
+            # Replace existing badge
+            new_content = re.sub(tests_badge_pattern, new_badge, content)
+        else:
+            # Add badge after the Maya badge line
+            maya_badge_pattern = r"(\[!\[Maya\]\(https://img\.shields\.io/badge/Maya-[^\)]+\)\]\([^\)]+\))"
+            match = re.search(maya_badge_pattern, content)
+            if match:
+                # Insert after Maya badge
+                insert_pos = match.end()
+                new_content = (
+                    content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
+                )
+            else:
+                # Fallback: add after Python badge
+                python_badge_pattern = r"(\[!\[Python\]\(https://img\.shields\.io/badge/Python-[^\)]+\)\]\([^\)]+\))"
+                match = re.search(python_badge_pattern, content)
+                if match:
+                    insert_pos = match.end()
+                    new_content = (
+                        content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
+                    )
+                else:
+                    # Last resort: add at the very beginning
+                    new_content = new_badge + "\n" + content
+
+        readme_path.write_text(new_content, encoding="utf-8")
+        print(f"\n[OK] README badge updated: {status}")
+        return True
+
+    def parse_test_results(self) -> tuple:
+        """Parse test_results.txt to extract test counts.
+
+        Returns:
+            Tuple of (passed, failed) where failed = failures + errors
+        """
+        if not self.results_file.exists():
+            return (0, 0, 0)
+
+        content = self.results_file.read_text(encoding="utf-8")
+
+        # Look for the total line: "Total: 253 tests, 0 failures, 1 errors, 15 skipped"
+        match = re.search(
+            r"Total: (\d+) tests, (\d+) failures?, (\d+) errors?", content
+        )
+
+        if match:
+            total = int(match.group(1))
+            failures = int(match.group(2))
+            errors = int(match.group(3))
+            passed = total - failures - errors
+            return (passed, failures + errors)
+
+        return (0, 0)
 
 
 def main():
@@ -356,29 +485,46 @@ def main():
 
     # Check for flags
     dry_run = "--dry-run" in args or "-d" in args
+    no_badge = "--no-badge" in args
     if dry_run:
         args = [arg for arg in args if arg not in ("--dry-run", "-d")]
+    if no_badge:
+        args = [arg for arg in args if arg != "--no-badge"]
 
     if not args:
         # No arguments - run default tests
-        runner.run_tests(dry_run=dry_run)
+        success = runner.run_tests(dry_run=dry_run)
     elif "--list" in args or "-l" in args:
         # List available tests
         runner.list_tests()
+        return
     elif "--quick" in args or "-q" in args:
         # Quick validation test
         runner.run_quick_test()
+        return
     elif "--help" in args or "-h" in args:
         # Show help
         print(__doc__)
+        return
     elif "--all" in args or "-a" in args:
         # Run ALL tests (not just default)
         all_modules = runner.discover_tests()
         print(f"\nRunning ALL {len(all_modules)} test modules...")
-        runner.run_tests(all_modules, dry_run=dry_run)
+        success = runner.run_tests(all_modules, dry_run=dry_run)
     else:
         # Run specific modules
-        runner.run_tests(args, dry_run=dry_run)
+        success = runner.run_tests(args, dry_run=dry_run)
+
+    # Update README badge with test results (unless disabled or dry run)
+    if success and not dry_run and not no_badge:
+        # Wait for tests to complete based on estimated time
+        wait_time = getattr(runner, "estimated_wait_time", 10) + 5  # Add 5s buffer
+        print(f"\nWaiting {wait_time}s for tests to complete...")
+        time.sleep(wait_time)
+
+        passed, failed = runner.parse_test_results()
+        if passed > 0 or failed > 0:
+            runner.update_readme_badge(passed, failed)
 
 
 if __name__ == "__main__":

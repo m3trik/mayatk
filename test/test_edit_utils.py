@@ -134,12 +134,6 @@ class TestEditUtils(MayaTkTestCase):
     # Vertex Operations Tests
     # -------------------------------------------------------------------------
 
-    def test_snap_closest_verts_basic(self):
-        """Test snapping closest vertices between meshes."""
-        self.skipTest("snap_closest_verts method not available in EditUtils")
-        # Just verify no errors occurred
-        self.assertNodeExists("cube2")
-
     def test_merge_vertices_with_threshold(self):
         """Test merging overlapping vertices."""
         # Create overlapping vertices by duplicating and slightly moving

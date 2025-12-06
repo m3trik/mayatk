@@ -8,11 +8,78 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from pythontk.img_utils.texture_map_factory import TextureMapFactory
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils._env_utils import EnvUtils
+
+
+class PBRWorkflowTemplate:
+    """Configuration class for PBR workflow templates.
+
+    Defines standard PBR export configurations for different game engines and pipelines.
+    Each template specifies how textures should be packed/combined for the target platform.
+    Templates are indexed by their position in the UI combo box (0-6).
+    """
+
+    # Template configurations indexed by combo box position
+    # Format: (albedo_transparency, metallic_smoothness, mask_map, orm_map, convert_specgloss)
+    TEMPLATE_CONFIGS = [
+        (
+            False,
+            False,
+            False,
+            False,
+            False,
+        ),  # 0: PBR Metallic/Roughness (Separate Maps)
+        (
+            True,
+            True,
+            False,
+            False,
+            False,
+        ),  # 1: Unity URP Lit (Packed: Albedo+Alpha, Metallic+Smoothness)
+        (
+            False,
+            False,
+            True,
+            False,
+            False,
+        ),  # 2: Unity HDRP Lit (Mask Map: Metallic+AO+Detail+Smoothness)
+        (
+            True,
+            False,
+            False,
+            True,
+            False,
+        ),  # 3: Unreal Engine (Packed: BaseColor+Alpha, ORM)
+        (False, False, False, True, False),  # 4: glTF 2.0 (ORM: AO+Roughness+Metallic)
+        (
+            False,
+            False,
+            False,
+            False,
+            False,
+        ),  # 5: Godot (Separate: Albedo, Metallic, Roughness)
+        (False, True, False, False, True),  # 6: PBR Specular/Glossiness Workflow
+    ]
+
+    @classmethod
+    def get_template_config(cls, index: int) -> Tuple[bool, bool, bool, bool, bool]:
+        """Get configuration for a template by its combo box index.
+
+        Parameters:
+            index: The combo box index (0-6)
+
+        Returns:
+            Tuple of (albedo_transparency, metallic_smoothness, mask_map, orm_map, convert_specgloss_to_pbr)
+        """
+        if 0 <= index < len(cls.TEMPLATE_CONFIGS):
+            return cls.TEMPLATE_CONFIGS[index]
+        # Default to standard PBR if index out of range
+        return (False, False, False, False, False)
 
 
 class StingrayArnoldShader:
@@ -31,25 +98,101 @@ class StingrayArnoldShader:
         self,
         textures: List[str],
         name: str = "",
+        shader_type: str = "stingray",  # "stingray" or "standard_surface"
         normal_type: str = "OpenGL",
         create_arnold: bool = False,
         albedo_transparency: bool = False,
         metallic_smoothness: bool = False,
+        mask_map: bool = False,
+        orm_map: bool = False,
+        convert_specgloss_to_pbr: bool = False,
+        cleanup_base_color: bool = False,
         output_extension: str = "png",
         callback: Callable = print,
     ) -> Optional[object]:
-        """ """
+        """Create a PBR shader network with textures.
+
+        Parameters:
+            textures: List of texture file paths
+            name: Shader name (auto-generated from texture if empty)
+            shader_type: "stingray" for Stingray PBS (legacy) or "standard_surface" for Maya Standard Surface (modern)
+            normal_type: "OpenGL" or "DirectX" normal map format
+            create_arnold: Also create Arnold aiStandardSurface for rendering
+            albedo_transparency: Combine albedo and opacity into single map
+            metallic_smoothness: Combine metallic and smoothness into single map
+            mask_map: Create Unity HDRP Mask Map (MSAO: Metallic+AO+Detail+Smoothness)
+            orm_map: Create Unreal/glTF ORM Map (Occlusion+Roughness+Metallic)
+            convert_specgloss_to_pbr: Auto-convert Specular/Glossiness workflow to PBR Metal/Rough
+            cleanup_base_color: Remove baked reflections from base color (requires metallic map)
+            output_extension: File extension for generated combined maps
+            callback: Progress callback function
+
+        Returns:
+            The created shader node (Stingray PBS or Standard Surface)
+        """
+        # DEBUG logging to file
+        import datetime
+
+        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
+        with open(debug_log, "a") as f:
+            f.write(f"\n{datetime.datetime.now()} - create_network called\n")
+            f.write(f"  Input textures: {len(textures) if textures else 0}\n")
+            f.write(f"  shader_type: {shader_type}\n")
+            f.write(f"  name: {name}\n")
+
         if not textures:
             callback(
                 f'<br><hl style="color:{self.color_error};"><b>Error:</b> No textures given to create_network.</hl>'
             )
+            with open(debug_log, "a") as f:
+                f.write(f"  RETURNING None: No textures\n")
             return None
 
-        textures = self.filter_for_correct_base_color_map(textures, albedo_transparency)
-        textures = self.filter_for_correct_metallic_map(
-            textures, metallic_smoothness, output_extension
-        )
-        textures = self.filter_for_correct_normal_map(textures, normal_type)
+        # Use TextureMapFactory for DRY texture preparation
+        workflow_config = {
+            "albedo_transparency": albedo_transparency,
+            "metallic_smoothness": metallic_smoothness,
+            "mask_map": mask_map,
+            "orm_map": orm_map,
+            "convert_specgloss_to_pbr": convert_specgloss_to_pbr,
+            "cleanup_base_color": cleanup_base_color,
+            "normal_type": normal_type,
+            "output_extension": output_extension,
+        }
+
+        # DEBUG: Log the workflow config
+        with open(debug_log, "a") as f:
+            f.write(f"  Workflow config:\n")
+            f.write(f"    albedo_transparency: {albedo_transparency}\n")
+            f.write(f"    metallic_smoothness: {metallic_smoothness}\n")
+            f.write(f"    mask_map: {mask_map}\n")
+            f.write(f"    orm_map: {orm_map}\n")
+            f.write(f"    convert_specgloss_to_pbr: {convert_specgloss_to_pbr}\n")
+            f.write(f"    cleanup_base_color: {cleanup_base_color}\n")
+            f.write(f"    normal_type: {normal_type}\n")
+
+        textures = TextureMapFactory.prepare_maps(textures, workflow_config, callback)
+
+        # DEBUG logging
+        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
+        with open(debug_log, "a") as f:
+            f.write(
+                f"  After prepare_maps: {len(textures) if textures else 0} textures\n"
+            )
+            if textures:
+                for i, tex in enumerate(textures):
+                    texture_type = ptk.resolve_map_type(tex)
+                    f.write(
+                        f"    [{i}]: {os.path.basename(tex)} (type: {texture_type})\n"
+                    )
+
+        if not textures:
+            callback(
+                f'<br><hl style="color:{self.color_error};"><b>Error:</b> No valid textures after preparation.</hl>'
+            )
+            with open(debug_log, "a") as f:
+                f.write(f"  RETURNING None: No valid textures after prepare_maps\n")
+            return None
 
         opacity_map = ptk.filter_images_by_type(
             textures, ["Opacity", "Albedo_Transparency"]
@@ -57,11 +200,29 @@ class StingrayArnoldShader:
 
         name = name if name else ptk.get_base_texture_name(textures[0])
 
-        sr_node = self.setup_stringray_node(name, opacity_map)
+        # DEBUG logging
+        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
+        with open(debug_log, "a") as f:
+            f.write(f"  Computed name: {repr(name)}\n")
+            f.write(f"  opacity_map: {opacity_map}\n")
+            f.write(f"  About to create shader (shader_type={shader_type})...\n")
+
+        # Create the base shader based on shader_type
+        if shader_type == "standard_surface":
+            shader_node = self.setup_standard_surface_node(name, opacity_map)
+        else:  # Default to stingray
+            shader_node = self.setup_stringray_node(name, opacity_map)
+
+        # DEBUG logging
+        with open(debug_log, "a") as f:
+            f.write(f"  shader_node created: {shader_node}\n")
+            f.write(f"  shader_node type: {type(shader_node)}\n")
+            if shader_node is None:
+                f.write(f"  PROBLEM: shader_node is None!\n")
 
         # Optional: Arnold shader creation
         if create_arnold:
-            ai_node, aiMult_node, bump_node = self.setup_arnold_nodes(name, sr_node)
+            ai_node, aiMult_node, bump_node = self.setup_arnold_nodes(name, shader_node)
 
         # Process each texture
         length = len(textures)
@@ -81,8 +242,16 @@ class StingrayArnoldShader:
                 )
                 continue
 
-            # Connect Stingray nodes
-            success = self.connect_stingray_nodes(texture, texture_type, sr_node)
+            # Connect shader nodes based on type
+            if shader_type == "standard_surface":
+                success = self.connect_standard_surface_nodes(
+                    texture, texture_type, shader_node
+                )
+            else:
+                success = self.connect_stingray_nodes(
+                    texture, texture_type, shader_node
+                )
+
             if success:
                 callback(
                     f'<br><hl style="color:{self.color_success};">Map type: <b>{texture_type}</b> connected.</hl>',
@@ -99,6 +268,17 @@ class StingrayArnoldShader:
                 self.connect_arnold_nodes(
                     texture, texture_type, ai_node, aiMult_node, bump_node
                 )
+
+        # DEBUG logging
+        with open(debug_log, "a") as f:
+            f.write(f"  RETURNING shader_node: {shader_node}\n")
+
+        # Return the shading engine (not the shader node itself)
+        # Find the connected shading engine
+        shading_groups = pm.listConnections(shader_node, type="shadingEngine")
+        if shading_groups:
+            return shading_groups[0]
+        return shader_node
 
     def setup_stringray_node(self, name: str, opacity: bool) -> object:
         """Initializes and sets up a StingrayPBS shader node in Maya.
@@ -136,20 +316,21 @@ class StingrayArnoldShader:
         return sr_node
 
     def setup_arnold_nodes(
-        self, name: str, sr_node: object
+        self, name: str, shader_node: object
     ) -> Tuple[object, object, object]:
-        """Sets up a basic Arnold shader network for use with a StingrayPBS node.
+        """Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
 
         This method loads the MtoA plugin if not already loaded, creates an aiStandardSurface
         shader, an aiMultiply utility node, and a bump2d node for normal mapping. It connects
-        these nodes together and to the StingrayPBS node's shading engine to integrate Arnold
-        rendering with Stingray materials.
+        these nodes together and to the shader node's shading engine to integrate Arnold
+        rendering with the base material.
 
         Parameters:
             name (str): Base name for the created Arnold nodes. The names will have suffixes
                         '_ai', '_multiply', and '_bump' respectively.
-            sr_node (object): The StingrayPBS node that the Arnold shader network is being
-                              set up for. This is used to find the connected shading engine.
+            shader_node (object): The Stingray PBS or Standard Surface shader node that the
+                                 Arnold shader network is being set up for. This is used to
+                                 find the connected shading engine.
 
         Returns:
             Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
@@ -164,20 +345,51 @@ class StingrayArnoldShader:
         bump_node = pm.shadingNode("bump2d", asShader=True)
         bump_node.bumpInterp.set(1)  # Set to tangent space normals
 
-        srSG_node = NodeUtils.get_connected_nodes(
-            sr_node,
+        # Get shading engine from either Stingray PBS or Standard Surface
+        shading_engine = NodeUtils.get_connected_nodes(
+            shader_node,
             node_type="shadingEngine",
             direction="outgoing",
             first_match=True,
         )
 
-        # Connect Arnold nodes
+        # Connect Arnold nodes to the shading engine
         NodeUtils.connect_multi_attr(
-            (ai_node.outColor, srSG_node.aiSurfaceShader),
+            (ai_node.outColor, shading_engine.aiSurfaceShader),
             (aiMult_node.outColor, ai_node.baseColor),
             (bump_node.outNormal, ai_node.normalCamera),
         )
         return ai_node, aiMult_node, bump_node
+
+    def setup_standard_surface_node(self, name: str, opacity: bool) -> object:
+        """Creates and sets up a Maya Standard Surface shader node.
+
+        Maya Standard Surface is the modern PBR shader for Maya 2020+ that replaces
+        Stingray PBS. It supports glTF/FBX export for game engines like Unity and Unreal.
+
+        Parameters:
+            name (str): The desired name for the Standard Surface shader node.
+            opacity (bool): Flag to indicate whether the shader should support transparency.
+                          If True, sets up transparency attributes.
+
+        Returns:
+            pm.nt.StandardSurface: The created Standard Surface shader node.
+        """
+        # Create Standard Surface node - must use shadingNode, not create_render_node
+        std_node = pm.shadingNode("standardSurface", asShader=True, name=name)
+
+        # Create and assign shading group
+        sg_node = pm.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        pm.connectAttr(std_node.outColor, sg_node.surfaceShader, force=True)
+
+        if opacity:
+            # Enable transparency for standard surface
+            std_node.transmission.set(1.0)
+            std_node.thinWalled.set(True)
+
+        return std_node
 
     def connect_stingray_nodes(
         self, texture: str, texture_type: str, sr_node: object
@@ -231,6 +443,24 @@ class StingrayArnoldShader:
                 texture_node.outAlpha, sr_node.TEX_roughness_mapX, force=True
             )
             sr_node.use_metallic_map.set(1)
+            sr_node.use_roughness_map.set(1)
+
+        elif texture_type == "MSAO":
+            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
+            # StingrayPBS expects RGB color connections, not individual channels
+            texture_node = NodeUtils.create_render_node(
+                "file", "as2DTexture", fileTextureName=texture
+            )
+            # Connect full color output - StingrayPBS will use red channel for metallic
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
+            # Connect full color output - StingrayPBS will use all channels for AO
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
+            # Connect alpha channel (smoothness) - this connection works for alpha
+            pm.connectAttr(
+                texture_node.outAlpha, sr_node.TEX_roughness_mapX, force=True
+            )
+            sr_node.use_metallic_map.set(1)
+            sr_node.use_ao_map.set(1)
             sr_node.use_roughness_map.set(1)
 
         elif "Normal" in texture_type:
@@ -356,6 +586,31 @@ class StingrayArnoldShader:
             )
             pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
 
+        elif texture_type == "MSAO":
+            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                ignoreColorSpaceFileRules=1,
+            )
+            # Metallic from red channel
+            pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
+            # Smoothness in alpha needs to be inverted to roughness
+            reverse_node = pm.shadingNode(
+                "reverse", asUtility=True, name="invertSmoothness"
+            )
+            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
+            pm.connectAttr(reverse_node.outputX, ai_node.specularRoughness, force=True)
+            pm.connectAttr(
+                reverse_node.outputX, ai_node.transmissionExtraRoughness, force=True
+            )
+            # AO from green channel - multiply with base color using aiMultiply
+            # Connect green channel as grayscale to all RGB channels of input2
+            pm.connectAttr(texture_node.outColor, aiMult_node.input2, force=True)
+
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
                 "file",
@@ -401,6 +656,157 @@ class StingrayArnoldShader:
             pm.connectAttr(texture_node.outColor, ai_node.opacity, force=True)
         else:
             return False
+        return True
+
+    def connect_standard_surface_nodes(
+        self, texture: str, texture_type: str, std_node: object
+    ) -> bool:
+        """Connects texture files to Maya Standard Surface shader slots.
+
+        Parameters:
+            texture (str): The file path of the texture image to be connected.
+            texture_type (str): The type of texture (e.g., "Base_Color", "Roughness", "Metallic").
+            std_node (pm.nt.StandardSurface): The Standard Surface shader node.
+
+        Returns:
+            bool: True if connection successful, False otherwise.
+        """
+        if texture_type in ["Base_Color", "Diffuse"]:
+            texture_node = NodeUtils.create_render_node(
+                "file", "as2DTexture", fileTextureName=texture
+            )
+            pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
+
+        elif texture_type == "Albedo_Transparency":
+            texture_node = NodeUtils.create_render_node(
+                "file", "as2DTexture", fileTextureName=texture
+            )
+            pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
+            pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
+            return True
+
+        elif texture_type == "Roughness":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+            )
+            pm.connectAttr(
+                texture_node.outAlpha, std_node.specularRoughness, force=True
+            )
+
+        elif texture_type == "Metallic":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+            )
+            pm.connectAttr(texture_node.outAlpha, std_node.metalness, force=True)
+
+        elif texture_type == "Metallic_Smoothness":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+            )
+            # Metallic in RGB, smoothness in alpha (need to invert for roughness)
+            reverse_node = pm.shadingNode(
+                "reverse", asUtility=True, name="invertSmoothness"
+            )
+            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
+            pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
+            pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
+
+        elif texture_type == "MSAO":
+            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+            )
+            # Connect red channel (metallic) to metalness
+            pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
+            # Smoothness in alpha needs to be inverted to roughness
+            reverse_node = pm.shadingNode(
+                "reverse", asUtility=True, name="invertSmoothness"
+            )
+            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
+            pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
+            # AO in green channel - multiply with base color if already connected
+            existing_conn = pm.listConnections(
+                std_node.baseColor, source=True, destination=False
+            )
+            if existing_conn:
+                mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
+                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
+                pm.connectAttr(texture_node.outColorG, mult_node.input2X, force=True)
+                pm.connectAttr(texture_node.outColorG, mult_node.input2Y, force=True)
+                pm.connectAttr(texture_node.outColorG, mult_node.input2Z, force=True)
+                pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+
+        elif "Normal" in texture_type:
+            # Standard Surface uses bump2d for normal maps
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+            )
+            bump_node = pm.shadingNode("bump2d", asUtility=True)
+            bump_node.bumpInterp.set(1)  # Tangent space normals
+            # Use outAlpha (grayscale) instead of outColor for bump2d compatibility
+            pm.connectAttr(texture_node.outAlpha, bump_node.bumpValue, force=True)
+            pm.connectAttr(bump_node.outNormal, std_node.normalCamera, force=True)
+
+        elif texture_type == "Emissive":
+            texture_node = NodeUtils.create_render_node(
+                "file", "as2DTexture", fileTextureName=texture
+            )
+            pm.connectAttr(texture_node.outColor, std_node.emissionColor, force=True)
+            std_node.emission.set(1.0)
+
+        elif texture_type == "Ambient_Occlusion":
+            # Standard Surface doesn't have direct AO input, multiply with base color
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+            )
+            # Create multiply node to combine AO with base color
+            mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
+            # If base color already connected, insert multiply
+            existing_conn = pm.listConnections(
+                std_node.baseColor, source=True, destination=False
+            )
+            if existing_conn:
+                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
+            pm.connectAttr(texture_node.outColor, mult_node.input2, force=True)
+            pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+
+        elif texture_type == "Opacity":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+            )
+            pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
+            std_node.transmission.set(1.0)
+            std_node.thinWalled.set(True)
+
+        else:
+            return False
+
         return True
 
     def filter_for_correct_normal_map(
@@ -555,6 +961,99 @@ class StingrayArnoldShader:
         # Return the textures list unchanged if no conditions are met
         return filtered_textures
 
+    def filter_for_mask_map(
+        self,
+        textures: List[str],
+        output_extension: str = "png",
+        callback: Callable = print,
+    ) -> List[str]:
+        """Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
+
+        Unity HDRP Mask Map format:
+        - R: Metallic
+        - G: Ambient Occlusion
+        - B: Detail Mask (unused, set to 0)
+        - A: Smoothness
+
+        Parameters:
+            textures (List[str]): List of texture file paths.
+            output_extension (str): File extension for generated mask map.
+            callback (Callable): Progress callback function.
+
+        Returns:
+            List[str]: Modified list with mask map replacing individual maps.
+        """
+        # Filter for required maps
+        metallic_map = ptk.filter_images_by_type(textures, "Metallic")
+        ao_map = ptk.filter_images_by_type(textures, ["Ambient_Occlusion", "AO"])
+        roughness_map = ptk.filter_images_by_type(textures, "Roughness")
+        smoothness_map = ptk.filter_images_by_type(textures, "Smoothness")
+
+        # Need at least metallic map to create mask map
+        if not metallic_map:
+            callback(
+                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No metallic map found for Mask Map creation. Skipping MSAO packing.</hl>'
+            )
+            return textures
+
+        # Determine smoothness/roughness source
+        if smoothness_map:
+            alpha_map = smoothness_map[0]
+            invert_alpha = False
+        elif roughness_map:
+            alpha_map = roughness_map[0]
+            invert_alpha = True  # Invert roughness to get smoothness
+        else:
+            callback(
+                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No roughness or smoothness map found for Mask Map alpha channel.</hl>'
+            )
+            alpha_map = None
+
+        # Use AO if available, otherwise create a white map
+        if not ao_map:
+            callback(
+                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No AO map found. Using white (255) for AO channel in Mask Map.</hl>'
+            )
+            # Will be handled by pack_msao_texture with fill_values
+
+        try:
+            # Create the MSAO mask map
+            base_name = ptk.get_base_texture_name(metallic_map[0])
+            out_dir = os.path.dirname(metallic_map[0])
+
+            # Use pythontk's pack_msao_texture function
+            mask_map_path = ptk.pack_msao_texture(
+                metallic_map_path=metallic_map[0],
+                ao_map_path=(
+                    ao_map[0] if ao_map else metallic_map[0]
+                ),  # Use metallic as placeholder if no AO
+                alpha_map_path=(
+                    alpha_map if alpha_map else metallic_map[0]
+                ),  # Use metallic as placeholder
+                output_dir=out_dir,
+                suffix="_MaskMap",
+                invert_alpha=invert_alpha,
+            )
+
+            callback(
+                f'<br><hl style="color:{self.color_success};"><b>Created Mask Map:</b> {os.path.basename(mask_map_path)}</hl>'
+            )
+
+            # Remove individual maps and add mask map
+            filtered_textures = [
+                tex
+                for tex in textures
+                if tex not in metallic_map + ao_map + roughness_map + smoothness_map
+            ] + [mask_map_path]
+
+            return filtered_textures
+
+        except Exception as e:
+            callback(
+                f'<br><hl style="color:{self.color_error};"><b>Error creating Mask Map:</b> {str(e)}</hl>'
+            )
+            return textures
+
     def filter_for_correct_base_color_map(
         self, textures: List[str], use_albedo_transparency: bool
     ) -> List[str]:
@@ -672,6 +1171,21 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         text = self.ui.cmb003.currentText()
         return text.lower()
 
+    @property
+    def shader_type(self) -> str:
+        """Get the shader type selection.
+
+        Returns:
+            (str) Either 'stingray' or 'standard_surface'
+        """
+        # This will be cmb004 or whichever combo box is added for shader type
+        # For now, default to stingray for backwards compatibility
+        if hasattr(self.ui, "cmb004"):
+            text = self.ui.cmb004.currentText()
+            if "Standard Surface" in text:
+                return "standard_surface"
+        return "stingray"
+
     def b000(self):
         """Create network."""
         if self.image_files:
@@ -682,23 +1196,28 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
             create_arnold = self.ui.chk000.isChecked()
 
-            output_template = self.ui.cmb002.currentText()
-            if output_template == "PBR Metal Roughness":
-                albedo_transparency = False
-                metallic_smoothness = False
-            elif (
-                output_template == "Unity Univeral Render Pipeline (Metallic Standard)"
-            ):
-                albedo_transparency = True
-                metallic_smoothness = True
+            # Get template configuration using combo box index
+            template_index = self.ui.cmb002.currentIndex()
+            (
+                albedo_transparency,
+                metallic_smoothness,
+                mask_map,
+                orm_map,
+                convert_specgloss_to_pbr,
+            ) = PBRWorkflowTemplate.get_template_config(template_index)
 
             self.create_network(
                 self.image_files,
                 self.mat_name,
+                shader_type=self.shader_type,
                 normal_type=self.normal_map_type,
                 create_arnold=create_arnold,
                 albedo_transparency=albedo_transparency,
                 metallic_smoothness=metallic_smoothness,
+                mask_map=mask_map,
+                orm_map=orm_map,
+                convert_specgloss_to_pbr=convert_specgloss_to_pbr,
+                cleanup_base_color=False,  # Can be exposed in UI later if needed
                 output_extension=self.output_extension,
                 callback=self.callback,
             )
