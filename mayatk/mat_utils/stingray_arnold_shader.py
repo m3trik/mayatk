@@ -150,7 +150,10 @@ class StingrayArnoldShader:
         }
 
         prepared_data = TextureMapFactory.prepare_maps(
-            textures, workflow_config, callback=callback
+            textures,
+            workflow_config,
+            callback=callback,
+            group_by_set=(not bool(name)),
         )
 
         if isinstance(prepared_data, dict):
@@ -1112,6 +1115,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
+        self.last_created_shader = None
 
         self.ui.txt001.setText(self.msg_intro)
         self.ui.progressBar.setValue(0)
@@ -1123,13 +1127,15 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setObjectName="lbl_graph_material",
-            setText="Graph Material",
+            setText="Open in Editor",
             setToolTip="Graph the material in the Hypershade.",
         )
 
     def lbl_graph_material(self):
         """Graph the material in the Hypershade."""
-        if pm.objExists(self.mat_name):
+        if self.last_created_shader:
+            MatUtils.graph_materials(self.last_created_shader)
+        elif pm.objExists(self.mat_name):
             MatUtils.graph_materials(self.mat_name)
         else:
             pm.warning(f"Material '{self.mat_name}' not found.")
@@ -1199,7 +1205,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                 convert_specgloss_to_pbr,
             ) = PBRWorkflowTemplate.get_template_config(template_index)
 
-            self.create_network(
+            self.last_created_shader = self.create_network(
                 self.image_files,
                 self.mat_name,
                 shader_type=self.shader_type,
