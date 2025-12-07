@@ -1,11 +1,15 @@
+======================================================================
+MAYATK TEST RESULTS
+======================================================================
 
-test_stingray_arnold_shader: PASS
-  Tests: 85, Failures: 0, Errors: 0, Skipped: 4
+
+test_debug_history: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_stingray_arnold_shader: PASS (85 tests, 0 failures, 0 errors)
+  test_debug_history: PASS (1 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 85 tests, 0 failures, 0 errors, 4 skipped
+Total: 1 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

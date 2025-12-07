@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple, Callable, Union
 
 try:
     import pymel.core as pm
@@ -109,7 +109,7 @@ class StingrayArnoldShader:
         cleanup_base_color: bool = False,
         output_extension: str = "png",
         callback: Callable = print,
-    ) -> Optional[object]:
+    ) -> Union[Optional[object], List[Optional[object]]]:
         """Create a PBR shader network with textures.
 
         Parameters:
@@ -128,24 +128,12 @@ class StingrayArnoldShader:
             callback: Progress callback function
 
         Returns:
-            The created shader node (Stingray PBS or Standard Surface)
+            The created shader node(s) (Stingray PBS or Standard Surface)
         """
-        # DEBUG logging to file
-        import datetime
-
-        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
-        with open(debug_log, "a") as f:
-            f.write(f"\n{datetime.datetime.now()} - create_network called\n")
-            f.write(f"  Input textures: {len(textures) if textures else 0}\n")
-            f.write(f"  shader_type: {shader_type}\n")
-            f.write(f"  name: {name}\n")
-
         if not textures:
             callback(
                 f'<br><hl style="color:{self.color_error};"><b>Error:</b> No textures given to create_network.</hl>'
             )
-            with open(debug_log, "a") as f:
-                f.write(f"  RETURNING None: No textures\n")
             return None
 
         # Use TextureMapFactory for DRY texture preparation
@@ -160,38 +148,43 @@ class StingrayArnoldShader:
             "output_extension": output_extension,
         }
 
-        # DEBUG: Log the workflow config
-        with open(debug_log, "a") as f:
-            f.write(f"  Workflow config:\n")
-            f.write(f"    albedo_transparency: {albedo_transparency}\n")
-            f.write(f"    metallic_smoothness: {metallic_smoothness}\n")
-            f.write(f"    mask_map: {mask_map}\n")
-            f.write(f"    orm_map: {orm_map}\n")
-            f.write(f"    convert_specgloss_to_pbr: {convert_specgloss_to_pbr}\n")
-            f.write(f"    cleanup_base_color: {cleanup_base_color}\n")
-            f.write(f"    normal_type: {normal_type}\n")
+        prepared_data = TextureMapFactory.prepare_maps(
+            textures, workflow_config, callback=callback
+        )
 
-        textures = TextureMapFactory.prepare_maps(textures, workflow_config, callback)
-
-        # DEBUG logging
-        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
-        with open(debug_log, "a") as f:
-            f.write(
-                f"  After prepare_maps: {len(textures) if textures else 0} textures\n"
+        if isinstance(prepared_data, dict):
+            # Batch mode
+            results = []
+            for set_name, set_textures in prepared_data.items():
+                callback(f"Creating network for set: {set_name}")
+                node = self._create_single_network(
+                    set_textures,
+                    set_name,  # Use set name for shader name
+                    shader_type,
+                    create_arnold,
+                    callback,
+                )
+                results.append(node)
+            return results
+        else:
+            # Single mode
+            return self._create_single_network(
+                prepared_data, name, shader_type, create_arnold, callback
             )
-            if textures:
-                for i, tex in enumerate(textures):
-                    texture_type = ptk.resolve_map_type(tex)
-                    f.write(
-                        f"    [{i}]: {os.path.basename(tex)} (type: {texture_type})\n"
-                    )
 
+    def _create_single_network(
+        self,
+        textures: List[str],
+        name: str,
+        shader_type: str,
+        create_arnold: bool,
+        callback: Callable,
+    ) -> Optional[object]:
+        """Internal method to create a single shader network from prepared textures."""
         if not textures:
             callback(
                 f'<br><hl style="color:{self.color_error};"><b>Error:</b> No valid textures after preparation.</hl>'
             )
-            with open(debug_log, "a") as f:
-                f.write(f"  RETURNING None: No valid textures after prepare_maps\n")
             return None
 
         opacity_map = ptk.filter_images_by_type(
@@ -200,25 +193,11 @@ class StingrayArnoldShader:
 
         name = name if name else ptk.get_base_texture_name(textures[0])
 
-        # DEBUG logging
-        debug_log = r"o:\Cloud\Code\_scripts\mayatk\test\create_network_debug.log"
-        with open(debug_log, "a") as f:
-            f.write(f"  Computed name: {repr(name)}\n")
-            f.write(f"  opacity_map: {opacity_map}\n")
-            f.write(f"  About to create shader (shader_type={shader_type})...\n")
-
         # Create the base shader based on shader_type
         if shader_type == "standard_surface":
             shader_node = self.setup_standard_surface_node(name, opacity_map)
         else:  # Default to stingray
             shader_node = self.setup_stringray_node(name, opacity_map)
-
-        # DEBUG logging
-        with open(debug_log, "a") as f:
-            f.write(f"  shader_node created: {shader_node}\n")
-            f.write(f"  shader_node type: {type(shader_node)}\n")
-            if shader_node is None:
-                f.write(f"  PROBLEM: shader_node is None!\n")
 
         # Optional: Arnold shader creation
         if create_arnold:
@@ -268,10 +247,6 @@ class StingrayArnoldShader:
                 self.connect_arnold_nodes(
                     texture, texture_type, ai_node, aiMult_node, bump_node
                 )
-
-        # DEBUG logging
-        with open(debug_log, "a") as f:
-            f.write(f"  RETURNING shader_node: {shader_node}\n")
 
         # Return the shading engine (not the shader node itself)
         # Find the connected shading engine

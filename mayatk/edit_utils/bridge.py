@@ -4,16 +4,16 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
-# from this package:
+# From this package:
 from mayatk.core_utils.preview import Preview
-from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.components import Components
 
 
 class Bridge:
     @staticmethod
     def bridge(edges, **kwargs):
         """ """
-        mapped_edges = components.Components.map_components_to_objects(edges)
+        mapped_edges = Components.map_components_to_objects(edges)
 
         for edges in mapped_edges.values():
             pm.polyBridgeEdge(edges, **kwargs)

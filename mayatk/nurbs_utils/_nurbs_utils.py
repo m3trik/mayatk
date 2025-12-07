@@ -18,8 +18,8 @@ from mayatk.xform_utils._xform_utils import XformUtils
 class NurbsUtils(ptk.HelpMixin):
     """ """
 
-    @CoreUtils.undoable
     @classmethod
+    @CoreUtils.undoable
     def loft(
         cls,
         uniform=True,
@@ -118,9 +118,9 @@ class NurbsUtils(ptk.HelpMixin):
         # pm.undoInfo(closeChunk=1)
         return result
 
-    @CoreUtils.undoable
     @classmethod
-    def create_curve_between_two_objs(start, end):
+    @CoreUtils.undoable
+    def create_curve_between_two_objs(cls, start, end):
         """Create a bezier curve between starting and end object(s).
 
         Parameters:
@@ -135,7 +135,7 @@ class NurbsUtils(ptk.HelpMixin):
         p2 = pm.objectCenter(end)
         hypotenuse = ptk.distance_between_points(p1, p2)
 
-        v1, v2 = ptk.get_cross_product_of_curves([start, end], normalize=1, values=1)
+        v1, v2 = cls.getCrossProductOfCurves([start, end], normalize=1, values=1)
         v3a = ptk.get_vector_from_two_points(p1, p2)
         v3b = ptk.get_vector_from_two_points(p2, p1)
 
@@ -331,9 +331,9 @@ class NurbsUtils(ptk.HelpMixin):
                 )
                 p = pm.getAttr(npcNode.parameter)
                 if not tolerance:
-                    result[i] = p
+                    result[str(i)] = p
                 elif distance < tolerance:
-                    result[i] = p
+                    result[str(i)] = p
 
         pm.delete(npcNode)
 
@@ -443,14 +443,12 @@ class NurbsUtils(ptk.HelpMixin):
         for curve in pm.ls(curves):
             p0 = pm.objectCenter(curve)
 
-            cvs = components.Components.get_components(
-                curve, "cv", returned_type="obj", flatten=1
-            )
             cvPos = cls.get_cv_info(curve, "position")
+            cvs = list(cvPos.keys())
             p1 = cvPos[cvs[0]]
-            p2 = cvPos[cvs[(len(cvs) / 2)]]
+            p2 = cvPos[cvs[int(len(cvs) / 2)]]
 
-            n1 = ptk.getCrossProduct(p0, p1, p2, normalize=normalize)
+            n1 = ptk.cross_product(p0, p1, p2, normalize=normalize)
 
             result[curve] = n1
 

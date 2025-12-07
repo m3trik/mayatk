@@ -1,0 +1,249 @@
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+Template generation complete.
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+  Error generating PBR Metallic Roughness: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+  Error generating Unity URP Lit: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+  Error generating Unity HDRP Lit: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+  Error generating Unreal Engine: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+  Error generating glTF 2.0: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: Godot
+  Calling create_network for Godot...
+  Error generating Godot: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+  Error generating PBR Specular Glossiness: 'NoneType' object has no attribute 'outColor'
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\generate_templates.py", line 113, in generate_templates
+    shader_node = sas.create_network(
+                  ^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\core_utils\_core_utils.py", line 176, in wrapper
+    return fn(self, *args[1:], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 160, in create_network
+    node = self._create_single_network(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 230, in _create_single_network
+    success = self.connect_stingray_nodes(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "O:\Cloud\Code\_scripts\mayatk\mayatk\mat_utils\stingray_arnold_shader.py", line 387, in connect_stingray_nodes
+    pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'outColor'
+
+Template generation complete.
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+Template generation complete.
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+Template generation complete.
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+Template generation complete.
+Starting generation...
+DEBUG: Version with lambda *args fix
+Generating template: PBR Metallic Roughness
+  Calling create_network for PBR Metallic Roughness...
+Generating template: Unity URP Lit
+  Calling create_network for Unity URP Lit...
+Generating template: Unity HDRP Lit
+  Calling create_network for Unity HDRP Lit...
+Generating template: Unreal Engine
+  Calling create_network for Unreal Engine...
+Generating template: glTF 2.0
+  Calling create_network for glTF 2.0...
+Generating template: Godot
+  Calling create_network for Godot...
+Generating template: PBR Specular Glossiness
+  Calling create_network for PBR Specular Glossiness...
+Template generation complete.

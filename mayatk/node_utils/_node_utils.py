@@ -483,7 +483,7 @@ class NodeUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_node_attributes(
-        node, inc=[], exc=[], exc_defaults=False, quiet=True, **kwargs
+        node, inc=None, exc=None, exc_defaults=False, quiet=True, **kwargs
     ):
         """Retrieves specified node's attributes along with their corresponding values,
         optionally excluding those with default values by adding them to the exclusion list.
@@ -499,12 +499,16 @@ class NodeUtils(ptk.HelpMixin):
         Returns:
             dict: A dictionary where keys are attribute names and values are the attribute values.
         """
+        if inc is None:
+            inc = []
+        if exc is None:
+            exc = []
+
         list_attr_kwargs = {  # Set defaults (Kwargs will overwrite these values)
             "read": True,
             "hasData": True,
             "settable": True,
             "scalarAndArray": True,
-            "keyable": False,
             "multi": True,
         }
         list_attr_kwargs.update(kwargs)
@@ -517,7 +521,7 @@ class NodeUtils(ptk.HelpMixin):
                     if defaults:
                         default_value = defaults[0]
                         current_value = pm.getAttr(f"{node}.{attr_name}")
-                        # Check for default value and add to 'exc' if matched
+
                         if current_value == default_value or (
                             isinstance(current_value, float)
                             and abs(current_value - default_value) < 1e-6
@@ -526,7 +530,6 @@ class NodeUtils(ptk.HelpMixin):
                 except Exception:
                     continue  # Skip attribute if any error occurs
 
-        # Apply filtering with the updated 'exc' list
         filtered_attr_names = ptk.filter_list(
             pm.listAttr(node, **list_attr_kwargs), inc, exc
         )

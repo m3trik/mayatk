@@ -1,13 +1,14 @@
 import os
 import logging
 import yaml
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict, Callable
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from pythontk.img_utils.texture_map_factory import ConversionRegistry, ProcessingContext
 
 # from this package:
 from mayatk.node_utils._node_utils import NodeUtils
@@ -56,9 +57,32 @@ class GraphCollector:
 
     def _create_node_entry(self, graph_info, placeholder_name, node, node_type):
         attributes = NodeUtils.get_node_attributes(node, exc_defaults=True)
+
+        # Ensure fileTextureName is captured for file nodes
+        if node_type == "file":
+            image_name = pm.getAttr(f"{node}.fileTextureName")
+            if image_name:
+                attributes["fileTextureName"] = str(image_name)
+
+        # Dynamic filtering: Remove attributes that are connected or are message types
+        filtered_attributes = {}
+        for attr_name, value in attributes.items():
+            if value is None:
+                continue
+
+            try:
+                attr = node.attr(attr_name)
+                # Skip if connected (driven by another node) or is a message attribute
+                if attr.isDestination() or attr.type() == "message":
+                    continue
+            except Exception:
+                pass
+
+            filtered_attributes[attr_name] = value
+
         graph_info[placeholder_name] = {
             "type": node_type,
-            "attributes": attributes,
+            "attributes": filtered_attributes,
             "connections": [],
             "metadata": {
                 "connected_to_shading_engine": self._is_connected_to_shading_engine(
@@ -69,7 +93,7 @@ class GraphCollector:
 
         # Adding metadata for file nodes regarding their map type
         if node_type == "file":
-            image_name = pm.getAttr(f"{node}.fileTextureName", "")
+            image_name = attributes.get("fileTextureName", "")
             map_type = ptk.resolve_map_type(image_name)
             graph_info[placeholder_name]["metadata"]["map_type"] = map_type
 
@@ -100,8 +124,8 @@ class GraphCollector:
         src_node_placeholder = self._get_placeholder_name(src_attr.node())
         dest_node_placeholder = self._get_placeholder_name(dest_attr.node())
         connection_info = {
-            "source": f"{src_node_placeholder}.{src_attr.attrName()}",
-            "target": f"{dest_node_placeholder}.{dest_attr.attrName()}",
+            "source": f"{src_node_placeholder}.{src_attr.longName()}",
+            "target": f"{dest_node_placeholder}.{dest_attr.longName()}",
         }
         graph_info[placeholder_name]["connections"].append(connection_info)
 
@@ -113,6 +137,9 @@ class GraphSaver(GraphCollector):
         file_path: str,
         exclude_types: Optional[List[str]] = None,  # Accept list of strings directly
     ) -> None:
+        # Expand nodes to include upstream history to capture the full network
+        nodes = pm.listHistory(nodes)
+
         # Convert exclude_types to lowercase for case-insensitive comparison
         exclude_types_lower = [t.lower() for t in ptk.make_iterable(exclude_types)]
 
@@ -150,6 +177,7 @@ class GraphRestorer:
         self.name = name  # Custom name for the shader if provided
         self.graph_config = self.load_yaml()
         self.nodes = {}  # Dictionary to map placeholders to PyNode objects
+        self.registry = ConversionRegistry()
 
     def load_yaml(self):
         """Load and return graph configuration from a YAML file."""
@@ -168,115 +196,133 @@ class GraphRestorer:
             logging.warning("Graph configuration is empty. Nothing to restore.")
             return
 
-        # Dictionary to hold available map types and their paths
-        available_map_types = {
-            ptk.resolve_map_type(path): path for path in self.texture_paths
-        }
+        logger = logging.getLogger("ShaderTemplateManager")
 
-        for placeholder, node_info in self.graph_config.items():
-            node_type = node_info["type"]
-            attributes = node_info.get("attributes", {})
-            metadata = node_info.get("metadata", {})
-            required_map_type = metadata.get("map_type", "")
-
-            file_path = available_map_types.get(required_map_type)
-
-            # If the required texture is not available, try to generate it
-            if not file_path and required_map_type:
-                file_path = self.generate_missing_map(
-                    required_map_type, available_map_types
-                )
-
-            # Set the file path if available
-            if file_path:
-                attributes["fileTextureName"] = file_path
-
-            # Determine the name for shaders and shading groups
-            node_name = None  # Only name shaders
-            classification_string = pm.getClassification(node_type)
-            if any("shader/surface" in c for c in classification_string):
-                # Use provided name or derive from texture if not given
-                node_name = (
-                    self.name
-                    if self.name
-                    else ptk.get_base_texture_name(self.texture_paths[0])
-                )
-
-            node = NodeUtils.create_render_node(
-                node_type,
-                name=node_name,
-                create_shading_group=metadata.get("connected_to_shading_engine", False),
-                **attributes,
+        # Check if file nodes are present in the template
+        file_nodes_found = any(
+            info["type"] == "file" for info in self.graph_config.values()
+        )
+        if self.texture_paths and not file_nodes_found:
+            logger.warning(
+                "Texture paths provided but no file nodes found in template. The template might be incomplete or saved with an older version."
             )
 
-            if node:
-                self.nodes[placeholder] = node
-                if node_name and "shader" in node_type:
-                    # Optionally name the shading group linked to this shader
-                    shading_group = pm.sets(
-                        renderable=True,
-                        noSurfaceShader=True,
-                        empty=True,
-                        name=f"{node_name}SG",
-                    )
-                    pm.connectAttr(f"{node}.outColor", f"{shading_group}.surfaceShader")
+        # Dictionary to hold available map types and their paths
+        available_map_types = {}
+        for path in self.texture_paths:
+            map_type = ptk.resolve_map_type(path)
+            if map_type:
+                available_map_types[map_type] = path
+                logger.info(f"Resolved '{os.path.basename(path)}' as '{map_type}'")
             else:
-                logging.error(f"Failed to create node: {placeholder}")
+                logger.warning(
+                    f"Could not resolve map type for '{os.path.basename(path)}'"
+                )
+
+        for placeholder, node_info in self.graph_config.items():
+            self._restore_node(placeholder, node_info, available_map_types)
 
         self.restore_connections()
 
-    @staticmethod
-    def generate_missing_map(required_map, provided_map_types):
-        """Attempts to generate a missing map based on available ones. Supports generating:
-        - Normal_OpenGL from Normal_DirectX and vice versa.
-        - MetallicSmoothness from separate Metallic and Smoothness/Roughness maps.
-        - AlbedoTransparency from separate Albedo and Transparency maps.
+    def _restore_node(self, placeholder, node_info, available_map_types):
+        logger = logging.getLogger("ShaderTemplateManager")
+        node_type = node_info["type"]
+        attributes = node_info.get("attributes", {})
+        metadata = node_info.get("metadata", {})
+        required_map_type = metadata.get("map_type", "")
 
-        Parameters:
-            required_map (str): The type of the map that needs to be generated.
-            provided_map_types (Dict[str, str]): A dictionary with available map types as keys and paths to texture files as values.
+        # Determine output directory and base name from available textures
+        output_dir = ""
+        base_name = "generated_map"
+        ext = "png"
 
-        Returns:
-            str or None: The path to the generated map file if successful, None otherwise.
-        """
-        # Handle Normal map conversion
-        if required_map == "Normal_OpenGL" and "Normal_DirectX" in provided_map_types:
-            return ptk.create_gl_from_dx(provided_map_types["Normal_DirectX"])
-        elif required_map == "Normal_DirectX" and "Normal_OpenGL" in provided_map_types:
-            return ptk.create_dx_from_gl(provided_map_types["Normal_OpenGL"])
+        if available_map_types:
+            first_path = next(iter(available_map_types.values()))
+            output_dir = os.path.dirname(first_path)
+            base_name = ptk.get_base_texture_name(first_path)
+            ext = os.path.splitext(first_path)[1].lstrip(".")
 
-        # Generate MetallicSmoothness from separate Metallic and Smoothness/Roughness maps
-        if required_map == "Metallic_Smoothness":
-            metallic_path = provided_map_types.get("Metallic")
-            smoothness_path = provided_map_types.get("Smoothness")
-            roughness_path = provided_map_types.get("Roughness")
+        context = ProcessingContext(
+            inventory=available_map_types,
+            config={},
+            output_dir=output_dir,
+            base_name=base_name,
+            ext=ext,
+            callback=lambda msg: logger.info(
+                msg.replace("<br>", "").replace("<hl>", "").replace("</hl>", "")
+            ),
+            conversion_registry=self.registry,
+        )
 
-            # Prefer smoothness over roughness; if both are missing, return None
-            alpha_map_path = (
-                smoothness_path
-                if smoothness_path
-                else (roughness_path if roughness_path else None)
+        file_path = None
+        if required_map_type:
+            fallbacks = {
+                "Base_Color": ["Diffuse"],
+                "Diffuse": ["Base_Color"],
+                "Normal": ["Normal_OpenGL", "Normal_DirectX"],
+                "Normal_OpenGL": ["Normal", "Normal_DirectX"],
+                "Normal_DirectX": ["Normal", "Normal_OpenGL"],
+            }
+            candidates = [required_map_type] + fallbacks.get(required_map_type, [])
+            file_path = context.resolve_map(*candidates, allow_conversion=True)
+
+        # Set the file path if available
+        if file_path:
+            attributes["fileTextureName"] = file_path
+            logger.info(
+                f"Node '{placeholder}': Assigned '{os.path.basename(file_path)}' to '{required_map_type}'"
             )
-            if metallic_path and alpha_map_path:
-                # Use roughness_path if smoothness is not available and invert the map as roughness is inverse of smoothness
-                invert_alpha = True if not smoothness_path and roughness_path else False
-                return ptk.pack_smoothness_into_metallic(
-                    metallic_map_path=metallic_path,
-                    alpha_map_path=alpha_map_path,
-                    invert_alpha=invert_alpha,
-                )
+        elif required_map_type:
+            logger.warning(
+                f"Node '{placeholder}': Missing texture for '{required_map_type}'"
+            )
 
-        # Generate AlbedoTransparency from separate Albedo and Transparency maps
-        if required_map == "Albedo_Transparency":
-            albedo_path = provided_map_types.get("Base_Color")
-            transparency_path = provided_map_types.get("Opacity")
+        # Determine the name for shaders and shading groups
+        node_name = self._determine_node_name(node_type)
 
-            if albedo_path and transparency_path:
-                return ptk.pack_transparency_into_albedo(
-                    albedo_map_path=albedo_path, alpha_map_path=transparency_path
-                )
+        # Ensure fileTextureName is passed explicitly if present in attributes
+        # This handles cases where attributes might be filtered or processed differently
+        ftn = attributes.get("fileTextureName")
 
+        node = NodeUtils.create_render_node(
+            node_type,
+            name=node_name,
+            create_shading_group=metadata.get("connected_to_shading_engine", False),
+            **attributes,
+        )
+
+        if node and ftn:
+            try:
+                pm.setAttr(f"{node}.fileTextureName", ftn, type="string")
+            except Exception as e:
+                logger.warning(f"Failed to set fileTextureName on {node}: {e}")
+
+        if node:
+            self.nodes[placeholder] = node
+            self._handle_shading_group(node, node_name, node_type)
+        else:
+            logging.error(f"Failed to create node: {placeholder}")
+
+    def _determine_node_name(self, node_type):
+        classification_string = pm.getClassification(node_type)
+        if any("shader/surface" in c for c in classification_string):
+            # Use provided name or derive from texture if not given
+            if self.name:
+                return self.name
+            elif self.texture_paths:
+                return ptk.get_base_texture_name(self.texture_paths[0])
         return None
+
+    def _handle_shading_group(self, node, node_name, node_type):
+        if node_name and "shader" in node_type:
+            # Optionally name the shading group linked to this shader
+            shading_group = pm.sets(
+                renderable=True,
+                noSurfaceShader=True,
+                empty=True,
+                name=f"{node_name}SG",
+            )
+            pm.connectAttr(f"{node}.outColor", f"{shading_group}.surfaceShader")
 
     def restore_connections(self):
         """Connect nodes as specified in the graph configuration."""
@@ -287,45 +333,78 @@ class GraphRestorer:
                 continue
 
             for connection in node_info.get("connections", []):
-                src_placeholder, src_attr = connection["source"].split(".")
-                tgt_placeholder, tgt_attr = connection["target"].split(".")
+                try:
+                    src_str = connection["source"]
+                    tgt_str = connection["target"]
 
-                src_node = self.nodes.get(src_placeholder)
-                tgt_node = self.nodes.get(tgt_placeholder)
+                    src_placeholder, src_attr = src_str.split(".", 1)
+                    tgt_placeholder, tgt_attr = tgt_str.split(".", 1)
 
-                if src_node and tgt_node:
-                    try:
+                    src_node = self.nodes.get(src_placeholder)
+                    tgt_node = self.nodes.get(tgt_placeholder)
+
+                    if src_node and tgt_node:
                         pm.connectAttr(
                             f"{src_node}.{src_attr}",
                             f"{tgt_node}.{tgt_attr}",
                             force=True,
                         )
-                    except Exception as e:
-                        logging.error(
-                            f"Failed to connect {src_placeholder}.{src_attr} to {tgt_placeholder}.{tgt_attr}: {str(e)}"
-                        )
-                else:
-                    if not src_node:
-                        logging.error(f"Source node {src_placeholder} not found.")
-                    if not tgt_node:
-                        logging.error(f"Target node {tgt_placeholder} not found.")
+                    else:
+                        if not src_node:
+                            logging.warning(
+                                f"Source node {src_placeholder} not found for connection {src_str} -> {tgt_str}"
+                            )
+                        if not tgt_node:
+                            logging.warning(
+                                f"Target node {tgt_placeholder} not found for connection {src_str} -> {tgt_str}"
+                            )
+                except Exception as e:
+                    logging.error(
+                        f"Failed to connect {connection.get('source')} to {connection.get('target')}: {str(e)}"
+                    )
 
 
-class QTextEditLogger(logging.Handler):
-    def __init__(self, widget):
-        super().__init__()
-        self.widget = widget
-        self.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        )
+class ShaderTemplates:
+    """
+    Facade class for managing shader templates.
+    Provides high-level methods to save and restore shader graphs.
+    """
 
-    def emit(self, record):
-        msg = self.format(record)
-        self.widget.append(msg)
+    @staticmethod
+    def save_template(nodes, file_path, exclude_types=None):
+        """
+        Save the specified nodes as a shader template.
+
+        Args:
+            nodes (list): List of Maya nodes to save.
+            file_path (str): Path to the output YAML file.
+            exclude_types (list, optional): List of node types to exclude.
+        """
+        saver = GraphSaver()
+        saver.save_graph(nodes, file_path, exclude_types=exclude_types)
+
+    @staticmethod
+    def restore_template(file_path, texture_paths=None, name=None):
+        """
+        Restore a shader template from a file.
+
+        Args:
+            file_path (str): Path to the YAML template file.
+            texture_paths (list, optional): List of texture paths to use.
+            name (str, optional): Name for the restored shader.
+
+        Returns:
+            dict: Mapping of placeholder names to created Maya nodes.
+        """
+        if texture_paths is None:
+            texture_paths = []
+        restorer = GraphRestorer(file_path, texture_paths, name)
+        restorer.restore_graph()
+        return restorer.nodes
 
 
-class ShaderTemplatesSlots:
-    def __init__(self, switchboard, log_level="WARNING"):
+class ShaderTemplatesSlots(ptk.LoggingMixin):
+    def __init__(self, switchboard, log_level="DEBUG"):
         super().__init__()
 
         self.sb = switchboard
@@ -336,10 +415,10 @@ class ShaderTemplatesSlots:
         self.image_files = None
 
         # Setup logging
-        self.logger = logging.getLogger("ShaderTemplateManager")
         self.logger.setLevel(log_level)
-        log_handler = QTextEditLogger(self.ui.txt001)
-        self.logger.addHandler(log_handler)
+        self.logger.hide_logger_name(False)
+        self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
+        self.logger.setup_logging_redirect(self.ui.txt001)
 
         # Load plugins
         EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
@@ -391,16 +470,16 @@ class ShaderTemplatesSlots:
         """Safe rename that checks for None."""
         current_path = widget.currentData()
         if current_path is None:
-            self.log.error("No template selected or data is missing.")
+            self.logger.error("No template selected or data is missing.")
             return
 
         new_path = os.path.join(os.path.dirname(current_path), new_name + ".yaml")
         if os.path.exists(new_path):
-            self.log.error("File with new name already exists.")
+            self.logger.error("File with new name already exists.")
             return
 
         os.rename(current_path, new_path)
-        self.log.info(f"Template renamed to: {new_path}")
+        self.logger.info(f"Template renamed to: {new_path}")
         widget.init_slot()  # Refresh ComboBox
 
     def lbl000(self):
@@ -413,20 +492,23 @@ class ShaderTemplatesSlots:
         template_path = self.ui.cmb002.currentData()
         if os.path.exists(template_path):
             os.remove(template_path)
-            self.log.info(f"Template deleted: {template_path}")
+            self.logger.info(f"Template deleted: {template_path}")
         self.ui.cmb002.init_slot()  # Refresh ComboBox
 
     def b000(self):
         """Create shader network using selected template."""
-        if self.image_files:
-            self.ui.txt001.clear()
-            self.log.info("Creating network based on template...")
+        self.ui.txt001.clear()
+        self.logger.info("Creating network based on template...")
 
-            yaml_file_path = self.ui.cmb002.currentData()
-            self.graph_restorer = GraphRestorer(yaml_file_path, self.image_files)
-            self.graph_restorer.restore_graph()
+        yaml_file_path = self.ui.cmb002.currentData()
+        if not yaml_file_path:
+            self.logger.error("No template selected.")
+            return
 
-            self.log.info("COMPLETED.")
+        # Use the facade instead of direct instantiation
+        ShaderTemplates.restore_template(yaml_file_path, self.image_files or [])
+
+        self.logger.info("COMPLETED.")
 
     def b001(self):
         """Load texture maps and update GUI."""
@@ -440,7 +522,7 @@ class ShaderTemplatesSlots:
             self.image_files = image_files
             self.ui.txt001.clear()
             for img in image_files:
-                self.log.info(ptk.truncate(img, 60))
+                self.logger.info(ptk.truncate(img, 60))
 
     def b002(self):
         """Save current graph as a new shader template."""
@@ -454,14 +536,23 @@ class ShaderTemplatesSlots:
         file_path = os.path.join(template_directory, f"{self.template_name}.yaml")
 
         if os.path.exists(file_path):
-            self.log.error("File already exists.")
+            self.logger.error("File already exists.")
             return
 
-        self.graph_saver = GraphSaver()
-        self.graph_saver.save_graph(
-            selected_nodes, file_path, exclude_types="shadingEngine"
+        # Use the facade
+        ShaderTemplates.save_template(
+            selected_nodes,
+            file_path,
+            exclude_types=[
+                "shadingEngine",
+                "transform",
+                "mesh",
+                "nurbsCurve",
+                "camera",
+                "light",
+            ],
         )
-        self.log.info(f"Shader template saved as: {file_path}")
+        self.logger.info(f"Shader template saved as: {file_path}")
         self.ui.cmb002.init_slot()
 
 

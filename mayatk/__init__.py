@@ -62,6 +62,7 @@ DEFAULT_INCLUDE = {
     # Material utils
     "mat_utils.stingray_arnold_shader": "*",
     "mat_utils.texture_path_editor": "TexturePathEditor",
+    "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",
     "ui_utils.ui_manager": "UiManager",

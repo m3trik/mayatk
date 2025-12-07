@@ -15,9 +15,9 @@ except Exception:
     om = None  # Allow module to import outside Maya; guard at call sites
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -279,7 +279,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             return
 
         # Group edges by connected sets using the existing method
-        connected_edges_sets = components.Components.get_contigious_edges(objects)
+        connected_edges_sets = Components.get_contigious_edges(objects)
 
         for edge_set in connected_edges_sets:
             # Get the vertices of the edge set
@@ -1713,7 +1713,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
         vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
 
-        closestVerts = components.Components.get_closest_verts(
+        closestVerts = Components.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
         )
 

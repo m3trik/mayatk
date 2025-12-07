@@ -9,9 +9,9 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -96,7 +96,7 @@ class UvUtils(ptk.HelpMixin):
             (list)(dict): Depending on the given returned_type arg.
             Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')], 1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
-        faces = components.Components.get_components(objects, "faces", flatten=True)
+        faces = Components.get_components(objects, "faces", flatten=True)
         shells = {}
 
         for face in faces:

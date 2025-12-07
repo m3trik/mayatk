@@ -87,6 +87,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "env_utils/reference_manager.ui",
             "slot": "env_utils.reference_manager.ReferenceManagerSlots",
         },
+        "shader_templates": {
+            "ui": "mat_utils/shader_templates/shader_templates.ui",
+            "slot": "mat_utils.shader_templates._shader_templates.ShaderTemplatesSlots",
+        },
         "snap": {
             "ui": "edit_utils/snap.ui",
             "slot": "edit_utils.snap.SnapSlots",

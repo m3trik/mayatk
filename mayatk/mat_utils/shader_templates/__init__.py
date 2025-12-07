@@ -1,10 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Shader Template Store and Restore
 
-from mayatk.mat_utils.shader_templates._shader_templates import *
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import MatUtils
+"""
 
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
+# Lazy-loaded via parent package - no explicit imports needed
