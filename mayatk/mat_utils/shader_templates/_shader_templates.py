@@ -8,10 +8,15 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from pythontk.img_utils.texture_map_factory import ConversionRegistry, ProcessingContext
+from pythontk.img_utils.texture_map_factory import (
+    ConversionRegistry,
+    ProcessingContext,
+    TextureMapFactory,
+)
 
 # from this package:
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
@@ -137,6 +142,10 @@ class GraphSaver(GraphCollector):
         file_path: str,
         exclude_types: Optional[List[str]] = None,  # Accept list of strings directly
     ) -> None:
+        if not nodes:
+            pm.warning("No nodes selected or provided for template saving.")
+            return
+
         # Expand nodes to include upstream history to capture the full network
         nodes = pm.listHistory(nodes)
 
@@ -256,14 +265,8 @@ class GraphRestorer:
 
         file_path = None
         if required_map_type:
-            fallbacks = {
-                "Base_Color": ["Diffuse"],
-                "Diffuse": ["Base_Color"],
-                "Normal": ["Normal_OpenGL", "Normal_DirectX"],
-                "Normal_OpenGL": ["Normal", "Normal_DirectX"],
-                "Normal_DirectX": ["Normal", "Normal_OpenGL"],
-            }
-            candidates = [required_map_type] + fallbacks.get(required_map_type, [])
+            fallbacks = TextureMapFactory.get_map_fallbacks(required_map_type)
+            candidates = [required_map_type] + list(fallbacks)
             file_path = context.resolve_map(*candidates, allow_conversion=True)
 
         # Set the file path if available
@@ -413,6 +416,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
+        self.last_restored_nodes = None
 
         # Setup logging
         self.logger.setLevel(log_level)
@@ -427,6 +431,35 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     @property
     def template_name(self):
         return "test"
+
+    def header_init(self, widget):
+        """Initialize the header widget."""
+        widget.setTitle("Shader Templates")
+        # Open the templates directory
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setObjectName="lbl_open_templates_dir",
+            setText="Open Templates Directory",
+            setToolTip="Open the directory containing shader templates.",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setObjectName="lbl_graph_material",
+            setText="Graph Material",
+            setToolTip="Graph the selected material in the Hypershade.",
+        )
+
+    def lbl_graph_material(self):
+        """Graph the last restored material in the Hypershade."""
+        if self.last_restored_nodes:
+            MatUtils.graph_materials(self.last_restored_nodes)
+        else:
+            pm.warning("No material has been restored yet.")
+
+    def lbl_open_templates_dir(self):
+        """Open the shader templates directory in file explorer."""
+        template_directory = os.path.join(os.path.dirname(__file__), "templates")
+        ptk.open_explorer(template_directory, create_dir=True)
 
     def cmb002_init(self, widget):
         """Initialize the ComboBox for shader templates."""
@@ -448,6 +481,12 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             )
             widget.on_editing_finished.connect(
                 lambda text: self.rename_template_safe(widget, text)
+            )
+            widget.menu.add(
+                self.sb.registered_widgets.Label,
+                setObjectName="lbl002",
+                setText="Open Template File",
+                setToolTip="Open the selected template YAML file in the default editor.",
             )
         self.refresh_templates(widget)
 
@@ -495,6 +534,11 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.info(f"Template deleted: {template_path}")
         self.ui.cmb002.init_slot()  # Refresh ComboBox
 
+    def lbl002(self):
+        """Open the selected template in the default editor."""
+        template_path = self.ui.cmb002.currentData()
+        ptk.open_explorer(template_path)
+
     def b000(self):
         """Create shader network using selected template."""
         self.ui.txt001.clear()
@@ -506,7 +550,10 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             return
 
         # Use the facade instead of direct instantiation
-        ShaderTemplates.restore_template(yaml_file_path, self.image_files or [])
+        restored_nodes = ShaderTemplates.restore_template(
+            yaml_file_path, self.image_files or []
+        )
+        self.last_restored_nodes = list(restored_nodes.values())
 
         self.logger.info("COMPLETED.")
 

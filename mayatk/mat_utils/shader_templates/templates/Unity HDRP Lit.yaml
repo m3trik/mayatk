@@ -87,45 +87,30 @@
   type: file
 '{{NODE_file_6}}':
   attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Metallic.png
-    outAlpha: 1.0
-    outSizeX: 4096.0
-    outSizeY: 4096.0
+    fileTextureName: generated_map_MaskMap.png
     uvTileProxyGenerate: true
   connections:
-  - source: '{{NODE_file_6}}.outColor'
-    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_map'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapX'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapY'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapZ'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapX'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapY'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapZ'
+  - source: '{{NODE_file_6}}.outAlpha'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapX'
+  - source: '{{NODE_file_6}}.outAlpha'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapY'
+  - source: '{{NODE_file_6}}.outAlpha'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapZ'
   metadata:
     connected_to_shading_engine: false
-    map_type: Metallic
-  type: file
-'{{NODE_file_7}}':
-  attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Roughness.png
-    outAlpha: 1.0
-    outSizeX: 4096.0
-    outSizeY: 4096.0
-    uvTileProxyGenerate: true
-  connections:
-  - source: '{{NODE_file_7}}.outColor'
-    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_map'
-  metadata:
-    connected_to_shading_engine: false
-    map_type: Roughness
-  type: file
-'{{NODE_file_8}}':
-  attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_AmbientOcclusion.png
-    outAlpha: 1.0
-    outSizeX: 4096.0
-    outSizeY: 4096.0
-    uvTileProxyGenerate: true
-  connections:
-  - source: '{{NODE_file_8}}.outColor'
-    target: '{{NODE_StingrayPBS_1}}.TEX_ao_map'
-  metadata:
-    connected_to_shading_engine: false
-    map_type: Ambient_Occlusion
+    map_type: MSAO
   type: file
 '{{NODE_shadingEngine_1}}':
   attributes:

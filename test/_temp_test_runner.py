@@ -21,7 +21,7 @@ import importlib.util
 pass
 
 # Setup results file
-output_file = r'O:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
+output_file = r'o:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
 with open(output_file, 'w', encoding='utf-8') as f:
     f.write("="*70 + "\n")
     f.write("MAYATK TEST RESULTS\n")
@@ -31,7 +31,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_debug_history']
+test_modules = ['test_mat_utils']
 total_tests = 0
 total_failures = 0
 total_errors = 0

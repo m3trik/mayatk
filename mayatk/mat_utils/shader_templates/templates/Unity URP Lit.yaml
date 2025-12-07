@@ -98,6 +98,10 @@
     target: '{{NODE_StingrayPBS_1}}.TEX_metallic_map'
   - source: '{{NODE_file_6}}.outAlpha'
     target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapX'
+  - source: '{{NODE_file_6}}.outAlpha'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapY'
+  - source: '{{NODE_file_6}}.outAlpha'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapZ'
   metadata:
     connected_to_shading_engine: false
     map_type: Metallic_Smoothness

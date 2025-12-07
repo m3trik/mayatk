@@ -187,6 +187,15 @@ class TestMatUtils(MayaTkTestCase):
         except (AttributeError, NotImplementedError):
             self.skipTest("find_by_mat_id not implemented")
 
+    def test_graph_materials(self):
+        """Test graphing materials in Hypershade."""
+        # This test mainly verifies the method runs without error
+        try:
+            mtk.graph_materials(self.lambert1)
+            mtk.graph_materials([self.lambert1, self.lambert2])
+        except Exception as e:
+            self.fail(f"graph_materials raised exception: {e}")
+
 
 class TestMatUtilsEdgeCases(MayaTkTestCase):
     """Edge case tests for MatUtils."""

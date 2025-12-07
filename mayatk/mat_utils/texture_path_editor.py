@@ -642,9 +642,7 @@ class TexturePathEditorSlots:
         if not nodes_to_graph:
             return
 
-        pm.select(nodes_to_graph, r=True)
-        pm.mel.eval("HypershadeWindow;")
-        pm.mel.eval("hypershade -graphInputOutput;")
+        MatUtils.graph_materials(nodes_to_graph)
 
     def select_material(self, selection=None):
         """Select the materials associated with the selected rows."""

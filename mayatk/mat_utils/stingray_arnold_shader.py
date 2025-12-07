@@ -13,6 +13,7 @@ from pythontk.img_utils.texture_map_factory import TextureMapFactory
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
@@ -1115,6 +1116,23 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         self.ui.txt001.setText(self.msg_intro)
         self.ui.progressBar.setValue(0)
         # self.init_header_menu()
+
+    def header_init(self, widget):
+        """Initialize the header widget."""
+        widget.setTitle("Stingray Arnold Shader")
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setObjectName="lbl_graph_material",
+            setText="Graph Material",
+            setToolTip="Graph the material in the Hypershade.",
+        )
+
+    def lbl_graph_material(self):
+        """Graph the material in the Hypershade."""
+        if pm.objExists(self.mat_name):
+            MatUtils.graph_materials(self.mat_name)
+        else:
+            pm.warning(f"Material '{self.mat_name}' not found.")
 
     @property
     def mat_name(self) -> str:
