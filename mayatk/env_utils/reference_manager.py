@@ -40,14 +40,12 @@ class AssemblyManager:
         try:
             # Validate file path
             if not pm.util.path(file_path).exists():
-                print(f"File does not exist: {file_path}")
                 pm.displayError(f"File does not exist: {file_path}")
                 return None
 
             # Create assembly definition
             assembly_name = f"{namespace}_assembly"
             assembly_node = pm.assembly(name=assembly_name, type="assemblyDefinition")
-            print(f"Created assembly definition: {assembly_node}")
 
             # Create representation
             rep_name = pm.assembly(
@@ -56,13 +54,8 @@ class AssemblyManager:
             representations = pm.assembly(
                 assembly_node, query=True, listRepresentations=True
             )
-            print(
-                f"Created representation for assembly: {assembly_node} from file: {file_path}"
-            )
-            print(f"Available representations for {assembly_node}: {representations}")
             return representations[0] if representations else None
         except Exception as e:
-            print(f"Failed to create assembly definition for {file_path}: {str(e)}")
             pm.displayError(f"Failed to create assembly definition for {file_path}")
             return None
 
@@ -81,12 +74,8 @@ class AssemblyManager:
         """
         try:
             pm.assembly(assembly_node, edit=True, active=representation_name)
-            print(
-                f"Set active representation {representation_name} for {assembly_node}"
-            )
             return True
         except Exception as e:
-            print(f"Failed to set active representation for {assembly_node}: {str(e)}")
             pm.displayError(f"Failed to set active representation for {assembly_node}")
             return False
 
@@ -105,15 +94,16 @@ class AssemblyManager:
             if rep_name:
                 assembly_name = f"{namespace}_assembly"
                 if cls.set_active_representation(assembly_name, rep_name):
-                    print(
-                        f"Successfully created and set active representation for {assembly_name}"
-                    )
                     # Optionally remove the original reference after conversion
                     ref.remove()
                 else:
-                    print(f"Failed to set active representation for {assembly_name}")
+                    cls.logger.error(
+                        f"Failed to set active representation for {assembly_name}"
+                    )
             else:
-                print(f"Failed to create assembly definition for {file_path}")
+                cls.logger.error(
+                    f"Failed to create assembly definition for {file_path}"
+                )
 
 
 class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
@@ -218,7 +208,6 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         # Check if the file is already referenced
         for ref in self.current_references:
             if os.path.normpath(ref.path) == normalized_file_path:
-                print(f"File already referenced: {file_path}")
                 return True  # Exit the method if the file is already referenced
 
         # Sanitize the namespace to ensure it contains only valid characters
@@ -416,7 +405,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Check if an item is currently being edited."""
         return self._editing_item == item
 
-    def format_table_item(self, item, file_path: str) -> None:
+    def _format_table_item(self, item, file_path: str) -> None:
         """Apply enable/disable state based on whether the file is the current scene."""
         norm_fp = os.path.normpath(file_path)
         current_scene = os.path.normpath(pm.sceneName()) if pm.sceneName() else ""
@@ -431,21 +420,22 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 )
             )
             item.setToolTip(f"Current scene file - cannot be referenced\n{file_path}")
-            # Apply grayed out style
-            font = item.font()
-            font.setItalic(True)
-            item.setFont(font)
+            # Apply current style (italic + orange) and mark as styled
+            self.ui.tbl000.format_item(item, key="current", italic=True)
+            item.setData(
+                self.sb.QtCore.Qt.UserRole + 10, True
+            )  # Mark as current-styled
         else:
             # Re-enable the item if it was previously disabled
             item.setFlags(
                 item.flags()
                 | (self.sb.QtCore.Qt.ItemIsSelectable | self.sb.QtCore.Qt.ItemIsEnabled)
             )
-            # Tooltip is now handled by TableWidget default behavior
-            # Reset styling
-            font = item.font()
-            font.setItalic(False)
-            item.setFont(font)
+            # Only reset color if this item was previously styled as current scene
+            was_current = item.data(self.sb.QtCore.Qt.UserRole + 10)
+            if was_current:
+                self.ui.tbl000.format_item(item, key="reset", italic=False)
+                item.setData(self.sb.QtCore.Qt.UserRole + 10, False)  # Clear the marker
 
     def handle_item_selection(self):
         t = self.ui.tbl000
@@ -727,7 +717,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         filter_text = self.ui.txt001.text().strip()
 
         # Check if filtering is enabled via checkbox
-        filter_enabled = getattr(self.ui, "chk_filter_enable", None)
+        filter_enabled = getattr(self.ui, "chk004", None)
         filter_enabled = (
             filter_enabled.isChecked() if filter_enabled else True
         )  # Default to True if checkbox doesn't exist
@@ -787,7 +777,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             file_names.append(name)
 
         # Check if name stripping is enabled via checkbox
-        strip_enabled = getattr(self.ui, "chk_strip_names", None)
+        strip_enabled = getattr(self.ui, "chk005", None)
         strip_enabled = (
             strip_enabled.isChecked() if strip_enabled else False
         )  # Default to False if checkbox doesn't exist
@@ -844,7 +834,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             item.setData(self.sb.QtCore.Qt.UserRole + 1, os.path.basename(file_path))
             item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
 
-            self.format_table_item(item, file_path)
+            self._format_table_item(item, file_path)
 
             # Column 1: Notes (Metadata)
             item_notes = t.item(row, 1)
@@ -860,7 +850,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             # Fetch metadata (Comments)
             try:
-                use_sidecar = self.slot.ui.header.menu.chk_use_sidecar.isChecked()
+                use_sidecar = self.slot.ui.header.menu.chk_use_metadata.isChecked()
                 metadata = ptk.Metadata.get(
                     file_path, "Comments", use_sidecar=use_sidecar
                 )
@@ -946,6 +936,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # refresh_file_list now properly syncs selection after signals are unblocked
 
     @block_table_selection_method
+    def unlink_references(self, namespaces):
+        """Unlink specific references."""
+        if not namespaces:
+            return
+
+        count = len(namespaces)
+        msg = f"Unlink {count} reference(s)?"
+        if self.sb.message_box(msg, "Yes", "No") != "Yes":
+            return
+
+        self.import_references(namespaces=namespaces, remove_namespace=True)
+        self.refresh_file_list()
+        self.logger.info(f"Unlinked {count} references.")
+
+    @block_table_selection_method
     def convert_to_assembly(self):
         self.logger.debug("Convert to assembly operation triggered.")
         user_choice = self.sb.message_box(
@@ -959,6 +964,213 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         else:
             self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
             self.logger.debug("Convert to assembly operation cancelled by user.")
+
+    def _format_name(self, name, case_style="None", suffix=""):
+        """Format a filename with case style and suffix."""
+        # Strip 'Case: ' prefix if present
+        if case_style and case_style.startswith("Case: "):
+            case_style = case_style[6:]  # Remove 'Case: ' prefix
+
+        if case_style and case_style != "None":
+            try:
+                name = ptk.StrUtils.set_case(name, case_style)
+            except Exception as e:
+                self.logger.warning(f"Failed to set case style {case_style}: {e}")
+
+        if suffix:
+            name += suffix
+
+        return name
+
+    def save_scene(self):
+        """Save the current scene to the workspace, prompting for a name."""
+        # Get settings from UI via slot
+        header_menu = self.slot.ui.header.menu
+        use_folder = header_menu.chk_enforce_folder.isChecked()
+        case_style = header_menu.cmb_case_style.currentText()
+        suffix = header_menu.txt_suffix.text()
+
+        # Pre-populate with current scene name if available, with case formatting applied
+        default_name = ""
+        current_scene = pm.sceneName()
+        if current_scene:
+            base_name = os.path.basename(current_scene).split(".")[0]
+            # Apply case formatting to the default name (without suffix)
+            default_name = self._format_name(base_name, case_style, suffix="")
+
+        name = self.sb.input_dialog("Save Scene", "Enter name for scene:", default_name)
+        if not name:
+            return
+
+        formatted_name = self._format_name(name, case_style, suffix)
+
+        workspace = self.current_working_dir
+        if not workspace or not os.path.isdir(workspace):
+            self.sb.message_box("Current workspace directory is invalid.")
+            return
+
+        target_dir = workspace
+        if use_folder:
+            # Folder name matches the base name (without suffix)
+            folder_name = self._format_name(name, case_style, suffix="")
+            target_dir = os.path.join(workspace, folder_name)
+            if not os.path.exists(target_dir):
+                try:
+                    os.makedirs(target_dir)
+                except OSError as e:
+                    self.sb.message_box(f"Failed to create directory: {e}")
+                    return
+
+        new_path = os.path.join(target_dir, formatted_name + ".ma")
+
+        if os.path.exists(new_path):
+            if (
+                self.sb.message_box(
+                    f"File exists:<br>{new_path}<br>Overwrite?", "Yes", "No"
+                )
+                != "Yes"
+            ):
+                return
+
+        try:
+            pm.saveAs(new_path, type="mayaAscii")
+            self.logger.info(f"Saved scene to: {new_path}")
+            self.refresh_file_list()
+        except Exception as e:
+            self.sb.message_box(f"Failed to save scene: {e}")
+
+    def rename_scene(self):
+        """Rename the selected scene file."""
+        t = self.ui.tbl000
+        selected_items = t.selectedItems()
+        if not selected_items:
+            self.sb.message_box("No scene selected.")
+            return
+
+        # Assuming single selection for rename
+        item = selected_items[0]
+        if item.column() != 0:
+            # Find the item in column 0 for this row
+            item = t.item(item.row(), 0)
+
+        old_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if not old_path or not os.path.exists(old_path):
+            self.sb.message_box("File not found.")
+            return
+
+        old_name = os.path.basename(old_path)
+        old_base, ext = os.path.splitext(old_name)
+
+        new_base = self.sb.input_dialog("Rename Scene", "Enter new name:", old_base)
+        if not new_base or new_base == old_base:
+            return
+
+        # Get settings
+        header_menu = self.slot.ui.header.menu
+        use_folder = header_menu.chk_enforce_folder.isChecked()
+        case_style = header_menu.cmb_case_style.currentText()
+        suffix = header_menu.txt_suffix.text()
+
+        formatted_name = self._format_name(new_base, case_style, suffix)
+        new_filename = formatted_name + ext
+
+        old_dir = os.path.dirname(old_path)
+        new_path = os.path.join(old_dir, new_filename)
+
+        if os.path.exists(new_path):
+            self.sb.message_box(f"Target file exists: {new_path}")
+            return
+
+        try:
+            os.rename(old_path, new_path)
+            self.logger.info(f"Renamed {old_path} to {new_path}")
+
+            # Handle folder rename
+            if use_folder:
+                parent_dir_name = os.path.basename(old_dir)
+                # Check if parent folder name is contained in the old file base name
+                # This handles cases where file has a suffix (e.g., folder "MyScene", file "MyScene_v01")
+                if old_base.startswith(parent_dir_name):
+                    # Rename folder to new base (without suffix)
+                    new_folder_name = self._format_name(new_base, case_style, suffix="")
+                    new_folder_path = os.path.join(
+                        os.path.dirname(old_dir), new_folder_name
+                    )
+
+                    if not os.path.exists(new_folder_path):
+                        os.rename(old_dir, new_folder_path)
+                        self.logger.info(
+                            f"Renamed folder {old_dir} to {new_folder_path}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Cannot rename folder, target exists: {new_folder_path}"
+                        )
+                else:
+                    self.logger.debug(
+                        f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
+                    )
+
+            self.refresh_file_list()
+
+        except Exception as e:
+            self.sb.message_box(f"Rename failed: {e}")
+
+    def delete_scene(self):
+        """Delete the selected scene file."""
+        t = self.ui.tbl000
+        selected_items = t.selectedItems()
+        if not selected_items:
+            self.sb.message_box("No scene selected.")
+            return
+
+        # Get all selected files
+        rows = set(item.row() for item in selected_items)
+        files_to_delete = []
+        for row in rows:
+            item = t.item(row, 0)
+            path = item.data(self.sb.QtCore.Qt.UserRole)
+            if path and os.path.exists(path):
+                files_to_delete.append(path)
+
+        if not files_to_delete:
+            return
+
+        if (
+            self.sb.message_box(f"Delete {len(files_to_delete)} file(s)?", "Yes", "No")
+            != "Yes"
+        ):
+            return
+
+        header_menu = self.slot.ui.header.menu
+        use_folder = header_menu.chk_enforce_folder.isChecked()
+
+        import shutil
+
+        for path in files_to_delete:
+            try:
+                os.remove(path)
+                self.logger.info(f"Deleted file: {path}")
+
+                if use_folder:
+                    parent_dir = os.path.dirname(path)
+                    parent_name = os.path.basename(parent_dir)
+                    file_base = os.path.splitext(os.path.basename(path))[0]
+
+                    # Check if parent folder name is contained in the file base name
+                    # This handles cases where file has a suffix (e.g., folder "MyScene", file "MyScene_v01")
+                    if file_base.startswith(parent_name):
+                        shutil.rmtree(parent_dir)
+                        self.logger.info(f"Deleted folder: {parent_dir}")
+                    else:
+                        self.logger.debug(
+                            f"Folder '{parent_name}' doesn't match file base '{file_base}', skipping folder delete"
+                        )
+
+            except Exception as e:
+                self.logger.error(f"Delete failed for {path}: {e}")
+
+        self.refresh_file_list()
 
 
 class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
@@ -1000,13 +1212,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller = ReferenceManagerController(self)
         self.ui.txt000.setText(self.controller.current_working_dir)
 
-        self.ui.b002.clicked.connect(self.controller.unreference_all)
-        self.ui.b003.clicked.connect(self.controller.unlink_all)
-        self.ui.b005.clicked.connect(self.controller.convert_to_assembly)
-        self.ui.b004.clicked.connect(
-            lambda: self.controller.refresh_file_list(invalidate=True)
-        )
-
         self.script_job = pm.scriptJob(
             event=["SceneOpened", self.controller.refresh_file_list]
         )
@@ -1031,9 +1236,68 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Initialize the header for the reference manager."""
         widget.menu.setTitle("Global Settings:")
         widget.menu.add(
+            "QPushButton",
+            setText="Refresh",
+            setObjectName="btn_refresh",
+            setToolTip="Refresh the file list.",
+        )
+        widget.menu.add("Separator", setTitle="Save Current Scene:")
+        widget.menu.add(
+            "QPushButton",
+            setText="Save Scene",
+            setObjectName="btn_save_scene",
+            setToolTip="Save the current scene to the workspace.",
+        )
+        widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_case_style",
+            setToolTip="Enforce a specific case style for new filenames.",
+            addItems=[
+                "Case: None",
+                "Case: lower",
+                "Case: upper",
+                "Case: title",
+                "Case: camel",
+                "Case: pascal",
+            ],
+        )
+        widget.menu.add(
+            "QLineEdit",
+            setObjectName="txt_suffix",
+            setPlaceholderText="Suffix",
+            setToolTip="Optional suffix to append to filenames (excluded from case formatting).",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Enforce Folder Structure",
+            setObjectName="chk_enforce_folder",
+            setChecked=False,
+            setToolTip="If checked, new files will be managed within a folder of the same name.",
+        )
+        widget.menu.add("Separator", setTitle="Reference Operations:")
+        widget.menu.add(
+            "QPushButton",
+            setText="Convert to Assembly",
+            setObjectName="btn_convert_assembly",
+            setToolTip="Convert all references to assemblies.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Unlink and Import All",
+            setObjectName="btn_unlink_import_all",
+            setToolTip="Unlink and import all references.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Un-Reference All",
+            setObjectName="btn_unreference_all",
+            setToolTip="Remove all references from the scene.",
+        )
+        widget.menu.add("Separator", setTitle="Metadata Options:")
+        widget.menu.add(
             "QCheckBox",
             setText="Use Metadata Sidecar",
-            setObjectName="chk_use_sidecar",
+            setObjectName="chk_use_metadata",
             setChecked=True,
             setToolTip="Store file metadata (notes/comments) in external .xmp sidecar files instead of embedding in Maya scene files. Sidecar files are safer and faster but require keeping them with the scene files.",
         )
@@ -1067,6 +1331,37 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setObjectName="btn_open_scene",
                 setToolTip="Open the selected scene file",
             )
+
+            widget.menu.add(
+                "QPushButton",
+                setText="Rename",
+                setObjectName="btn_rename_scene",
+                setToolTip="Rename the selected scene file.",
+            )
+
+            widget.menu.add(
+                "QPushButton",
+                setText="Delete",
+                setObjectName="btn_delete_scene",
+                setToolTip="Delete the selected scene file.",
+            )
+
+            widget.menu.add(
+                "QPushButton",
+                setText="Unlink and Import",
+                setObjectName="btn_unlink_import",
+                setToolTip="Unlink and import the selected reference(s).",
+            )
+
+            # Connect context menu actions
+            widget.register_menu_action("btn_open_scene", self.btn_open_scene)
+            widget.register_menu_action(
+                "btn_rename_scene", self.controller.rename_scene
+            )
+            widget.register_menu_action(
+                "btn_delete_scene", self.controller.delete_scene
+            )
+            widget.register_menu_action("btn_unlink_import", self.btn_unlink_import)
 
             # Connect item delegate signals for rename functionality
             widget.itemChanged.connect(self.tbl000_item_changed)
@@ -1124,7 +1419,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             new_comments = item.text()
             try:
-                use_sidecar = self.ui.header.menu.chk_use_sidecar.isChecked()
+                use_sidecar = self.ui.header.menu.chk_use_metadata.isChecked()
                 ptk.Metadata.set(
                     file_path, Comments=new_comments, use_sidecar=use_sidecar
                 )
@@ -1149,16 +1444,34 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             if idx.column() == 0 and t.item(idx.row(), 0)
         ]
 
-        current_namespaces = {
-            ref.namespace for ref in self.controller.current_references
-        }
-        selected_namespaces = []
+        # Map paths to namespaces for current references
+        path_to_namespaces = {}
+        for ref in self.controller.current_references:
+            try:
+                path = os.path.normpath(ref.path)
+                if path not in path_to_namespaces:
+                    path_to_namespaces[path] = []
+                path_to_namespaces[path].append(ref.namespace)
+            except Exception:
+                continue
 
+        selected_namespaces = []
         for item in selected_items:
-            if item.text() in current_namespaces:
-                selected_namespaces.append(item.text())
+            file_path = item.data(self.sb.QtCore.Qt.UserRole)
+            if file_path:
+                norm_path = os.path.normpath(file_path)
+                if norm_path in path_to_namespaces:
+                    selected_namespaces.extend(path_to_namespaces[norm_path])
 
         return selected_namespaces
+
+    def btn_unlink_import(self):
+        """Unlink and import the selected references."""
+        namespaces = self._get_selected_reference_namespaces()
+        if not namespaces:
+            self.sb.message_box("No active references selected.")
+            return
+        self.controller.unlink_references(namespaces)
 
     def btn_open_scene(self):
         """Open the selected scene file."""
@@ -1173,19 +1486,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             if current_item:
                 selected_rows = {current_item.row()}
                 self.logger.debug(
-                    f"btn_open_scene: Using current item at row {current_item.row()}"
+                    f"b008: Using current item at row {current_item.row()}"
                 )
             else:
-                self.logger.debug(
-                    "btn_open_scene: No rows selected and no current item"
-                )
+                self.logger.debug("b008: No rows selected and no current item")
                 self.sb.message_box("No scene file selected.")
                 return
 
         if len(selected_rows) > 1:
-            self.logger.debug(
-                f"btn_open_scene: Multiple rows selected ({len(selected_rows)})"
-            )
+            self.logger.debug(f"b008: Multiple rows selected ({len(selected_rows)})")
             self.sb.message_box("Please select only one scene file to open.")
             return
 
@@ -1194,7 +1503,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         item = t.item(row, 0)  # Get item from Files column
 
         if not item:
-            self.logger.warning(f"btn_open_scene: No item found at row {row}")
+            self.logger.warning(f"b008: No item found at row {row}")
             self.sb.message_box("Could not retrieve scene file information.")
             return
 
@@ -1202,13 +1511,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         file_path = item.data(self.sb.QtCore.Qt.UserRole)
 
         if not file_path:
-            self.logger.warning(
-                f"btn_open_scene: No file path data for item {item.text()}"
-            )
+            self.logger.warning(f"b008: No file path data for item {item.text()}")
             self.sb.message_box("Scene file path not found.")
             return
 
-        self.logger.debug(f"btn_open_scene: Opening scene file: {file_path}")
+        self.logger.debug(f"b008: Opening scene file: {file_path}")
         self.controller.open_scene(file_path)
 
     def txt000_init(self, widget):
@@ -1231,9 +1538,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             widget.option_box.menu.add(
                 "QPushButton",
-                setText="Set To Workspace",
+                setText="Set To Current Workspace",
                 setObjectName="b001",
                 setToolTip="Set the root folder to that of the current workspace.",
+            )
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Open Current Dir",
+                setObjectName="b006",
+                setToolTip="Open the current directory in the file explorer.",
             )
             widget.option_box.menu.add(
                 "QCheckBox",
@@ -1245,7 +1558,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.option_box.menu.add(
                 "QCheckBox",
                 setText="Ignore Empty Workspaces",
-                setObjectName="chk_ignore_empty",
+                setObjectName="chk003",
                 setChecked=True,
                 setToolTip="Skip workspaces that contain no scene files.",
             )
@@ -1266,14 +1579,14 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.option_box.menu.add(
                 "QCheckBox",
                 setText="Enable Filter",
-                setObjectName="chk_filter_enable",
+                setObjectName="chk004",
                 setChecked=True,
                 setToolTip="Filter the file list by the text entered above.",
             )
             widget.option_box.menu.add(
                 "QCheckBox",
                 setText="Strip From Names",
-                setObjectName="chk_strip_names",
+                setObjectName="chk005",
                 setChecked=False,
                 setToolTip="Remove the filter text from displayed file names (cosmetic only).",
             )
@@ -1428,23 +1741,19 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # Use the centralized workspace combo update method
         self.controller._update_workspace_combo()
 
-    def chk_ignore_empty(self, checked):
+    def chk003(self, checked):
         """Handle the ignore empty workspaces toggle."""
         # Skip processing during initialization or directory updates to prevent unwanted triggers
         if getattr(self, "_initializing", False):
-            self.logger.debug(
-                "chk_ignore_empty called during initialization - ignoring"
-            )
+            self.logger.debug("chk003 called during initialization - ignoring")
             return
 
         if getattr(self.controller, "_updating_directory", False):
-            self.logger.debug(
-                "chk_ignore_empty called during directory update - ignoring"
-            )
+            self.logger.debug("chk003 called during directory update - ignoring")
             return
 
         self.logger.debug(
-            f"chk_ignore_empty ignore empty workspaces toggled: {checked} (type: {type(checked)})"
+            f"chk003 ignore empty workspaces toggled: {checked} (type: {type(checked)})"
         )
 
         # Convert Qt checkbox state to boolean
@@ -1457,33 +1766,33 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         old_ignore_empty = self.controller.ignore_empty_workspaces
 
         self.logger.debug(
-            f"chk_ignore_empty old_ignore_empty: {old_ignore_empty}, new_ignore_empty: {checked_bool}"
+            f"chk003 old_ignore_empty: {old_ignore_empty}, new_ignore_empty: {checked_bool}"
         )
 
         # Don't process if the value hasn't actually changed (avoid UI triggering loops)
         if old_ignore_empty == checked_bool:
             self.logger.debug(
-                "chk_ignore_empty ignore empty workspaces unchanged, no refresh needed"
+                "chk003 ignore empty workspaces unchanged, no refresh needed"
             )
             return
 
         self.controller.ignore_empty_workspaces = checked_bool
 
         self.logger.debug(
-            "chk_ignore_empty ignore empty workspaces changed, updating workspace combo"
+            "chk003 ignore empty workspaces changed, updating workspace combo"
         )
         # Use the centralized workspace combo update method
         self.controller._update_workspace_combo()
 
-    def chk_filter_enable(self, checked):
+    def chk004(self, checked):
         """Handle the filter enable checkbox."""
-        self.logger.debug(f"Filter enable checkbox changed: {checked}")
+        self.logger.debug(f"chk004 filter enable changed: {checked}")
         # Refresh the file list when filter enable state changes
         self.controller.refresh_file_list(invalidate=False)
 
-    def chk_strip_names(self, checked):
+    def chk005(self, checked):
         """Handle the strip names checkbox."""
-        self.logger.debug(f"Strip names checkbox changed: {checked}")
+        self.logger.debug(f"chk005 strip names changed: {checked}")
         # Refresh the file list when strip names state changes
         self.controller.refresh_file_list(invalidate=False)
 
@@ -1504,6 +1813,58 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Set dir to current workspace."""
         self.logger.debug("b001 set to current workspace clicked.")
         self.ui.txt000.setText(self.controller.current_workspace)
+
+    def btn_open_scene(self):
+        """Open the selected scene file."""
+        t = self.ui.tbl000
+
+        # Get currently selected rows
+        selected_rows = set(idx.row() for idx in t.selectedIndexes())
+
+        # If no rows are selected, try to get the current item (right-click context)
+        if not selected_rows:
+            current_item = t.currentItem()
+            if current_item:
+                selected_rows.add(current_item.row())
+
+        if not selected_rows:
+            self.sb.message_box("No scene selected.")
+            return
+
+        # Open each selected file
+        for row in selected_rows:
+            item = t.item(row, 0)
+            file_path = item.data(self.sb.QtCore.Qt.UserRole)
+            if file_path:
+                self.controller.open_scene(file_path)
+
+    def btn_unlink_import(self):
+        """Unlink and import the selected reference(s)."""
+        namespaces = self._get_selected_reference_namespaces()
+        if not namespaces:
+            self.sb.message_box("No active references selected.")
+            return
+        self.controller.unlink_references(namespaces)
+
+    def btn_save_scene(self):
+        """Save the current scene to the workspace."""
+        self.controller.save_scene()
+
+    def btn_refresh(self):
+        """Refresh the file list."""
+        self.controller.refresh_file_list(invalidate=True)
+
+    def btn_convert_assembly(self):
+        """Convert all references to assemblies."""
+        self.controller.convert_to_assembly()
+
+    def btn_unlink_import_all(self):
+        """Unlink and import all references."""
+        self.controller.unlink_all()
+
+    def btn_unreference_all(self):
+        """Remove all references from the scene."""
+        self.controller.unreference_all()
 
 
 # -----------------------------------------------------------------------------
