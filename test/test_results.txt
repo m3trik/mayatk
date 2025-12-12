@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_mat_utils: PASS
-  Tests: 18, Failures: 0, Errors: 0, Skipped: 1
+test_scale_keys: PASS
+  Tests: 59, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_mat_utils: PASS (18 tests, 0 failures, 0 errors)
+  test_scale_keys: PASS (59 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 18 tests, 0 failures, 0 errors, 1 skipped
+Total: 59 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

@@ -7,9 +7,27 @@ Tests for AnimUtils class functionality including:
 - Keyframe operations
 - Animation curve queries
 - Key optimization
-- Key snapping and scaling
+
+Note: scale_keys tests are in test_scale_keys.py
+Note: stagger_keyframes tests are in test_stagger_keys.py
 """
 import unittest
+
+# Initialize QApplication before importing mayatk to handle UI widgets created at module level
+try:
+    from PySide6.QtWidgets import QApplication
+
+    if not QApplication.instance():
+        app = QApplication([])
+except ImportError:
+    try:
+        from PySide2.QtWidgets import QApplication
+
+        if not QApplication.instance():
+            app = QApplication([])
+    except ImportError:
+        pass
+
 import pymel.core as pm
 import mayatk as mtk
 
@@ -64,4 +82,18 @@ class TestAnimUtils(MayaTkTestCase):
 
 
 if __name__ == "__main__":
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        if not QApplication.instance():
+            app = QApplication([])
+    except ImportError:
+        try:
+            from PySide2.QtWidgets import QApplication
+
+            if not QApplication.instance():
+                app = QApplication([])
+        except ImportError:
+            pass
+
     unittest.main(verbosity=2)

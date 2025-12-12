@@ -17,11 +17,14 @@ for root in package_roots:
 import unittest
 import importlib.util
 
-# Reload critical modules using ModuleReloader to ensure latest code
-pass
+# Clear cached mayatk modules to ensure fresh code is loaded
+modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
+for mod in modules_to_clear:
+    del sys.modules[mod]
+print(f"Cleared {len(modules_to_clear)} cached mayatk modules")
 
 # Setup results file
-output_file = r'o:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
+output_file = r'O:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
 with open(output_file, 'w', encoding='utf-8') as f:
     f.write("="*70 + "\n")
     f.write("MAYATK TEST RESULTS\n")
@@ -31,7 +34,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_mat_utils']
+test_modules = ['test_scale_keys']
 total_tests = 0
 total_failures = 0
 total_errors = 0

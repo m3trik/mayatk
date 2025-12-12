@@ -173,6 +173,9 @@ except Exception as e:
             "test_xform_utils",
             "test_rig_utils",
             "test_env_utils",
+            "test_scale_keys",
+            "test_stagger_keys",
+            "test_keyframe_grouper",
         ]
 
         if modules is None:
@@ -227,8 +230,11 @@ except Exception as e:
             import unittest
             import importlib.util
 
-            # Reload critical modules using ModuleReloader to ensure latest code
-            pass
+            # Clear cached mayatk modules to ensure fresh code is loaded
+            modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
+            for mod in modules_to_clear:
+                del sys.modules[mod]
+            print(f"Cleared {{len(modules_to_clear)}} cached mayatk modules")
 
             # Setup results file
             output_file = r'{output_file_path}'

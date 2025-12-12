@@ -850,7 +850,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             # Fetch metadata (Comments)
             try:
-                use_sidecar = self.slot.ui.header.menu.chk_use_metadata.isChecked()
+                use_sidecar = True
                 metadata = ptk.Metadata.get(
                     file_path, "Comments", use_sidecar=use_sidecar
                 )
@@ -1244,7 +1244,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         widget.menu.add("Separator", setTitle="Save Current Scene:")
         widget.menu.add(
             "QPushButton",
-            setText="Save Scene",
+            setText="Save",
             setObjectName="btn_save_scene",
             setToolTip="Save the current scene to the workspace.",
         )
@@ -1292,14 +1292,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setText="Un-Reference All",
             setObjectName="btn_unreference_all",
             setToolTip="Remove all references from the scene.",
-        )
-        widget.menu.add("Separator", setTitle="Metadata Options:")
-        widget.menu.add(
-            "QCheckBox",
-            setText="Use Metadata Sidecar",
-            setObjectName="chk_use_metadata",
-            setChecked=True,
-            setToolTip="Store file metadata (notes/comments) in external .xmp sidecar files instead of embedding in Maya scene files. Sidecar files are safer and faster but require keeping them with the scene files.",
         )
 
     def tbl000_init(self, widget):
@@ -1419,7 +1411,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             new_comments = item.text()
             try:
-                use_sidecar = self.ui.header.menu.chk_use_metadata.isChecked()
+                use_sidecar = True
                 ptk.Metadata.set(
                     file_path, Comments=new_comments, use_sidecar=use_sidecar
                 )
@@ -1523,13 +1515,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug(
             f"txt000_init called, is_initialized: {getattr(widget, 'is_initialized', False)}"
         )
-
         if not widget.is_initialized:
             widget.option_box.pin(
                 settings_key="reference_manager_directories",
                 single_click_restore=True,
             )
-
             widget.option_box.menu.add(
                 "QPushButton",
                 setText="Browse",
@@ -1538,15 +1528,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             widget.option_box.menu.add(
                 "QPushButton",
-                setText="Set To Current Workspace",
-                setObjectName="b001",
-                setToolTip="Set the root folder to that of the current workspace.",
+                setText="Open Directory",
+                setObjectName="b006",
+                setToolTip="Open the current directory in the file explorer.",
             )
             widget.option_box.menu.add(
                 "QPushButton",
-                setText="Open Current Dir",
-                setObjectName="b006",
-                setToolTip="Open the current directory in the file explorer.",
+                setText="Set To Current Workspace",
+                setObjectName="b001",
+                setToolTip="Set the root folder to that of the current workspace.",
             )
             widget.option_box.menu.add(
                 "QCheckBox",
@@ -1808,6 +1798,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug(f"b000 browse selected directory: {selected_directory}")
         if selected_directory:
             self.ui.txt000.setText(selected_directory)
+
+    def b006(self):
+        """Open the current directory in the file explorer."""
+        current_dir = self.ui.txt000.text()
+        ptk.FileUtils.open_explorer(current_dir, logger=self.logger)
 
     def b001(self):
         """Set dir to current workspace."""
