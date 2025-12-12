@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_scale_keys: PASS
-  Tests: 59, Failures: 0, Errors: 0, Skipped: 0
+test_segment_keys: PASS
+  Tests: 23, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_scale_keys: PASS (59 tests, 0 failures, 0 errors)
+  test_segment_keys: PASS (23 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 59 tests, 0 failures, 0 errors, 0 skipped
+Total: 23 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

@@ -9,7 +9,7 @@ Tests for AnimUtils class functionality including:
 - Key optimization
 
 Note: scale_keys tests are in test_scale_keys.py
-Note: stagger_keyframes tests are in test_stagger_keys.py
+Note: stagger_keys tests are in test_stagger_keys.py
 """
 import unittest
 

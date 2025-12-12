@@ -11,56 +11,46 @@ import pythontk as ptk
 
 # Import CoreUtils using internal path to avoid circular imports
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.anim_utils.anim_structs import AnimPlan, ShiftOperation
 
 
 class _StaggerKeysInternal:
     """Internal helper methods for StaggerKeys - shifting logic only.
 
-    Grouping and filtering logic is delegated to KeyframeGrouper.
+    Grouping and filtering logic is delegated to SegmentKeys.
     """
 
     @staticmethod
-    def _shift_curves_by_amount(
-        curves: List["pm.PyNode"],
-        shift_amount: float,
-        time_range: Optional[Tuple[float, float]] = None,
-    ) -> int:
-        """Helper method to shift a list of animation curves by a given amount.
-
-        Parameters:
-            curves: List of animation curve nodes to shift.
-            shift_amount: Number of frames to shift the curves by.
-            time_range: Specific range of keys to shift.
-
-        Returns:
-            Number of curves successfully shifted.
-        """
+    def _apply_plan(plan: AnimPlan) -> int:
+        """Execute the stagger plan."""
         shifted_count = 0
-        for curve in curves:
-            # Determine range to shift
-            if time_range:
-                range_args = {"time": time_range}
-            else:
-                curve_keyframes = pm.keyframe(curve, query=True, timeChange=True)
-                if not curve_keyframes:
-                    continue
-                range_args = {"time": (min(curve_keyframes), max(curve_keyframes))}
+        for op in plan.operations:
+            if isinstance(op, ShiftOperation):
+                try:
+                    # Determine range args
+                    range_args = {}
+                    if op.time_range:
+                        range_args["time"] = op.time_range
 
-            try:
-                pm.keyframe(
-                    curve,
-                    edit=True,
-                    relative=True,
-                    timeChange=shift_amount,
-                    **range_args,
-                )
-                shifted_count += 1
-            except RuntimeError as e:
-                pm.warning(f"Failed to move keys for {curve}: {e}")
+                    # If no time range specified, we might want to query the curve range
+                    # But ShiftOperation usually implies shifting the whole curve if range is None
+                    # However, pm.keyframe without time arg shifts everything.
+
+                    for curve in op.curves:
+                        pm.keyframe(
+                            curve,
+                            edit=True,
+                            relative=True,
+                            timeChange=op.offset,
+                            **range_args,
+                        )
+                    shifted_count += 1
+                except RuntimeError as e:
+                    pm.warning(f"Failed to move keys for {op.curves}: {e}")
         return shifted_count
 
     @classmethod
-    def _apply_stagger(
+    def _calculate_stagger_plan(
         cls,
         groups_data: List[dict],
         start_frame: float,
@@ -68,23 +58,9 @@ class _StaggerKeysInternal:
         use_intervals: bool = False,
         avoid_overlap: bool = False,
         preserve_gaps: bool = False,
-    ) -> int:
-        """Apply staggering logic to a list of grouped keyframe data.
-
-        Shared logic used by stagger_keyframes and scale_keys (for overlap prevention).
-
-        Parameters:
-            groups_data: List of dicts with 'start', 'duration', 'curves' keys.
-            start_frame: The frame to start the sequence from.
-            spacing: Gap/overlap amount.
-            use_intervals: Fixed interval mode.
-            avoid_overlap: Skip intervals to avoid overlap (interval mode only).
-            preserve_gaps: If True, only shifts forward to prevent overlap, never backward.
-
-        Returns:
-            Number of groups shifted.
-        """
-        shifted_count = 0
+    ) -> AnimPlan:
+        """Generate an AnimPlan for staggering."""
+        plan = AnimPlan()
 
         if use_intervals:
             # Fixed interval mode: place animations at regular frame intervals
@@ -108,21 +84,24 @@ class _StaggerKeysInternal:
 
                 shift_amount = target_start - group_start
 
-                if shift_amount != 0:
+                if abs(shift_amount) > 1e-6:
                     if "sub_groups" in data:
                         for sub in data["sub_groups"]:
-                            cls._shift_curves_by_amount(
-                                sub.get("curves", []),
-                                shift_amount,
-                                time_range=sub.get("segment_range"),
+                            plan.operations.append(
+                                ShiftOperation(
+                                    curves=sub.get("curves", []),
+                                    offset=shift_amount,
+                                    time_range=sub.get("segment_range"),
+                                )
                             )
                     else:
-                        curves_to_move = data.get("curves", [])
-                        segment_range = data.get("segment_range")
-                        cls._shift_curves_by_amount(
-                            curves_to_move, shift_amount, time_range=segment_range
+                        plan.operations.append(
+                            ShiftOperation(
+                                curves=data.get("curves", []),
+                                offset=shift_amount,
+                                time_range=data.get("segment_range"),
+                            )
                         )
-                    shifted_count += 1
 
                 previous_end = target_start + duration
         else:
@@ -146,26 +125,29 @@ class _StaggerKeysInternal:
 
                 shift_amount = current_frame - group_start
 
-                if shift_amount != 0:
+                if abs(shift_amount) > 1e-6:
                     if "sub_groups" in data:
                         for sub in data["sub_groups"]:
-                            cls._shift_curves_by_amount(
-                                sub.get("curves", []),
-                                shift_amount,
-                                time_range=sub.get("segment_range"),
+                            plan.operations.append(
+                                ShiftOperation(
+                                    curves=sub.get("curves", []),
+                                    offset=shift_amount,
+                                    time_range=sub.get("segment_range"),
+                                )
                             )
                     else:
-                        curves_to_move = data.get("curves", [])
-                        segment_range = data.get("segment_range")
-                        cls._shift_curves_by_amount(
-                            curves_to_move, shift_amount, time_range=segment_range
+                        plan.operations.append(
+                            ShiftOperation(
+                                curves=data.get("curves", []),
+                                offset=shift_amount,
+                                time_range=data.get("segment_range"),
+                            )
                         )
-                    shifted_count += 1
 
                 # Update current frame for next object/group
                 current_frame = current_frame + duration + spacing_frames
 
-        return shifted_count
+        return plan
 
 
 class StaggerKeys:
@@ -173,7 +155,7 @@ class StaggerKeys:
 
     @staticmethod
     @CoreUtils.undoable
-    def stagger_keyframes(
+    def stagger_keys(
         objects: list,
         start_frame: int = None,
         spacing: Union[int, float] = 0,
@@ -184,6 +166,7 @@ class StaggerKeys:
         group_overlapping: bool = False,
         ignore: Union[str, List[str]] = None,
         split_static: bool = True,
+        verbose: bool = False,
     ):
         """Stagger the keyframes of selected objects with various positioning controls.
 
@@ -219,9 +202,11 @@ class StaggerKeys:
                 Curves connected to these attributes will not be moved.
             split_static: If True, treats segments of animation separated by static gaps
                 (flat keys) as separate groups. Each segment will be staggered independently.
+            verbose: If True, prints detailed information including original time ranges.
         """
         # Import shared helpers
-        from mayatk.anim_utils._anim_utils import AnimUtils, KeyframeGrouper
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.segment_keys import SegmentKeys
 
         if not objects:
             pm.warning("No objects provided.")
@@ -243,7 +228,7 @@ class StaggerKeys:
 
             # Determine which curves to use based on whether keys are selected
             if selected_curves:
-                curves_to_use = KeyframeGrouper._filter_curves_by_ignore(
+                curves_to_use = SegmentKeys._filter_curves_by_ignore(
                     selected_curves, ignore
                 )
                 keyframes = AnimUtils.get_keyframe_times(
@@ -253,9 +238,7 @@ class StaggerKeys:
                 all_curves = (
                     pm.listConnections(obj, type="animCurve", s=True, d=False) or []
                 )
-                curves_to_use = KeyframeGrouper._filter_curves_by_ignore(
-                    all_curves, ignore
-                )
+                curves_to_use = SegmentKeys._filter_curves_by_ignore(all_curves, ignore)
                 keyframes = AnimUtils.get_keyframe_times(
                     curves_to_use, from_curves=True
                 )
@@ -264,9 +247,7 @@ class StaggerKeys:
                 # If split_static is enabled, break the object's animation into active segments
                 segments = []
                 if split_static:
-                    segments = KeyframeGrouper._get_active_animation_segments(
-                        curves_to_use
-                    )
+                    segments = SegmentKeys._get_active_animation_segments(curves_to_use)
 
                 # If no segments found, treat as one block
                 if not segments:
@@ -294,15 +275,20 @@ class StaggerKeys:
             pm.warning("No keyframes found on the provided objects.")
             return
 
-        # Stage 2: Group segments if requested using KeyframeGrouper
+        # Capture original ranges if verbose
+        original_ranges = []
+        if verbose:
+            original_ranges = SegmentKeys.get_time_ranges(obj_keyframe_data)
+
+        # Stage 2: Group segments if requested using SegmentKeys
         if group_overlapping:
-            obj_keyframe_data = KeyframeGrouper._group_by_overlap(obj_keyframe_data)
+            obj_keyframe_data = SegmentKeys._group_by_overlap(obj_keyframe_data)
 
         # Use provided start_frame or earliest keyframe
         base_frame = start_frame if start_frame is not None else first_keyframe
 
         # Apply stagger logic
-        _StaggerKeysInternal._apply_stagger(
+        plan = _StaggerKeysInternal._calculate_stagger_plan(
             obj_keyframe_data,
             start_frame=base_frame,
             spacing=spacing,
@@ -311,18 +297,73 @@ class StaggerKeys:
             preserve_gaps=False,
         )
 
+        _StaggerKeysInternal._apply_plan(plan)
+
         if smooth_tangents:
             for data in obj_keyframe_data:
-                objects_in_group = data.get("objects", [data["obj"]])
-                keyframes = data["keyframes"]
-                for obj in objects_in_group:
-                    try:
-                        pm.keyTangent(
-                            obj,
-                            edit=True,
-                            time=(keyframes[0], keyframes[-1]),
-                            outTangentType="auto",
-                            inTangentType="auto",
+                curves = data.get("curves", [])
+                if curves:
+                    # Use shared helper for smart tangent setting
+                    AnimUtils._set_smart_tangents(curves, tangent_type="auto")
+
+        if verbose and original_ranges:
+            # Print original ranges
+            SegmentKeys.print_time_ranges(
+                original_ranges,
+                header="Original Time Ranges:",
+                per_segment=split_static,
+            )
+
+            # Capture and print new ranges
+            # Re-collect segments to get updated times
+            # Note: We need to re-collect using the same logic as above
+            new_segments = []
+            for obj in objects:
+                # Get animation curves - check for selected keys first
+                selected_curves = pm.keyframe(obj, query=True, name=True, selected=True)
+
+                if selected_curves:
+                    curves_to_use = SegmentKeys._filter_curves_by_ignore(
+                        selected_curves, ignore
+                    )
+                else:
+                    all_curves = (
+                        pm.listConnections(obj, type="animCurve", s=True, d=False) or []
+                    )
+                    curves_to_use = SegmentKeys._filter_curves_by_ignore(
+                        all_curves, ignore
+                    )
+
+                if curves_to_use:
+                    if split_static:
+                        active_segments = SegmentKeys._get_active_animation_segments(
+                            curves_to_use
                         )
-                    except RuntimeError as e:
-                        pm.warning(f"Failed to adjust tangents for {obj}: {e}")
+                        for seg_start, seg_end in active_segments:
+                            new_segments.append(
+                                {
+                                    "obj": obj,
+                                    "start": seg_start,
+                                    "end": seg_end,
+                                }
+                            )
+                    else:
+                        # Get full range
+                        times = AnimUtils.get_keyframe_times(
+                            curves_to_use, from_curves=True
+                        )
+                        if times:
+                            new_segments.append(
+                                {
+                                    "obj": obj,
+                                    "start": times[0],
+                                    "end": times[-1],
+                                }
+                            )
+
+            new_ranges = SegmentKeys.get_time_ranges(new_segments)
+            SegmentKeys.print_time_ranges(
+                new_ranges,
+                header="New Time Ranges:",
+                per_segment=split_static,
+            )

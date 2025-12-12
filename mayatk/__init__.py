@@ -33,6 +33,7 @@ DEFAULT_INCLUDE = {
     # Animation utilities
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
+    "anim_utils.segment_keys": "SegmentKeys",
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.auto_instancer": "AutoInstancer",

@@ -1157,9 +1157,9 @@ class TestSplitStaticSegments(MayaTkTestCase):
         pm.delete(cube1)
         pm.delete(cube2)
 
-    def test_keyframe_grouper_integration(self):
-        """Test that KeyframeGrouper is used for segment collection."""
-        from mayatk.anim_utils._anim_utils import KeyframeGrouper
+    def test_segment_keys_integration(self):
+        """Test that SegmentKeys is used for segment collection."""
+        from mayatk.anim_utils.segment_keys import SegmentKeys
 
         cube = pm.polyCube(name="grouper_test")[0]
 
@@ -1169,8 +1169,8 @@ class TestSplitStaticSegments(MayaTkTestCase):
         pm.setKeyframe(cube, attribute="translateX", time=20, value=10)  # Static
         pm.setKeyframe(cube, attribute="translateX", time=30, value=20)
 
-        # Test that KeyframeGrouper.collect_segments finds 2 segments
-        segments = KeyframeGrouper.collect_segments(
+        # Test that SegmentKeys.collect_segments finds 2 segments
+        segments = SegmentKeys.collect_segments(
             [cube],
             split_static=True,
         )

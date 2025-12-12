@@ -24,7 +24,7 @@ for mod in modules_to_clear:
 print(f"Cleared {len(modules_to_clear)} cached mayatk modules")
 
 # Setup results file
-output_file = r'O:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
+output_file = r'o:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
 with open(output_file, 'w', encoding='utf-8') as f:
     f.write("="*70 + "\n")
     f.write("MAYATK TEST RESULTS\n")
@@ -34,7 +34,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_scale_keys']
+test_modules = ['test_segment_keys']
 total_tests = 0
 total_failures = 0
 total_errors = 0
