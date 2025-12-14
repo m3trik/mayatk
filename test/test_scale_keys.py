@@ -1194,6 +1194,62 @@ class TestSplitStaticSegments(MayaTkTestCase):
         pm.delete(cube)
 
 
+class TestScaleKeysSegmentIsolation(MayaTkTestCase):
+    def test_scale_split_segments_pivots(self):
+        """Verify that split segments scale around their OWN start times, not the object start."""
+        cube = pm.polyCube(name="TestCube")[0]
+        
+        # Create two distinct segments: 0-10 and 20-30
+        # Segment A: 0-10
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        
+        # Static gap 10-20
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        
+        # Scale by 2.0
+        # split_static=True (default)
+        # group_mode="per_object" (default) -> Should map to per_segment for split_static
+        ScaleKeys.scale_keys(
+            objects=[cube],
+            factor=2.0,
+            split_static=True,
+            group_mode="per_object"
+        )
+        
+        # Verify Segment A: Should be 0-20 (Pivot 0)
+        # 0 -> 0
+        # 10 -> 20
+        self.assertEqual(pm.keyframe(cube, t=0, q=True, vc=True)[0], 0.0)
+        # Check if key exists at 20 with value 10
+        keys_at_20 = pm.keyframe(cube, t=20, q=True, vc=True)
+        self.assertTrue(keys_at_20, "Should have key at frame 20")
+        self.assertAlmostEqual(keys_at_20[0], 10.0)
+        
+        # Verify Segment B: Should be 20-40 (Pivot 20)
+        # If it used object start (0) as pivot: 20->40, 30->60.
+        # If it used segment start (20) as pivot: 20->20, 30->40.
+        
+        # We expect Pivot 20 (Segment Start)
+        # So key at 20 should stay at 20 (value 10)
+        # Key at 30 should move to 40 (value 20)
+        
+        keys_at_20 = pm.keyframe(cube, t=20, q=True, vc=True)
+        self.assertTrue(keys_at_20, "Should have key at frame 20")
+        # Value should be 10 (end of A and start of B)
+        self.assertAlmostEqual(keys_at_20[0], 10.0)
+        
+        # Check key at 40
+        keys_at_40 = pm.keyframe(cube, t=40, q=True, vc=True)
+        self.assertTrue(keys_at_40, "Should have key at frame 40 (end of scaled segment B)")
+        self.assertAlmostEqual(keys_at_40[0], 20.0)
+        
+        # Ensure NO key at 60 (which would happen if pivot was 0)
+        keys_at_60 = pm.keyframe(cube, t=60, q=True, vc=True)
+        self.assertFalse(keys_at_60, "Should NOT have key at frame 60 (implies wrong pivot used)")
+
+
 if __name__ == "__main__":
     try:
         from PySide6.QtWidgets import QApplication
@@ -1210,3 +1266,7 @@ if __name__ == "__main__":
             pass
 
     unittest.main(verbosity=2)
+import unittest
+
+import pymel.core as pm
+

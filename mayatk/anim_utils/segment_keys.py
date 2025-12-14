@@ -332,11 +332,14 @@ class SegmentKeys(SegmentKeysInfo):
 
             # Create segment entry for each active range
             for seg_start, seg_end in active_segments:
+                # Filter keyframes to those within this segment
+                segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
+
                 segments.append(
                     {
                         "obj": obj,
                         "curves": list(curves_to_use),
-                        "keyframes": keyframes,
+                        "keyframes": segment_keys,
                         "start": seg_start,
                         "end": seg_end,
                         "duration": seg_end - seg_start,

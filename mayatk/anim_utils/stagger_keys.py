@@ -125,11 +125,14 @@ class StaggerKeys:
                     segments = [(keyframes[0], keyframes[-1])]
 
                 for seg_start, seg_end in segments:
+                    # Filter keyframes to those within this segment
+                    segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
+
                     obj_keyframe_data.append(
                         {
                             "obj": obj,
                             "curves": curves_to_use,
-                            "keyframes": keyframes,
+                            "keyframes": segment_keys,
                             "start": seg_start,
                             "end": seg_end,
                             "duration": seg_end - seg_start,
