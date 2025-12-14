@@ -1182,7 +1182,11 @@ class ScaleKeys:
         if self.prevent_overlap and self.split_static:
             segment_mode = "per_segment"
 
-        groups = SegmentKeys.group_segments(self.segments, mode=segment_mode)
+        # For scaling, we want touching segments to group together in overlap mode
+        # to preserve continuity of sequential actions.
+        groups = SegmentKeys.group_segments(
+            self.segments, mode=segment_mode, inclusive=True
+        )
 
         # Convert SegmentKeys groups to processing format
         processing_groups = self._convert_groups_for_processing(groups)

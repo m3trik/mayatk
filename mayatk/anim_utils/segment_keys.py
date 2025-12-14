@@ -385,6 +385,7 @@ class SegmentKeys(SegmentKeysInfo):
         cls,
         segments: List[Dict[str, Any]],
         mode: str = "per_segment",
+        **kwargs,
     ) -> List[Dict[str, Any]]:
         """Group segments based on the specified mode.
 
@@ -398,6 +399,9 @@ class SegmentKeys(SegmentKeysInfo):
                 - 'per_object': Segments from the same object are grouped
                 - 'overlap_groups': Overlapping segments are merged
                 - 'single_group': All segments form one group
+            **kwargs: Additional arguments passed to specific grouping methods.
+                - inclusive (bool): For 'overlap_groups', if True, touching segments
+                  (end == start) are merged. Default False.
 
         Returns:
             List of group dictionaries.
@@ -412,7 +416,7 @@ class SegmentKeys(SegmentKeysInfo):
         elif mode == "per_object":
             return cls._group_per_object(segments)
         elif mode in ("overlap_groups", "overlap", "overlapping"):
-            return cls._group_by_overlap(segments)
+            return cls._group_by_overlap(segments, **kwargs)
         elif mode in ("single_group", "single", "all"):
             return cls._group_as_single(segments)
         else:
@@ -473,8 +477,16 @@ class SegmentKeys(SegmentKeysInfo):
         return groups
 
     @staticmethod
-    def _group_by_overlap(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Group segments with overlapping time ranges."""
+    def _group_by_overlap(
+        segments: List[Dict[str, Any]], inclusive: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Group segments with overlapping time ranges.
+
+        Args:
+            segments: List of segments to group.
+            inclusive: If True, touching segments (end == start) are merged.
+                If False (default), they are treated as separate groups.
+        """
         if not segments:
             return []
 
@@ -496,9 +508,13 @@ class SegmentKeys(SegmentKeysInfo):
         for i in range(1, len(sorted_segments)):
             seg = sorted_segments[i]
 
-            # Use strict inequality (<) for overlap detection
-            # Touching keys (end == start) are treated as separate groups
-            if seg["start"] < current_group["end"]:
+            # Check overlap based on inclusive flag
+            threshold = current_group["end"]
+            is_overlap = (
+                (seg["start"] <= threshold) if inclusive else (seg["start"] < threshold)
+            )
+
+            if is_overlap:
                 # Overlapping - merge into current group
                 if seg["obj"] not in current_group["objects"]:
                     current_group["objects"].append(seg["obj"])

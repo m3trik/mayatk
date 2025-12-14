@@ -457,6 +457,40 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         result = SegmentKeys._group_by_overlap(data)
         self.assertEqual(len(result), 2)
 
+    def test_group_by_overlap_touching_inclusive(self):
+        """Test grouping touching segments with inclusive=True."""
+        obj1 = pm.polyCube(name="obj1")[0]
+        obj2 = pm.polyCube(name="obj2")[0]
+
+        data = [
+            {
+                "obj": obj1,
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "curves": [],
+            },
+            {
+                "obj": obj2,
+                "keyframes": [10, 20],
+                "start": 10,
+                "end": 20,
+                "duration": 10,
+                "curves": [],
+            },
+        ]
+
+        # Default (inclusive=False) -> 2 groups
+        result_exclusive = SegmentKeys._group_by_overlap(data, inclusive=False)
+        self.assertEqual(len(result_exclusive), 2)
+
+        # Inclusive=True -> 1 group
+        result_inclusive = SegmentKeys._group_by_overlap(data, inclusive=True)
+        self.assertEqual(len(result_inclusive), 1)
+        self.assertEqual(result_inclusive[0]["start"], 0)
+        self.assertEqual(result_inclusive[0]["end"], 20)
+
     def test_group_by_overlap_with_overlap(self):
         """Test grouping overlapping segments into single group."""
         obj1 = pm.polyCube(name="obj1")[0]
