@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run repro_preserve_spacing.py",
+			"type": "shell",
+			"command": "$env:PYTHONPATH = \"o:\\Cloud\\Code\\_scripts\\mayatk\"; & \"C:\\Program Files\\Autodesk\\Maya2025\\bin\\mayapy.exe\" o:\\Cloud\\Code\\_scripts\\mayatk\\test\\repro_preserve_spacing.py",
+			"args": [],
+			"isBackground": false,
+			"group": "test"
+		}
+	]
+}

@@ -7,11 +7,13 @@ sys.path.append(r"O:\Cloud\Code\_scripts\pythontk")
 
 print("Initializing Maya standalone...")
 import maya.standalone
-maya.standalone.initialize(name='python')
+
+maya.standalone.initialize(name="python")
 
 print("Creating QApplication...")
 try:
     from PySide2 import QtWidgets
+
     app = QtWidgets.QApplication(sys.argv)
 except ImportError:
     print("Could not import PySide2 or create QApplication")
@@ -96,4 +98,3 @@ groups_overlap = SegmentKeys.group_segments(segments, mode="overlap_groups")
 print(f"Overlap Groups: {len(groups_overlap)}")
 for i, g in enumerate(groups_overlap):
     print(f"  Group {i}: {g['objects']} ({g['start']} - {g['end']})")
-

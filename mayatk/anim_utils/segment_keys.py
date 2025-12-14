@@ -222,6 +222,7 @@ class SegmentKeys(SegmentKeysInfo):
         static_tolerance: float = 1e-4,
         time_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
         ignore_visibility_holds: bool = False,
+        ignore_holds: bool = False,
     ) -> List[Dict[str, Any]]:
         """Collect animation segments from objects.
 
@@ -233,12 +234,14 @@ class SegmentKeys(SegmentKeysInfo):
             ignore: Attribute name(s) to exclude (e.g., 'visibility').
             split_static: If True, segments separated by static gaps are split.
             selected_keys_only: If True, only process selected keyframes.
-            channel_box_attrs: If provided, only process curves for these attributes.
             static_tolerance: Value tolerance for detecting static segments.
             time_range: Optional (start, end) tuple to limit keyframe collection.
             ignore_visibility_holds: If True, visibility curves are treated like any
                 other curve (static holds are ignored). If False (default), visibility
                 curves are treated as always active to preserve holds.
+            ignore_holds: If True, trailing holds are ignored entirely (not processed,
+                not reported). If False (default), trailing holds are absorbed into
+                each segment so they are scaled/shifted with the segment.
 
         Returns:
             List of segment dictionaries.
@@ -330,8 +333,42 @@ class SegmentKeys(SegmentKeysInfo):
             if not active_segments:
                 active_segments = [(keyframes[0], keyframes[-1])]
 
+            # Default behavior: absorb trailing holds into the segment so hold keys
+            # move with the segment (prevents collisions during shifting/staggering).
+            # Optional behavior (ignore_holds=True): keep segments active-only.
+            if split_static and active_segments and not ignore_holds:
+                eps = 1e-3
+                active_segments = sorted(active_segments, key=lambda x: (x[0], x[1]))
+                expanded_segments = []
+                for i, (seg_start, seg_end) in enumerate(active_segments):
+                    next_start = (
+                        active_segments[i + 1][0]
+                        if i + 1 < len(active_segments)
+                        else None
+                    )
+
+                    # Determine an upper bound for trailing holds.
+                    # - If there's a next segment, absorb keys up to (but not past) its start.
+                    # - Otherwise absorb through the last key in the range.
+                    if next_start is not None:
+                        upper = float(next_start)
+                    else:
+                        upper = float(keyframes[-1])
+
+                    # Extend segment end to the last keyframe time within the trailing-hold window.
+                    seg_end_expanded = float(seg_end)
+                    for k in reversed(keyframes):
+                        if k <= upper + eps and k >= float(seg_end) - eps:
+                            seg_end_expanded = float(k)
+                            break
+
+                    # Keep start as-is (segment starts at first active time).
+                    expanded_segments.append((float(seg_start), float(seg_end_expanded)))
+
+                active_segments = expanded_segments
+
             # Create segment entry for each active range
-            for seg_start, seg_end in active_segments:
+            for seg_start, seg_end in sorted(active_segments, key=lambda x: (x[0], x[1])):
                 # Filter keyframes to those within this segment
                 segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
 
@@ -598,11 +635,11 @@ class SegmentKeys(SegmentKeysInfo):
                     curve_id = curve.name()
                 except Exception:
                     curve_id = str(curve)
-                
+
                 if curve_id not in curve_to_indices:
                     curve_to_indices[curve_id] = []
                 curve_to_indices[curve_id].append(i)
-        
+
         # Find connected components using Union-Find
         parent = list(range(len(groups)))
 
@@ -664,7 +701,7 @@ class SegmentKeys(SegmentKeysInfo):
                     "obj": first.get("obj"),
                     "sub_groups": list(first.get("sub_groups", [first])),
                 }
-                
+
                 # Collect names for warning
                 merged_obj_names = [str(first.get("obj") or "Unknown")]
 
@@ -675,7 +712,7 @@ class SegmentKeys(SegmentKeysInfo):
                     for obj in other_objs:
                         if obj not in merged["objects"]:
                             merged["objects"].append(obj)
-                    
+
                     obj_name = str(other.get("obj") or "Unknown")
                     if obj_name not in merged_obj_names:
                         merged_obj_names.append(obj_name)
@@ -703,9 +740,11 @@ class SegmentKeys(SegmentKeysInfo):
                 merged["segment_range"] = (merged["start"], merged["end"])
 
                 merged_groups.append(merged)
-                
+
                 # Warn about merge
-                pm.warning(f"Merged {len(indices)} groups sharing curves: {', '.join(merged_obj_names)}. Shared curves prevent independent staggering.")
+                pm.warning(
+                    f"Merged {len(indices)} groups sharing curves: {', '.join(merged_obj_names)}. Shared curves prevent independent staggering."
+                )
 
         return merged_groups
 
@@ -917,7 +956,12 @@ class SegmentKeys(SegmentKeysInfo):
                 "timeChange": offset,
             }
             if time_range:
-                kwargs["time"] = time_range
+                try:
+                    eps = 1e-3
+                    start, end = float(time_range[0]), float(time_range[1])
+                    kwargs["time"] = (start - eps, end + eps)
+                except Exception:
+                    kwargs["time"] = time_range
 
             for curve in curves:
                 pm.keyframe(curve, **kwargs)

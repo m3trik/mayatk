@@ -34,7 +34,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_ignore_visibility']
+test_modules = ['test_repro_merged_segments']
 total_tests = 0
 total_failures = 0
 total_errors = 0

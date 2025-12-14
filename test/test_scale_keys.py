@@ -1198,26 +1198,23 @@ class TestScaleKeysSegmentIsolation(MayaTkTestCase):
     def test_scale_split_segments_pivots(self):
         """Verify that split segments scale around their OWN start times, not the object start."""
         cube = pm.polyCube(name="TestCube")[0]
-        
+
         # Create two distinct segments: 0-10 and 20-30
         # Segment A: 0-10
         pm.setKeyframe(cube, t=0, v=0, at="tx")
         pm.setKeyframe(cube, t=10, v=10, at="tx")
-        
+
         # Static gap 10-20
         pm.setKeyframe(cube, t=20, v=10, at="tx")
         pm.setKeyframe(cube, t=30, v=20, at="tx")
-        
+
         # Scale by 2.0
         # split_static=True (default)
         # group_mode="per_object" (default) -> Should map to per_segment for split_static
         ScaleKeys.scale_keys(
-            objects=[cube],
-            factor=2.0,
-            split_static=True,
-            group_mode="per_object"
+            objects=[cube], factor=2.0, split_static=True, group_mode="per_object"
         )
-        
+
         # Verify Segment A: Should be 0-20 (Pivot 0)
         # 0 -> 0
         # 10 -> 20
@@ -1226,28 +1223,32 @@ class TestScaleKeysSegmentIsolation(MayaTkTestCase):
         keys_at_20 = pm.keyframe(cube, t=20, q=True, vc=True)
         self.assertTrue(keys_at_20, "Should have key at frame 20")
         self.assertAlmostEqual(keys_at_20[0], 10.0)
-        
+
         # Verify Segment B: Should be 20-40 (Pivot 20)
         # If it used object start (0) as pivot: 20->40, 30->60.
         # If it used segment start (20) as pivot: 20->20, 30->40.
-        
+
         # We expect Pivot 20 (Segment Start)
         # So key at 20 should stay at 20 (value 10)
         # Key at 30 should move to 40 (value 20)
-        
+
         keys_at_20 = pm.keyframe(cube, t=20, q=True, vc=True)
         self.assertTrue(keys_at_20, "Should have key at frame 20")
         # Value should be 10 (end of A and start of B)
         self.assertAlmostEqual(keys_at_20[0], 10.0)
-        
+
         # Check key at 40
         keys_at_40 = pm.keyframe(cube, t=40, q=True, vc=True)
-        self.assertTrue(keys_at_40, "Should have key at frame 40 (end of scaled segment B)")
+        self.assertTrue(
+            keys_at_40, "Should have key at frame 40 (end of scaled segment B)"
+        )
         self.assertAlmostEqual(keys_at_40[0], 20.0)
-        
+
         # Ensure NO key at 60 (which would happen if pivot was 0)
         keys_at_60 = pm.keyframe(cube, t=60, q=True, vc=True)
-        self.assertFalse(keys_at_60, "Should NOT have key at frame 60 (implies wrong pivot used)")
+        self.assertFalse(
+            keys_at_60, "Should NOT have key at frame 60 (implies wrong pivot used)"
+        )
 
 
 class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
@@ -1262,7 +1263,7 @@ class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
         # Cube1: 0-10
         pm.setKeyframe(self.cube1, t=0, v=0, at="tx")
         pm.setKeyframe(self.cube1, t=10, v=10, at="tx")
-        
+
         # Cube2: 10-20
         pm.setKeyframe(self.cube2, t=10, v=0, at="tx")
         pm.setKeyframe(self.cube2, t=20, v=10, at="tx")
@@ -1274,18 +1275,18 @@ class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
         # Cube1: 0-10 -> 0-5 (Pivot 0)
         # Cube2: 10-20 -> 10-15 (Pivot 10)
         # Gap: 10 - 5 = 5 frames
-        
+
         ScaleKeys.scale_keys(
             objects=[self.cube1, self.cube2],
             factor=0.5,
             group_mode="overlap_groups",
-            merge_touching=False, # Default
-            snap_mode="none" # Disable snapping for precise float checks
+            merge_touching=False,  # Default
+            snap_mode="none",  # Disable snapping for precise float checks
         )
-        
+
         c1_end = pm.keyframe(self.cube1, q=True, tc=True)[-1]
         c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        
+
         # They should NOT be touching anymore
         self.assertNotAlmostEqual(c1_end, c2_start, places=4)
         self.assertAlmostEqual(c1_end, 5.0, places=4)
@@ -1299,18 +1300,18 @@ class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
         # Cube1: 0-10 -> 0-5
         # Cube2: 10-20 -> 5-10
         # Gap: 0 frames
-        
+
         ScaleKeys.scale_keys(
             objects=[self.cube1, self.cube2],
             factor=0.5,
             group_mode="overlap_groups",
             merge_touching=True,
-            snap_mode="none"
+            snap_mode="none",
         )
-        
+
         c1_end = pm.keyframe(self.cube1, q=True, tc=True)[-1]
         c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        
+
         # They SHOULD be touching
         self.assertAlmostEqual(c1_end, c2_start, places=4)
         self.assertAlmostEqual(c1_end, 5.0, places=4)
@@ -1336,4 +1337,3 @@ if __name__ == "__main__":
 import unittest
 
 import pymel.core as pm
-

@@ -2090,7 +2090,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if abs(new_time - old_time) <= tolerance:
                 continue
 
-            values = pm.keyframe(curve, query=True, time=(old_time,), valueChange=True)
+            # Maya's keyframe query is most reliable when the time argument is a
+            # (start, end) pair, even when targeting a single key time.
+            values = pm.keyframe(
+                curve, query=True, time=(old_time, old_time), valueChange=True
+            )
             if not values:
                 continue
 
@@ -2115,10 +2119,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # 3. Set keys at new positions
         moved_count = 0
+        # Collect remaining key times (keys not being moved) to avoid overwriting them.
+        try:
+            remaining_times = pm.keyframe(curve, query=True, timeChange=True) or []
+        except Exception:
+            remaining_times = []
+
+        # Use an epsilon that's small but larger than tolerance so we can escape collisions.
+        epsilon = max(1e-3, tolerance * 10.0)
+
+        def _is_time_taken(candidate: float, taken: List[float]) -> bool:
+            for t in taken:
+                if abs(candidate - t) <= tolerance:
+                    return True
+            return False
+
+        taken_times: List[float] = list(remaining_times)
+
         for _, new_time, value, tangent_data in keys_to_move:
             try:
-                pm.setKeyframe(curve, time=new_time, value=value)
-                AnimUtils._apply_curve_tangent_data(curve, new_time, tangent_data)
+                candidate_time = float(new_time)
+
+                # Avoid collisions with existing keys and other moved keys.
+                # If the time is taken, nudge forward by a tiny epsilon until free.
+                # This preserves key count and prevents segments collapsing to 0 duration.
+                safety = 0
+                while _is_time_taken(candidate_time, taken_times) and safety < 1000:
+                    candidate_time += epsilon
+                    safety += 1
+
+                pm.setKeyframe(curve, time=candidate_time, value=value)
+                AnimUtils._apply_curve_tangent_data(curve, candidate_time, tangent_data)
+                taken_times.append(candidate_time)
                 moved_count += 1
             except RuntimeError as error:
                 pm.warning(f"Failed to set key on {curve} at {new_time}: {error}")

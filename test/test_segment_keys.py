@@ -60,38 +60,74 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         result = SegmentKeys.collect_segments([])
         self.assertEqual(result, [])
 
-    def test_segment_keyframe_isolation(self):
-        """Verify that collected segments only contain their own keyframes."""
+    def test_segment_keyframe_isolation_default_absorbs_trailing_holds(self):
+        """Verify trailing holds are absorbed into segments by default.
+
+        New default behavior (ignore_holds=False): when split_static=True, trailing
+        hold keys up to the next segment start are included in the earlier segment.
+        This prevents overlap/collapses during downstream shifting/staggering.
+        """
         cube = pm.polyCube(name="TestCube")[0]
-        
+
         # Create two distinct segments: 0-10 and 20-30
         pm.setKeyframe(cube, t=0, v=0, at="tx")
         pm.setKeyframe(cube, t=10, v=10, at="tx")
-        
+
         # Static gap 10-20 (flat)
         pm.setKeyframe(cube, t=20, v=10, at="tx")
         pm.setKeyframe(cube, t=30, v=20, at="tx")
-        
-        # Collect segments
+
+        # Collect segments (default behavior absorbs trailing holds)
         segments = SegmentKeys.collect_segments([cube], split_static=True)
-        
+
         self.assertEqual(len(segments), 2, "Should find 2 segments")
-        
-        # Segment 1: 0-10
+
+        # Segment 1: 0-20 (absorbs the trailing hold key at 20)
         seg1 = segments[0]
         self.assertEqual(seg1["start"], 0)
-        self.assertEqual(seg1["end"], 10)
-        # CRITICAL CHECK: Should only have keys 0, 10
-        self.assertEqual(seg1["keyframes"], [0.0, 10.0], 
-                        f"Segment 1 should only have keys [0, 10], got {seg1['keyframes']}")
-        
+        self.assertEqual(seg1["end"], 20)
+        # Includes the trailing hold boundary key (20)
+        self.assertEqual(
+            seg1["keyframes"],
+            [0.0, 10.0, 20.0],
+            f"Segment 1 should have keys [0, 10, 20], got {seg1['keyframes']}",
+        )
+
         # Segment 2: 20-30
         seg2 = segments[1]
         self.assertEqual(seg2["start"], 20)
         self.assertEqual(seg2["end"], 30)
-        # CRITICAL CHECK: Should only have keys 20, 30
-        self.assertEqual(seg2["keyframes"], [20.0, 30.0], 
-                        f"Segment 2 should only have keys [20, 30], got {seg2['keyframes']}")
+        # Boundary key 20 is also included here (segment start)
+        self.assertEqual(
+            seg2["keyframes"],
+            [20.0, 30.0],
+            f"Segment 2 should only have keys [20, 30], got {seg2['keyframes']}",
+        )
+
+    def test_segment_keyframe_isolation_ignore_holds_active_only(self):
+        """Verify ignore_holds=True keeps active-only segments (no trailing holds)."""
+        cube = pm.polyCube(name="TestCubeIgnoreHolds")[0]
+
+        # Create two distinct segments: 0-10 and 20-30
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+
+        # Static gap 10-20 (flat)
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        pm.setKeyframe(cube, t=30, v=20, at="tx")
+
+        segments = SegmentKeys.collect_segments([cube], split_static=True, ignore_holds=True)
+        self.assertEqual(len(segments), 2, "Should find 2 segments")
+
+        seg1 = segments[0]
+        self.assertEqual(seg1["start"], 0)
+        self.assertEqual(seg1["end"], 10)
+        self.assertEqual(seg1["keyframes"], [0.0, 10.0])
+
+        seg2 = segments[1]
+        self.assertEqual(seg2["start"], 20)
+        self.assertEqual(seg2["end"], 30)
+        self.assertEqual(seg2["keyframes"], [20.0, 30.0])
 
     def test_print_scene_info(self):
         """Test print_scene_info runs without error."""
@@ -392,8 +428,81 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
         result = SegmentKeys.collect_segments([cube], split_static=True)
 
-        # Should have 2 segments (1-10 and 20-30)
+        # Default behavior absorbs trailing holds, so segments become (1-20) and (20-30)
         self.assertEqual(len(result), 2)
+
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[0]["end"], 20)
+        self.assertEqual(result[1]["start"], 20)
+        self.assertEqual(result[1]["end"], 30)
+
+    def test_collect_segments_split_static_ignore_holds_trailing_hold_after_last_segment(self):
+        """When the final segment has a trailing hold, ignore_holds controls inclusion.
+
+        Setup:
+        - Active change from 0->10
+        - Trailing hold key at 20 (same value as at 10)
+
+        Expectation:
+        - Default (ignore_holds=False): segment expands to end at 20 and includes key 20
+        - ignore_holds=True: segment stays active-only (ends at 10) and excludes key 20
+        """
+        cube = pm.polyCube(name="hold_last_seg")[0]
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+
+        segs_default = SegmentKeys.collect_segments([cube], split_static=True)
+        self.assertEqual(len(segs_default), 1)
+        self.assertEqual(segs_default[0]["start"], 0)
+        self.assertEqual(segs_default[0]["end"], 20)
+        self.assertEqual(segs_default[0]["keyframes"], [0.0, 10.0, 20.0])
+
+        segs_ignore = SegmentKeys.collect_segments([cube], split_static=True, ignore_holds=True)
+        self.assertEqual(len(segs_ignore), 1)
+        self.assertEqual(segs_ignore[0]["start"], 0)
+        self.assertEqual(segs_ignore[0]["end"], 10)
+        self.assertEqual(segs_ignore[0]["keyframes"], [0.0, 10.0])
+
+    def test_collect_segments_visibility_holds_can_bridge_static_gaps(self):
+        """Visibility curves can merge segments unless ignore_visibility_holds=True.
+
+        If a visibility curve spans the full range, and ignore_visibility_holds=False
+        (default), it is treated as always active and can bridge static gaps in other
+        channels, producing a single merged segment.
+        """
+        cube = pm.polyCube(name="vis_bridge")[0]
+
+        # Two translateX active segments with a static gap
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        pm.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Visibility holds across the entire range (no change)
+        pm.setKeyframe(cube, t=0, v=1, at="visibility")
+        pm.setKeyframe(cube, t=30, v=1, at="visibility")
+
+        segs_bridge = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_visibility_holds=False,
+        )
+        self.assertEqual(len(segs_bridge), 1)
+        self.assertEqual(segs_bridge[0]["start"], 0)
+        self.assertEqual(segs_bridge[0]["end"], 30)
+
+        segs_no_bridge = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_visibility_holds=True,
+        )
+        # Without visibility bridging, we expect 2 segments (with trailing-hold absorption)
+        self.assertEqual(len(segs_no_bridge), 2)
+        self.assertEqual(segs_no_bridge[0]["start"], 0)
+        self.assertEqual(segs_no_bridge[0]["end"], 20)
+        self.assertEqual(segs_no_bridge[1]["start"], 20)
+        self.assertEqual(segs_no_bridge[1]["end"], 30)
 
     def test_full_pipeline(self):
         """Test full collect -> group pipeline."""

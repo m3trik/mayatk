@@ -35,6 +35,7 @@ class ScaleKeys:
         prevent_overlap: bool = False,
         flatten_tangents: bool = True,
         split_static: bool = True,
+        ignore_holds: bool = False,
         merge_touching: bool = False,
         verbose: bool = False,
         verbose_header: str = None,
@@ -43,6 +44,7 @@ class ScaleKeys:
 
         self.utils = AnimUtils
         self.merge_touching = merge_touching
+        self.ignore_holds = ignore_holds
 
         by_speed = mode == "speed"
         if mode not in {"uniform", "speed"}:
@@ -711,14 +713,25 @@ class ScaleKeys:
                 if keys:
                     time_arg = keys
 
+                # Maya time-range queries can miss boundary keys due to floating point
+                # representation (eg. 517.5000001 vs 517.5). Expand slightly to ensure
+                # endpoints are included.
+                query_time_arg = None
+                if time_arg:
+                    try:
+                        eps = 1e-3
+                        query_time_arg = (float(time_arg[0]) - eps, float(time_arg[1]) + eps)
+                    except Exception:
+                        query_time_arg = time_arg
+
                 if self.selected_keys_only or (self.snap_mode is not None):
                     curve_times_map = {}
                     for curve in curves_to_scale:
                         kwargs = {"query": True, "tc": True}
                         if self.selected_keys_only:
                             kwargs["selected"] = True
-                        if time_arg:
-                            kwargs["time"] = time_arg
+                        if query_time_arg:
+                            kwargs["time"] = query_time_arg
 
                         times = pm.keyframe(curve, **kwargs)
                         if times:
@@ -754,7 +767,7 @@ class ScaleKeys:
                         curves_to_scale,
                         pivot_time,
                         effective_factor,
-                        time_arg,
+                        query_time_arg,
                     )
 
         # Execute aggregated moves
@@ -794,75 +807,23 @@ class ScaleKeys:
     def _stagger_scaled_segments(
         self,
         groups: List[Dict[str, Any]],
+        scale_factor: float = 1.0,
     ) -> None:
         """Stagger scaled segments to prevent overlap.
 
         After scaling, segments may overlap each other. This method repositions
-        them sequentially so that each segment starts after the previous one ends.
+        them sequentially so that each segment starts after the previous one ends,
+        preserving the original spacing between groups (scaled by scale_factor).
 
         Parameters:
             groups: List of KeyframeGrouper groups (each with sub_groups containing segments).
+            scale_factor: The factor by which to scale the gaps.
         """
         if not groups:
             return
 
-        # Collect segment data with updated time ranges after scaling
-        stagger_data = []
-
-        for group in groups:
-            # Get all curves from the group's segments
-            group_curves = []
-            for seg in group.get("sub_groups", []):
-                group_curves.extend(seg.get("curves", []))
-            group_curves = list(dict.fromkeys(group_curves))  # Dedupe
-
-            if not group_curves:
-                continue
-
-            # Query the CURRENT time range after scaling
-            # NOTE: We must use the segment's specific range, not the whole curve range
-            # But since we just scaled, we don't know the exact new range of this specific segment easily
-            # unless we tracked it.
-            # However, if we are in per_segment mode, 'group' corresponds to a single segment.
-            # Let's try to get the range from the keyframes in the group if available.
-
-            # If we use get_keyframe_times on the curves, we get the WHOLE curve range (all segments).
-            # This is WRONG for multi-segment objects.
-
-            # We need to find the keys that belong to this segment.
-            # The 'group' object has 'keyframes' but those might be old times?
-            # No, 'processing_groups' were used for scaling.
-
-            # Let's look at how we can identify the segment's new location.
-            # If we assume the segments are distinct and non-overlapping (which they should be after scaling if they were before),
-            # we might be able to find the cluster of keys.
-
-            # BETTER APPROACH:
-            # When we built 'groups' (from SegmentKeys.group_segments), each group had 'start' and 'end'.
-            # After scaling, those times are shifted/scaled.
-            # But we don't have the updated times in the group object.
-
-            # Workaround:
-            # Since we are in 'per_segment' mode (enforced above), each group IS a segment.
-            # We can look at the keys on the curves and find the ones that match the expected count?
-            # Or, we can rely on the fact that we just scaled them.
-
-            # Wait, if we use 'segment_range' in _apply_stagger, it uses that to limit the move.
-            # But we need to know the CURRENT range to calculate the shift amount.
-            # And we need to pass the CURRENT range as 'segment_range' so the move is limited.
-
-            # If we pass the WHOLE curve range as 'segment_range', it moves the whole curve.
-            # If we pass the specific segment range, it moves just that segment.
-
-            # Problem: How to get the specific segment range AFTER scaling but BEFORE staggering?
-            # We know the keys were scaled.
-            # If we look at the curves, we see all keys.
-
-            # Let's try to re-collect segments?
-            # SegmentKeys.collect_segments will find the new segments.
-            # Since we just scaled, the segments might have changed size/position, but they should still be separated by gaps (if split_static worked).
-
-            pass
+        # Sort groups by original start time to ensure correct gap calculation
+        groups.sort(key=lambda x: x["start"])
 
         # Re-collect segments to get accurate current ranges
         # This is safer than guessing
@@ -874,63 +835,242 @@ class ScaleKeys:
             channel_box_attrs=self.channel_box_attrs,
             time_range=None,  # We want all segments now
             ignore_visibility_holds=self.split_static,
+            ignore_holds=self.ignore_holds,
         )
 
-        # Now group them again to match our processing structure
-        # We forced 'per_segment' mode earlier for prevent_overlap
-        current_groups = SegmentKeys.group_segments(
-            current_segments, mode="per_segment"
-        )
+        # Organize current segments by object for mapping
+        # We cannot assume segment order is preserved per-object after scaling,
+        # especially when objects have multiple segments. We'll match segments
+        # by nearest expected scaled start (and roughly expected duration).
+        segments_by_obj = {}
+        for seg in current_segments:
+            obj = seg["obj"]
+            if obj not in segments_by_obj:
+                segments_by_obj[obj] = []
+            segments_by_obj[obj].append(seg)
 
-        # Merge shared curves to prevent double transform
-        current_groups = SegmentKeys.merge_groups_sharing_curves(current_groups)
+        for obj, segs in segments_by_obj.items():
+            segs.sort(key=lambda s: s["start"])
 
-        # Clear stagger_data and rebuild it from fresh groups
+        def _pick_best_segment(
+            obj,
+            expected_start: Optional[float] = None,
+            expected_duration: Optional[float] = None,
+        ) -> Optional[Dict[str, Any]]:
+            candidates = segments_by_obj.get(obj) or []
+            if not candidates:
+                return None
+
+            if expected_start is None:
+                return candidates.pop(0)
+
+            best_index = None
+            best_score = None
+            for i, cand in enumerate(candidates):
+                cand_start = float(cand.get("start", 0.0))
+                cand_end = float(cand.get("end", cand_start))
+                cand_duration = cand_end - cand_start
+
+                start_diff = abs(cand_start - expected_start)
+                dur_diff = (
+                    abs(cand_duration - expected_duration)
+                    if expected_duration is not None
+                    else 0.0
+                )
+
+                # Start alignment dominates; duration is a secondary tie-breaker.
+                score = start_diff + (dur_diff * 0.25)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_index = i
+
+            if best_index is None:
+                return candidates.pop(0)
+
+            return candidates.pop(best_index)
+
+        # Build stagger data preserving original grouping
         stagger_data = []
 
-        for group in current_groups:
-            # Get all curves from the group's segments
+        for group in groups:
+            group_start = float("inf")
+            group_end = float("-inf")
             group_curves = []
-            for seg in group.get("sub_groups", []):
-                group_curves.extend(seg.get("curves", []))
-            group_curves = list(dict.fromkeys(group_curves))  # Dedupe
 
-            if not group_curves:
+            original_group_start = float("inf")
+            original_group_end = float("-inf")
+
+            # Iterate sub_groups (which are the original segments)
+            sub_groups = group.get("sub_groups", [])
+            if not sub_groups:
                 continue
 
-            # Use the group's start/end which comes from collect_segments (accurate)
-            start = group["start"]
-            end = group["end"]
+            for old_seg in sub_groups:
+                obj = old_seg["obj"]
+
+                try:
+                    original_group_start = min(
+                        original_group_start, float(old_seg.get("start", 0.0))
+                    )
+                    original_group_end = max(
+                        original_group_end, float(old_seg.get("end", 0.0))
+                    )
+                except Exception:
+                    pass
+
+                expected_start = None
+                expected_duration = None
+
+                # Only attempt predictive matching in uniform relative scaling.
+                if not self.absolute and not self.by_speed:
+                    try:
+                        # IMPORTANT: when scaling used overlap-group pivots, the pivot is the
+                        # overlap group's start time (not the user/global pivot).
+                        if self.group_mode == "overlap_groups":
+                            pivot_time = float(original_group_start)
+                        else:
+                            pivot_time = (
+                                float(self.pivot)
+                                if (self.pivot is not None and self.group_mode != "per_object")
+                                else float(original_group_start)
+                            )
+                        seg_start = float(old_seg["start"])
+                        seg_end = float(old_seg["end"])
+                        seg_duration = seg_end - seg_start
+
+                        expected_start = pivot_time + (seg_start - pivot_time) * float(
+                            scale_factor
+                        )
+                        expected_duration = seg_duration * float(scale_factor)
+                    except Exception:
+                        expected_start = None
+                        expected_duration = None
+
+                new_seg = _pick_best_segment(
+                    obj, expected_start=expected_start, expected_duration=expected_duration
+                )
+                if not new_seg:
+                    continue
+
+                s = new_seg["start"]
+                e = new_seg["end"]
+                group_start = min(group_start, s)
+                group_end = max(group_end, e)
+                group_curves.extend(new_seg.get("curves", []))
+
+            if group_start == float("inf"):
+                continue
+
+            if original_group_start == float("inf"):
+                # Fallback (should not happen if sub_groups is non-empty)
+                original_group_start = float(group.get("start", group_start))
+            if original_group_end == float("-inf"):
+                original_group_end = float(group.get("end", group_end))
+
+            group_curves = list(dict.fromkeys(group_curves))
 
             stagger_data.append(
                 {
-                    "obj": group.get("obj") or (group.get("objects", [None])[0]),
+                    "start": group_start,
+                    "end": group_end,
+                    "duration": group_end - group_start,
                     "curves": group_curves,
-                    "start": start,
-                    "end": end,
-                    "duration": end - start,
-                    "segment_range": (start, end),
-                    "keyframes": group.get("keyframes", []),
+                    "segment_range": (group_start, group_end),
+                    "original_start": original_group_start,
+                    "original_end": original_group_end,
                 }
             )
 
         if len(stagger_data) < 2:
             return  # Nothing to stagger with less than 2 groups
 
+        if self.verbose:
+            print(f"[ScaleKeys] _stagger_scaled_segments: scale_factor={scale_factor}")
+            for idx, item in enumerate(stagger_data[:6]):
+                print(
+                    "[ScaleKeys] group[{i}] orig=({os:.2f}-{oe:.2f}) cur=({cs:.2f}-{ce:.2f}) dur={d:.2f}".format(
+                        i=idx,
+                        os=float(item.get("original_start", 0.0)),
+                        oe=float(item.get("original_end", 0.0)),
+                        cs=float(item.get("start", 0.0)),
+                        ce=float(item.get("end", 0.0)),
+                        d=float(item.get("duration", 0.0)),
+                    )
+                )
+
+        # Apply stagger using original gaps
+        operations = []
+
+        # Start from the first group's current position
+        previous_end = stagger_data[0]["end"]
+        previous_original_end = stagger_data[0]["original_end"]
+
+        for i in range(1, len(stagger_data)):
+            data = stagger_data[i]
+            
+            # Calculate gap from previous PROCESSED group
+            # This handles cases where groups were skipped in stagger_data construction
+            gap = data["original_start"] - previous_original_end
+
+            # Scale the gap
+            scaled_gap = gap * scale_factor
+
+            # Ensure we don't introduce overlap if prevent_overlap is the goal
+            if scaled_gap < 0:
+                scaled_gap = 0
+
+            target_start = previous_end + scaled_gap
+            shift_amount = target_start - data["start"]
+
+            if self.verbose and i <= 6:
+                print(
+                    "[ScaleKeys] step[{i}] gap={g:.2f} scaled_gap={sg:.2f} prev_end={pe:.2f} -> target_start={ts:.2f} cur_start={cs:.2f} shift={sh:.2f}".format(
+                        i=i,
+                        g=float(gap),
+                        sg=float(scaled_gap),
+                        pe=float(previous_end),
+                        ts=float(target_start),
+                        cs=float(data.get("start", 0.0)),
+                        sh=float(shift_amount),
+                    )
+                )
+
+            if abs(shift_amount) > 1e-6:
+                # Use group-level data to prevent double-transforming shared curves
+                curves = list(dict.fromkeys(data.get("curves", [])))
+                time_range = data.get("segment_range")
+                if not time_range:
+                    time_range = (data.get("start"), data.get("end"))
+
+                operations.append(
+                    {
+                        "curves": curves,
+                        "shift": shift_amount,
+                        "time": time_range,
+                    }
+                )
+
+            # Update previous_end for next iteration
+            previous_end = target_start + data["duration"]
+            previous_original_end = data["original_end"]
+
+        # Execute operations in safe order
+        pos_ops = [op for op in operations if op["shift"] > 0]
+        neg_ops = [op for op in operations if op["shift"] < 0]
+
         # Sort by start time
-        stagger_data.sort(key=lambda x: x["start"])
+        def get_start_time(op):
+            t = op.get("time")
+            return t[0] if t else float("-inf")
 
-        # Apply stagger with spacing=0 and avoid_overlap behavior
-        start_frame = stagger_data[0]["start"]
+        pos_ops.sort(key=get_start_time, reverse=True)
+        neg_ops.sort(key=get_start_time)
 
-        self.utils._apply_stagger(
-            stagger_data,
-            start_frame=start_frame,
-            spacing=0,
-            use_intervals=False,
-            avoid_overlap=False,
-            preserve_gaps=False,  # Don't preserve gaps - place sequentially
-        )
+        for op in pos_ops:
+            SegmentKeys.shift_curves(op["curves"], op["shift"], op["time"])
+
+        for op in neg_ops:
+            SegmentKeys.shift_curves(op["curves"], op["shift"], op["time"])
 
     def _report_speed(
         self,
@@ -1140,6 +1280,8 @@ class ScaleKeys:
             time_range=(
                 (self.base_start, self.base_end) if self.range_specified else None
             ),
+            ignore_visibility_holds=self.split_static,
+            ignore_holds=self.ignore_holds,
         )
 
         if not self.segments:
@@ -1161,6 +1303,7 @@ class ScaleKeys:
                     (self.base_start, self.base_end) if self.range_specified else None
                 ),
                 ignore_visibility_holds=self.split_static,
+                ignore_holds=self.ignore_holds,
             )
             original_ranges = SegmentKeys.get_time_ranges(detailed_segments)
 
@@ -1181,7 +1324,12 @@ class ScaleKeys:
             segment_mode = "per_segment"
 
         # If prevent_overlap is True, we MUST use per_segment mode to allow independent staggering
-        if self.prevent_overlap and self.split_static:
+        # UNLESS we are in overlap_groups mode, where we want to stagger the groups themselves.
+        if (
+            self.prevent_overlap
+            and self.split_static
+            and self.group_mode != "overlap_groups"
+        ):
             segment_mode = "per_segment"
 
         # For scaling, we want touching segments to group together in overlap mode
@@ -1212,7 +1360,14 @@ class ScaleKeys:
 
         # After scaling, stagger segments only when prevent_overlap is enabled
         if self.split_static and self.prevent_overlap and keys_scaled > 0:
-            self._stagger_scaled_segments(groups)
+            # Calculate gap scale
+            gap_scale = 1.0
+            if not self.absolute and not self.by_speed:
+                gap_scale = self.factor
+            
+            # print(f"DEBUG: Staggering with gap_scale={gap_scale} (factor={self.factor}, absolute={self.absolute})")
+
+            self._stagger_scaled_segments(groups, scale_factor=gap_scale)
 
         # Flatten tangents after scaling to prevent overshoot from skewed angles
         if self.flatten_tangents and keys_scaled > 0:
@@ -1259,6 +1414,7 @@ class ScaleKeys:
                     (self.base_start, self.base_end) if self.range_specified else None
                 ),
                 ignore_visibility_holds=self.split_static,
+                ignore_holds=self.ignore_holds,
             )
             new_ranges = SegmentKeys.get_time_ranges(new_segments)
             SegmentKeys.print_time_ranges(
@@ -1282,8 +1438,25 @@ class ScaleKeys:
                 scaling to prevent overshoot/undershoot from skewed tangent angles.
             merge_touching: If True, touching segments (end == start) are merged into
                 a single group when using 'overlap_groups' mode. Default is False.
+            ignore_holds: If True, trailing holds are ignored entirely (not processed,
+                not reported). If False (default), trailing holds are absorbed into
+                each segment so they are scaled/shifted with the segment.
             verbose: If True, prints detailed information including original time ranges.
             verbose_header: Optional custom text to prefix the verbose output headers.
         """
+        # In overlap-group pivot mode, touching segments (end == start) must be
+        # treated as a single overlap group during scaling to avoid applying
+        # conflicting pivot mappings to the shared boundary key.
+        #
+        # Keep this opt-out: callers can explicitly pass merge_touching=False.
+        try:
+            group_mode = kwargs.get("group_mode")
+            normalized = cls._normalize_group_mode(group_mode)
+        except Exception:
+            normalized = None
+
+        if normalized == "overlap_groups" and "merge_touching" not in kwargs:
+            kwargs["merge_touching"] = True
+
         instance = cls(**kwargs)
         return instance.execute()

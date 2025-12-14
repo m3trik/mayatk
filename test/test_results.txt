@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_ignore_visibility: PASS
-  Tests: 2, Failures: 0, Errors: 0, Skipped: 0
+test_repro_merged_segments: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_ignore_visibility: PASS (2 tests, 0 failures, 0 errors)
+  test_repro_merged_segments: PASS (1 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 2 tests, 0 failures, 0 errors, 0 skipped
+Total: 1 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================
