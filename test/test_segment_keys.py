@@ -17,6 +17,18 @@ import importlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
+    from PySide2.QtWidgets import QApplication
+except ImportError:
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        QApplication = None
+
+# Ensure QApplication exists before any Maya imports that might need it
+if QApplication and not QApplication.instance():
+    app = QApplication(sys.argv)
+
+try:
     import pymel.core as pm
 except ImportError:
     pm = None

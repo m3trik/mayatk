@@ -35,12 +35,14 @@ class ScaleKeys:
         prevent_overlap: bool = False,
         flatten_tangents: bool = True,
         split_static: bool = True,
+        merge_touching: bool = False,
         verbose: bool = False,
         verbose_header: str = None,
     ):
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         self.utils = AnimUtils
+        self.merge_touching = merge_touching
 
         by_speed = mode == "speed"
         if mode not in {"uniform", "speed"}:
@@ -1185,7 +1187,7 @@ class ScaleKeys:
         # For scaling, we want touching segments to group together in overlap mode
         # to preserve continuity of sequential actions.
         groups = SegmentKeys.group_segments(
-            self.segments, mode=segment_mode, inclusive=True
+            self.segments, mode=segment_mode, inclusive=self.merge_touching
         )
 
         # Convert SegmentKeys groups to processing format
@@ -1278,6 +1280,8 @@ class ScaleKeys:
                 gaps (flat keys) are treated as independent groups and scaled separately.
             flatten_tangents: If True (default), flattens all tangents to 'auto' after
                 scaling to prevent overshoot/undershoot from skewed tangent angles.
+            merge_touching: If True, touching segments (end == start) are merged into
+                a single group when using 'overlap_groups' mode. Default is False.
             verbose: If True, prints detailed information including original time ranges.
             verbose_header: Optional custom text to prefix the verbose output headers.
         """

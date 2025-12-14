@@ -1250,6 +1250,73 @@ class TestScaleKeysSegmentIsolation(MayaTkTestCase):
         self.assertFalse(keys_at_60, "Should NOT have key at frame 60 (implies wrong pivot used)")
 
 
+class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
+    """Tests for the merge_touching parameter."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube1 = pm.polyCube(name="cube1")[0]
+        self.cube2 = pm.polyCube(name="cube2")[0]
+
+        # Create touching segments
+        # Cube1: 0-10
+        pm.setKeyframe(self.cube1, t=0, v=0, at="tx")
+        pm.setKeyframe(self.cube1, t=10, v=10, at="tx")
+        
+        # Cube2: 10-20
+        pm.setKeyframe(self.cube2, t=10, v=0, at="tx")
+        pm.setKeyframe(self.cube2, t=20, v=10, at="tx")
+
+    def test_merge_touching_false(self):
+        """Default behavior: Touching segments are separate groups."""
+        # Scale by 0.5
+        # If separate:
+        # Cube1: 0-10 -> 0-5 (Pivot 0)
+        # Cube2: 10-20 -> 10-15 (Pivot 10)
+        # Gap: 10 - 5 = 5 frames
+        
+        ScaleKeys.scale_keys(
+            objects=[self.cube1, self.cube2],
+            factor=0.5,
+            group_mode="overlap_groups",
+            merge_touching=False, # Default
+            snap_mode="none" # Disable snapping for precise float checks
+        )
+        
+        c1_end = pm.keyframe(self.cube1, q=True, tc=True)[-1]
+        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
+        
+        # They should NOT be touching anymore
+        self.assertNotAlmostEqual(c1_end, c2_start, places=4)
+        self.assertAlmostEqual(c1_end, 5.0, places=4)
+        self.assertAlmostEqual(c2_start, 10.0, places=4)
+
+    def test_merge_touching_true(self):
+        """Merge behavior: Touching segments are one group."""
+        # Scale by 0.5
+        # If merged:
+        # Combined: 0-20 -> 0-10 (Pivot 0)
+        # Cube1: 0-10 -> 0-5
+        # Cube2: 10-20 -> 5-10
+        # Gap: 0 frames
+        
+        ScaleKeys.scale_keys(
+            objects=[self.cube1, self.cube2],
+            factor=0.5,
+            group_mode="overlap_groups",
+            merge_touching=True,
+            snap_mode="none"
+        )
+        
+        c1_end = pm.keyframe(self.cube1, q=True, tc=True)[-1]
+        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
+        
+        # They SHOULD be touching
+        self.assertAlmostEqual(c1_end, c2_start, places=4)
+        self.assertAlmostEqual(c1_end, 5.0, places=4)
+        self.assertAlmostEqual(c2_start, 5.0, places=4)
+
+
 if __name__ == "__main__":
     try:
         from PySide6.QtWidgets import QApplication
