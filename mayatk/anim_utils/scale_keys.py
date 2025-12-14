@@ -13,55 +13,131 @@ import pythontk as ptk
 # Import CoreUtils using internal path to avoid circular imports
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.segment_keys import SegmentKeys
-from mayatk.anim_utils.stagger_keys import _StaggerKeysInternal
-from mayatk.anim_utils.anim_structs import (
-    AnimPlan,
-    ScaleOperation,
-    MoveOperation,
-    ShiftOperation,
-)
 
 
-@dataclass
-class _ScaleKeysContext:
-    utils: Any
-    objects: List[Any]
-    mode: str
-    factor: float
-    keys: Any
-    pivot: Optional[float]
-    channel_box_attrs_only: bool
-    ignore: Optional[Union[str, List[str]]]
-    group_mode: str
-    snap_mode: Optional[str]
-    samples: Optional[int]
-    include_rotation: Union[bool, str]
-    absolute: Optional[bool]
-    prevent_overlap: bool
-    flatten_tangents: bool = True
-    split_static: bool = True
-    by_speed: bool = False
-    verbose: bool = False
-    time_range: Tuple[Optional[float], Optional[float]] = (None, None)
-    selected_keys_only: bool = False
-    base_start: Optional[float] = None
-    base_end: Optional[float] = None
-    range_specified: bool = False
-    channel_box_attrs: Optional[List[str]] = None
-    objects_list: List[Any] = field(default_factory=list)
-    object_info: List[Dict[str, Any]] = field(default_factory=list)
-    segments: List[Dict[str, Any]] = field(default_factory=list)
-    diagnostics: Dict[str, Any] = field(default_factory=dict)
+class ScaleKeys:
+    """Encapsulates scale_keys logic for clarity and focused testing."""
 
+    def __init__(
+        self,
+        objects=None,
+        mode: str = "uniform",
+        factor: float = 1.0,
+        keys=None,
+        pivot: Optional[float] = None,
+        channel_box_attrs_only: bool = False,
+        ignore: Optional[Union[str, List[str]]] = None,
+        group_mode: str = "single_group",
+        snap_mode: Optional[str] = "nearest",
+        samples: Optional[int] = None,
+        include_rotation: Union[bool, str] = False,
+        absolute: Optional[bool] = None,
+        prevent_overlap: bool = False,
+        flatten_tangents: bool = True,
+        split_static: bool = True,
+        verbose: bool = False,
+        verbose_header: str = None,
+    ):
+        from mayatk.anim_utils._anim_utils import AnimUtils
 
-@dataclass
-class ScalingPlan(AnimPlan):
-    global_pivot: Optional[float] = None
-    speed_info: str = ""
+        self.utils = AnimUtils
 
+        by_speed = mode == "speed"
+        if mode not in {"uniform", "speed"}:
+            pm.warning(f"Invalid mode '{mode}'. Using 'uniform'.")
+            mode = "uniform"
+            by_speed = False
 
-class _ScaleKeysInternal:
-    """Internal helper methods for ScaleKeys - input normalization, target collection, and grouping."""
+        if absolute is None:
+            absolute = by_speed
+
+        if samples is None and by_speed:
+            samples = 64
+
+        time_range, selected_keys_only = (
+            self._normalize_keys_to_time_range_and_selection(keys)
+        )
+        base_start_raw, base_end_raw = time_range
+
+        def _coerce_to_float(value):
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pm.warning(f"Invalid time_range value '{value}'. Ignoring component.")
+                return None
+
+        base_start = _coerce_to_float(base_start_raw)
+        base_end = _coerce_to_float(base_end_raw)
+        range_specified = base_start is not None or base_end is not None
+
+        objects = pm.selected() if objects is None else objects
+        if not objects:
+            # We'll handle validation failure by setting objects to empty list
+            # and checking in execute
+            objects = []
+        else:
+            objects = pm.ls(objects, flatten=True)
+
+        channel_box_attrs = None
+        if channel_box_attrs_only:
+            channel_box_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+
+        if selected_keys_only and not by_speed:
+            all_selected_keys = pm.keyframe(query=True, sl=True, tc=True)
+            if not all_selected_keys:
+                # Will handle in execute
+                pass
+
+        group_mode_normalized = self._normalize_group_mode(group_mode)
+        if group_mode_normalized not in {
+            "single_group",
+            "per_object",
+            "overlap_groups",
+        }:
+            pm.warning(
+                f"Unsupported group_mode '{group_mode}'. Falling back to 'single_group'."
+            )
+            group_mode_normalized = "single_group"
+
+        if by_speed and selected_keys_only:
+            pm.warning(
+                "selected_keys_only is not supported with mode='speed'. Processing all keys in range."
+            )
+            selected_keys_only = False
+
+        # Initialize state
+        self.objects = objects
+        self.mode = mode
+        self.factor = factor
+        self.keys = keys
+        self.pivot = pivot
+        self.channel_box_attrs_only = channel_box_attrs_only
+        self.ignore = ignore
+        self.group_mode = group_mode_normalized
+        self.snap_mode = snap_mode
+        self.samples = samples
+        self.include_rotation = include_rotation
+        self.absolute = absolute
+        self.prevent_overlap = prevent_overlap
+        self.flatten_tangents = flatten_tangents
+        self.split_static = split_static
+        self.by_speed = by_speed
+        self.verbose = verbose
+        self.verbose_header = verbose_header
+        self.time_range = time_range
+        self.selected_keys_only = selected_keys_only
+        self.base_start = base_start
+        self.base_end = base_end
+        self.range_specified = range_specified
+        self.channel_box_attrs = channel_box_attrs
+        self.objects_list = objects
+        self.object_info: List[Dict[str, Any]] = []
+        self.segments: List[Dict[str, Any]] = []
+        self.diagnostics: Dict[str, Any] = {}
 
     # Input normalization helpers
     @staticmethod
@@ -159,71 +235,6 @@ class _ScaleKeysInternal:
 
     # Target collection and grouping helpers
     @classmethod
-    def _build_object_groups(
-        cls, object_info: List[Dict[str, Any]], group_mode: str
-    ) -> List[List[Dict[str, Any]]]:
-        """Create processing groups based on the requested grouping mode."""
-        from mayatk.anim_utils._anim_utils import AnimUtils
-
-        if not object_info:
-            return []
-
-        valid_entries = [info for info in object_info if info]
-        if not valid_entries:
-            return []
-
-        normalized_mode = cls._normalize_group_mode(group_mode)
-
-        if normalized_mode == "per_object":
-            return [[info] for info in valid_entries]
-
-        if normalized_mode == "single_group":
-            return [valid_entries]
-
-        # overlap_groups
-        overlap_payload: List[Dict[str, Any]] = []
-        for info in valid_entries:
-            start = info.get("start")
-            end = info.get("end")
-            clamped = ptk.clamp_range(start, end, validate=False)
-            if not clamped or clamped[0] > clamped[1]:
-                continue
-
-            overlap_payload.append(
-                {
-                    "obj": info.get("object"),
-                    "keyframes": info.get("key_times") or [],
-                    "start": clamped[0],
-                    "end": clamped[1],
-                    "duration": clamped[1] - clamped[0],
-                    "curves": info.get("curves_to_scale")
-                    or info.get("all_curves")
-                    or [],
-                }
-            )
-
-        if not overlap_payload:
-            return [[info] for info in valid_entries]
-
-        grouped = AnimUtils._group_overlapping_keyframes(overlap_payload)
-        if not grouped:
-            return [[info] for info in valid_entries]
-
-        info_lookup = {info.get("object"): info for info in valid_entries}
-        groups: List[List[Dict[str, Any]]] = []
-
-        for group in grouped:
-            group_infos: List[Dict[str, Any]] = []
-            for obj in group.get("objects", []):
-                info = info_lookup.get(obj)
-                if info and info not in group_infos:
-                    group_infos.append(info)
-            if group_infos:
-                groups.append(group_infos)
-
-        return groups if groups else [[info] for info in valid_entries]
-
-    @classmethod
     def _resolve_group_bounds(
         cls,
         group: List[Dict[str, Any]],
@@ -282,168 +293,75 @@ class _ScaleKeysInternal:
             else None
         )
 
-    @classmethod
-    def _collect_scale_targets(
-        cls,
-        objects: List["pm.PyNode"],
-        ignore: Optional[Union[str, List[str]]],
-        channel_box_attrs: Optional[List[str]],
-        selected_keys_only: bool,
-        range_specified: bool,
-        base_start: Optional[float],
-        base_end: Optional[float],
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """Prepare per-object payload for scale_keys, respecting ignore filters."""
-        from mayatk.anim_utils._anim_utils import AnimUtils
-
-        targets: List[Dict[str, Any]] = []
-        diagnostics: Dict[str, Any] = {
-            "objects_processed": 0,
-            "objects_with_curves": 0,
-            "filtered_by_ignore": 0,
-            "filtered_by_channel_box": 0,
-        }
-
-        for obj in objects:
-            diagnostics["objects_processed"] += 1
-
-            curves_initial = AnimUtils.objects_to_curves(obj)
-            if not curves_initial:
+    @staticmethod
+    def _execute_scale_operation(
+        curves: List[Any],
+        pivot: float,
+        factor: float,
+        time_range: Optional[Tuple[float, float]] = None,
+    ) -> int:
+        """Execute a scale operation directly."""
+        keys_scaled = 0
+        for curve in curves:
+            if not pm.objExists(curve):
                 continue
 
-            diagnostics["objects_with_curves"] += 1
-
-            curves_filtered = AnimUtils._filter_curves_by_ignore(curves_initial, ignore)
-            if not curves_filtered:
-                diagnostics["filtered_by_ignore"] += 1
-                continue
-
-            curves_all = cls._filter_curves_by_channel_box(
-                curves_filtered, channel_box_attrs
-            )
-            if not curves_all:
-                if channel_box_attrs:
-                    diagnostics["filtered_by_channel_box"] += 1
-                continue
-
-            curves_all = list(dict.fromkeys(curves_all))
-            info: Dict[str, Any] = {
-                "object": obj,
-                "all_curves": curves_all,
+            kwargs = {
+                "timeScale": factor,
+                "timePivot": pivot,
             }
-
-            if selected_keys_only:
-                selected_curves = (
-                    pm.keyframe(obj, query=True, name=True, selected=True) or []
-                )
-                selected_curves = AnimUtils._filter_curves_by_ignore(
-                    selected_curves, ignore
-                )
-                selected_curves = cls._filter_curves_by_channel_box(
-                    selected_curves, channel_box_attrs
-                )
-                selected_curves = list(dict.fromkeys(selected_curves))
-                if not selected_curves:
+            if time_range:
+                kwargs["time"] = time_range
+                # Verify keys exist in range before scaling to avoid warnings/errors
+                if not pm.keyframe(curve, query=True, time=time_range):
                     continue
-                info["curves_to_scale"] = selected_curves
-                key_mode = "selected"
+                keys_scaled += pm.keyframe(
+                    curve, query=True, keyframeCount=True, time=time_range
+                )
             else:
-                info["curves_to_scale"] = curves_all
-                key_mode = "all"
+                keys_scaled += pm.keyframe(curve, query=True, keyframeCount=True)
 
-            key_times_full_raw = AnimUtils.get_keyframe_times(
-                info["curves_to_scale"], mode=key_mode, from_curves=True
-            )
-            key_times_full = (
-                sorted({float(t) for t in key_times_full_raw})
-                if key_times_full_raw
-                else []
-            )
-            if not key_times_full:
-                continue
+            pm.scaleKey(curve, **kwargs)
+        return keys_scaled
 
-            info["key_times_full"] = key_times_full
-            info["start_full"] = key_times_full[0]
-            info["end_full"] = key_times_full[-1]
-
-            if range_specified:
-                filtered_times = [
-                    t
-                    for t in key_times_full
-                    if (base_start is None or t >= base_start)
-                    and (base_end is None or t <= base_end)
-                ]
-            else:
-                filtered_times = key_times_full
-
-            info["key_times"] = filtered_times
-            info["start"] = filtered_times[0] if filtered_times else None
-            info["end"] = filtered_times[-1] if filtered_times else None
-
-            targets.append(info)
-
-        return targets, diagnostics
+    def _execute_move_operation(
+        self,
+        curve: Any,
+        time_pairs: List[Tuple[float, float]],
+    ) -> int:
+        """Execute a move operation directly."""
+        if not pm.objExists(curve):
+            return 0
+        return self.utils._move_curve_keys(curve, time_pairs)
 
     @staticmethod
-    def _apply_plan(ctx: _ScaleKeysContext, plan: ScalingPlan) -> int:
-        """Execute the operations in the scaling plan."""
+    def _execute_shift_operation(
+        curves: List[Any],
+        offset: float,
+        time_range: Optional[Tuple[float, float]] = None,
+    ) -> int:
+        """Execute a shift operation directly."""
         keys_scaled = 0
+        for curve in curves:
+            if not pm.objExists(curve):
+                continue
 
-        for op in plan.operations:
-            if isinstance(op, ScaleOperation):
-                for curve in op.curves:
-                    if not pm.objExists(curve):
-                        continue
-
-                    kwargs = {
-                        "timeScale": op.factor,
-                        "timePivot": op.pivot,
-                    }
-                    if op.time_range:
-                        kwargs["time"] = op.time_range
-                        # Verify keys exist in range before scaling to avoid warnings/errors
-                        if not pm.keyframe(curve, query=True, time=op.time_range):
-                            continue
-                        keys_scaled += pm.keyframe(
-                            curve, query=True, keyframeCount=True, time=op.time_range
-                        )
-                    else:
-                        keys_scaled += pm.keyframe(
-                            curve, query=True, keyframeCount=True
-                        )
-
-                    pm.scaleKey(curve, **kwargs)
-
-            elif isinstance(op, MoveOperation):
-                if not pm.objExists(op.curve):
+            kwargs = {
+                "edit": True,
+                "relative": True,
+                "timeChange": offset,
+            }
+            if time_range:
+                kwargs["time"] = time_range
+                if not pm.keyframe(curve, query=True, time=time_range):
                     continue
-                moved = ctx.utils._move_curve_keys(op.curve, op.time_pairs)
-                keys_scaled += moved
+                keys_scaled += pm.keyframe(
+                    curve, query=True, keyframeCount=True, time=time_range
+                )
+            else:
+                keys_scaled += pm.keyframe(curve, query=True, keyframeCount=True)
 
-            elif isinstance(op, ShiftOperation):
-                for curve in op.curves:
-                    if not pm.objExists(curve):
-                        continue
-
-                    kwargs = {
-                        "edit": True,
-                        "relative": True,
-                        "timeChange": op.offset,
-                    }
-                    if op.time_range:
-                        kwargs["time"] = op.time_range
-                        if not pm.keyframe(curve, query=True, time=op.time_range):
-                            continue
-                        keys_scaled += pm.keyframe(
-                            curve, query=True, keyframeCount=True, time=op.time_range
-                        )
-                    else:
-                        keys_scaled += pm.keyframe(
-                            curve, query=True, keyframeCount=True
-                        )
-
-                    pm.keyframe(curve, **kwargs)
-
+            pm.keyframe(curve, **kwargs)
         return keys_scaled
 
     @staticmethod
@@ -514,43 +432,41 @@ class _ScaleKeysInternal:
 
     # Processing helpers
 
-    @classmethod
-    def _calculate_speed_plan(
-        cls,
-        ctx: _ScaleKeysContext,
+    def _execute_speed_scale(
+        self,
         groups: List[List[Dict[str, Any]]],
         overlap_groups_data: List[Dict[str, Any]],
-    ) -> ScalingPlan:
-        plan = ScalingPlan()
+    ) -> int:
+        """Execute speed-based scaling."""
         keys_scaled = 0
         processed_objects = 0
         min_target_start: Optional[float] = None
         max_target_end: Optional[float] = None
 
         try:
-            factor_val = float(ctx.factor)
+            factor_val = float(self.factor)
         except (TypeError, ValueError):
             pm.warning("Factor must be a numeric value in speed mode.")
-            return plan
+            return 0
 
         if factor_val <= 0.0:
             pm.warning("Factor must be greater than 0 in speed mode.")
-            return plan
+            return 0
 
         for group in groups:
             group_range = (
                 None
-                if ctx.group_mode == "per_object"
-                else cls._resolve_group_bounds(group, ctx.base_start, ctx.base_end)
+                if self.group_mode == "per_object"
+                else self._resolve_group_bounds(group, self.base_start, self.base_end)
             )
-            if ctx.group_mode != "per_object":
+            if self.group_mode != "per_object":
                 if not group_range or group_range[1] <= group_range[0]:
                     continue
 
             group_calculations = []
             for info in group:
-                object_range = cls._resolve_range_for_object(
-                    info, group_range, ctx.group_mode, ctx.base_start, ctx.base_end
+                object_range = self._resolve_range_for_object(
+                    info, group_range, self.group_mode, self.base_start, self.base_end
                 )
                 if not object_range or object_range[1] <= object_range[0]:
                     continue
@@ -563,11 +479,11 @@ class _ScaleKeysInternal:
                     continue
 
                 sample_times, progress, total_distance = (
-                    ctx.utils._compute_motion_progress(
+                    self.utils._compute_motion_progress(
                         info["object"],
                         object_range,
-                        samples=ctx.samples,
-                        include_rotation=ctx.include_rotation,
+                        samples=self.samples,
+                        include_rotation=self.include_rotation,
                     )
                 )
 
@@ -582,7 +498,7 @@ class _ScaleKeysInternal:
                 if original_duration <= 0.0:
                     continue
 
-                if ctx.absolute:
+                if self.absolute:
                     effective_target_speed = factor_val
                 else:
                     current_speed = total_distance / original_duration
@@ -605,7 +521,7 @@ class _ScaleKeysInternal:
             scale_factor = 1.0
             pivot = group_range[0] if group_range else None
 
-            if ctx.absolute:
+            if self.absolute:
                 max_ratio = 0.0
                 for item in group_calculations:
                     if item["original_duration"] > 1e-6:
@@ -614,28 +530,29 @@ class _ScaleKeysInternal:
                             max_ratio = ratio
                 scale_factor = max_ratio
             else:
-                scale_factor = 1.0 / float(ctx.factor)
+                scale_factor = 1.0 / float(self.factor)
 
-            if ctx.group_mode == "per_object":
+            if self.group_mode == "per_object":
                 for item in group_calculations:
                     if item["original_duration"] > 1e-6:
                         obj_factor = item["target_duration"] / item["original_duration"]
 
-                        # Create a temporary context for this object to calculate uniform plan
-                        # We must set absolute=False because we've already calculated the relative multiplier
-                        uniform_ctx = replace(ctx, absolute=False)
+                        # Temporarily override absolute for this call
+                        original_absolute = self.absolute
+                        self.absolute = False
 
-                        # Construct operations directly for this object
-                        sub_plan = cls._calculate_uniform_plan_for_group(
-                            uniform_ctx,
-                            [[item["info"]]],
-                            factor=obj_factor,
-                            pivot=item["object_range"][0],
-                            group_mode="per_object",
-                            keys=item["object_range"],
-                        )
-                        plan.operations.extend(sub_plan.operations)
-                        keys_scaled += len(item["info"].get("curves_to_scale", []))
+                        try:
+                            # Execute directly for this object
+                            keys_scaled += self._execute_uniform_scale_for_group(
+                                [[item["info"]]],
+                                factor=obj_factor,
+                                pivot=item["object_range"][0],
+                                group_mode="per_object",
+                                keys=item["object_range"],
+                            )
+                        finally:
+                            self.absolute = original_absolute
+
                         processed_objects += 1
             else:
                 all_curves = []
@@ -646,94 +563,76 @@ class _ScaleKeysInternal:
                     group_objects = [
                         item["info"]["object"] for item in group_calculations
                     ]
-                    # Construct operations for the group
-                    # We need to reconstruct the group structure for the helper
-                    # The helper expects List[List[Dict]]
-
                     # Reconstruct the group info list
                     reconstructed_group = [item["info"] for item in group_calculations]
 
-                    # Create a temporary context for this group
-                    uniform_ctx = replace(ctx, absolute=False)
+                    # Temporarily override absolute for this call
+                    original_absolute = self.absolute
+                    self.absolute = False
 
-                    sub_plan = cls._calculate_uniform_plan_for_group(
-                        uniform_ctx,
-                        [reconstructed_group],
-                        factor=scale_factor,
-                        pivot=pivot,
-                        group_mode="single_group",
-                        keys=group_range,
-                    )
-                    plan.operations.extend(sub_plan.operations)
-                    keys_scaled += len(all_curves)
+                    try:
+                        keys_scaled += self._execute_uniform_scale_for_group(
+                            [reconstructed_group],
+                            factor=scale_factor,
+                            pivot=pivot,
+                            group_mode="single_group",
+                            keys=group_range,
+                        )
+                    finally:
+                        self.absolute = original_absolute
+
                     processed_objects += len(group_objects)
 
-        overlap_ops = cls._calculate_overlap_prevention_ops(ctx, overlap_groups_data)
-        plan.operations.extend(overlap_ops)
+        self._execute_overlap_prevention(overlap_groups_data)
 
-        plan.keys_affected = keys_scaled
-        plan.processed_objects = processed_objects
-        plan.description = {
-            "single_group": "single-group",
-            "per_object": "per-object",
-            "overlap_groups": "overlap-group",
-        }[ctx.group_mode]
+        return keys_scaled
 
-        return plan
-
-    @classmethod
-    def _calculate_uniform_plan(
-        cls,
-        ctx: _ScaleKeysContext,
+    def _execute_uniform_scale(
+        self,
         groups: List[List[Dict[str, Any]]],
         overlap_groups_data: List[Dict[str, Any]],
-    ) -> ScalingPlan:
-        return cls._calculate_uniform_plan_for_group(
-            ctx,
+    ) -> int:
+        """Execute uniform scaling."""
+        return self._execute_uniform_scale_for_group(
             groups,
-            factor=ctx.factor,
-            pivot=ctx.pivot,
-            group_mode=ctx.group_mode,
+            factor=self.factor,
+            pivot=self.pivot,
+            group_mode=self.group_mode,
             keys=None,  # Will be derived from context/groups
             overlap_groups_data=overlap_groups_data,
         )
 
-    @classmethod
-    def _calculate_uniform_plan_for_group(
-        cls,
-        ctx: _ScaleKeysContext,
+    def _execute_uniform_scale_for_group(
+        self,
         groups: List[List[Dict[str, Any]]],
         factor: float,
         pivot: Optional[float],
         group_mode: str,
         keys: Optional[Tuple[float, float]] = None,
         overlap_groups_data: Optional[List[Dict[str, Any]]] = None,
-    ) -> ScalingPlan:
-        plan = ScalingPlan()
-
+    ) -> int:
+        """Execute uniform scaling for a group."""
         if factor <= 0:
             pm.warning("Scale factor must be greater than 0.")
-            return plan
+            return 0
 
-        is_identity_scale = not ctx.absolute and abs(factor - 1.0) < 1e-6
-        should_snap = ctx.snap_mode and ctx.snap_mode != "none"
+        is_identity_scale = not self.absolute and abs(factor - 1.0) < 1e-6
+        should_snap = self.snap_mode and self.snap_mode != "none"
         if is_identity_scale and not should_snap:
             # Even if identity, we might need overlap prevention
             if overlap_groups_data:
-                overlap_ops = cls._calculate_overlap_prevention_ops(
-                    ctx, overlap_groups_data
-                )
-                plan.operations.extend(overlap_ops)
-            return plan
+                self._execute_overlap_prevention(overlap_groups_data)
+            return 0
 
         keys_scaled = 0
         global_pivot: Optional[float] = None
+        aggregated_moves: Dict[Any, List[Tuple[float, float]]] = {}
 
         for group in groups:
             group_range = (
                 None
                 if group_mode == "per_object"
-                else cls._resolve_group_bounds(group, ctx.base_start, ctx.base_end)
+                else self._resolve_group_bounds(group, self.base_start, self.base_end)
             )
 
             # Override group range if keys provided (for speed mode calls)
@@ -754,8 +653,8 @@ class _ScaleKeysInternal:
                 if not curves_to_scale:
                     continue
 
-                object_range = cls._resolve_range_for_object(
-                    info, group_range, group_mode, ctx.base_start, ctx.base_end
+                object_range = self._resolve_range_for_object(
+                    info, group_range, group_mode, self.base_start, self.base_end
                 )
 
                 # Override object range if keys provided (for speed mode calls)
@@ -780,7 +679,7 @@ class _ScaleKeysInternal:
                 pivot_time = float(pivot_time)
 
                 effective_factor = factor
-                if ctx.absolute:
+                if self.absolute:
                     current_duration = 0.0
                     if group_mode == "per_object":
                         segment_range = info.get("segment_range")
@@ -798,10 +697,10 @@ class _ScaleKeysInternal:
                         continue
 
                 # Determine time range for key selection
-                if ctx.split_static:
+                if self.split_static:
                     segment_range = info.get("segment_range")
                     time_arg = segment_range if segment_range else object_range
-                elif ctx.range_specified and object_range:
+                elif self.range_specified and object_range:
                     time_arg = object_range
                 else:
                     time_arg = None
@@ -810,11 +709,11 @@ class _ScaleKeysInternal:
                 if keys:
                     time_arg = keys
 
-                if ctx.selected_keys_only or (ctx.snap_mode is not None):
+                if self.selected_keys_only or (self.snap_mode is not None):
                     curve_times_map = {}
                     for curve in curves_to_scale:
                         kwargs = {"query": True, "tc": True}
-                        if ctx.selected_keys_only:
+                        if self.selected_keys_only:
                             kwargs["selected"] = True
                         if time_arg:
                             kwargs["time"] = time_arg
@@ -831,12 +730,12 @@ class _ScaleKeysInternal:
                             )
                             time_pairs.append((old_time, new_time))
 
-                        if ctx.snap_mode and ctx.snap_mode != "none":
+                        if self.snap_mode and self.snap_mode != "none":
                             # Apply snapping to new times
                             snapped_pairs = []
                             for old, new in time_pairs:
                                 # Handle alias for aggressive
-                                mode = ctx.snap_mode.lower()
+                                mode = self.snap_mode.lower()
                                 if mode == "aggressive":
                                     mode = "aggressive_preferred"
 
@@ -844,59 +743,34 @@ class _ScaleKeysInternal:
                                 snapped_pairs.append((old, snapped_new))
                             time_pairs = snapped_pairs
 
-                        plan.operations.append(
-                            MoveOperation(curve=curve, time_pairs=time_pairs)
-                        )
-                        keys_scaled += len(time_pairs)
+                        if curve not in aggregated_moves:
+                            aggregated_moves[curve] = []
+                        aggregated_moves[curve].extend(time_pairs)
                 else:
                     # Bulk scale
-                    plan.operations.append(
-                        ScaleOperation(
-                            curves=curves_to_scale,
-                            pivot=pivot_time,
-                            factor=effective_factor,
-                            time_range=time_arg,
-                        )
+                    keys_scaled += self._execute_scale_operation(
+                        curves_to_scale,
+                        pivot_time,
+                        effective_factor,
+                        time_arg,
                     )
-                    # Estimate keys scaled (not exact without query, but good enough for report)
-                    keys_scaled += 1  # Count curves or query? Let's just count curves for now or query if needed.
-                    # Actually, let's query to be accurate for the report
-                    # But for performance, maybe skip?
-                    # The original code queried.
-                    # Let's query count.
-                    # Optimization: Only query if we really need the count.
-                    # For now, let's assume we do.
-                    # Actually, ScaleOperation handles multiple curves.
-                    # We can just add the operation.
-                    # The count will be updated when applied?
-                    # Or we can estimate.
-                    pass
+
+        # Execute aggregated moves
+        for curve, pairs in aggregated_moves.items():
+            keys_scaled += self._execute_move_operation(curve, pairs)
 
         if overlap_groups_data:
-            overlap_ops = cls._calculate_overlap_prevention_ops(
-                ctx, overlap_groups_data
-            )
-            plan.operations.extend(overlap_ops)
+            self._execute_overlap_prevention(overlap_groups_data)
 
-        plan.keys_affected = (
-            keys_scaled  # This might be inaccurate for BulkScale until applied
-        )
-        plan.description = {
-            "single_group": "single-group pivot",
-            "per_object": "per-object pivots",
-            "overlap_groups": "overlap-group pivots",
-        }.get(group_mode, "custom")
-        plan.global_pivot = global_pivot
+        return keys_scaled
 
-        return plan
-
-    @classmethod
-    def _calculate_overlap_prevention_ops(
-        cls, ctx: _ScaleKeysContext, overlap_groups_data: List[Dict[str, Any]]
-    ) -> List[ShiftOperation]:
-        if ctx.prevent_overlap and overlap_groups_data:
+    def _execute_overlap_prevention(
+        self, overlap_groups_data: List[Dict[str, Any]]
+    ) -> None:
+        """Execute overlap prevention directly."""
+        if self.prevent_overlap and overlap_groups_data:
             for data in overlap_groups_data:
-                times = ctx.utils.get_keyframe_times(
+                times = self.utils.get_keyframe_times(
                     data.get("curves", []), from_curves=True, as_range=True
                 )
                 if times:
@@ -906,7 +780,7 @@ class _ScaleKeysInternal:
             overlap_groups_data.sort(key=lambda x: x["start"])
             start_frame = overlap_groups_data[0]["start"]
 
-            plan = _StaggerKeysInternal._calculate_stagger_plan(
+            SegmentKeys.execute_stagger(
                 overlap_groups_data,
                 start_frame=start_frame,
                 spacing=0,
@@ -914,42 +788,9 @@ class _ScaleKeysInternal:
                 avoid_overlap=False,
                 preserve_gaps=True,
             )
-            return [op for op in plan.operations if isinstance(op, ShiftOperation)]
-        return []
 
-    # Processing helpers
-    @classmethod
-    def _process_speed(
-        cls,
-        ctx: _ScaleKeysContext,
-        groups: List[List[Dict[str, Any]]],
-        overlap_groups_data: List[Dict[str, Any]],
-    ) -> int:
-        # Deprecated - replaced by _calculate_speed_plan
-        pass
-
-    @classmethod
-    def _process_uniform(
-        cls,
-        ctx: _ScaleKeysContext,
-        groups: List[List[Dict[str, Any]]],
-        overlap_groups_data: List[Dict[str, Any]],
-    ) -> int:
-        # Deprecated - replaced by _calculate_uniform_plan
-        pass
-
-    # Shared helpers
-    @classmethod
-    def _apply_overlap_prevention(
-        cls, ctx: _ScaleKeysContext, overlap_groups_data: List[Dict[str, Any]]
-    ) -> None:
-        # Deprecated - replaced by _calculate_overlap_prevention_ops
-        pass
-
-    @classmethod
     def _stagger_scaled_segments(
-        cls,
-        ctx: _ScaleKeysContext,
+        self,
         groups: List[Dict[str, Any]],
     ) -> None:
         """Stagger scaled segments to prevent overlap.
@@ -958,7 +799,6 @@ class _ScaleKeysInternal:
         them sequentially so that each segment starts after the previous one ends.
 
         Parameters:
-            ctx: The scale keys context.
             groups: List of KeyframeGrouper groups (each with sub_groups containing segments).
         """
         if not groups:
@@ -978,23 +818,97 @@ class _ScaleKeysInternal:
                 continue
 
             # Query the CURRENT time range after scaling
-            times = ctx.utils.get_keyframe_times(
-                group_curves, from_curves=True, as_range=True
-            )
-            if not times:
+            # NOTE: We must use the segment's specific range, not the whole curve range
+            # But since we just scaled, we don't know the exact new range of this specific segment easily
+            # unless we tracked it.
+            # However, if we are in per_segment mode, 'group' corresponds to a single segment.
+            # Let's try to get the range from the keyframes in the group if available.
+
+            # If we use get_keyframe_times on the curves, we get the WHOLE curve range (all segments).
+            # This is WRONG for multi-segment objects.
+
+            # We need to find the keys that belong to this segment.
+            # The 'group' object has 'keyframes' but those might be old times?
+            # No, 'processing_groups' were used for scaling.
+
+            # Let's look at how we can identify the segment's new location.
+            # If we assume the segments are distinct and non-overlapping (which they should be after scaling if they were before),
+            # we might be able to find the cluster of keys.
+
+            # BETTER APPROACH:
+            # When we built 'groups' (from SegmentKeys.group_segments), each group had 'start' and 'end'.
+            # After scaling, those times are shifted/scaled.
+            # But we don't have the updated times in the group object.
+
+            # Workaround:
+            # Since we are in 'per_segment' mode (enforced above), each group IS a segment.
+            # We can look at the keys on the curves and find the ones that match the expected count?
+            # Or, we can rely on the fact that we just scaled them.
+
+            # Wait, if we use 'segment_range' in _apply_stagger, it uses that to limit the move.
+            # But we need to know the CURRENT range to calculate the shift amount.
+            # And we need to pass the CURRENT range as 'segment_range' so the move is limited.
+
+            # If we pass the WHOLE curve range as 'segment_range', it moves the whole curve.
+            # If we pass the specific segment range, it moves just that segment.
+
+            # Problem: How to get the specific segment range AFTER scaling but BEFORE staggering?
+            # We know the keys were scaled.
+            # If we look at the curves, we see all keys.
+
+            # Let's try to re-collect segments?
+            # SegmentKeys.collect_segments will find the new segments.
+            # Since we just scaled, the segments might have changed size/position, but they should still be separated by gaps (if split_static worked).
+
+            pass
+
+        # Re-collect segments to get accurate current ranges
+        # This is safer than guessing
+        current_segments = SegmentKeys.collect_segments(
+            self.objects_list,
+            ignore=self.ignore,
+            split_static=self.split_static,
+            selected_keys_only=self.selected_keys_only,
+            channel_box_attrs=self.channel_box_attrs,
+            time_range=None,  # We want all segments now
+            ignore_visibility_holds=self.split_static,
+        )
+
+        # Now group them again to match our processing structure
+        # We forced 'per_segment' mode earlier for prevent_overlap
+        current_groups = SegmentKeys.group_segments(
+            current_segments, mode="per_segment"
+        )
+
+        # Merge shared curves to prevent double transform
+        current_groups = SegmentKeys.merge_groups_sharing_curves(current_groups)
+
+        # Clear stagger_data and rebuild it from fresh groups
+        stagger_data = []
+
+        for group in current_groups:
+            # Get all curves from the group's segments
+            group_curves = []
+            for seg in group.get("sub_groups", []):
+                group_curves.extend(seg.get("curves", []))
+            group_curves = list(dict.fromkeys(group_curves))  # Dedupe
+
+            if not group_curves:
                 continue
+
+            # Use the group's start/end which comes from collect_segments (accurate)
+            start = group["start"]
+            end = group["end"]
 
             stagger_data.append(
                 {
                     "obj": group.get("obj") or (group.get("objects", [None])[0]),
                     "curves": group_curves,
-                    "start": times[0],
-                    "end": times[1],
-                    "duration": times[1] - times[0],
-                    "keyframes": list(
-                        ctx.utils.get_keyframe_times(group_curves, from_curves=True)
-                        or []
-                    ),
+                    "start": start,
+                    "end": end,
+                    "duration": end - start,
+                    "segment_range": (start, end),
+                    "keyframes": group.get("keyframes", []),
                 }
             )
 
@@ -1007,7 +921,7 @@ class _ScaleKeysInternal:
         # Apply stagger with spacing=0 and avoid_overlap behavior
         start_frame = stagger_data[0]["start"]
 
-        ctx.utils._apply_stagger(
+        self.utils._apply_stagger(
             stagger_data,
             start_frame=start_frame,
             spacing=0,
@@ -1016,9 +930,8 @@ class _ScaleKeysInternal:
             preserve_gaps=False,  # Don't preserve gaps - place sequentially
         )
 
-    @staticmethod
     def _report_speed(
-        ctx: _ScaleKeysContext,
+        self,
         keys_scaled: int,
         processed_objects: int,
         min_target_start: Optional[float],
@@ -1029,7 +942,7 @@ class _ScaleKeysInternal:
                 "single_group": "single-group",
                 "per_object": "per-object",
                 "overlap_groups": "overlap-group",
-            }[ctx.group_mode]
+            }[self.group_mode]
             range_info = ""
             if min_target_start is not None and max_target_end is not None:
                 range_info = (
@@ -1037,9 +950,9 @@ class _ScaleKeysInternal:
                 )
 
             speed_info = (
-                f"{float(ctx.factor):.3f} units/frame"
-                if ctx.absolute
-                else f"{float(ctx.factor):.2f}x speed"
+                f"{float(self.factor):.3f} units/frame"
+                if self.absolute
+                else f"{float(self.factor):.2f}x speed"
             )
             pm.displayInfo(
                 f"Retimed {keys_scaled} keyframes to {speed_info} using {mode_label} ranges (objects processed={processed_objects}){range_info}."
@@ -1049,152 +962,26 @@ class _ScaleKeysInternal:
                 "No keyframes were retimed. Check the specified objects and time range."
             )
 
-    # Preparation helpers
-    @classmethod
-    def _prepare_context(
-        cls,
-        utils_cls: Any,
-        *,
-        objects=None,
-        mode="uniform",
-        factor: float,
-        keys=None,
-        pivot: Optional[float],
-        channel_box_attrs_only: bool,
-        ignore: Optional[Union[str, List[str]]],
-        group_mode: str,
-        snap_mode: Optional[str],
-        samples: Optional[int],
-        include_rotation: Union[bool, str],
-        absolute: Optional[bool],
-        prevent_overlap: bool,
-        flatten_tangents: bool = True,
-        split_static: bool = True,
-        verbose: bool = False,
-    ) -> Optional[_ScaleKeysContext]:
-        by_speed = mode == "speed"
-        if mode not in {"uniform", "speed"}:
-            pm.warning(f"Invalid mode '{mode}'. Using 'uniform'.")
-            mode = "uniform"
-            by_speed = False
-
-        if absolute is None:
-            absolute = by_speed
-
-        if samples is None and by_speed:
-            samples = 64
-
-        time_range, selected_keys_only = (
-            cls._normalize_keys_to_time_range_and_selection(keys)
-        )
-        base_start_raw, base_end_raw = time_range
-
-        def _coerce_to_float(value):
-            if value is None:
-                return None
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                pm.warning(f"Invalid time_range value '{value}'. Ignoring component.")
-                return None
-
-        base_start = _coerce_to_float(base_start_raw)
-        base_end = _coerce_to_float(base_end_raw)
-        range_specified = base_start is not None or base_end is not None
-
-        objects = pm.selected() if objects is None else objects
-        if not objects:
-            pm.warning("No objects specified or selected.")
-            return None
-
-        objects = pm.ls(objects, flatten=True)
-        if not objects:
-            pm.warning("No valid objects specified or selected.")
-            return None
-
-        channel_box_attrs = None
-        if channel_box_attrs_only:
-            channel_box_attrs = pm.channelBox(
-                "mainChannelBox", query=True, selectedMainAttributes=True
-            )
-            if not channel_box_attrs:
-                pm.warning("No attributes selected in channel box.")
-                return None
-
-        if selected_keys_only and not by_speed:
-            all_selected_keys = pm.keyframe(query=True, sl=True, tc=True)
-            if not all_selected_keys:
-                pm.warning("No keyframes selected.")
-                return None
-
-        group_mode_normalized = cls._normalize_group_mode(group_mode)
-        if group_mode_normalized not in {
-            "single_group",
-            "per_object",
-            "overlap_groups",
-        }:
-            pm.warning(
-                f"Unsupported group_mode '{group_mode}'. Falling back to 'single_group'."
-            )
-            group_mode_normalized = "single_group"
-
-        if by_speed and selected_keys_only:
-            pm.warning(
-                "selected_keys_only is not supported with mode='speed'. Processing all keys in range."
-            )
-            selected_keys_only = False
-
-        ctx = _ScaleKeysContext(
-            utils=utils_cls,
-            objects=objects,
-            mode=mode,
-            factor=factor,
-            keys=keys,
-            pivot=pivot,
-            channel_box_attrs_only=channel_box_attrs_only,
-            ignore=ignore,
-            group_mode=group_mode_normalized,
-            snap_mode=snap_mode,
-            samples=samples,
-            include_rotation=include_rotation,
-            absolute=absolute,
-            prevent_overlap=prevent_overlap,
-            flatten_tangents=flatten_tangents,
-            split_static=split_static,
-            by_speed=by_speed,
-            time_range=time_range,
-            selected_keys_only=selected_keys_only,
-            base_start=base_start,
-            base_end=base_end,
-            range_specified=range_specified,
-            channel_box_attrs=channel_box_attrs,
-            objects_list=objects,
-            verbose=verbose,
-        )
-        return ctx
-
-    @staticmethod
-    def _warn_no_targets(ctx: _ScaleKeysContext) -> None:
-        diagnostics = ctx.diagnostics or {}
-        if diagnostics.get("filtered_by_channel_box") and ctx.channel_box_attrs:
+    def _warn_no_targets(self) -> None:
+        diagnostics = self.diagnostics or {}
+        if diagnostics.get("filtered_by_channel_box") and self.channel_box_attrs:
             pm.warning(
                 "No keyframes matched the selected channel box attributes. "
                 "Clear the channel box selection or choose keyed attributes."
             )
-        elif diagnostics.get("filtered_by_ignore") and ctx.ignore:
+        elif diagnostics.get("filtered_by_ignore") and self.ignore:
             pm.warning(
                 "All keyed attributes were filtered out by the ignore list: "
-                f"{ctx.ignore}"
+                f"{self.ignore}"
             )
         else:
             pm.warning(
                 "No animation curves found to retime."
-                if ctx.by_speed
+                if self.by_speed
                 else "No keyframes found to scale."
             )
 
-    @classmethod
-    def _flatten_tangents(cls, ctx: _ScaleKeysContext) -> None:
+    def _flatten_tangents(self) -> None:
         """Flatten all tangents on affected curves to 'auto' to prevent overshoot.
 
         After scaling keyframes, tangent angles can become skewed causing overshoot
@@ -1204,18 +991,17 @@ class _ScaleKeysInternal:
         Note: Visibility curves (and other stepped curves) are explicitly set to 'step'
         to preserve their stepped tangents.
         """
-        for info in ctx.object_info:
+        for info in self.object_info:
             curves = info.get("curves_to_scale", []) or info.get("all_curves", [])
             if curves:
-                ctx.utils._set_smart_tangents(curves, tangent_type="auto")
+                self.utils._set_smart_tangents(curves, tangent_type="auto")
 
-    @classmethod
-    def _build_overlap_groups(cls, ctx: _ScaleKeysContext) -> List[Dict[str, Any]]:
-        if not ctx.prevent_overlap:
+    def _build_overlap_groups(self) -> List[Dict[str, Any]]:
+        if not self.prevent_overlap:
             return []
 
         all_objects_data = []
-        for info in ctx.object_info:
+        for info in self.object_info:
             if info.get("start") is not None and info.get("end") is not None:
                 all_objects_data.append(
                     {
@@ -1231,211 +1017,41 @@ class _ScaleKeysInternal:
         if not all_objects_data:
             return []
 
-        overlap_groups_data = ctx.utils._group_overlapping_keyframes(all_objects_data)
+        overlap_groups_data = self.utils._group_overlapping_keyframes(all_objects_data)
         overlap_groups_data.sort(key=lambda x: x["start"])
         return overlap_groups_data
 
-    @staticmethod
     def _report_uniform(
-        ctx: _ScaleKeysContext,
+        self,
         keys_scaled: int,
         mode_label_map: Dict[str, str],
         global_pivot: Optional[float],
     ) -> None:
         if keys_scaled > 0:
-            selection_type = "selected" if ctx.selected_keys_only else "all"
+            selection_type = "selected" if self.selected_keys_only else "all"
             range_info = ""
-            if ctx.range_specified:
+            if self.range_specified:
                 start_text = (
-                    f"{ctx.base_start:.2f}" if ctx.base_start is not None else "auto"
+                    f"{self.base_start:.2f}" if self.base_start is not None else "auto"
                 )
-                end_text = f"{ctx.base_end:.2f}" if ctx.base_end is not None else "auto"
+                end_text = (
+                    f"{self.base_end:.2f}" if self.base_end is not None else "auto"
+                )
                 range_info = f" (range: {start_text} -> {end_text})"
 
             pivot_info = ""
-            if ctx.group_mode == "single_group" and global_pivot is not None:
+            if self.group_mode == "single_group" and global_pivot is not None:
                 pivot_info = f" around frame {global_pivot:.2f}"
 
-            scale_info = f"{ctx.factor * 100:.2f}%"
-            if ctx.absolute:
-                scale_info = f"to {ctx.factor:.2f} frames"
+            scale_info = f"{self.factor * 100:.2f}%"
+            if self.absolute:
+                scale_info = f"to {self.factor:.2f} frames"
 
             pm.displayInfo(
-                f"Scaled {keys_scaled} {selection_type} keys {scale_info} using {mode_label_map[ctx.group_mode]}{pivot_info}{range_info}."
+                f"Scaled {keys_scaled} {selection_type} keys {scale_info} using {mode_label_map[self.group_mode]}{pivot_info}{range_info}."
             )
         else:
             pm.warning("No keyframes found to scale.")
-
-
-class ScaleKeys(_ScaleKeysInternal):
-    """Encapsulates scale_keys logic for clarity and focused testing."""
-
-    @classmethod
-    @CoreUtils.undoable
-    def scale_keys(
-        cls,
-        *,
-        objects=None,
-        mode: str = "uniform",
-        factor: float = 1.0,
-        keys=None,
-        pivot: Optional[float] = None,
-        channel_box_attrs_only: bool = False,
-        ignore: Optional[Union[str, List[str]]] = None,
-        group_mode: str = "single_group",
-        snap_mode: Optional[str] = "nearest",
-        samples: Optional[int] = None,
-        include_rotation: Union[bool, str] = False,
-        absolute: Optional[bool] = None,
-        prevent_overlap: bool = False,
-        flatten_tangents: bool = True,
-        split_static: bool = True,
-        verbose: bool = False,
-    ) -> int:
-        """Scale keyframes uniformly or via motion-aware retiming.
-
-        Parameters:
-            split_static: If True (default), animation segments separated by static
-                gaps (flat keys) are treated as independent groups and scaled separately.
-            flatten_tangents: If True (default), flattens all tangents to 'auto' after
-                scaling to prevent overshoot/undershoot from skewed tangent angles.
-            verbose: If True, prints detailed information including original time ranges.
-        """
-
-        from mayatk.anim_utils._anim_utils import AnimUtils
-
-        ctx = cls._prepare_context(
-            AnimUtils,
-            objects=objects,
-            mode=mode,
-            factor=factor,
-            keys=keys,
-            pivot=pivot,
-            channel_box_attrs_only=channel_box_attrs_only,
-            ignore=ignore,
-            group_mode=group_mode,
-            snap_mode=snap_mode,
-            samples=samples,
-            include_rotation=include_rotation,
-            absolute=absolute,
-            prevent_overlap=prevent_overlap,
-            flatten_tangents=flatten_tangents,
-            split_static=split_static,
-            verbose=verbose,
-        )
-
-        if ctx is None:
-            return 0
-
-        # Use SegmentKeys for segment-based collection and grouping
-        ctx.segments = SegmentKeys.collect_segments(
-            ctx.objects_list,
-            ignore=ctx.ignore,
-            split_static=ctx.split_static,
-            selected_keys_only=ctx.selected_keys_only,
-            channel_box_attrs=ctx.channel_box_attrs,
-            time_range=(ctx.base_start, ctx.base_end) if ctx.range_specified else None,
-        )
-
-        if not ctx.segments:
-            cls._warn_no_targets(ctx)
-            return 0
-
-        # Capture original ranges if verbose
-        original_ranges = []
-        if ctx.verbose:
-            original_ranges = SegmentKeys.get_time_ranges(ctx.segments)
-
-        # Convert segments to object_info format for compatibility
-        ctx.object_info = cls._segments_to_object_info(ctx.segments)
-
-        # Use SegmentKeys for grouping (maps group_mode to segment mode)
-        segment_mode_map = {
-            "per_object": "per_object",
-            "single_group": "single_group",
-            "overlap_groups": "overlap_groups",
-        }
-        segment_mode = segment_mode_map.get(ctx.group_mode, "per_segment")
-
-        # When split_static is True and group_mode is per_object, use per_segment
-        # so each segment is scaled independently
-        if ctx.split_static and ctx.group_mode == "per_object":
-            segment_mode = "per_segment"
-
-        groups = SegmentKeys.group_segments(ctx.segments, mode=segment_mode)
-
-        # Convert SegmentKeys groups to processing format
-        processing_groups = cls._convert_groups_for_processing(groups)
-
-        overlap_groups_data = cls._build_overlap_groups(ctx)
-
-        if ctx.by_speed:
-            plan = cls._calculate_speed_plan(
-                ctx, processing_groups, overlap_groups_data
-            )
-        else:
-            plan = cls._calculate_uniform_plan(
-                ctx, processing_groups, overlap_groups_data
-            )
-
-        keys_scaled = cls._apply_plan(ctx, plan)
-
-        # After scaling, stagger segments only when prevent_overlap is enabled
-        # This fixes overlaps caused by scaling but doesn't rearrange already-separate segments
-        if ctx.split_static and ctx.prevent_overlap and keys_scaled > 0:
-            cls._stagger_scaled_segments(ctx, groups)
-
-        # Flatten tangents after scaling to prevent overshoot from skewed angles
-        if ctx.flatten_tangents and keys_scaled > 0:
-            cls._flatten_tangents(ctx)
-
-        # Reporting
-        if ctx.by_speed:
-            cls._report_speed(
-                ctx, plan.keys_affected, plan.processed_objects, None, None
-            )
-        else:
-            mode_label_map = {
-                "single_group": "single-group pivot",
-                "per_object": "per-object pivots",
-                "overlap_groups": "overlap-group pivots",
-            }
-            # Update map with custom label if present
-            if plan.description and plan.description not in mode_label_map.values():
-                mode_label_map[ctx.group_mode] = plan.description
-
-            cls._report_uniform(
-                ctx, plan.keys_affected, mode_label_map, plan.global_pivot
-            )
-
-        if ctx.verbose and original_ranges:
-            # Print original ranges
-            SegmentKeys.print_time_ranges(
-                original_ranges,
-                header="Original Time Ranges:",
-                per_segment=ctx.split_static,
-            )
-
-            # Capture and print new ranges
-            # Re-collect segments to get updated times
-            new_segments = SegmentKeys.collect_segments(
-                ctx.objects_list,
-                ignore=ctx.ignore,
-                split_static=ctx.split_static,
-                selected_keys_only=ctx.selected_keys_only,
-                channel_box_attrs=ctx.channel_box_attrs,
-                time_range=(
-                    (ctx.base_start, ctx.base_end) if ctx.range_specified else None
-                ),
-            )
-            new_ranges = SegmentKeys.get_time_ranges(new_segments)
-            SegmentKeys.print_time_ranges(
-                new_ranges,
-                header="New Time Ranges:",
-                per_segment=ctx.split_static,
-            )
-
-        return keys_scaled
 
     @staticmethod
     def _segments_to_object_info(
@@ -1507,3 +1123,159 @@ class ScaleKeys(_ScaleKeysInternal):
             if group_infos:
                 processing_groups.append(group_infos)
         return processing_groups
+
+    def execute(self) -> int:
+        if not self.objects:
+            return 0
+
+        # Use SegmentKeys for segment-based collection and grouping
+        self.segments = SegmentKeys.collect_segments(
+            self.objects_list,
+            ignore=self.ignore,
+            split_static=self.split_static,
+            selected_keys_only=self.selected_keys_only,
+            channel_box_attrs=self.channel_box_attrs,
+            time_range=(
+                (self.base_start, self.base_end) if self.range_specified else None
+            ),
+        )
+
+        if not self.segments:
+            self._warn_no_targets()
+            return 0
+
+        # Capture original ranges if verbose
+        original_ranges = []
+        if self.verbose:
+            # Re-collect with detailed view for reporting (ignoring visibility holds)
+            # This ensures the report matches the "Animation Info" tool
+            detailed_segments = SegmentKeys.collect_segments(
+                self.objects_list,
+                ignore=self.ignore,
+                split_static=self.split_static,
+                selected_keys_only=self.selected_keys_only,
+                channel_box_attrs=self.channel_box_attrs,
+                time_range=(
+                    (self.base_start, self.base_end) if self.range_specified else None
+                ),
+                ignore_visibility_holds=self.split_static,
+            )
+            original_ranges = SegmentKeys.get_time_ranges(detailed_segments)
+
+        # Convert segments to object_info format for compatibility
+        self.object_info = self._segments_to_object_info(self.segments)
+
+        # Use SegmentKeys for grouping (maps group_mode to segment mode)
+        segment_mode_map = {
+            "per_object": "per_object",
+            "single_group": "single_group",
+            "overlap_groups": "overlap_groups",
+        }
+        segment_mode = segment_mode_map.get(self.group_mode, "per_segment")
+
+        # When split_static is True and group_mode is per_object, use per_segment
+        # so each segment is scaled independently
+        if self.split_static and self.group_mode == "per_object":
+            segment_mode = "per_segment"
+
+        # If prevent_overlap is True, we MUST use per_segment mode to allow independent staggering
+        if self.prevent_overlap and self.split_static:
+            segment_mode = "per_segment"
+
+        groups = SegmentKeys.group_segments(self.segments, mode=segment_mode)
+
+        # Convert SegmentKeys groups to processing format
+        processing_groups = self._convert_groups_for_processing(groups)
+
+        overlap_groups_data = self._build_overlap_groups()
+
+        # If split_static is True, we handle overlap prevention via _stagger_scaled_segments later.
+        # Passing overlap_groups_data to scale methods would cause incorrect staggering based on whole-curve ranges.
+        overlap_groups_data_for_scale = (
+            None if self.split_static else overlap_groups_data
+        )
+
+        if self.by_speed:
+            keys_scaled = self._execute_speed_scale(
+                processing_groups, overlap_groups_data_for_scale
+            )
+        else:
+            keys_scaled = self._execute_uniform_scale(
+                processing_groups, overlap_groups_data_for_scale
+            )
+
+        # After scaling, stagger segments only when prevent_overlap is enabled
+        if self.split_static and self.prevent_overlap and keys_scaled > 0:
+            self._stagger_scaled_segments(groups)
+
+        # Flatten tangents after scaling to prevent overshoot from skewed angles
+        if self.flatten_tangents and keys_scaled > 0:
+            self._flatten_tangents()
+
+        # Reporting
+        if self.by_speed:
+            self._report_speed(keys_scaled, 0, None, None)
+        else:
+            mode_label_map = {
+                "single_group": "single-group pivot",
+                "per_object": "per-object pivots",
+                "overlap_groups": "overlap-group pivots",
+            }
+
+            self._report_uniform(keys_scaled, mode_label_map, None)
+
+        if self.verbose and original_ranges:
+            # Determine headers
+            header_orig = "Original Time Ranges:"
+            header_new = "Scale Keys: New Time Ranges:"
+
+            if self.verbose_header:
+                header_orig = f"{self.verbose_header} Original Time Ranges:"
+                header_new = f"{self.verbose_header} New Time Ranges:"
+
+            # Print original ranges
+            SegmentKeys.print_time_ranges(
+                original_ranges,
+                header=header_orig,
+                per_segment=self.split_static,
+                by_time=True,
+            )
+
+            # Capture and print new ranges
+            # Re-collect segments to get updated times
+            new_segments = SegmentKeys.collect_segments(
+                self.objects_list,
+                ignore=self.ignore,
+                split_static=self.split_static,
+                selected_keys_only=self.selected_keys_only,
+                channel_box_attrs=self.channel_box_attrs,
+                time_range=(
+                    (self.base_start, self.base_end) if self.range_specified else None
+                ),
+                ignore_visibility_holds=self.split_static,
+            )
+            new_ranges = SegmentKeys.get_time_ranges(new_segments)
+            SegmentKeys.print_time_ranges(
+                new_ranges,
+                header=header_new,
+                per_segment=self.split_static,
+                by_time=True,
+            )
+
+        return keys_scaled
+
+    @classmethod
+    @CoreUtils.undoable
+    def scale_keys(cls, **kwargs) -> int:
+        """Scale keyframes uniformly or via motion-aware retiming.
+
+        Parameters:
+            split_static: If True (default), animation segments separated by static
+                gaps (flat keys) are treated as independent groups and scaled separately.
+            flatten_tangents: If True (default), flattens all tangents to 'auto' after
+                scaling to prevent overshoot/undershoot from skewed tangent angles.
+            verbose: If True, prints detailed information including original time ranges.
+            verbose_header: Optional custom text to prefix the verbose output headers.
+        """
+        instance = cls(**kwargs)
+        return instance.execute()

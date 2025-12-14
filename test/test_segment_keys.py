@@ -48,14 +48,14 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         result = SegmentKeys.collect_segments([])
         self.assertEqual(result, [])
 
-    def test_print_segment_info(self):
-        """Test print_segment_info runs without error."""
+    def test_print_scene_info(self):
+        """Test print_scene_info runs without error."""
         cube = pm.polyCube(name="print_test")[0]
         pm.setKeyframe(cube, t=0, v=0, at="tx")
         pm.setKeyframe(cube, t=10, v=10, at="tx")
 
         # Should run without error
-        SegmentKeys.print_segment_info([cube])
+        SegmentKeys.print_scene_info([cube])
 
     def test_group_segments_empty_list(self):
         """group_segments with empty list returns empty."""

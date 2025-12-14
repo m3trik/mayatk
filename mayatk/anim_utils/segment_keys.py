@@ -7,7 +7,175 @@ except ImportError as error:
     print(__file__, error)
 
 
-class SegmentKeys:
+class SegmentKeysInfo:
+    """Mixin for reporting animation segment information."""
+
+    @staticmethod
+    def get_time_ranges(
+        segments: List[Dict[str, Any]],
+    ) -> List[Tuple[str, float, float]]:
+        """Extract time ranges from segment data.
+
+        Args:
+            segments: List of dictionaries containing 'obj', 'start', and 'end' keys.
+
+        Returns:
+            List of tuples (object_name, start_time, end_time).
+        """
+        ranges = []
+        for seg in segments:
+            obj = seg.get("obj")
+            obj_name = str(obj) if obj else "Unknown"
+            start = seg.get("start", 0.0)
+            end = seg.get("end", 0.0)
+            ranges.append((obj_name, start, end))
+        return ranges
+
+    @classmethod
+    def print_time_ranges(
+        cls,
+        source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]],
+        header: Optional[str] = None,
+        per_segment: bool = False,
+        object_fmt: Optional[str] = None,
+        segment_fmt: Optional[str] = None,
+        by_time: bool = False,
+    ):
+        """Print formatted time ranges.
+
+        Args:
+            source: List of segments (dicts) or ranges (tuples).
+            header: Optional header text.
+            per_segment: If True, prints every item. If False, aggregates by object.
+            object_fmt: Optional format string for object lines.
+                Available keys: obj, start, end, duration, count, suffix
+            segment_fmt: Optional format string for segment lines.
+                Available keys: i, start, end, duration
+            by_time: If True, prints a flat list of all segments sorted by start time.
+        """
+        if not source:
+            return
+
+        # Resolve ranges
+        ranges = []
+        first = source[0]
+        if isinstance(first, dict):
+            ranges = cls.get_time_ranges(source)
+        elif isinstance(first, tuple):
+            ranges = source
+        else:
+            return
+
+        if not ranges:
+            return
+
+        if header is None:
+            scene_name = pm.sceneName()
+            if scene_name:
+                scene_name = scene_name.basename()
+            else:
+                scene_name = "Untitled"
+            header = f"Animation Info - {scene_name}"
+
+        print(f"\n{header}")
+        print("-" * 60)
+
+        from collections import defaultdict
+
+        if by_time:
+            # Flat list sorted by time
+            # First, assign segment indices
+            obj_counters = defaultdict(int)
+            obj_totals = defaultdict(int)
+
+            # Calculate totals first
+            for obj, _, _ in ranges:
+                obj_totals[obj] += 1
+
+            annotated = []
+            # We need to process in the order they appear in 'ranges' to assign indices correctly?
+            # 'ranges' comes from 'collect_segments' which iterates objects.
+            # So for each object, segments are chronological.
+
+            for obj, start, end in ranges:
+                obj_counters[obj] += 1
+                annotated.append(
+                    {
+                        "obj": obj,
+                        "start": start,
+                        "end": end,
+                        "index": obj_counters[obj],
+                        "total": obj_totals[obj],
+                    }
+                )
+
+            # Sort by start time
+            annotated.sort(key=lambda x: x["start"])
+
+            for item in annotated:
+                duration = item["end"] - item["start"]
+                suffix = f" [{item['total']} segments]" if item["total"] > 1 else ""
+
+                # Format: Object (Seg i/N) : Start - End (Dur: D) [Total]
+                if item["total"] > 1:
+                    label = f"{item['obj']} (Seg {item['index']}/{item['total']})"
+                else:
+                    label = f"{item['obj']} (Seg {item['index']})"
+
+                print(
+                    f"{label:<30} : {item['start']:8.2f} - {item['end']:8.2f} (Dur: {duration:6.2f}){suffix}"
+                )
+
+        else:
+            # Group by object
+            obj_segments = defaultdict(list)
+            for obj, start, end in ranges:
+                obj_segments[obj].append((start, end))
+
+            for obj, segments in obj_segments.items():
+                # Calculate aggregate
+                min_start = min(s[0] for s in segments)
+                max_end = max(s[1] for s in segments)
+                total_dur = max_end - min_start
+                count = len(segments)
+                suffix = f" [{count} segments]" if count > 1 else ""
+
+                # Print object line
+                if object_fmt:
+                    print(
+                        object_fmt.format(
+                            obj=obj,
+                            start=min_start,
+                            end=max_end,
+                            duration=total_dur,
+                            count=count,
+                            suffix=suffix,
+                        )
+                    )
+                else:
+                    print(
+                        f"{obj:<30} : {min_start:8.2f} - {max_end:8.2f} (Dur: {total_dur:6.2f}){suffix}"
+                    )
+
+                # Print segments if requested
+                if per_segment:
+                    for i, (start, end) in enumerate(segments, 1):
+                        duration = end - start
+                        if segment_fmt:
+                            print(
+                                segment_fmt.format(
+                                    i=i, start=start, end=end, duration=duration
+                                )
+                            )
+                        else:
+                            print(
+                                f"    Seg {i:<2}                         : {start:8.2f} - {end:8.2f} (Dur: {duration:6.2f})"
+                            )
+
+        print("-" * 60)
+
+
+class SegmentKeys(SegmentKeysInfo):
     """Shared helper for collecting and grouping animation segments.
 
     This class provides Stage 1 (collection) and Stage 2 (grouping) operations
@@ -43,96 +211,6 @@ class SegmentKeys:
         - 'single_group': All segments form one group
     """
 
-    @staticmethod
-    def get_time_ranges(
-        segments: List[Dict[str, Any]],
-    ) -> List[Tuple[str, float, float]]:
-        """Extract time ranges from segment data.
-
-        Args:
-            segments: List of dictionaries containing 'obj', 'start', and 'end' keys.
-
-        Returns:
-            List of tuples (object_name, start_time, end_time).
-        """
-        ranges = []
-        for seg in segments:
-            obj = seg.get("obj")
-            obj_name = str(obj) if obj else "Unknown"
-            start = seg.get("start", 0.0)
-            end = seg.get("end", 0.0)
-            ranges.append((obj_name, start, end))
-        return ranges
-
-    @staticmethod
-    def print_time_ranges(
-        ranges: List[Tuple[str, float, float]],
-        header: str = "Time Ranges:",
-        per_segment: bool = False,
-    ):
-        """Print formatted time ranges.
-
-        Args:
-            ranges: List of (object_name, start, end) tuples.
-            header: Title to print before the list.
-            per_segment: If True, prints each segment individually. If False,
-                aggregates ranges per object (min start, max end).
-        """
-        if not ranges:
-            return
-
-        print(f"\n{header}")
-        print("-" * 60)
-
-        if per_segment:
-            # Print every segment as is
-            for obj, start, end in ranges:
-                duration = end - start
-                print(f"{obj:<30} : {start:8.2f} - {end:8.2f} (Dur: {duration:6.2f})")
-        else:
-            # Aggregate per object
-            from collections import defaultdict
-
-            obj_ranges = defaultdict(list)
-            for obj, start, end in ranges:
-                obj_ranges[obj].append((start, end))
-
-            for obj, range_list in obj_ranges.items():
-                min_start = min(r[0] for r in range_list)
-                max_end = max(r[1] for r in range_list)
-                duration = max_end - min_start
-                print(
-                    f"{obj:<30} : {min_start:8.2f} - {max_end:8.2f} (Dur: {duration:6.2f})"
-                )
-
-        print("-" * 60)
-
-    @classmethod
-    def print_segment_info(cls, objects: Optional[List[Any]] = None):
-        """Collect and print segment info for objects.
-
-        Args:
-            objects: List of objects. If None, uses selection. If no selection, uses all transforms.
-        """
-        if not objects:
-            objects = pm.selected(type="transform")
-            if not objects:
-                objects = pm.ls(type="transform")
-
-        if not objects:
-            pm.warning("No objects found.")
-            return
-
-        segments = cls.collect_segments(objects, split_static=True)
-        if not segments:
-            pm.warning("No animation segments found.")
-            return
-
-        ranges = cls.get_time_ranges(segments)
-        cls.print_time_ranges(
-            ranges, header="Segment Info (Split Static):", per_segment=True
-        )
-
     @classmethod
     def collect_segments(
         cls,
@@ -143,6 +221,7 @@ class SegmentKeys:
         channel_box_attrs: Optional[List[str]] = None,
         static_tolerance: float = 1e-4,
         time_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
+        ignore_visibility_holds: bool = False,
     ) -> List[Dict[str, Any]]:
         """Collect animation segments from objects.
 
@@ -157,6 +236,9 @@ class SegmentKeys:
             channel_box_attrs: If provided, only process curves for these attributes.
             static_tolerance: Value tolerance for detecting static segments.
             time_range: Optional (start, end) tuple to limit keyframe collection.
+            ignore_visibility_holds: If True, visibility curves are treated like any
+                other curve (static holds are ignored). If False (default), visibility
+                curves are treated as always active to preserve holds.
 
         Returns:
             List of segment dictionaries.
@@ -225,7 +307,9 @@ class SegmentKeys:
             # Determine segment ranges
             if split_static:
                 active_segments = cls._get_active_animation_segments(
-                    curves_to_use, tolerance=static_tolerance
+                    curves_to_use,
+                    tolerance=static_tolerance,
+                    ignore_visibility_holds=ignore_visibility_holds,
                 )
                 # Filter active segments to time range
                 if range_start is not None or range_end is not None:
@@ -261,6 +345,37 @@ class SegmentKeys:
                 )
 
         return segments
+
+    @classmethod
+    def print_scene_info(
+        cls, objects: Optional[List["pm.PyNode"]] = None, detailed: bool = True
+    ):
+        """Print animation info for the scene or provided objects.
+
+        Args:
+            objects: List of objects to analyze. If None, uses selection or all objects.
+            detailed: If True, prints individual segments. If False, aggregates per object.
+        """
+        if not objects:
+            objects = pm.selected(type="transform")
+        if not objects:
+            objects = pm.ls(type="transform")
+
+        if not objects:
+            pm.warning("No objects found to analyze.")
+            return
+
+        # Collect segments with split_static=True to get full detail
+        # Pass ignore_visibility_holds=True to see visual segments even if visibility bridges them
+        segments = cls.collect_segments(
+            objects, split_static=True, ignore_visibility_holds=detailed
+        )
+
+        if not segments:
+            pm.warning("No animation found on the specified objects.")
+            return
+
+        cls.print_time_ranges(segments, per_segment=detailed)
 
     @classmethod
     def group_segments(
@@ -442,6 +557,140 @@ class SegmentKeys:
         ]
 
     @staticmethod
+    def merge_groups_sharing_curves(
+        groups: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Merge groups that share any animation curves.
+
+        This prevents double-transforming curves when multiple objects share the same
+        animation curve (e.g. instances or connected attributes).
+        """
+        if not groups:
+            return []
+
+        # Map curve to group indices
+        curve_to_indices = {}
+        for i, group in enumerate(groups):
+            curves = group.get("curves", [])
+            # print(f"DEBUG: Group {i} curves: {[c.name() for c in curves]}")
+            for curve in curves:
+                # Use name to ensure identity across PyNode instances
+                try:
+                    curve_id = curve.name()
+                except Exception:
+                    curve_id = str(curve)
+                
+                if curve_id not in curve_to_indices:
+                    curve_to_indices[curve_id] = []
+                curve_to_indices[curve_id].append(i)
+        
+        # Find connected components using Union-Find
+        parent = list(range(len(groups)))
+
+        def find(i):
+            if parent[i] != i:
+                parent[i] = find(parent[i])
+            return parent[i]
+
+        def union(i, j):
+            root_i = find(i)
+            root_j = find(j)
+            if root_i != root_j:
+                parent[root_i] = root_j
+
+        def ranges_overlap(r1, r2):
+            return max(r1[0], r2[0]) < min(r1[1], r2[1])
+
+        for indices in curve_to_indices.values():
+            if len(indices) > 1:
+                for k in range(len(indices)):
+                    for m in range(k + 1, len(indices)):
+                        idx1 = indices[k]
+                        idx2 = indices[m]
+
+                        r1 = groups[idx1].get(
+                            "segment_range",
+                            (groups[idx1]["start"], groups[idx1]["end"]),
+                        )
+                        r2 = groups[idx2].get(
+                            "segment_range",
+                            (groups[idx2]["start"], groups[idx2]["end"]),
+                        )
+
+                        if ranges_overlap(r1, r2):
+                            union(idx1, idx2)
+
+        # Group indices by root
+        root_to_indices = {}
+        for i in range(len(groups)):
+            root = find(i)
+            if root not in root_to_indices:
+                root_to_indices[root] = []
+            root_to_indices[root].append(i)
+
+        # Build merged groups
+        merged_groups = []
+        for indices in root_to_indices.values():
+            if len(indices) == 1:
+                merged_groups.append(groups[indices[0]])
+            else:
+                # Merge multiple groups
+                first = groups[indices[0]]
+                merged = {
+                    "objects": list(first.get("objects", [first.get("obj")])),
+                    "curves": list(first.get("curves", [])),
+                    "keyframes": list(first.get("keyframes", [])),
+                    "start": first["start"],
+                    "end": first["end"],
+                    "obj": first.get("obj"),
+                    "sub_groups": list(first.get("sub_groups", [first])),
+                }
+                
+                # Collect names for warning
+                merged_obj_names = [str(first.get("obj") or "Unknown")]
+
+                for k in range(1, len(indices)):
+                    other = groups[indices[k]]
+                    # Merge objects
+                    other_objs = other.get("objects", [other.get("obj")])
+                    for obj in other_objs:
+                        if obj not in merged["objects"]:
+                            merged["objects"].append(obj)
+                    
+                    obj_name = str(other.get("obj") or "Unknown")
+                    if obj_name not in merged_obj_names:
+                        merged_obj_names.append(obj_name)
+
+                    # Merge curves
+                    merged["curves"].extend(other.get("curves", []))
+
+                    # Merge keyframes
+                    merged["keyframes"].extend(other.get("keyframes", []))
+
+                    # Update range
+                    merged["start"] = min(merged["start"], other["start"])
+                    merged["end"] = max(merged["end"], other["end"])
+
+                    # Merge sub_groups
+                    other_subs = other.get("sub_groups", [other])
+                    merged["sub_groups"].extend(other_subs)
+
+                # Dedupe curves and keyframes
+                merged["curves"] = list(dict.fromkeys(merged["curves"]))
+                merged["keyframes"] = sorted(set(merged["keyframes"]))
+                merged["duration"] = merged["end"] - merged["start"]
+
+                # Ensure segment_range is set (use overall range)
+                merged["segment_range"] = (merged["start"], merged["end"])
+
+                merged_groups.append(merged)
+                
+                # Warn about merge
+                pm.warning(f"Merged {len(indices)} groups sharing curves: {', '.join(merged_obj_names)}. Shared curves prevent independent staggering.")
+
+        return merged_groups
+
+    @staticmethod
     def _filter_curves_by_ignore(
         curves: List["pm.PyNode"],
         ignore: Optional[Union[str, List[str]]],
@@ -541,6 +790,7 @@ class SegmentKeys:
     def _get_active_animation_segments(
         curves: List["pm.PyNode"],
         tolerance: float = 1e-4,
+        ignore_visibility_holds: bool = False,
     ) -> List[Tuple[float, float]]:
         """Identify segments of active animation, excluding static gaps.
 
@@ -548,11 +798,14 @@ class SegmentKeys:
         Static gaps (where all curves hold the same value) are excluded.
 
         Note: Visibility curves (and other stepped curves) are treated as active
-        between all keys to preserve holds during scaling.
+        between all keys to preserve holds during scaling, unless ignore_visibility_holds
+        is True.
 
         Parameters:
             curves: List of animation curves to analyze.
             tolerance: Value tolerance for detecting static segments.
+            ignore_visibility_holds: If True, visibility curves are treated like any
+                other curve (static holds are ignored).
 
         Returns:
             List of (start, end) tuples representing active animation segments.
@@ -572,17 +825,21 @@ class SegmentKeys:
 
             # Check if curve is visibility
             is_visibility = False
-            try:
-                if "visibility" in curve.name().lower():
-                    is_visibility = True
-                else:
-                    plugs = curve.outputs(plugs=True)
-                    for plug in plugs:
-                        if "visibility" in plug.partialName(includeNode=False).lower():
-                            is_visibility = True
-                            break
-            except Exception:
-                pass
+            if not ignore_visibility_holds:
+                try:
+                    if "visibility" in curve.name().lower():
+                        is_visibility = True
+                    else:
+                        plugs = curve.outputs(plugs=True)
+                        for plug in plugs:
+                            if (
+                                "visibility"
+                                in plug.partialName(includeNode=False).lower()
+                            ):
+                                is_visibility = True
+                                break
+                except Exception:
+                    pass
 
             # Identify segments where value changes
             for i in range(len(times) - 1):
@@ -590,6 +847,7 @@ class SegmentKeys:
                 v1, v2 = values[i], values[i + 1]
 
                 # For visibility, treat all intervals as active to preserve holds
+                # unless ignore_visibility_holds is True
                 if is_visibility or abs(v1 - v2) > tolerance:
                     all_intervals.append((t1, t2))
 
@@ -616,3 +874,160 @@ class SegmentKeys:
         merged.append((current_start, current_end))
 
         return merged
+
+    @staticmethod
+    def shift_curves(
+        curves: List[Any],
+        offset: float,
+        time_range: Optional[Tuple[float, float]] = None,
+    ):
+        """Shift keys on curves by offset.
+
+        Args:
+            curves: List of animation curves to shift.
+            offset: Amount to shift (in frames).
+            time_range: Optional (start, end) tuple to limit the shift to specific keys.
+        """
+        if not curves or abs(offset) < 1e-6:
+            return
+
+        try:
+            kwargs = {
+                "edit": True,
+                "relative": True,
+                "timeChange": offset,
+            }
+            if time_range:
+                kwargs["time"] = time_range
+
+            for curve in curves:
+                pm.keyframe(curve, **kwargs)
+        except RuntimeError as e:
+            pm.warning(f"Failed to move keys for {curves}: {e}")
+
+    @classmethod
+    def execute_stagger(
+        cls,
+        groups_data: List[dict],
+        start_frame: float,
+        spacing: Union[int, float] = 0,
+        use_intervals: bool = False,
+        avoid_overlap: bool = False,
+        preserve_gaps: bool = False,
+    ):
+        """Calculate and execute staggering on groups of segments.
+
+        Args:
+            groups_data: List of group dictionaries (from group_segments or similar).
+            start_frame: Frame to start staggering from.
+            spacing: Spacing between groups (frames or percentage).
+            use_intervals: If True, use fixed intervals.
+            avoid_overlap: If True (and use_intervals=True), skip intervals to avoid overlap.
+            preserve_gaps: If True (and use_intervals=False), ensure we don't pull back.
+        """
+        operations = []
+
+        if use_intervals:
+            # Fixed interval mode: place animations at regular frame intervals
+            previous_end = None
+
+            for i, data in enumerate(groups_data):
+                group_start = data["start"]
+                duration = data["duration"]
+
+                target_start = start_frame + (i * spacing)
+
+                # Check for overlap if avoid_overlap is enabled
+                if avoid_overlap and previous_end is not None:
+                    if target_start < previous_end:
+                        overlap_count = 1
+                        while target_start < previous_end:
+                            target_start = (
+                                start_frame + (i * spacing) + (overlap_count * spacing)
+                            )
+                            overlap_count += 1
+
+                shift_amount = target_start - group_start
+                previous_end = target_start + duration
+
+                if abs(shift_amount) > 1e-6:
+                    # Use group-level data to prevent double-transforming shared curves
+                    # Dedupe curves just in case
+                    curves = list(dict.fromkeys(data.get("curves", [])))
+
+                    # Determine time range
+                    time_range = data.get("segment_range")
+                    if not time_range:
+                        time_range = (data.get("start"), data.get("end"))
+
+                    operations.append(
+                        {
+                            "curves": curves,
+                            "shift": shift_amount,
+                            "time": time_range,
+                        }
+                    )
+
+        else:
+            # Sequential stagger mode: animations placed end-to-end with spacing offset
+            current_frame = start_frame
+
+            for data in groups_data:
+                group_start = data["start"]
+                duration = data["duration"]
+
+                # Calculate spacing in frames
+                # If spacing is between -1.0 and 1.0, treat as percentage of duration
+                if -1.0 < spacing < 1.0:
+                    spacing_frames = duration * spacing
+                else:
+                    spacing_frames = spacing
+
+                # If preserving gaps, ensure we don't pull back
+                if preserve_gaps:
+                    current_frame = max(current_frame, group_start)
+
+                shift_amount = current_frame - group_start
+
+                # Update current frame for next object/group
+                current_frame = current_frame + duration + spacing_frames
+
+                if abs(shift_amount) > 1e-6:
+                    # Use group-level data to prevent double-transforming shared curves
+                    # Dedupe curves just in case
+                    curves = list(dict.fromkeys(data.get("curves", [])))
+
+                    # Determine time range
+                    time_range = data.get("segment_range")
+                    if not time_range:
+                        time_range = (data.get("start"), data.get("end"))
+
+                    operations.append(
+                        {
+                            "curves": curves,
+                            "shift": shift_amount,
+                            "time": time_range,
+                        }
+                    )
+
+        # Execute operations in safe order to prevent collisions
+        # Positive shifts (moving right): Process Reverse (End to Start)
+        # Negative shifts (moving left): Process Forward (Start to End)
+
+        pos_ops = [op for op in operations if op["shift"] > 0]
+        neg_ops = [op for op in operations if op["shift"] < 0]
+
+        # Sort by start time
+        # Handle None time range (treat as -inf)
+        def get_start_time(op):
+            t = op.get("time")
+            return t[0] if t else float("-inf")
+
+        pos_ops.sort(key=get_start_time, reverse=True)
+        neg_ops.sort(key=get_start_time)
+
+        for op in pos_ops:
+            cls.shift_curves(op["curves"], op["shift"], op["time"])
+
+        for op in neg_ops:
+            cls.shift_curves(op["curves"], op["shift"], op["time"])

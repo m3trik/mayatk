@@ -11,143 +11,6 @@ import pythontk as ptk
 
 # Import CoreUtils using internal path to avoid circular imports
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.anim_utils.anim_structs import AnimPlan, ShiftOperation
-
-
-class _StaggerKeysInternal:
-    """Internal helper methods for StaggerKeys - shifting logic only.
-
-    Grouping and filtering logic is delegated to SegmentKeys.
-    """
-
-    @staticmethod
-    def _apply_plan(plan: AnimPlan) -> int:
-        """Execute the stagger plan."""
-        shifted_count = 0
-        for op in plan.operations:
-            if isinstance(op, ShiftOperation):
-                try:
-                    # Determine range args
-                    range_args = {}
-                    if op.time_range:
-                        range_args["time"] = op.time_range
-
-                    # If no time range specified, we might want to query the curve range
-                    # But ShiftOperation usually implies shifting the whole curve if range is None
-                    # However, pm.keyframe without time arg shifts everything.
-
-                    for curve in op.curves:
-                        pm.keyframe(
-                            curve,
-                            edit=True,
-                            relative=True,
-                            timeChange=op.offset,
-                            **range_args,
-                        )
-                    shifted_count += 1
-                except RuntimeError as e:
-                    pm.warning(f"Failed to move keys for {op.curves}: {e}")
-        return shifted_count
-
-    @classmethod
-    def _calculate_stagger_plan(
-        cls,
-        groups_data: List[dict],
-        start_frame: float,
-        spacing: Union[int, float] = 0,
-        use_intervals: bool = False,
-        avoid_overlap: bool = False,
-        preserve_gaps: bool = False,
-    ) -> AnimPlan:
-        """Generate an AnimPlan for staggering."""
-        plan = AnimPlan()
-
-        if use_intervals:
-            # Fixed interval mode: place animations at regular frame intervals
-            previous_end = None
-
-            for i, data in enumerate(groups_data):
-                group_start = data["start"]
-                duration = data["duration"]
-
-                target_start = start_frame + (i * spacing)
-
-                # Check for overlap if avoid_overlap is enabled
-                if avoid_overlap and previous_end is not None:
-                    if target_start < previous_end:
-                        overlap_count = 1
-                        while target_start < previous_end:
-                            target_start = (
-                                start_frame + (i * spacing) + (overlap_count * spacing)
-                            )
-                            overlap_count += 1
-
-                shift_amount = target_start - group_start
-
-                if abs(shift_amount) > 1e-6:
-                    if "sub_groups" in data:
-                        for sub in data["sub_groups"]:
-                            plan.operations.append(
-                                ShiftOperation(
-                                    curves=sub.get("curves", []),
-                                    offset=shift_amount,
-                                    time_range=sub.get("segment_range"),
-                                )
-                            )
-                    else:
-                        plan.operations.append(
-                            ShiftOperation(
-                                curves=data.get("curves", []),
-                                offset=shift_amount,
-                                time_range=data.get("segment_range"),
-                            )
-                        )
-
-                previous_end = target_start + duration
-        else:
-            # Sequential stagger mode: animations placed end-to-end with spacing offset
-            current_frame = start_frame
-
-            for data in groups_data:
-                group_start = data["start"]
-                duration = data["duration"]
-
-                # Calculate spacing in frames
-                # If spacing is between -1.0 and 1.0, treat as percentage of duration
-                if -1.0 < spacing < 1.0:
-                    spacing_frames = duration * spacing
-                else:
-                    spacing_frames = spacing
-
-                # If preserving gaps, ensure we don't pull back
-                if preserve_gaps:
-                    current_frame = max(current_frame, group_start)
-
-                shift_amount = current_frame - group_start
-
-                if abs(shift_amount) > 1e-6:
-                    if "sub_groups" in data:
-                        for sub in data["sub_groups"]:
-                            plan.operations.append(
-                                ShiftOperation(
-                                    curves=sub.get("curves", []),
-                                    offset=shift_amount,
-                                    time_range=sub.get("segment_range"),
-                                )
-                            )
-                    else:
-                        plan.operations.append(
-                            ShiftOperation(
-                                curves=data.get("curves", []),
-                                offset=shift_amount,
-                                time_range=data.get("segment_range"),
-                            )
-                        )
-
-                # Update current frame for next object/group
-                current_frame = current_frame + duration + spacing_frames
-
-        return plan
 
 
 class StaggerKeys:
@@ -166,7 +29,9 @@ class StaggerKeys:
         group_overlapping: bool = False,
         ignore: Union[str, List[str]] = None,
         split_static: bool = True,
+        ignore_visibility_holds: bool = True,
         verbose: bool = False,
+        verbose_header: str = None,
     ):
         """Stagger the keyframes of selected objects with various positioning controls.
 
@@ -202,7 +67,11 @@ class StaggerKeys:
                 Curves connected to these attributes will not be moved.
             split_static: If True, treats segments of animation separated by static gaps
                 (flat keys) as separate groups. Each segment will be staggered independently.
+            ignore_visibility_holds: If True (default), visibility curves are treated as
+                active only during transitions, preventing long static holds from
+                bridging gaps between segments.
             verbose: If True, prints detailed information including original time ranges.
+            verbose_header: Optional custom text to prefix the verbose output headers.
         """
         # Import shared helpers
         from mayatk.anim_utils._anim_utils import AnimUtils
@@ -213,8 +82,7 @@ class StaggerKeys:
             return
 
         objects = pm.ls(objects, type="transform", flatten=True)
-        if invert:
-            objects = list(reversed(objects))
+        # Invert logic is applied after collection and sorting to ensure consistent behavior
 
         # Stage 1: Collect segments using KeyframeGrouper
         # Note: We need custom collection here because stagger supports selected_keys
@@ -247,7 +115,10 @@ class StaggerKeys:
                 # If split_static is enabled, break the object's animation into active segments
                 segments = []
                 if split_static:
-                    segments = SegmentKeys._get_active_animation_segments(curves_to_use)
+                    segments = SegmentKeys._get_active_animation_segments(
+                        curves_to_use,
+                        ignore_visibility_holds=ignore_visibility_holds,
+                    )
 
                 # If no segments found, treat as one block
                 if not segments:
@@ -278,17 +149,35 @@ class StaggerKeys:
         # Capture original ranges if verbose
         original_ranges = []
         if verbose:
-            original_ranges = SegmentKeys.get_time_ranges(obj_keyframe_data)
+            # Re-collect with detailed view for reporting (ignoring visibility holds)
+            # This ensures the report matches the "Animation Info" tool
+            detailed_segments = SegmentKeys.collect_segments(
+                objects,
+                ignore=ignore,
+                split_static=split_static,
+                ignore_visibility_holds=ignore_visibility_holds,
+            )
+            original_ranges = SegmentKeys.get_time_ranges(detailed_segments)
 
         # Stage 2: Group segments if requested using SegmentKeys
         if group_overlapping:
             obj_keyframe_data = SegmentKeys._group_by_overlap(obj_keyframe_data)
 
+        # Always merge groups that share curves to prevent double-transforming
+        obj_keyframe_data = SegmentKeys.merge_groups_sharing_curves(obj_keyframe_data)
+
+        # Sort by start time to ensure deterministic, time-based staggering
+        # This fixes issues where selection order causes early objects to be pushed to the end
+        obj_keyframe_data.sort(key=lambda x: x["start"])
+
+        if invert:
+            obj_keyframe_data.reverse()
+
         # Use provided start_frame or earliest keyframe
         base_frame = start_frame if start_frame is not None else first_keyframe
 
         # Apply stagger logic
-        plan = _StaggerKeysInternal._calculate_stagger_plan(
+        SegmentKeys.execute_stagger(
             obj_keyframe_data,
             start_frame=base_frame,
             spacing=spacing,
@@ -296,8 +185,6 @@ class StaggerKeys:
             avoid_overlap=avoid_overlap,
             preserve_gaps=False,
         )
-
-        _StaggerKeysInternal._apply_plan(plan)
 
         if smooth_tangents:
             for data in obj_keyframe_data:
@@ -307,63 +194,34 @@ class StaggerKeys:
                     AnimUtils._set_smart_tangents(curves, tangent_type="auto")
 
         if verbose and original_ranges:
+            # Determine headers
+            header_orig = "Original Time Ranges:"
+            header_new = "Stagger Keys: New Time Ranges:"
+
+            if verbose_header:
+                header_orig = f"{verbose_header} Original Time Ranges:"
+                header_new = f"{verbose_header} New Time Ranges:"
+
             # Print original ranges
             SegmentKeys.print_time_ranges(
                 original_ranges,
-                header="Original Time Ranges:",
+                header=header_orig,
                 per_segment=split_static,
+                by_time=True,
             )
 
             # Capture and print new ranges
             # Re-collect segments to get updated times
-            # Note: We need to re-collect using the same logic as above
-            new_segments = []
-            for obj in objects:
-                # Get animation curves - check for selected keys first
-                selected_curves = pm.keyframe(obj, query=True, name=True, selected=True)
-
-                if selected_curves:
-                    curves_to_use = SegmentKeys._filter_curves_by_ignore(
-                        selected_curves, ignore
-                    )
-                else:
-                    all_curves = (
-                        pm.listConnections(obj, type="animCurve", s=True, d=False) or []
-                    )
-                    curves_to_use = SegmentKeys._filter_curves_by_ignore(
-                        all_curves, ignore
-                    )
-
-                if curves_to_use:
-                    if split_static:
-                        active_segments = SegmentKeys._get_active_animation_segments(
-                            curves_to_use
-                        )
-                        for seg_start, seg_end in active_segments:
-                            new_segments.append(
-                                {
-                                    "obj": obj,
-                                    "start": seg_start,
-                                    "end": seg_end,
-                                }
-                            )
-                    else:
-                        # Get full range
-                        times = AnimUtils.get_keyframe_times(
-                            curves_to_use, from_curves=True
-                        )
-                        if times:
-                            new_segments.append(
-                                {
-                                    "obj": obj,
-                                    "start": times[0],
-                                    "end": times[-1],
-                                }
-                            )
-
+            new_segments = SegmentKeys.collect_segments(
+                objects,
+                ignore=ignore,
+                split_static=split_static,
+                ignore_visibility_holds=split_static,
+            )
             new_ranges = SegmentKeys.get_time_ranges(new_segments)
             SegmentKeys.print_time_ranges(
                 new_ranges,
-                header="New Time Ranges:",
+                header=header_new,
                 per_segment=split_static,
+                by_time=True,
             )

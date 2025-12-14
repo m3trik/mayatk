@@ -211,6 +211,16 @@ class UiUtils:
 
         return attributes_dict
 
+    @staticmethod
+    def reveal_in_outliner(objects):
+        """Reveal objects in the Outliner panel."""
+        # Get the outliner editor associated with 'outlinerPanel1'
+        outliner_editor = pm.outlinerPanel(
+            "outlinerPanel1", query=True, outlinerEditor=True
+        )
+        # Reveal the objects in the outliner
+        pm.outlinerEditor(outliner_editor, edit=True, revealObjects=objects)
+
 
 # --------------------------------------------------------------------------------------------
 

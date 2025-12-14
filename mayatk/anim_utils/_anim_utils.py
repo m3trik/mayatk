@@ -1940,6 +1940,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         """Apply staggering logic to a list of grouped keyframe data.
 
         Shared logic used by stagger_keys and scale_keys (for overlap prevention).
+        Delegates to SegmentKeys.execute_stagger which implements safe execution order.
 
         Parameters:
             groups_data: List of dicts with 'start', 'duration', 'curves' keys.
@@ -1952,95 +1953,16 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Returns:
             int: Number of groups shifted.
         """
-        shifted_count = 0
+        from mayatk.anim_utils.segment_keys import SegmentKeys
 
-        if use_intervals:
-            # Fixed interval mode: place animations at regular frame intervals
-            previous_end = None  # Track the end of the previous animation
-
-            for i, data in enumerate(groups_data):
-                group_start = data["start"]
-                duration = data["duration"]
-
-                # Calculate target start position
-                target_start = start_frame + (i * spacing)
-
-                # Check for overlap if avoid_overlap is enabled
-                if avoid_overlap and previous_end is not None:
-                    # If the target start would overlap with the previous animation's end
-                    if target_start < previous_end:
-                        # Skip to next interval position(s) that doesn't overlap
-                        overlap_count = 1
-                        while target_start < previous_end:
-                            target_start = (
-                                start_frame + (i * spacing) + (overlap_count * spacing)
-                            )
-                            overlap_count += 1
-
-                shift_amount = target_start - group_start
-
-                if shift_amount != 0:
-                    if "sub_groups" in data:
-                        for sub in data["sub_groups"]:
-                            cls._shift_curves_by_amount(
-                                sub.get("curves", []),
-                                shift_amount,
-                                time_range=sub.get("segment_range"),
-                            )
-                    else:
-                        curves_to_move = data.get("curves", [])
-                        segment_range = data.get("segment_range")
-                        cls._shift_curves_by_amount(
-                            curves_to_move, shift_amount, time_range=segment_range
-                        )
-                    shifted_count += 1
-
-                # Update previous_end to track this animation's new end position
-                previous_end = target_start + duration
-        else:
-            # Sequential stagger mode: animations placed end-to-end with spacing offset
-            current_frame = start_frame
-            # print(f"DEBUG: _apply_stagger sequential. Start {start_frame}")
-
-            for data in groups_data:
-                group_start = data["start"]
-                duration = data["duration"]
-
-                # Calculate spacing in frames
-                # If spacing is between -1.0 and 1.0, treat as percentage of duration
-                if -1.0 < spacing < 1.0:
-                    spacing_frames = duration * spacing
-                else:
-                    spacing_frames = spacing
-
-                # If preserving gaps, ensure we don't pull back
-                if preserve_gaps:
-                    current_frame = max(current_frame, group_start)
-
-                shift_amount = current_frame - group_start
-                # print(f"DEBUG: Group Start {group_start}, Current {current_frame}, Shift {shift_amount}")
-
-                if shift_amount != 0:
-                    if "sub_groups" in data:
-                        for sub in data["sub_groups"]:
-                            cls._shift_curves_by_amount(
-                                sub.get("curves", []),
-                                shift_amount,
-                                time_range=sub.get("segment_range"),
-                            )
-                    else:
-                        curves_to_move = data.get("curves", [])
-                        segment_range = data.get("segment_range")
-                        cls._shift_curves_by_amount(
-                            curves_to_move, shift_amount, time_range=segment_range
-                        )
-                    shifted_count += 1
-
-                # Update current frame for next object/group
-                # Positive spacing = gap, negative = overlap
-                current_frame = current_frame + duration + spacing_frames
-
-        return shifted_count
+        return SegmentKeys.execute_stagger(
+            groups_data,
+            start_frame=start_frame,
+            spacing=spacing,
+            use_intervals=use_intervals,
+            avoid_overlap=avoid_overlap,
+            preserve_gaps=preserve_gaps,
+        )
 
     @classmethod
     def _get_active_animation_segments(

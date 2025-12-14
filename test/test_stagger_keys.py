@@ -260,12 +260,14 @@ class TestStaggerSplitStatic(MayaTkTestCase):
         # Check Cube 1
         c1_times = sorted(pm.keyframe(self.cube, q=True, tc=True))
         self.assertIn(0.0, c1_times)
+        # With time-sorting, Cube 2 (starts 0) comes before Cube 1 Seg 2 (starts 50)
+        # So: C1_S1(0-10) -> C2(10-20) -> C1_S2(20-30)
         self.assertIn(20.0, c1_times)
 
         # Check Cube 2
         c2_times = sorted(pm.keyframe(cube2, q=True, tc=True))
+        self.assertIn(10.0, c2_times)
         self.assertIn(20.0, c2_times)
-        self.assertIn(30.0, c2_times)
 
     def test_split_static_with_overlap_grouping(self):
         """Test split static with group_overlapping=True."""
@@ -339,6 +341,39 @@ class TestStaggerTangents(MayaTkTestCase):
         self.assertIn(tx_tangent, ["auto", "spline"])
 
 
+class TestStaggerSharedCurves(MayaTkTestCase):
+    def test_stagger_shared_curves(self):
+        """
+        Verifies behavior when multiple objects share the same animation curve.
+        This simulates the 'Duration 0' bug seen in the user report.
+        """
+        # Create 2 objects
+        cube1 = self.create_test_cube("cube1")
+        cube2 = self.create_test_cube("cube2")
+
+        # Create animation on cube1
+        pm.setKeyframe(cube1, t=0, v=0, at="tx")
+        pm.setKeyframe(cube1, t=30, v=10, at="tx")
+
+        # Connect cube2.tx to the SAME animCurve as cube1.tx
+        anim_curve = pm.listConnections(cube1.tx, type="animCurve")[0]
+        pm.connectAttr(anim_curve.output, cube2.tx, force=True)
+
+        # Stagger them with spacing=0 (should result in NO shift if treated as one group)
+        # If treated as separate, the second object would trigger a shift on the shared curve.
+
+        StaggerKeys.stagger_keys(
+            objects=[cube1, cube2],
+            spacing=0,
+        )
+
+        times = pm.keyframe(cube1, q=True, tc=True)
+
+        # If they were double-shifted, the keys would move.
+        # If merged, they stay at 0-30 (since spacing=0 and they are the first/only group).
+        self.assertEqual(times, [0.0, 30.0])
+
+
 # Note: Tests for internal helper methods (_filter_curves_by_ignore, _group_by_overlap,
 # _get_active_animation_segments) are now in test_keyframe_grouper.py since that
 # functionality has been moved to the shared KeyframeGrouper class.
@@ -359,4 +394,114 @@ if __name__ == "__main__":
         except ImportError:
             pass
 
+
+class TestStaggerSortOrder(MayaTkTestCase):
+    """Test that stagger_keys respects time order regardless of selection order."""
+
+    def setUp(self):
+        super().setUp()
+        self.objA = self.create_test_cube("objA")
+        self.objB = self.create_test_cube("objB")
+        self.objC = self.create_test_cube("objC")
+
+        # Create animation in time order: A, B, C
+        # A: 0-10
+        pm.setKeyframe(self.objA, t=0, v=0, at="tx")
+        pm.setKeyframe(self.objA, t=10, v=10, at="tx")
+
+        # B: 20-30
+        pm.setKeyframe(self.objB, t=20, v=0, at="tx")
+        pm.setKeyframe(self.objB, t=30, v=10, at="tx")
+
+        # C: 40-50
+        pm.setKeyframe(self.objC, t=40, v=0, at="tx")
+        pm.setKeyframe(self.objC, t=50, v=10, at="tx")
+
+    def test_stagger_sorts_by_time(self):
+        """Test that objects are staggered in time order even if passed in random order."""
+        # Pass objects in reverse order: C, B, A
+        objects = [self.objC, self.objB, self.objA]
+
+        # Stagger with 0 spacing (stack them)
+        StaggerKeys.stagger_keys(objects, spacing=0)
+
+        # Expected result: A (0-10), B (10-20), C (20-30)
+        # If not sorted, it would be C (40-50), B (50-60), A (60-70) or similar
+
+        # Check A
+        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[0], 0.0)
+        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[-1], 10.0)
+
+        # Check B
+        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[0], 10.0)
+        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[-1], 20.0)
+
+        # Check C
+        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[0], 20.0)
+        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[-1], 30.0)
+
+    def test_stagger_invert_respects_sort(self):
+        """Test that invert reverses the TIME sorted order, not selection order."""
+        # Pass objects in random order: B, A, C
+        objects = [self.objB, self.objA, self.objC]
+
+        # Stagger with invert=True
+        StaggerKeys.stagger_keys(objects, spacing=0, invert=True)
+
+        # Expected result: C (first), B (second), A (third)
+        # Because Time Order is A, B, C. Inverted is C, B, A.
+        # C starts at 0 (or whatever start_frame defaults to, usually earliest key = 0)
+
+        # C: 0-10
+        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[0], 0.0)
+
+        # B: 10-20
+        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[0], 10.0)
+
+        # A: 20-30
+        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[0], 20.0)
+
+
+class TestSharedCurveCollapse(MayaTkTestCase):
+    """Test specifically for the 'double transform' or 'collapse' bug with shared curves."""
+
+    def setUp(self):
+        super().setUp()
+        self.objA = self.create_test_cube("objA")
+        self.objB = self.create_test_cube("objB")
+
+        # Create a shared animation curve
+        # Keys at 0 and 10. Duration 10.
+        pm.setKeyframe(self.objA, t=0, v=0, at="tx")
+        pm.setKeyframe(self.objA, t=10, v=10, at="tx")
+
+        # Connect objB.tx to the same curve
+        curve = pm.listConnections(self.objA.tx, type="animCurveTL")[0]
+        pm.connectAttr(curve.output, self.objB.tx)
+
+    def test_partial_overlap_collapse(self):
+        """
+        Reproduce the scenario where a small shift causes a partial double-transform.
+        If the fix is working, keys should move exactly once.
+        """
+        objects = [self.objA, self.objB]
+
+        # Stagger with start_frame override to force a specific shift
+        # Start at 0. Force start to 5. Shift = 5.
+        StaggerKeys.stagger_keys(objects, start_frame=5, spacing=0)
+
+        final_keys = pm.keyframe(self.objA, q=True, tc=True)
+
+        # Expected: Keys shifted by 5 -> [5.0, 15.0]. Duration 10.
+        self.assertEqual(final_keys[0], 5.0, "Start frame should be 5.0")
+        self.assertEqual(final_keys[1], 15.0, "End frame should be 15.0")
+        self.assertAlmostEqual(
+            final_keys[1] - final_keys[0],
+            10.0,
+            delta=0.001,
+            msg="Duration should be preserved",
+        )
+
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

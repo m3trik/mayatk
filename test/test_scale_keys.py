@@ -29,7 +29,7 @@ except ImportError:
         pass
 
 import pymel.core as pm
-from mayatk.anim_utils.scale_keys import ScaleKeys, _ScaleKeysInternal
+from mayatk.anim_utils.scale_keys import ScaleKeys
 
 from base_test import MayaTkTestCase
 
@@ -38,76 +38,70 @@ from base_test import MayaTkTestCase
 # Internal Helper Tests
 # =============================================================================
 class TestScaleKeysInternal(MayaTkTestCase):
-    """Tests for _ScaleKeysInternal helper methods."""
+    """Tests for ScaleKeys helper methods."""
 
     def test_normalize_group_mode_valid(self):
         """Test valid group mode normalization."""
         self.assertEqual(
-            _ScaleKeysInternal._normalize_group_mode("single_group"), "single_group"
+            ScaleKeys._normalize_group_mode("single_group"), "single_group"
         )
+        self.assertEqual(ScaleKeys._normalize_group_mode("per_object"), "per_object")
         self.assertEqual(
-            _ScaleKeysInternal._normalize_group_mode("per_object"), "per_object"
-        )
-        self.assertEqual(
-            _ScaleKeysInternal._normalize_group_mode("overlap_groups"), "overlap_groups"
+            ScaleKeys._normalize_group_mode("overlap_groups"), "overlap_groups"
         )
 
     def test_normalize_group_mode_case_insensitive(self):
         """Test that group mode normalization is case-insensitive."""
         self.assertEqual(
-            _ScaleKeysInternal._normalize_group_mode("SINGLE_GROUP"), "single_group"
+            ScaleKeys._normalize_group_mode("SINGLE_GROUP"), "single_group"
         )
-        self.assertEqual(
-            _ScaleKeysInternal._normalize_group_mode("Per_Object"), "per_object"
-        )
+        self.assertEqual(ScaleKeys._normalize_group_mode("Per_Object"), "per_object")
 
     def test_normalize_group_mode_none(self):
         """Test that None defaults to 'single_group'."""
-        self.assertEqual(_ScaleKeysInternal._normalize_group_mode(None), "single_group")
+        self.assertEqual(ScaleKeys._normalize_group_mode(None), "single_group")
 
     def test_normalize_group_mode_invalid(self):
         """Test that invalid mode raises ValueError."""
         with self.assertRaises(ValueError):
-            _ScaleKeysInternal._normalize_group_mode("invalid_mode")
+            ScaleKeys._normalize_group_mode("invalid_mode")
 
     def test_normalize_keys_none(self):
         """Test keys normalization with None input."""
-        time_range, selected = (
-            _ScaleKeysInternal._normalize_keys_to_time_range_and_selection(None)
+        time_range, selected = ScaleKeys._normalize_keys_to_time_range_and_selection(
+            None
         )
         self.assertEqual(time_range, (None, None))
         self.assertFalse(selected)
 
     def test_normalize_keys_selected_string(self):
         """Test keys normalization with 'selected' string."""
-        time_range, selected = (
-            _ScaleKeysInternal._normalize_keys_to_time_range_and_selection("selected")
+        time_range, selected = ScaleKeys._normalize_keys_to_time_range_and_selection(
+            "selected"
         )
         self.assertEqual(time_range, (None, None))
         self.assertTrue(selected)
 
     def test_normalize_keys_numeric_string(self):
         """Test keys normalization with numeric string."""
-        time_range, selected = (
-            _ScaleKeysInternal._normalize_keys_to_time_range_and_selection("10.5")
+        time_range, selected = ScaleKeys._normalize_keys_to_time_range_and_selection(
+            "10.5"
         )
         self.assertEqual(time_range, (10.5, 10.5))
         self.assertFalse(selected)
 
     def test_normalize_keys_tuple(self):
         """Test keys normalization with tuple range."""
-        time_range, selected = (
-            _ScaleKeysInternal._normalize_keys_to_time_range_and_selection((1, 10))
+        time_range, selected = ScaleKeys._normalize_keys_to_time_range_and_selection(
+            (1, 10)
         )
         self.assertEqual(time_range, (1.0, 10.0))
         self.assertFalse(selected)
 
     def test_normalize_keys_list_multiple(self):
         """Test keys normalization with list of values."""
-        time_range, selected = (
-            _ScaleKeysInternal._normalize_keys_to_time_range_and_selection(
-                [1, 5, 10, 3]
-            )
+        time_range, selected = ScaleKeys._normalize_keys_to_time_range_and_selection(
+            [1, 5, 10, 3]
         )
         self.assertEqual(time_range, (1.0, 10.0))  # Should be min/max
         self.assertFalse(selected)
@@ -1003,43 +997,6 @@ class TestSamplesParameter(MayaTkTestCase):
 class TestHelperMethods(MayaTkTestCase):
     """Tests for internal helper methods."""
 
-    def test_build_object_groups_per_object(self):
-        """Test _build_object_groups with per_object mode."""
-        cube1 = pm.polyCube(name="helper_cube1")[0]
-        cube2 = pm.polyCube(name="helper_cube2")[0]
-
-        object_info = [
-            {"object": cube1, "start": 0, "end": 10},
-            {"object": cube2, "start": 5, "end": 15},
-        ]
-
-        groups = _ScaleKeysInternal._build_object_groups(object_info, "per_object")
-
-        self.assertEqual(len(groups), 2)
-        self.assertEqual(len(groups[0]), 1)
-        self.assertEqual(len(groups[1]), 1)
-
-        pm.delete(cube1)
-        pm.delete(cube2)
-
-    def test_build_object_groups_single_group(self):
-        """Test _build_object_groups with single_group mode."""
-        cube1 = pm.polyCube(name="helper_cube1")[0]
-        cube2 = pm.polyCube(name="helper_cube2")[0]
-
-        object_info = [
-            {"object": cube1, "start": 0, "end": 10},
-            {"object": cube2, "start": 5, "end": 15},
-        ]
-
-        groups = _ScaleKeysInternal._build_object_groups(object_info, "single_group")
-
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(len(groups[0]), 2)
-
-        pm.delete(cube1)
-        pm.delete(cube2)
-
     def test_resolve_group_bounds(self):
         """Test _resolve_group_bounds calculation."""
         group = [
@@ -1048,7 +1005,7 @@ class TestHelperMethods(MayaTkTestCase):
             {"start": 10, "end": 20},
         ]
 
-        bounds = _ScaleKeysInternal._resolve_group_bounds(group, None, None)
+        bounds = ScaleKeys._resolve_group_bounds(group, None, None)
 
         self.assertEqual(bounds, (0, 20))
 
@@ -1058,7 +1015,7 @@ class TestHelperMethods(MayaTkTestCase):
             {"start": 0, "end": 100},
         ]
 
-        bounds = _ScaleKeysInternal._resolve_group_bounds(group, 10, 50)
+        bounds = ScaleKeys._resolve_group_bounds(group, 10, 50)
 
         self.assertEqual(bounds, (10, 50))
 
@@ -1184,6 +1141,55 @@ class TestSplitStaticSegments(MayaTkTestCase):
         seg_ranges = [(s["start"], s["end"]) for s in segments]
         self.assertIn((0, 10), seg_ranges)
         self.assertIn((20, 30), seg_ranges)
+
+        pm.delete(cube)
+
+    def test_scale_overlap_multi_segment_bug(self):
+        """Regression Test: Scaling multi-segment object with overlap prevention.
+
+        Verifies that moving one segment during stagger doesn't accidentally move
+        other segments on the same curve (which happens if segment_range is missing).
+        """
+        cube = pm.polyCube(name="multi_seg_bug")[0]
+
+        # Create 2 segments on the same object separated by a STATIC gap
+        # Seg 1: 0-10 (0 to 10)
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+
+        # Gap: 10-20 (Hold at 10)
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+
+        # Seg 2: 20-30 (10 to 20)
+        pm.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Scale by 2.0 with split_static=True and prevent_overlap=True
+        # Pivot=0.
+        # Seg 1 (0-10) scales to 0-20.
+        # Seg 2 (20-30) scales to 40-60.
+        # Stagger (spacing=0) should pull Seg 2 back to start at 20 (end of Seg 1).
+
+        ScaleKeys.scale_keys(
+            objects=[cube],
+            factor=2.0,
+            pivot=0,
+            split_static=True,
+            prevent_overlap=True,
+        )
+
+        times = pm.keyframe(cube, q=True, tc=True)
+
+        # Check Seg 1 (0-20)
+        self.assertAlmostEqual(times[0], 0.0, msg="Segment 1 start should be 0.0")
+        self.assertAlmostEqual(times[1], 20.0, msg="Segment 1 end should be 20.0")
+
+        # Check Seg 2 (20-40) - Was 40-60, shifted back by 20
+        self.assertAlmostEqual(
+            times[2], 20.0, delta=0.001, msg="Segment 2 start should be 20.0"
+        )
+        self.assertAlmostEqual(
+            times[3], 40.0, delta=0.001, msg="Segment 2 end should be 40.0"
+        )
 
         pm.delete(cube)
 
