@@ -77,7 +77,7 @@ class AnimCurveDiagnostics:
             return 0
 
         # Filter for visibility curves using AnimUtils helper
-        vis_curves = AnimUtils._get_visibility_curves(all_curves)
+        vis_curves, _ = AnimUtils._get_visibility_curves(all_curves)
 
         if not vis_curves:
             if not quiet:
@@ -87,8 +87,13 @@ class AnimCurveDiagnostics:
         count = 0
         for curve in vis_curves:
             try:
-                # Force step tangents (outTangentType is what controls the segment shape)
-                pm.keyTangent(curve, edit=True, outTangentType="step")
+                # Force step tangents (apply to both sides to avoid interpolation artifacts)
+                pm.keyTangent(
+                    curve,
+                    edit=True,
+                    outTangentType="step",
+                    inTangentType="step",
+                )
                 count += 1
             except Exception as e:
                 if not quiet:

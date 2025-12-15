@@ -238,6 +238,7 @@ class _AnimUtilsMixin:
                     curves_to_step,
                     edit=True,
                     outTangentType="step",
+                    inTangentType="step",
                     **range_args,
                 )
             except RuntimeError as e:
