@@ -3,13 +3,20 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_repro_merged_segments: PASS
-  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
+test_scale_keys: FAIL
+  Tests: 62, Failures: 1, Errors: 0, Skipped: 0
+
+  FAILURE: test_collision_merge (test_scale_keys.TestSnappingEdgeCases.test_collision_merge)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_scale_keys.py", line 565, in test_collision_merge
+    self.assertEqual(len(times), 1)
+AssertionError: 2 != 1
+
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_repro_merged_segments: PASS (1 tests, 0 failures, 0 errors)
+  test_scale_keys: FAIL (62 tests, 1 failures, 0 errors)
 ======================================================================
-Total: 1 tests, 0 failures, 0 errors, 0 skipped
+Total: 62 tests, 1 failures, 0 errors, 0 skipped
 ======================================================================

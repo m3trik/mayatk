@@ -606,11 +606,33 @@ class ScaleKeys:
             overlap_groups_data=overlap_groups_data,
         )
 
+    def _resolve_pivot_value(
+        self, pivot: Union[float, str, None], start: float, end: float
+    ) -> float:
+        """Resolve pivot value from float, string ('center', 'start', 'end'), or None."""
+        if pivot is None:
+            return start
+        if isinstance(pivot, (int, float)) and not isinstance(pivot, bool):
+            return float(pivot)
+        if isinstance(pivot, str):
+            p = pivot.strip().lower()
+            if p == "center":
+                return start + (end - start) * 0.5
+            if p == "end":
+                return end
+            if p == "start":
+                return start
+            try:
+                return float(pivot)
+            except ValueError:
+                pass
+        return start
+
     def _execute_uniform_scale_for_group(
         self,
         groups: List[List[Dict[str, Any]]],
         factor: float,
-        pivot: Optional[float],
+        pivot: Union[float, str, None],
         group_mode: str,
         keys: Optional[Tuple[float, float]] = None,
         overlap_groups_data: Optional[List[Dict[str, Any]]] = None,
@@ -646,7 +668,11 @@ class ScaleKeys:
             if group_mode != "per_object":
                 if not group_range or group_range[1] < group_range[0]:
                     continue
-                group_pivot = pivot if pivot is not None else group_range[0]
+
+                group_pivot = self._resolve_pivot_value(
+                    pivot, group_range[0], group_range[1]
+                )
+
                 if global_pivot is None:
                     global_pivot = group_pivot
             else:
@@ -666,17 +692,20 @@ class ScaleKeys:
                     object_range = keys
 
                 # Determine pivot time based on mode
-                if pivot is not None and group_mode != "per_object":
-                    pivot_time = pivot
-                elif group_mode == "per_object":
-                    segment_range = info.get("segment_range")
-                    pivot_time = (
-                        segment_range[0]
-                        if segment_range
-                        else (object_range[0] if object_range else None)
-                    )
-                else:
+                if group_mode != "per_object":
                     pivot_time = group_pivot
+                else:
+                    # Per object pivot resolution
+                    calc_range = info.get("segment_range")
+                    if not calc_range:
+                        calc_range = object_range
+
+                    if calc_range:
+                        pivot_time = self._resolve_pivot_value(
+                            pivot, calc_range[0], calc_range[1]
+                        )
+                    else:
+                        pivot_time = None
 
                 if pivot_time is None:
                     continue
@@ -697,6 +726,9 @@ class ScaleKeys:
 
                     if current_duration > 1e-6:
                         effective_factor = factor / current_duration
+                        print(
+                            f"DEBUG: Obj {info['object']} GroupMode {group_mode} GrpDur {current_duration} Factor {factor} -> EffFactor {effective_factor} Pivot {pivot_time}"
+                        )
                     else:
                         continue
 
@@ -720,7 +752,10 @@ class ScaleKeys:
                 if time_arg:
                     try:
                         eps = 1e-3
-                        query_time_arg = (float(time_arg[0]) - eps, float(time_arg[1]) + eps)
+                        query_time_arg = (
+                            float(time_arg[0]) - eps,
+                            float(time_arg[1]) + eps,
+                        )
                     except Exception:
                         query_time_arg = time_arg
 
@@ -931,7 +966,10 @@ class ScaleKeys:
                         else:
                             pivot_time = (
                                 float(self.pivot)
-                                if (self.pivot is not None and self.group_mode != "per_object")
+                                if (
+                                    self.pivot is not None
+                                    and self.group_mode != "per_object"
+                                )
                                 else float(original_group_start)
                             )
                         seg_start = float(old_seg["start"])
@@ -947,7 +985,9 @@ class ScaleKeys:
                         expected_duration = None
 
                 new_seg = _pick_best_segment(
-                    obj, expected_start=expected_start, expected_duration=expected_duration
+                    obj,
+                    expected_start=expected_start,
+                    expected_duration=expected_duration,
                 )
                 if not new_seg:
                     continue
@@ -1007,7 +1047,7 @@ class ScaleKeys:
 
         for i in range(1, len(stagger_data)):
             data = stagger_data[i]
-            
+
             # Calculate gap from previous PROCESSED group
             # This handles cases where groups were skipped in stagger_data construction
             gap = data["original_start"] - previous_original_end
@@ -1137,6 +1177,15 @@ class ScaleKeys:
             curves = info.get("curves_to_scale", []) or info.get("all_curves", [])
             if curves:
                 self.utils._set_smart_tangents(curves, tangent_type="auto")
+
+    def _fix_visibility_tangents(self) -> None:
+        """Ensure visibility curves are set to 'step' tangents."""
+        for info in self.object_info:
+            curves = info.get("curves_to_scale", []) or info.get("all_curves", [])
+            if curves:
+                vis_curves, _ = self.utils._get_visibility_curves(curves)
+                if vis_curves:
+                    self.utils._set_smart_tangents(vis_curves, tangent_type="auto")
 
     def _build_overlap_groups(self) -> List[Dict[str, Any]]:
         if not self.prevent_overlap:
@@ -1270,6 +1319,16 @@ class ScaleKeys:
         if not self.objects:
             return 0
 
+        # For single_group mode, we must include all holds to ensure uniform scaling
+        # of the entire group. Discarding holds would cause them to remain in place
+        # while other keys move, breaking the animation.
+        ignore_holds = self.ignore_holds
+        ignore_visibility_holds = self.split_static
+
+        if self.group_mode == "single_group":
+            ignore_holds = False
+            ignore_visibility_holds = False
+
         # Use SegmentKeys for segment-based collection and grouping
         self.segments = SegmentKeys.collect_segments(
             self.objects_list,
@@ -1280,8 +1339,8 @@ class ScaleKeys:
             time_range=(
                 (self.base_start, self.base_end) if self.range_specified else None
             ),
-            ignore_visibility_holds=self.split_static,
-            ignore_holds=self.ignore_holds,
+            ignore_visibility_holds=ignore_visibility_holds,
+            ignore_holds=ignore_holds,
         )
 
         if not self.segments:
@@ -1291,8 +1350,7 @@ class ScaleKeys:
         # Capture original ranges if verbose
         original_ranges = []
         if self.verbose:
-            # Re-collect with detailed view for reporting (ignoring visibility holds)
-            # This ensures the report matches the "Animation Info" tool
+            # Re-collect with detailed view for reporting
             detailed_segments = SegmentKeys.collect_segments(
                 self.objects_list,
                 ignore=self.ignore,
@@ -1302,8 +1360,8 @@ class ScaleKeys:
                 time_range=(
                     (self.base_start, self.base_end) if self.range_specified else None
                 ),
-                ignore_visibility_holds=self.split_static,
-                ignore_holds=self.ignore_holds,
+                ignore_visibility_holds=ignore_visibility_holds,
+                ignore_holds=ignore_holds,
             )
             original_ranges = SegmentKeys.get_time_ranges(detailed_segments)
 
@@ -1364,14 +1422,18 @@ class ScaleKeys:
             gap_scale = 1.0
             if not self.absolute and not self.by_speed:
                 gap_scale = self.factor
-            
+
             # print(f"DEBUG: Staggering with gap_scale={gap_scale} (factor={self.factor}, absolute={self.absolute})")
 
             self._stagger_scaled_segments(groups, scale_factor=gap_scale)
 
         # Flatten tangents after scaling to prevent overshoot from skewed angles
-        if self.flatten_tangents and keys_scaled > 0:
-            self._flatten_tangents()
+        if keys_scaled > 0:
+            if self.flatten_tangents:
+                self._flatten_tangents()
+            else:
+                # Enforce step on visibility even if not flattening others
+                self._fix_visibility_tangents()
 
         # Reporting
         if self.by_speed:

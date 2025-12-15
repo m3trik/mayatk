@@ -116,7 +116,9 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         pm.setKeyframe(cube, t=20, v=10, at="tx")
         pm.setKeyframe(cube, t=30, v=20, at="tx")
 
-        segments = SegmentKeys.collect_segments([cube], split_static=True, ignore_holds=True)
+        segments = SegmentKeys.collect_segments(
+            [cube], split_static=True, ignore_holds=True
+        )
         self.assertEqual(len(segments), 2, "Should find 2 segments")
 
         seg1 = segments[0]
@@ -436,7 +438,9 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(result[1]["start"], 20)
         self.assertEqual(result[1]["end"], 30)
 
-    def test_collect_segments_split_static_ignore_holds_trailing_hold_after_last_segment(self):
+    def test_collect_segments_split_static_ignore_holds_trailing_hold_after_last_segment(
+        self,
+    ):
         """When the final segment has a trailing hold, ignore_holds controls inclusion.
 
         Setup:
@@ -458,7 +462,9 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(segs_default[0]["end"], 20)
         self.assertEqual(segs_default[0]["keyframes"], [0.0, 10.0, 20.0])
 
-        segs_ignore = SegmentKeys.collect_segments([cube], split_static=True, ignore_holds=True)
+        segs_ignore = SegmentKeys.collect_segments(
+            [cube], split_static=True, ignore_holds=True
+        )
         self.assertEqual(len(segs_ignore), 1)
         self.assertEqual(segs_ignore[0]["start"], 0)
         self.assertEqual(segs_ignore[0]["end"], 10)

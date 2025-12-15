@@ -223,6 +223,7 @@ class SegmentKeys(SegmentKeysInfo):
         time_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
         ignore_visibility_holds: bool = False,
         ignore_holds: bool = False,
+        exclude_next_start: bool = True,
     ) -> List[Dict[str, Any]]:
         """Collect animation segments from objects.
 
@@ -242,6 +243,11 @@ class SegmentKeys(SegmentKeysInfo):
             ignore_holds: If True, trailing holds are ignored entirely (not processed,
                 not reported). If False (default), trailing holds are absorbed into
                 each segment so they are scaled/shifted with the segment.
+            exclude_next_start: If True (default), the segment end will exclude the
+                start key of the next segment (using epsilon). This is useful for
+                operations like stagger where gaps should be collapsible. If False,
+                the segment absorbs keys up to and including the next start, which
+                is useful for scaling to preserve continuity.
 
         Returns:
             List of segment dictionaries.
@@ -348,27 +354,42 @@ class SegmentKeys(SegmentKeysInfo):
                     )
 
                     # Determine an upper bound for trailing holds.
-                    # - If there's a next segment, absorb keys up to (but not past) its start.
+                    # - If there's a next segment, absorb keys up to its start.
                     # - Otherwise absorb through the last key in the range.
                     if next_start is not None:
-                        upper = float(next_start)
+                        if exclude_next_start:
+                            eps = 1e-3
+                            upper = float(next_start) - eps
+                        else:
+                            eps = 1e-3
+                            upper = float(next_start)
                     else:
-                        upper = float(keyframes[-1])
+                        upper = float(keyframes[-1]) + eps
 
                     # Extend segment end to the last keyframe time within the trailing-hold window.
                     seg_end_expanded = float(seg_end)
                     for k in reversed(keyframes):
-                        if k <= upper + eps and k >= float(seg_end) - eps:
+                        if k <= upper and k >= float(seg_end) - eps:
                             seg_end_expanded = float(k)
                             break
 
-                    # Keep start as-is (segment starts at first active time).
-                    expanded_segments.append((float(seg_start), float(seg_end_expanded)))
+                    # Extend segment start for the first segment to include leading holds
+                    seg_start_expanded = float(seg_start)
+                    if i == 0 and keyframes:
+                        first_key = float(keyframes[0])
+                        if first_key < seg_start - eps:
+                            seg_start_expanded = first_key
+
+                    expanded_segments.append(
+                        (float(seg_start_expanded), float(seg_end_expanded))
+                    )
 
                 active_segments = expanded_segments
 
             # Create segment entry for each active range
-            for seg_start, seg_end in sorted(active_segments, key=lambda x: (x[0], x[1])):
+            for seg_start, seg_end in sorted(
+                active_segments, key=lambda x: (x[0], x[1])
+            ):
                 # Filter keyframes to those within this segment
                 segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
 
@@ -547,9 +568,12 @@ class SegmentKeys(SegmentKeysInfo):
 
             # Check overlap based on inclusive flag
             threshold = current_group["end"]
-            is_overlap = (
-                (seg["start"] <= threshold) if inclusive else (seg["start"] < threshold)
-            )
+            if inclusive:
+                # Allow for small epsilon gaps (e.g. from exclude_next_start)
+                # Epsilon used in collect_segments is 1e-3, so we use slightly more.
+                is_overlap = seg["start"] <= (threshold + 2e-3)
+            else:
+                is_overlap = seg["start"] < threshold
 
             if is_overlap:
                 # Overlapping - merge into current group

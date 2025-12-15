@@ -164,23 +164,16 @@ class _AnimUtilsMixin:
         return filtered
 
     @staticmethod
-    def _set_smart_tangents(
+    def _get_visibility_curves(
         curves: List["pm.PyNode"],
-        tangent_type: str = "auto",
-        time_range: Optional[Tuple[float, float]] = None,
-    ) -> None:
-        """Apply tangent type to curves, enforcing 'step' for visibility attributes.
+    ) -> Tuple[List["pm.PyNode"], List["pm.PyNode"]]:
+        """Split curves into visibility curves and others.
 
-        Parameters:
-            curves: List of animation curves to modify.
-            tangent_type: The tangent type to apply to standard curves (default: 'auto').
-            time_range: Optional (start, end) tuple to limit the effect.
+        Returns:
+            Tuple of (visibility_curves, other_curves)
         """
-        if not curves:
-            return
-
-        curves_to_smooth = []
-        curves_to_step = []
+        vis_curves = []
+        other_curves = []
 
         for curve in curves:
             is_visibility = False
@@ -199,9 +192,31 @@ class _AnimUtilsMixin:
                 pass
 
             if is_visibility:
-                curves_to_step.append(curve)
+                vis_curves.append(curve)
             else:
-                curves_to_smooth.append(curve)
+                other_curves.append(curve)
+
+        return vis_curves, other_curves
+
+    @staticmethod
+    def _set_smart_tangents(
+        curves: List["pm.PyNode"],
+        tangent_type: str = "auto",
+        time_range: Optional[Tuple[float, float]] = None,
+    ) -> None:
+        """Apply tangent type to curves, enforcing 'step' for visibility attributes.
+
+        Parameters:
+            curves: List of animation curves to modify.
+            tangent_type: The tangent type to apply to standard curves (default: 'auto').
+            time_range: Optional (start, end) tuple to limit the effect.
+        """
+        if not curves:
+            return
+
+        curves_to_step, curves_to_smooth = _AnimUtilsMixin._get_visibility_curves(
+            curves
+        )
 
         range_args = {"time": time_range} if time_range else {}
 

@@ -29,6 +29,7 @@ class StaggerKeys:
         group_overlapping: bool = False,
         ignore: Union[str, List[str]] = None,
         split_static: bool = True,
+        merge_touching: bool = False,
         ignore_visibility_holds: bool = True,
         verbose: bool = False,
         verbose_header: str = None,
@@ -67,6 +68,8 @@ class StaggerKeys:
                 Curves connected to these attributes will not be moved.
             split_static: If True, treats segments of animation separated by static gaps
                 (flat keys) as separate groups. Each segment will be staggered independently.
+            merge_touching: If True, touching segments (end == start) are merged into a
+                single group when using group_overlapping. Default False.
             ignore_visibility_holds: If True (default), visibility curves are treated as
                 active only during transitions, preventing long static holds from
                 bridging gaps between segments.
@@ -81,90 +84,52 @@ class StaggerKeys:
             pm.warning("No objects provided.")
             return
 
+        # Auto-enable group_overlapping if merge_touching is requested
+        if merge_touching:
+            group_overlapping = True
+
         objects = pm.ls(objects, type="transform", flatten=True)
         # Invert logic is applied after collection and sorting to ensure consistent behavior
 
-        # Stage 1: Collect segments using KeyframeGrouper
-        # Note: We need custom collection here because stagger supports selected_keys
-        obj_keyframe_data = []
-        first_keyframe = None
-        last_keyframe = None
+        # Stage 1: Collect segments using SegmentKeys
+        # Check if we should operate on selected keys only
+        selected_keys_only = False
+        try:
+            # Check if any keys are selected on the target objects
+            if pm.keyframe(objects, query=True, name=True, selected=True):
+                selected_keys_only = True
+        except Exception:
+            pass
 
-        for obj in objects:
-            # Get animation curves - check for selected keys first
-            selected_curves = pm.keyframe(obj, query=True, name=True, selected=True)
-
-            # Determine which curves to use based on whether keys are selected
-            if selected_curves:
-                curves_to_use = SegmentKeys._filter_curves_by_ignore(
-                    selected_curves, ignore
-                )
-                keyframes = AnimUtils.get_keyframe_times(
-                    curves_to_use, mode="selected", from_curves=True
-                )
-            else:
-                all_curves = (
-                    pm.listConnections(obj, type="animCurve", s=True, d=False) or []
-                )
-                curves_to_use = SegmentKeys._filter_curves_by_ignore(all_curves, ignore)
-                keyframes = AnimUtils.get_keyframe_times(
-                    curves_to_use, from_curves=True
-                )
-
-            if keyframes:
-                # If split_static is enabled, break the object's animation into active segments
-                segments = []
-                if split_static:
-                    segments = SegmentKeys._get_active_animation_segments(
-                        curves_to_use,
-                        ignore_visibility_holds=ignore_visibility_holds,
-                    )
-
-                # If no segments found, treat as one block
-                if not segments:
-                    segments = [(keyframes[0], keyframes[-1])]
-
-                for seg_start, seg_end in segments:
-                    # Filter keyframes to those within this segment
-                    segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
-
-                    obj_keyframe_data.append(
-                        {
-                            "obj": obj,
-                            "curves": curves_to_use,
-                            "keyframes": segment_keys,
-                            "start": seg_start,
-                            "end": seg_end,
-                            "duration": seg_end - seg_start,
-                            "segment_range": (seg_start, seg_end),
-                        }
-                    )
-
-                if first_keyframe is None or keyframes[0] < first_keyframe:
-                    first_keyframe = keyframes[0]
-                if last_keyframe is None or keyframes[-1] > last_keyframe:
-                    last_keyframe = keyframes[-1]
+        obj_keyframe_data = SegmentKeys.collect_segments(
+            objects,
+            ignore=ignore,
+            split_static=split_static,
+            selected_keys_only=selected_keys_only,
+            ignore_visibility_holds=ignore_visibility_holds,
+            ignore_holds=False,  # Ensure trailing holds are absorbed/moved
+            exclude_next_start=True,
+        )
 
         if not obj_keyframe_data:
             pm.warning("No keyframes found on the provided objects.")
             return
 
+        # Calculate bounds
+        first_keyframe = min(seg["start"] for seg in obj_keyframe_data)
+        last_keyframe = max(seg["end"] for seg in obj_keyframe_data)
+
         # Capture original ranges if verbose
         original_ranges = []
         if verbose:
-            # Re-collect with detailed view for reporting (ignoring visibility holds)
-            # This ensures the report matches the "Animation Info" tool
-            detailed_segments = SegmentKeys.collect_segments(
-                objects,
-                ignore=ignore,
-                split_static=split_static,
-                ignore_visibility_holds=ignore_visibility_holds,
-            )
-            original_ranges = SegmentKeys.get_time_ranges(detailed_segments)
+            # Use the already collected data for reporting
+            original_ranges = SegmentKeys.get_time_ranges(obj_keyframe_data)
 
         # Stage 2: Group segments if requested using SegmentKeys
         if group_overlapping:
-            obj_keyframe_data = SegmentKeys._group_by_overlap(obj_keyframe_data)
+            obj_keyframe_data = SegmentKeys._group_by_overlap(
+                obj_keyframe_data, inclusive=merge_touching
+            )
 
         # Always merge groups that share curves to prevent double-transforming
         obj_keyframe_data = SegmentKeys.merge_groups_sharing_curves(obj_keyframe_data)
@@ -189,12 +154,23 @@ class StaggerKeys:
             preserve_gaps=False,
         )
 
-        if smooth_tangents:
-            for data in obj_keyframe_data:
-                curves = data.get("curves", [])
-                if curves:
-                    # Use shared helper for smart tangent setting
-                    AnimUtils._set_smart_tangents(curves, tangent_type="auto")
+        # Ensure visibility tangents are always step, regardless of smooth_tangents
+        for data in obj_keyframe_data:
+            curves = data.get("curves", [])
+            if not curves:
+                continue
+
+            if smooth_tangents:
+                # Use shared helper for smart tangent setting (handles both types)
+                AnimUtils._set_smart_tangents(curves, tangent_type="auto")
+            else:
+                # Only fix visibility curves
+                vis_curves, _ = AnimUtils._get_visibility_curves(curves)
+                if vis_curves:
+                    # We can use _set_smart_tangents with only vis curves
+                    # It will see them as vis curves and set them to step
+                    # It won't touch anything else because we passed nothing else
+                    AnimUtils._set_smart_tangents(vis_curves, tangent_type="auto")
 
         if verbose and original_ranges:
             # Determine headers
@@ -220,6 +196,7 @@ class StaggerKeys:
                 ignore=ignore,
                 split_static=split_static,
                 ignore_visibility_holds=split_static,
+                exclude_next_start=True,
             )
             new_ranges = SegmentKeys.get_time_ranges(new_segments)
             SegmentKeys.print_time_ranges(

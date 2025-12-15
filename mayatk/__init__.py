@@ -40,6 +40,8 @@ DEFAULT_INCLUDE = {
     "core_utils.mash->Mash": "*",
     "core_utils.preview->Preview": "Preview",
     "core_utils.diagnostics->Diagnostics": "*",
+    "core_utils.diagnostics.animation": "AnimCurveDiagnostics",
+    "core_utils.diagnostics.scene": "SceneDiagnostics",
     # Edit utils - specific classes
     "edit_utils.selection": "Selection",
     "edit_utils.naming": "Naming",
