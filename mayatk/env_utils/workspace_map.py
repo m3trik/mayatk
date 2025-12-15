@@ -525,7 +525,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
             if workspace_data and workspace_data.get("type") == "workspace":
                 workspace_path = workspace_data.get("path")
                 if workspace_path and os.path.isdir(workspace_path):
-                    ptk.open_file(workspace_path)
+                    ptk.open_explorer(workspace_path)
                     self.logger.info(f"Opened folder: {workspace_path}")
 
 

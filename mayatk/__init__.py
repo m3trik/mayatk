@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.9.53"
+__version__ = "0.9.54"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -30,35 +30,45 @@ DEFAULT_INCLUDE = {
     "_xform_utils": "*",
     "_nurbs_utils": "*",
     "_light_utils": "*",
+    # Animation utilities
+    "anim_utils.scale_keys": "*",
+    "anim_utils.stagger_keys": "*",
+    "anim_utils.segment_keys": "SegmentKeys",
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.auto_instancer": "AutoInstancer",
-    "core_utils.mash->Mash": ["MashToolkit", "MashNetworkNodes"],
-    "core_utils.preview->Preview": "*",
+    "core_utils.mash->Mash": "*",
+    "core_utils.preview->Preview": "Preview",
     "core_utils.diagnostics->Diagnostics": "*",
+    "core_utils.diagnostics.animation": "AnimCurveDiagnostics",
+    "core_utils.diagnostics.scene": "SceneDiagnostics",
     # Edit utils - specific classes
-    "edit_utils.selection": "*",
-    "edit_utils.naming": "*",
-    "edit_utils.primitives": "*",
-    "edit_utils.snap": "*",
+    "edit_utils.selection": "Selection",
+    "edit_utils.naming": "Naming",
+    "edit_utils.primitives": "Primitives",
+    "edit_utils.snap": "Snap",
     "edit_utils.macros": "Macros",
-    "edit_utils.bevel": "*",
-    "edit_utils.bridge": "*",
-    "edit_utils.cut_on_axis": "*",
-    "edit_utils.duplicate_grid": "*",
-    "edit_utils.duplicate_linear": "*",
-    "edit_utils.duplicate_radial": "*",
-    "edit_utils.dynamic_pipe": "*",
-    "edit_utils.mirror": "*",
-    "edit_utils.mesh_graph": "*",
+    "edit_utils.bevel": "Bevel",
+    "edit_utils.bridge": "Bridge",
+    "edit_utils.cut_on_axis": "CutOnAxis",
+    "edit_utils.duplicate_grid": "DuplicateGrid",
+    "edit_utils.duplicate_linear": "DuplicateLinear",
+    "edit_utils.duplicate_radial": "DuplicateRadial",
+    "edit_utils.dynamic_pipe": "DynamicPipe",
+    "edit_utils.mirror": "Mirror",
+    "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
-    "env_utils.command_port": "*",
+    "env_utils.command_port": "CommandPort",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
-    "env_utils.namespace_sandbox": "*",
-    "env_utils.reference_manager": "*",
-    "env_utils.script_output": "*",
-    "env_utils.hierarchy_manager": "*",
+    "env_utils.namespace_sandbox": "NamespaceSandbox",
+    "env_utils.reference_manager": "ReferenceManager",
+    "env_utils.script_output": "ScriptOutput",
+    "env_utils.hierarchy_manager": "HierarchyManager",
+    # Material utils
+    "mat_utils.stingray_arnold_shader": "*",
+    "mat_utils.texture_path_editor": "TexturePathEditor",
+    "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",
     "ui_utils.ui_manager": "UiManager",

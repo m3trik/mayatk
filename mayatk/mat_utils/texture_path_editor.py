@@ -436,7 +436,7 @@ class TexturePathEditorSlots:
                 exists = os.path.exists(abs_path)
                 path_cache[path] = (exists, abs_path)
 
-            widget.set_action_color(item, "reset" if exists else "invalid", row, col)
+            widget.format_item(item, key="reset" if exists else "invalid")
             item.setToolTip("" if exists else f"Missing file:\n{abs_path}")
 
         widget.set_column_formatter(1, format_if_invalid)
@@ -642,9 +642,7 @@ class TexturePathEditorSlots:
         if not nodes_to_graph:
             return
 
-        pm.select(nodes_to_graph, r=True)
-        pm.mel.eval("HypershadeWindow;")
-        pm.mel.eval("hypershade -graphInputOutput;")
+        MatUtils.graph_materials(nodes_to_graph)
 
     def select_material(self, selection=None):
         """Select the materials associated with the selected rows."""

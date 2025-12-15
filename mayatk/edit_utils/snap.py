@@ -8,9 +8,9 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-# from this package:
+# From this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.components import Components
 
 
 class Snap(ptk.HelpMixin):
@@ -31,8 +31,8 @@ class Snap(ptk.HelpMixin):
         Returns:
             int: Number of vertices that were snapped.
         """
-        vertices = components.Components.get_components(obj1, "vertices")
-        closestVerts = components.Components.get_closest_vertex(
+        vertices = Components.get_components(obj1, "vertices")
+        closestVerts = Components.get_closest_vertex(
             vertices, obj2, tolerance=tolerance, freeze_transforms=freeze_transforms
         )
 

@@ -1,3 +1,0 @@
-openPorts NOT in CLASS_TO_MODULE
-Direct import works: <function openPorts at 0x000001FDBDDF8540>
-Via mayatk failed: module mayatk has no attribute 'openPorts'

@@ -1,0 +1,122 @@
+'{{NODE_StingrayPBS_1}}':
+  attributes:
+    use_ao_map: 1.0
+    use_color_map: 1.0
+    use_metallic_map: 1.0
+    use_normal_map: 1.0
+    use_roughness_map: 1.0
+  connections:
+  - source: '{{NODE_StingrayPBS_1}}.outColor'
+    target: '{{NODE_shadingEngine_1}}.surfaceShader'
+  metadata:
+    connected_to_shading_engine: true
+  type: StingrayPBS
+'{{NODE_file_1}}':
+  attributes:
+    fileHasAlpha: true
+    fileTextureName: C:/Program Files/Autodesk/Maya2025/presets/ShaderFX/Images/PBS/midday/diffuse_cube.dds
+    outAlpha: 1.0
+    outSizeX: 16.0
+    outSizeY: 96.0
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_1}}.outColor'
+    target: '{{NODE_StingrayPBS_1}}.TEX_global_diffuse_cube'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: null
+  type: file
+'{{NODE_file_2}}':
+  attributes:
+    fileHasAlpha: true
+    fileTextureName: C:/Program Files/Autodesk/Maya2025/presets/ShaderFX/Images/PBS/midday/specular_cube.dds
+    outAlpha: 1.0
+    outSizeX: 256.0
+    outSizeY: 1536.0
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_2}}.outColor'
+    target: '{{NODE_StingrayPBS_1}}.TEX_global_specular_cube'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: null
+  type: file
+'{{NODE_file_3}}':
+  attributes:
+    fileHasAlpha: true
+    fileTextureName: C:/Program Files/Autodesk/Maya2025/presets/ShaderFX/Images/PBS/ibl_brdf_lut.png
+    outAlpha: 1.0
+    outSizeX: 128.0
+    outSizeY: 128.0
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_3}}.outColor'
+    target: '{{NODE_StingrayPBS_1}}.TEX_brdf_lut'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: null
+  type: file
+'{{NODE_file_4}}':
+  attributes:
+    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Base_Color.png
+    outAlpha: 1.0
+    outSizeX: 4096.0
+    outSizeY: 4096.0
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_4}}.outColor'
+    target: '{{NODE_StingrayPBS_1}}.TEX_color_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Base_Color
+  type: file
+'{{NODE_file_5}}':
+  attributes:
+    fileHasAlpha: true
+    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Normal.png
+    outAlpha: 1.0
+    outSizeX: 4096.0
+    outSizeY: 4096.0
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_5}}.outColor'
+    target: '{{NODE_StingrayPBS_1}}.TEX_normal_map'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: Normal
+  type: file
+'{{NODE_file_6}}':
+  attributes:
+    fileTextureName: generated_map_ORM.png
+    uvTileProxyGenerate: true
+  connections:
+  - source: '{{NODE_file_6}}.outColorB'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapX'
+  - source: '{{NODE_file_6}}.outColorB'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapY'
+  - source: '{{NODE_file_6}}.outColorB'
+    target: '{{NODE_StingrayPBS_1}}.TEX_metallic_mapZ'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapX'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapY'
+  - source: '{{NODE_file_6}}.outColorG'
+    target: '{{NODE_StingrayPBS_1}}.TEX_roughness_mapZ'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapX'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapY'
+  - source: '{{NODE_file_6}}.outColorR'
+    target: '{{NODE_StingrayPBS_1}}.TEX_ao_mapZ'
+  metadata:
+    connected_to_shading_engine: false
+    map_type: ORM
+  type: file
+'{{NODE_shadingEngine_1}}':
+  attributes:
+    isHistoricallyInteresting: 0
+    renderableOnlySet: true
+  connections: []
+  metadata:
+    connected_to_shading_engine: false
+  type: shadingEngine

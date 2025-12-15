@@ -1581,6 +1581,31 @@ class MatUtils(MatUtilsInternals):
 
         return results
 
+    @staticmethod
+    def graph_materials(
+        materials: Union[str, List[str], object], mode: str = "showUpAndDownstream"
+    ) -> None:
+        """Open the Hypershade and graph the specified materials.
+
+        Parameters:
+            materials (str/list): The material(s) to graph.
+            mode (str): The graphing mode.
+                    Options: "graphMaterials", "addSelected", "showUpstream", "showDownstream", "showUpAndDownstream"
+        """
+        # Ensure materials are selected
+        if not materials:
+            return
+
+        pm.select(materials)
+
+        # Open Hypershade
+        pm.mel.HypershadeWindow()
+
+        # Graph the materials
+        pm.evalDeferred(
+            lambda: pm.mel.hyperShadePanelGraphCommand("hyperShadePanel1", mode)
+        )
+
 
 # -----------------------------------------------------------------------------
 

@@ -10,7 +10,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.components import Components as components
+from mayatk.core_utils.components import Components
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -753,7 +753,7 @@ class EditUtils(ptk.HelpMixin):
         pm.undoInfo(openChunk=True)
         nonManifoldVerts = set()
 
-        vertices = components.Components.get_components(objects, "vertices")
+        vertices = Components.get_components(objects, "vertices")
         for vertex in vertices:
             connected_faces = pm.polyListComponentConversion(
                 vertex, fromVertex=1, toFace=1

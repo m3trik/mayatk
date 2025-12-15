@@ -45,6 +45,61 @@ class AnimCurveDiagnostics:
         )
 
     @classmethod
+    @CoreUtils.undoable
+    def repair_visibility_tangents(
+        cls,
+        objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]] = None,
+        recursive: bool = True,
+        quiet: bool = False,
+    ) -> int:
+        """
+        Repair visibility animation curves by forcing 'step' tangents.
+
+        Visibility attributes (boolean/enum) should always use stepped tangents to avoid
+        interpolation artifacts (e.g. visibility=0.5).
+
+        Args:
+            objects: Specific objects to check. If None, checks all curves in scene.
+            recursive: Whether to check hierarchy if objects are transforms.
+            quiet: Suppress output messages.
+
+        Returns:
+            int: Number of curves repaired.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        # Collect all animation curves
+        all_curves = cls._collect_anim_curves(objects, recursive)
+
+        if not all_curves:
+            if not quiet:
+                pm.warning("No animation curves found.")
+            return 0
+
+        # Filter for visibility curves using AnimUtils helper
+        vis_curves = AnimUtils._get_visibility_curves(all_curves)
+
+        if not vis_curves:
+            if not quiet:
+                print("No visibility curves found.")
+            return 0
+
+        count = 0
+        for curve in vis_curves:
+            try:
+                # Force step tangents (outTangentType is what controls the segment shape)
+                pm.keyTangent(curve, edit=True, outTangentType="step")
+                count += 1
+            except Exception as e:
+                if not quiet:
+                    print(f"Failed to repair {curve}: {e}")
+
+        if not quiet:
+            print(f"Repaired tangents on {count} visibility curves.")
+
+        return count
+
+    @classmethod
     def _repair_corrupted_curves(
         cls,
         objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]] = None,
