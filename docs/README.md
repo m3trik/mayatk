@@ -1,7 +1,7 @@
 # MAYATK (Maya Toolkit)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.9.58-blue.svg)](https://pypi.org/project/mayatk/)
+[![Version](https://img.shields.io/badge/Version-0.9.59-blue.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
 [![Tests](https://img.shields.io/badge/Tests-1%20passed-brightgreen.svg)](test/)
