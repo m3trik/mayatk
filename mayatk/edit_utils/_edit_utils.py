@@ -488,6 +488,7 @@ class EditUtils(ptk.HelpMixin):
         pivot: Union[str, tuple] = "object",  # Fix: Use Union[str, tuple]
         mergeMode: int = -1,
         uninstance: bool = False,
+        use_object_axes: bool = True,
         **kwargs,
     ):
         """Mirror geometry across a given axis.
@@ -504,6 +505,7 @@ class EditUtils(ptk.HelpMixin):
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
             uninstance (bool): If True, uninstances the object before mirroring.
+            use_object_axes (bool): If True, uses object's local axes (consumed by caller, ignored here but accepted to prevent kwargs error).
             kwargs: Additional arguments for polyMirrorFace.
 
         Returns:
@@ -596,8 +598,22 @@ class EditUtils(ptk.HelpMixin):
         # Get the transform node for the mirror operation
         mirror_transform = NodeUtils.get_transform_node(mirror_node)
         if not mirror_transform:
+            # Try to find via connections if it's a history node
+            try:
+                outputs = mirror_node.output.outputs(type="mesh")
+                if outputs:
+                    mirror_transform = outputs[0].getParent()
+            except Exception:
+                pass
+
+        if not mirror_transform:
             pm.warning(f"[Mirror] No transform node found for {mirror_node}.")
             return None
+
+        # Ensure mirror_transform is a single node
+        if isinstance(mirror_transform, list):
+            mirror_transform = mirror_transform[0]
+
         try:
             sep_nodes = pm.polySeparate(mirror_transform, uss=True, inp=True)
             if len(sep_nodes) < 2:
@@ -1130,14 +1146,16 @@ class EditUtils(ptk.HelpMixin):
 
         # Get currently selected objects and components
         objects = pm.ls(sl=True, objectsOnly=True)
-        components = pm.ls(sl=True, flatten=True)
+        all_selection = pm.ls(sl=True, flatten=True)
+        # Filter components to ensure they are actual components
+        components = [c for c in all_selection if isinstance(c, pm.Component)]
 
         for obj in objects:
             # For joints, use removeJoint
             if pm.objectType(obj, isType="joint"):
                 pm.removeJoint(obj)
             # For mesh objects, look for component selections
-            elif pm.objectType(obj, isType="mesh"):
+            elif NodeUtils.is_mesh(obj):
                 obj_long_name = obj.longName()  # Convert Mesh object to its long name
                 # Check for selected components of the object
                 selected_components = [

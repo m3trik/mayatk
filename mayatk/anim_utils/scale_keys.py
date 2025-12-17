@@ -332,11 +332,12 @@ class ScaleKeys:
         self,
         curve: Any,
         time_pairs: List[Tuple[float, float]],
+        allow_merge: bool = False,
     ) -> int:
         """Execute a move operation directly."""
         if not pm.objExists(curve):
             return 0
-        return self.utils._move_curve_keys(curve, time_pairs)
+        return self.utils._move_curve_keys(curve, time_pairs, allow_merge=allow_merge)
 
     @staticmethod
     def _execute_shift_operation(
@@ -806,8 +807,11 @@ class ScaleKeys:
                     )
 
         # Execute aggregated moves
+        allow_merge = bool(self.snap_mode and self.snap_mode != "none")
         for curve, pairs in aggregated_moves.items():
-            keys_scaled += self._execute_move_operation(curve, pairs)
+            keys_scaled += self._execute_move_operation(
+                curve, pairs, allow_merge=allow_merge
+            )
 
         if overlap_groups_data:
             self._execute_overlap_prevention(overlap_groups_data)

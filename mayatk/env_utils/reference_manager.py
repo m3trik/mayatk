@@ -135,8 +135,68 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         """Check if a file is an auto-save file based on its name."""
         return bool(self.prefilter_regex.match(filename))
 
+    def _extract_strip_patterns(self, filter_text: str, delimiter=(",", ";")) -> list:
+        """Extract the core patterns to strip from wildcard filter text.
+
+        For example:
+        - '*_v001*' -> ['_v001']
+        - 'character_*' -> ['character_']
+        - '*' -> []
+        - '*_module.ma;C130*' -> ['_module.ma', 'C130']
+        - 'test_*_rig' -> ['test_'] (takes the longest contiguous part)
+
+        Parameters:
+            filter_text (str): The filter text possibly containing multiple patterns.
+            delimiter (str or tuple): Delimiter(s) used to split patterns.
+
+        Returns:
+            list: List of core patterns to strip from filenames.
+        """
+        import re
+
+        if not filter_text:
+            return []
+
+        # Split by delimiters first
+        if isinstance(delimiter, tuple):
+            pattern = "|".join(re.escape(d) for d in delimiter)
+            patterns = [p.strip() for p in re.split(pattern, filter_text) if p.strip()]
+        elif delimiter in filter_text:
+            patterns = [p.strip() for p in filter_text.split(delimiter) if p.strip()]
+        else:
+            patterns = [filter_text]
+
+        strip_patterns = []
+        for pattern in patterns:
+            # If pattern is just wildcards, skip
+            if pattern.replace("*", "").replace("?", "") == "":
+                continue
+
+            # Remove leading wildcards
+            while pattern.startswith("*") or pattern.startswith("?"):
+                pattern = pattern[1:]
+
+            # Remove trailing wildcards
+            while pattern.endswith("*") or pattern.endswith("?"):
+                pattern = pattern[:-1]
+
+            # If there are still wildcards in the middle, take the longest contiguous part
+            if "*" in pattern or "?" in pattern:
+                parts = [part for part in pattern.replace("?", "*").split("*") if part]
+                if parts:
+                    pattern = max(parts, key=len)
+                else:
+                    pattern = ""
+
+            if pattern:
+                strip_patterns.append(pattern)
+
+        return strip_patterns
+
     def _extract_strip_pattern(self, filter_text: str) -> str:
         """Extract the core pattern to strip from wildcard filter text.
+
+        DEPRECATED: Use _extract_strip_patterns() for multi-pattern support.
 
         For example:
         - '*_v001*' -> '_v001'
@@ -145,34 +205,8 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         - 'literal_text' -> 'literal_text'
         - 'test_*_rig' -> 'test_' and '_rig' (but we'll take the longest contiguous part)
         """
-        if not filter_text:
-            return ""
-
-        # Remove leading and trailing wildcards to get the core pattern
-        pattern = filter_text
-
-        # If pattern is just wildcards, return empty string
-        if pattern.replace("*", "").replace("?", "") == "":
-            return ""
-
-        # Remove leading wildcards
-        while pattern.startswith("*") or pattern.startswith("?"):
-            pattern = pattern[1:]
-
-        # Remove trailing wildcards
-        while pattern.endswith("*") or pattern.endswith("?"):
-            pattern = pattern[:-1]
-
-        # If there are still wildcards in the middle, take the longest contiguous part
-        if "*" in pattern or "?" in pattern:
-            # Split by wildcards and find the longest part
-            parts = [part for part in pattern.replace("?", "*").split("*") if part]
-            if parts:
-                pattern = max(parts, key=len)
-            else:
-                pattern = ""
-
-        return pattern
+        patterns = self._extract_strip_patterns(filter_text, delimiter=(",", ";"))
+        return patterns[0] if patterns else ""
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
@@ -724,7 +758,13 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         if filter_text and filter_enabled:
             self.logger.debug(f"Filtering file list with filter: {filter_text}")
-            file_list = ptk.filter_list(file_list, inc=filter_text, basename_only=True)
+            file_list = ptk.filter_list(
+                file_list,
+                inc=filter_text,
+                basename_only=True,
+                delimiter=(",", ";"),
+                match_all=True,
+            )
 
         # Identify and include external references
         current_refs = self.current_references
@@ -784,10 +824,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         if filter_text and strip_enabled:
             # Strip the filter text from display names
-            # Handle wildcard patterns by extracting the core pattern
-            strip_pattern = self._extract_strip_pattern(filter_text)
-            file_names = [name.replace(strip_pattern, "") for name in file_names]
-            self.logger.debug(f"Stripped '{strip_pattern}' from file names for display")
+            # Handle wildcard patterns by extracting the core patterns
+            strip_patterns = self._extract_strip_patterns(filter_text)
+            for strip_pattern in strip_patterns:
+                file_names = [name.replace(strip_pattern, "") for name in file_names]
+            self.logger.debug(f"Stripped {strip_patterns} from file names for display")
 
         self.logger.debug(f"Updating table with {len(file_names)} files.")
         self.update_table(file_names, file_list)
@@ -1043,9 +1084,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Rename the selected scene file."""
         t = self.ui.tbl000
         selected_items = t.selectedItems()
+
+        # Fallback to current item if nothing is selected (context menu case)
         if not selected_items:
-            self.sb.message_box("No scene selected.")
-            return
+            current_item = t.currentItem()
+            if current_item:
+                selected_items = [current_item]
+            else:
+                self.sb.message_box("No scene selected.")
+                return
 
         # Assuming single selection for rename
         item = selected_items[0]
@@ -1120,9 +1167,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Delete the selected scene file."""
         t = self.ui.tbl000
         selected_items = t.selectedItems()
+
+        # Fallback to current item if nothing is selected (context menu case)
         if not selected_items:
-            self.sb.message_box("No scene selected.")
-            return
+            current_item = t.currentItem()
+            if current_item:
+                selected_items = [current_item]
+            else:
+                self.sb.message_box("No scene selected.")
+                return
 
         # Get all selected files
         rows = set(item.row() for item in selected_items)

@@ -220,11 +220,11 @@ class TaskFactory:
 
         summary_lines.append("")  # Empty line for spacing
 
-        # Simple counts
-        summary_lines.append(f"Tasks Executed: {tasks_count}")
+        # Simple counts in x/y format
+        summary_lines.append(f"Tasks Executed: {tasks_count}/{tasks_count}")
         if checks_count > 0:
             checks_passed = checks_count - failed_checks_count
-            summary_lines.append(f"Checks Passed: {checks_passed}")
+            summary_lines.append(f"Checks Passed: {checks_passed}/{checks_count}")
 
         self.logger.log_box("EXPORT SUCCESSFUL", summary_lines)
 

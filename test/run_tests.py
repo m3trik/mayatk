@@ -16,6 +16,10 @@ Usage:
     python run_tests.py --quick                  # Run quick validation test
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
+
+Directory Structure:
+    - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
+    - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
 import re
 import socket
@@ -230,11 +234,19 @@ except Exception as e:
             import unittest
             import importlib.util
 
-            # Clear cached mayatk modules to ensure fresh code is loaded
-            modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
-            for mod in modules_to_clear:
-                del sys.modules[mod]
-            print(f"Cleared {{len(modules_to_clear)}} cached mayatk modules")
+            # Use ModuleReloader to properly reload mayatk modules
+            try:
+                from pythontk import ModuleReloader
+                reloader = ModuleReloader(include_submodules=True)
+                import mayatk
+                reloaded = reloader.reload(mayatk)
+                print(f"[ModuleReloader] Reloaded {{len(reloaded)}} mayatk modules")
+            except Exception as e:
+                # Fallback to simple module clearing if reloader fails
+                modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
+                for mod in modules_to_clear:
+                    del sys.modules[mod]
+                print(f"[Fallback] Cleared {{len(modules_to_clear)}} cached mayatk modules")
 
             # Setup results file
             output_file = r'{output_file_path}'
@@ -366,6 +378,14 @@ import os
 runner_dir = r'{runner_dir}'
 if runner_dir not in sys.path:
     sys.path.insert(0, runner_dir)
+
+# AGGRESSIVE MODULE CLEARING - clear all mayatk modules BEFORE running tests
+# This ensures fresh imports from the test files
+mods_to_clear = [k for k in list(sys.modules.keys()) 
+                 if 'mayatk' in k.lower() or '_temp_test_runner' in k]
+for mod in mods_to_clear:
+    del sys.modules[mod]
+print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
 
 # Force reload/execution of the temp runner
 try:

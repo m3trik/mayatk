@@ -28,6 +28,7 @@ class StaggerKeys:
         invert: bool = False,
         group_overlapping: bool = False,
         ignore: Union[str, List[str]] = None,
+        channel_box_attrs_only: bool = False,
         split_static: bool = True,
         merge_touching: bool = False,
         ignore_visibility_holds: bool = True,
@@ -66,6 +67,9 @@ class StaggerKeys:
                 single block. Objects in the same group will be moved together.
             ignore: Attribute name(s) to ignore when staggering (e.g., 'visibility').
                 Curves connected to these attributes will not be moved.
+            channel_box_attrs_only: If True, only affect attributes currently selected
+                in the Channel Box. This provides precise control over which channels
+                are staggered.
             split_static: If True, treats segments of animation separated by static gaps
                 (flat keys) as separate groups. Each segment will be staggered independently.
             merge_touching: If True, touching segments (end == start) are merged into a
@@ -91,6 +95,19 @@ class StaggerKeys:
         objects = pm.ls(objects, type="transform", flatten=True)
         # Invert logic is applied after collection and sorting to ensure consistent behavior
 
+        # Get channel box attributes if requested
+        channel_box_attrs = None
+        if channel_box_attrs_only:
+            channel_box_attrs = pm.channelBox(
+                "mainChannelBox", query=True, selectedMainAttributes=True
+            )
+            if not channel_box_attrs:
+                pm.warning(
+                    "Channel Box Attrs Only is enabled but no attributes are selected "
+                    "in the Channel Box. Select attributes or disable this option."
+                )
+                return
+
         # Stage 1: Collect segments using SegmentKeys
         # Check if we should operate on selected keys only
         selected_keys_only = False
@@ -106,6 +123,7 @@ class StaggerKeys:
             ignore=ignore,
             split_static=split_static,
             selected_keys_only=selected_keys_only,
+            channel_box_attrs=channel_box_attrs,
             ignore_visibility_holds=ignore_visibility_holds,
             ignore_holds=False,  # Ensure trailing holds are absorbed/moved
             exclude_next_start=True,
@@ -195,6 +213,7 @@ class StaggerKeys:
                 objects,
                 ignore=ignore,
                 split_static=split_static,
+                channel_box_attrs=channel_box_attrs,
                 ignore_visibility_holds=split_static,
                 exclude_next_start=True,
             )

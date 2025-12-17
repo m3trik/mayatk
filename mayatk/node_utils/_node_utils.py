@@ -263,12 +263,19 @@ class NodeUtils(ptk.HelpMixin):
 
         if attributes:
             result = pm.listAttr(result, read=True, hasData=True)
+            # print(f"DEBUG: listAttr result: {result}")
 
         # Convert element type and apply filters
-        result = CoreUtils.convert_array_type(
-            result, returned_type=returned_type, flatten=True
-        )
+        if not attributes:
+            result = CoreUtils.convert_array_type(
+                result, returned_type=returned_type, flatten=True
+            )
         result = ptk.filter_list(result, inc, exc)
+
+        if attributes:
+            # When returning attributes, we always want a list, regardless of input cardinality
+            return result
+
         return ptk.format_return(result, nodes)
 
     @classmethod
@@ -307,11 +314,16 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = CoreUtils.convert_array_type(
-            result, returned_type=returned_type, flatten=True
-        )
+        if not attributes:
+            result = CoreUtils.convert_array_type(
+                result, returned_type=returned_type, flatten=True
+            )
         # filter
         result = ptk.filter_list(result, inc, exc)
+
+        if attributes:
+            return list(set(result))
+
         # return as list if `nodes` was given as a list.
         return ptk.format_return(list(set(result)), nodes)
 
@@ -353,9 +365,10 @@ class NodeUtils(ptk.HelpMixin):
             result = pm.listAttr(result, read=1, hasData=1)
 
         # convert element type.
-        result = CoreUtils.convert_array_type(
-            result, returned_type=returned_type, flatten=True
-        )
+        if not attributes:
+            result = CoreUtils.convert_array_type(
+                result, returned_type=returned_type, flatten=True
+            )
         # filter
         result = ptk.filter_list(result, inc, exc)
         # return as list if `nodes` was given as a list.
@@ -693,9 +706,31 @@ class NodeUtils(ptk.HelpMixin):
                         component_name = f"{attr}{component_suffixes[i]}"
                         pm.setAttr(f"{node}.{component_name}", component)
                 else:
-                    node.addAttr(
-                        attr, defaultValue=value, keyable=keyable, dataType=attr_type
-                    )
+                    # Distinguish between attributeType and dataType
+                    data_types = [
+                        "string",
+                        "stringArray",
+                        "matrix",
+                        "doubleArray",
+                        "int32Array",
+                        "vectorArray",
+                        "pointArray",
+                        "mesh",
+                        "lattice",
+                        "nurbsCurve",
+                        "nurbsSurface",
+                    ]
+
+                    if attr_type in data_types:
+                        node.addAttr(attr, keyable=keyable, dataType=attr_type)
+                    else:
+                        node.addAttr(
+                            attr,
+                            defaultValue=value,
+                            keyable=keyable,
+                            attributeType=attr_type,
+                        )
+
                     pm.setAttr(
                         f"{node}.{attr}", value
                     )  # Set attribute value immediately after creation
@@ -806,10 +841,13 @@ class NodeUtils(ptk.HelpMixin):
                     instances.append(iterDag.fullPathName())
                 iterDag.next()
         else:
+            objects = pm.ls(objects)
             shapes = pm.listRelatives(objects, s=1)
             instances = pm.listRelatives(shapes, ap=1)
             if not return_parent_objects:
-                [instances.remove(obj) for obj in objects]
+                for obj in objects:
+                    if obj in instances:
+                        instances.remove(obj)
 
         return instances
 

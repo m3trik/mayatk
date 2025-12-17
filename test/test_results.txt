@@ -3,20 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_scale_keys: FAIL
-  Tests: 62, Failures: 1, Errors: 0, Skipped: 0
-
-  FAILURE: test_collision_merge (test_scale_keys.TestSnappingEdgeCases.test_collision_merge)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_scale_keys.py", line 565, in test_collision_merge
-    self.assertEqual(len(times), 1)
-AssertionError: 2 != 1
-
+test_components: LOAD ERROR
+  unexpected indent (O:/Cloud/Code/_scripts/mayatk/test/test_components.py, line 336)
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_scale_keys: FAIL (62 tests, 1 failures, 0 errors)
+  test_components: LOAD ERROR - unexpected indent (O:/Cloud/Code/_scripts/mayatk/t
 ======================================================================
-Total: 62 tests, 1 failures, 0 errors, 0 skipped
+Total: 0 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

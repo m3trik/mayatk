@@ -85,7 +85,8 @@ class RigUtils(ptk.HelpMixin):
         """
         grp = pm.group(empty=True, n=name)
         try:
-            pm.parent(grp, objects)
+            if objects:
+                pm.parent(objects, grp)
         except Exception as error:
             print(
                 f"{__file__} in create_group\n\t# Error: Unable to parent object(s): {error} #"
@@ -123,18 +124,21 @@ class RigUtils(ptk.HelpMixin):
         Returns:
             pm.nt.Transform: The created locator transform node.
         """
-        pos = kwargs.get("position", None)
+        pos = kwargs.pop("position", None)
+
         if pos is not None:
             if not isinstance(pos, (tuple, list)):
-                transform_node = NodeUtils.get_transform_node(pos)
+                transform_node = NodeUtils.get_transform_node([pos])
                 if transform_node:
-                    kwargs["position"] = pm.xform(
-                        transform_node[0], q=True, ws=True, t=True
-                    )
+                    pos = pm.xform(transform_node[0], q=True, ws=True, t=True)
                 else:
-                    kwargs.pop("position", None)
+                    pos = None
 
         loc = pm.spaceLocator(**{k: v for k, v in kwargs.items() if v is not None})
+
+        if pos is not None:
+            pm.xform(loc, ws=True, t=pos)
+
         if scale != 1:
             pm.scale(loc, scale, scale, scale)
         if parent:

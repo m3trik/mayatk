@@ -89,6 +89,12 @@ class SceneExporter(ptk.LoggingMixin):
 
         # Set export configuration
         self.export_dir = os.path.abspath(os.path.expandvars(export_dir))
+
+        # Validate export directory exists
+        if not os.path.isdir(self.export_dir):
+            self.logger.error(f"Export directory does not exist: {self.export_dir}")
+            return False
+
         self.preset_file = preset_file  # Ensure the setter is called
         self.output_name = output_name
         self.name_regex = name_regex
@@ -178,6 +184,7 @@ class SceneExporter(ptk.LoggingMixin):
         scene_path = pm.sceneName() or "untitled"
         scene_name = os.path.splitext(os.path.basename(scene_path))[0]
         export_name = self.output_name or scene_name
+        export_name = export_name.removesuffix(".fbx").removesuffix(".FBX")
         if self.timestamp:
             export_name += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
         export_name = self.format_export_name(export_name)

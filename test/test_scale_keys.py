@@ -1352,6 +1352,64 @@ class TestMergeTouching(MayaTkTestCase if pm else unittest.TestCase):
         self.assertAlmostEqual(c2_start, 5.0, places=4)
 
 
+class TestScaleKeysFixes(MayaTkTestCase):
+    """Tests for recent fixes (Subframe keys, Visibility Tangents)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = self.create_test_cube("test_scale_fix_cube")
+
+        # Create standard animation 0-10
+        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
+        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
+
+        # Create visibility animation (stepped)
+        pm.setKeyframe(self.cube, t=0, v=1, at="visibility")
+        pm.setKeyframe(self.cube, t=5, v=0, at="visibility")
+        pm.setKeyframe(self.cube, t=10, v=1, at="visibility")
+
+        # Ensure visibility is stepped initially
+        pm.keyTangent(self.cube, at="visibility", itt="step", ott="step")
+
+    def test_subframe_snapping(self):
+        """Test that keys snap to nearest frame when snap_mode='nearest'."""
+        # Create a subframe key
+        pm.setKeyframe(self.cube, t=5.5, v=5, at="tx")
+
+        # Scale by 1.0 (identity) but with snapping enabled
+        ScaleKeys(objects=[self.cube], factor=1.0, snap_mode="nearest").execute()
+
+        # Check key times
+        times = pm.keyframe(self.cube, at="tx", q=True, tc=True)
+        for t in times:
+            self.assertAlmostEqual(
+                t, round(t), delta=0.001, msg=f"Key at {t} is not integer"
+            )
+
+        # Specifically check the 5.5 key moved to 6.0 (nearest)
+        self.assertIn(6.0, times)
+        self.assertNotIn(5.5, times)
+
+    def test_visibility_tangent_preservation(self):
+        """Test that visibility tangents remain 'step' after scaling."""
+        # Scale by 2.0
+        ScaleKeys(objects=[self.cube], factor=2.0, snap_mode="nearest").execute()
+
+        # Check visibility tangents
+        times = pm.keyframe(self.cube, at="visibility", q=True, tc=True)
+        for t in times:
+            in_type = pm.keyTangent(
+                self.cube, at="visibility", t=(t,), q=True, itt=True
+            )[0]
+            out_type = pm.keyTangent(
+                self.cube, at="visibility", t=(t,), q=True, ott=True
+            )[0]
+
+            # In-tangent cannot be 'step' in Maya, so we expect 'clamped' (or whatever we set)
+            # self.assertEqual(in_type, "step", f"In-tangent at {t} should be step")
+            self.assertEqual(out_type, "step", f"Out-tangent at {t} should be step")
+
+
 if __name__ == "__main__":
     try:
         from PySide6.QtWidgets import QApplication

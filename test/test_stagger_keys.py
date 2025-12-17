@@ -503,5 +503,53 @@ class TestSharedCurveCollapse(MayaTkTestCase):
         )
 
 
+class TestStaggerKeysFixes(MayaTkTestCase):
+    """Tests for recent fixes (Channel Box filtering, Visibility Tangents)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = self.create_test_cube("test_stagger_fix_cube")
+
+        # Create standard animation 0-10
+        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
+        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
+
+        # Create visibility animation (stepped)
+        pm.setKeyframe(self.cube, t=0, v=1, at="visibility")
+        pm.setKeyframe(self.cube, t=5, v=0, at="visibility")
+        pm.setKeyframe(self.cube, t=10, v=1, at="visibility")
+
+        # Ensure visibility is stepped initially
+        pm.keyTangent(self.cube, at="visibility", itt="step", ott="step")
+
+    def test_visibility_tangent_preservation(self):
+        """Test that visibility tangents remain 'step' after staggering."""
+        # Stagger (shift by 5 frames)
+        StaggerKeys.stagger_keys(objects=[self.cube], start_frame=5, spacing=0)
+
+        # Check visibility tangents
+        times = pm.keyframe(self.cube, at="visibility", q=True, tc=True)
+        for t in times:
+            in_type = pm.keyTangent(
+                self.cube, at="visibility", t=(t,), q=True, itt=True
+            )[0]
+            out_type = pm.keyTangent(
+                self.cube, at="visibility", t=(t,), q=True, ott=True
+            )[0]
+
+            # In-tangent cannot be 'step' in Maya, so we expect 'clamped' (or whatever we set)
+            # self.assertEqual(in_type, "step", f"In-tangent at {t} should be step")
+            self.assertEqual(out_type, "step", f"Out-tangent at {t} should be step")
+
+    def test_channel_box_filtering(self):
+        """Test that channel_box_attrs_only parameter works."""
+        # We can't easily mock UI selection, but we can verify the parameter is accepted
+        # and doesn't crash.
+        try:
+            StaggerKeys.stagger_keys(objects=[self.cube], channel_box_attrs_only=True)
+        except Exception as e:
+            self.fail(f"stagger_keys with channel_box_attrs_only=True failed: {e}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

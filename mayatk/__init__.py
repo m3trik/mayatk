@@ -42,6 +42,7 @@ DEFAULT_INCLUDE = {
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.animation": "AnimCurveDiagnostics",
     "core_utils.diagnostics.scene": "SceneDiagnostics",
+    "core_utils.diagnostics.uv": "UvDiagnostics",
     # Edit utils - specific classes
     "edit_utils.selection": "Selection",
     "edit_utils.naming": "Naming",
@@ -76,6 +77,8 @@ DEFAULT_INCLUDE = {
     "xform_utils.matrices": "Matrices",
     # NURBS utils
     "nurbs_utils.image_tracer": "ImageTracer",
+    # Rig utils
+    "rig_utils.controls": "Controls",
 }
 
 bootstrap_package(

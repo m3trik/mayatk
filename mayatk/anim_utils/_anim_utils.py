@@ -2,7 +2,6 @@
 # coding=utf-8
 from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any, Iterable, Set
 import math
-import os
 
 try:
     import pymel.core as pm
@@ -18,13 +17,6 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.xform_utils._xform_utils import XformUtils
-
-
-DEBUG_SPEED_RETIME = os.environ.get("MTK_SPEED_RETIME_DEBUG", "1").lower() not in {
-    "0",
-    "false",
-    "off",
-}
 
 
 class _AnimUtilsMixin:
@@ -179,15 +171,20 @@ class _AnimUtilsMixin:
             is_visibility = False
             try:
                 # Check curve name
-                if "visibility" in curve.name().lower():
+                curve_name = curve.name().lower()
+                if "visibility" in curve_name:
                     is_visibility = True
                 else:
                     # Check connections
                     plugs = curve.outputs(plugs=True)
                     for plug in plugs:
-                        if "visibility" in plug.partialName(includeNode=False).lower():
+                        plug_name = plug.partialName(includeNode=False).lower()
+                        if "visibility" in plug_name:
                             is_visibility = True
                             break
+
+                # Debug print
+                # print(f"DEBUG: Curve {curve} (name={curve_name}) is_vis={is_visibility}")
             except Exception:
                 pass
 
@@ -234,11 +231,13 @@ class _AnimUtilsMixin:
 
         if curves_to_step:
             try:
+                # 'step' is only valid for out-tangents.
+                # For in-tangents, we use 'clamped' to avoid errors, though it doesn't affect the step behavior.
                 pm.keyTangent(
                     curves_to_step,
                     edit=True,
                     outTangentType="step",
-                    inTangentType="step",
+                    inTangentType="clamped",
                     **range_args,
                 )
             except RuntimeError as e:
@@ -393,23 +392,32 @@ class _AnimUtilsMixin:
         if not data:
             return
 
+        in_type = data.get("inTangentType")
+        out_type = data.get("outTangentType")
+
         try:
             pm.keyTangent(
                 curve,
                 edit=True,
                 time=(time,),
-                inTangentType=data.get("inTangentType"),
-                outTangentType=data.get("outTangentType"),
+                inTangentType=in_type,
+                outTangentType=out_type,
             )
-            pm.keyTangent(
-                curve,
-                edit=True,
-                time=(time,),
-                inAngle=data.get("inAngle"),
-                outAngle=data.get("outAngle"),
-                inWeight=data.get("inWeight"),
-                outWeight=data.get("outWeight"),
-            )
+            # Only apply angle/weight for non-step tangents
+            # Step tangents are immediate jumps with no adjustable angle/weight
+            if in_type not in ("step", "stepnext") or out_type not in (
+                "step",
+                "stepnext",
+            ):
+                pm.keyTangent(
+                    curve,
+                    edit=True,
+                    time=(time,),
+                    inAngle=data.get("inAngle"),
+                    outAngle=data.get("outAngle"),
+                    inWeight=data.get("inWeight"),
+                    outWeight=data.get("outWeight"),
+                )
         except Exception:
             pass
 
@@ -1263,11 +1271,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             first_key_time = min(keys)
                             offset = frame - first_key_time
 
-                        # Move the keys using moveKey
+                        # Move the keys using keyframe
                         if time_range:
-                            pm.moveKey(obj, time=time_range, timeSlice=offset)
+                            pm.keyframe(obj, edit=True, time=time_range, relative=True, timeChange=offset)
                         else:
-                            pm.moveKey(obj, timeSlice=offset)
+                            pm.keyframe(obj, edit=True, relative=True, timeChange=offset)
 
                         keys_moved += len(keys)
 
@@ -2050,51 +2058,23 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         return merged
 
-    @classmethod
-    def _snap_curve_keys(
-        cls,
-        curve: "pm.PyNode",
-        key_times: List[float],
-        snap_mode: str = "nearest",
-    ) -> int:
-        """Snap keyframe times to whole frames using the specified rounding mode.
-
-        Parameters:
-            curve: The animation curve to snap keys on.
-            key_times: List of keyframe times to snap.
-            snap_mode: Rounding mode ('nearest', 'preferred', 'aggressive_preferred', 'none').
-
-        Returns:
-            Number of keys snapped.
-        """
-        if not key_times or snap_mode == "none":
-            return 0
-
-        snapped = 0
-        keys_to_move = []
-
-        for time in key_times:
-            # Only snap if the time has decimal places
-            if time != int(time):
-                new_time = ptk.MathUtils.round_value(time, mode=snap_mode)
-                if abs(new_time - time) > 1e-6:  # Only move if actually different
-                    keys_to_move.append((time, new_time))
-
-        # Move the keys
-        if keys_to_move:
-            snapped = cls._move_curve_keys(curve, keys_to_move)
-
-        return snapped
-
     @staticmethod
     def _move_curve_keys(
         curve: "pm.PyNode",
         time_pairs: List[Tuple[float, float]],
         tolerance: float = 1e-4,
+        allow_merge: bool = False,
     ) -> int:
         """Move keys on a curve to new times, preserving value and tangents.
 
         Uses a read-cut-set approach to avoid keyframe collisions during retiming.
+        
+        Parameters:
+            curve: The animation curve to modify.
+            time_pairs: List of (old_time, new_time) tuples.
+            tolerance: Tolerance for floating point comparisons.
+            allow_merge: If True, keys moved to the same time will overwrite each other.
+                         If False (default), keys are nudged to avoid collision.
         """
 
         if not time_pairs:
@@ -2159,10 +2139,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 # Avoid collisions with existing keys and other moved keys.
                 # If the time is taken, nudge forward by a tiny epsilon until free.
                 # This preserves key count and prevents segments collapsing to 0 duration.
-                safety = 0
-                while _is_time_taken(candidate_time, taken_times) and safety < 1000:
-                    candidate_time += epsilon
-                    safety += 1
+                if not allow_merge:
+                    safety = 0
+                    while _is_time_taken(candidate_time, taken_times) and safety < 1000:
+                        candidate_time += epsilon
+                        safety += 1
 
                 pm.setKeyframe(curve, time=candidate_time, value=value)
                 AnimUtils._apply_curve_tangent_data(curve, candidate_time, tangent_data)
@@ -2178,174 +2159,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             pass
 
         return moved_count
-
-        return moved
-
-    @staticmethod
-    def _retime_curves_to_constant_speed(
-        curves: List["pm.PyNode"],
-        source_range: Tuple[float, float],
-        target_range: Tuple[float, float],
-        sample_times: List[float],
-        progress: List[float],
-        snap_mode: str = "nearest",
-    ) -> int:
-        """Retimes keys on the supplied curves so progress happens at constant speed.
-
-        Parameters:
-            curves: Animation curves to retime.
-            source_range: (start, end) range of the original key distribution.
-            target_range: (start, end) desired output time range.
-            sample_times: Sampled time values for motion progress.
-            progress: Normalized progress values (0-1) at each sample time.
-            snap_mode: Rounding mode for whole-number keyframe times. Options:
-                - "none": No snapping, preserve precise decimal times
-                - "nearest": Round to nearest whole number (default)
-                - "floor": Always round down
-                - "ceil": Always round up
-                - "half_up": Round .5 and above up
-                - "preferred": Round to aesthetically pleasing numbers (conservative)
-                - "aggressive_preferred": Round to preferred numbers (aggressive)
-
-        Returns:
-            int: Number of keys successfully moved.
-        """
-
-        if not curves or not sample_times:
-            return 0
-
-        source_start, source_end = source_range
-        target_start, target_end = target_range
-
-        source_duration = source_end - source_start
-        target_duration = target_end - target_start
-        if source_duration <= 0.0 or target_duration <= 0.0:
-            return 0
-
-        min_delta = max(1e-4, target_duration * 1e-5)
-        total_moved = 0
-
-        for curve in curves:
-            key_times = pm.keyframe(
-                curve, query=True, timeChange=True, time=source_range
-            )
-            if not key_times or len(key_times) < 2:
-                if DEBUG_SPEED_RETIME:
-                    # print(
-                    #     f"[speed-retime] Skipping {curve}: insufficient key data (keys={len(key_times) if key_times else 0})"
-                    # )
-                    pass
-                continue
-
-            unique_times = sorted(set(key_times))
-            new_time_pairs: List[Tuple[float, float]] = []
-            prev_enforced_time: Optional[float] = None
-            prev_output_time: Optional[float] = None
-            retain_whole_times = all(
-                ptk.MathUtils.is_close_to_whole(t) for t in unique_times
-            )
-            debug_rows: List[str] = []
-
-            # Identify actual first/last keys in this curve's range
-            first_key_time = unique_times[0]
-            last_key_time = unique_times[-1]
-
-            if DEBUG_SPEED_RETIME:
-                # print(
-                #     f"[speed-retime] Curve {curve}: keys={len(unique_times)} retain_whole={retain_whole_times} first={first_key_time:.3f} last={last_key_time:.3f}"
-                # )
-                pass
-
-            for idx, original_time in enumerate(unique_times):
-                is_first_key = idx == 0
-                is_last_key = idx == len(unique_times) - 1
-
-                normalized = ptk.MathUtils.evaluate_sampled_progress(
-                    original_time, sample_times, progress
-                )
-                raw_target_time = target_start + normalized * target_duration
-
-                # Anchor endpoints to the requested target range boundaries
-                if is_first_key:
-                    raw_target_time = target_start
-                elif is_last_key:
-                    raw_target_time = target_end
-                # Also anchor to range boundaries if they match
-                elif math.isclose(original_time, source_start, abs_tol=1e-4):
-                    raw_target_time = target_start
-                elif math.isclose(original_time, source_end, abs_tol=1e-4):
-                    raw_target_time = target_end
-
-                if (
-                    prev_enforced_time is not None
-                    and raw_target_time <= prev_enforced_time
-                    and prev_enforced_time < target_end
-                ):
-                    raw_target_time = min(target_end, prev_enforced_time + min_delta)
-
-                new_time = raw_target_time
-                snapped = False
-
-                if retain_whole_times and ptk.MathUtils.is_close_to_whole(
-                    original_time
-                ):
-                    # Snap to whole frames when possible so integer-timed keys stay on integers.
-                    candidate = ptk.MathUtils.round_value(
-                        raw_target_time, mode=snap_mode
-                    )
-                    candidate = max(target_start, min(target_end, float(candidate)))
-                    if (
-                        prev_output_time is None
-                        or candidate >= prev_output_time - min_delta
-                    ):
-                        new_time = candidate
-                        snapped = True
-
-                # Re-anchor first/last keys after snapping attempt
-                if is_first_key:
-                    new_time = target_start
-                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
-                        target_start
-                    )
-                elif is_last_key:
-                    new_time = target_end
-                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
-                        target_end
-                    )
-                # Also handle range boundary anchoring
-                elif math.isclose(original_time, source_start, abs_tol=1e-4):
-                    new_time = target_start
-                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
-                        target_start
-                    )
-                elif math.isclose(original_time, source_end, abs_tol=1e-4):
-                    new_time = target_end
-                    snapped = retain_whole_times and ptk.MathUtils.is_close_to_whole(
-                        target_end
-                    )
-
-                new_time_pairs.append((original_time, new_time))
-                prev_enforced_time = raw_target_time
-                prev_output_time = new_time
-
-                if DEBUG_SPEED_RETIME:
-                    # debug_rows.append(
-                    #     f"    {original_time:.3f} -> {new_time:.3f} (raw={raw_target_time:.3f}, snapped={'yes' if snapped else 'no'})"
-                    # )
-                    pass
-
-            moved = AnimUtils._move_curve_keys(curve, new_time_pairs)
-            total_moved += moved
-
-            if DEBUG_SPEED_RETIME:
-                # for row in debug_rows:
-                #     print(row)
-                # print(
-                #     f"[speed-retime] Curve {curve}: moved {moved} keys (original={source_start:.3f}->{source_end:.3f}, target={target_start:.3f}->{target_end:.3f})"
-                # )
-                pass
-
-        return total_moved
 
     @staticmethod
     def _shift_curves_by_amount(
