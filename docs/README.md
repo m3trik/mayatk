@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/Version-0.9.56-blue.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-6%20passed%201%20failed-orange.svg)](test/)
+[![Tests](https://img.shields.io/badge/Tests-502%20passed-brightgreen.svg)](test/)
 
 <!-- short_description_start -->
 *mayatk is a collection of utility functions and helper classes for Autodesk Maya, providing convenience wrappers and common workflow patterns for Maya scripting.*

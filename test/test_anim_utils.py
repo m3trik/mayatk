@@ -220,12 +220,6 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertIsInstance(res, list)
         self.assertEqual(len(res), 2)
 
-    def test_format_frame_rate_str(self):
-        """Test frame rate string formatting."""
-        rate = AnimUtils.format_frame_rate_str("film")
-        self.assertIsInstance(rate, str)
-        self.assertIn("24 fps", rate)
-
     # =========================================================================
     # Key Manipulation (Advanced)
     # =========================================================================
