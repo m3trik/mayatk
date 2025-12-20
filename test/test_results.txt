@@ -3,30 +3,50 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_scene_audit: FAIL
-  Tests: 7, Failures: 1, Errors: 0, Skipped: 0
+test_anim_utils: PASS
+  Tests: 26, Failures: 0, Errors: 0, Skipped: 0
 
-  FAILURE: test_print_report (test_scene_audit.TestSceneDiagnostics.test_print_report)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_scene_audit.py", line 168, in test_print_report
-    self.analyzer.print_report(report)
-  File "O:\Cloud/Code/_scripts/mayatk\mayatk\core_utils\diagnostics\scene_diag.py", line 2655, in print_report
-    self.log_table(data, headers, title="Top 5 High Poly")
-    ^^^^^^^^^^^^^^
-AttributeError: 'SceneAnalyzer' object has no attribute 'log_table'
+test_cam_utils: PASS
+  Tests: 14, Failures: 0, Errors: 0, Skipped: 0
 
-During handling of the above exception, another exception occurred:
+test_components: PASS
+  Tests: 27, Failures: 0, Errors: 0, Skipped: 0
 
-Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_scene_audit.py", line 170, in test_print_report
-    self.fail(f"print_report failed with populated report: {e}")
-AssertionError: print_report failed with populated report: 'SceneAnalyzer' object has no attribute 'log_table'
+test_controls: PASS
+  Tests: 18, Failures: 0, Errors: 0, Skipped: 0
 
+test_core_utils: PASS
+  Tests: 26, Failures: 0, Errors: 0, Skipped: 0
 
-======================================================================
-SUMMARY
-======================================================================
-  test_scene_audit: FAIL (7 tests, 1 failures, 0 errors)
-======================================================================
-Total: 7 tests, 1 failures, 0 errors, 0 skipped
-======================================================================
+test_display_utils: PASS
+  Tests: 4, Failures: 0, Errors: 0, Skipped: 0
+
+test_edit_utils: PASS
+  Tests: 18, Failures: 0, Errors: 0, Skipped: 0
+
+test_env_utils: PASS
+  Tests: 12, Failures: 0, Errors: 0, Skipped: 0
+
+test_image_tracer: PASS
+  Tests: 4, Failures: 0, Errors: 0, Skipped: 0
+
+test_light_utils: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
+
+test_mat_utils: PASS
+  Tests: 13, Failures: 0, Errors: 0, Skipped: 0
+
+test_node_utils: PASS
+  Tests: 16, Failures: 0, Errors: 0, Skipped: 0
+
+test_nurbs_utils: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
+
+test_playblast_exporter: PASS
+  Tests: 14, Failures: 0, Errors: 0, Skipped: 0
+
+test_repro_scale_tangents: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
+
+test_rig_utils: PASS
+  Tests: 11, Failures: 0, Errors: 0, Skipped: 0

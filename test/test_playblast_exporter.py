@@ -34,10 +34,18 @@ except ImportError:
 
 from base_test import MayaTkTestCase
 
+# Check for full test mode
+FULL_TESTS = os.environ.get("MAYATK_FULL_TESTS", "0") == "1"
+
 
 class TestPlayblastExporter(MayaTkTestCase):
     def setUp(self):
         super().setUp()
+        if FULL_TESTS:
+            print(f"\nRunning {self._testMethodName} in FULL mode")
+        else:
+            print(f"\nRunning {self._testMethodName} in QUICK mode")
+
         pm.newFile(force=True)
         self.cube = pm.polyCube(name="testCube")[0]
         # Create some animation
@@ -173,9 +181,29 @@ class TestPlayblastExporter(MayaTkTestCase):
             print("Skipping metadata test (OpenCV not available)")
             return
 
+        if FULL_TESTS:
+            pm.playbackOptions(min=1, max=10)
+        else:
+            pm.playbackOptions(min=1, max=5)
+
         exporter = PlayblastExporter()
         # Use a temp directory for the output
         output_base = os.path.join(os.environ["TEMP"], "test_metadata_export")
+
+        # Cleanup before run to avoid leftover frames from previous runs
+        if os.path.exists(output_base + "_test_vid"):
+            import shutil
+            try:
+                shutil.rmtree(output_base + "_test_vid")
+            except OSError:
+                pass
+        # Also check for files if it wasn't a directory (since make_directory defaults to False)
+        # The exporter creates files with prefix output_base + "_test_vid"
+        # We should probably use a unique directory to be safe
+        import uuid
+        unique_dir = os.path.join(os.environ["TEMP"], f"test_metadata_{uuid.uuid4().hex}")
+        os.makedirs(unique_dir, exist_ok=True)
+        output_base = os.path.join(unique_dir, "test_export")
 
         # Use specific resolution
         width, height = 320, 240
@@ -234,9 +262,12 @@ class TestPlayblastExporter(MayaTkTestCase):
             )
 
             # Check duration
-            # Range 1-10 is 10 frames
-            expected_frames = 10
-            # Allow small variance due to ffmpeg encoding quirks or container overhead, but for 10 frames it should be exact
+            if FULL_TESTS:
+                expected_frames = 10
+            else:
+                expected_frames = 5
+
+            # Allow small variance due to ffmpeg encoding quirks or container overhead, but for small frames it should be exact
             self.assertEqual(
                 frame_count,
                 expected_frames,
@@ -253,7 +284,13 @@ class TestPlayblastExporter(MayaTkTestCase):
                 self.fail(f"Playblast failed: {e}")
         finally:
             # Cleanup
-            if os.path.exists(output_base + "_test_vid"):
+            if 'unique_dir' in locals() and os.path.exists(unique_dir):
+                import shutil
+                try:
+                    shutil.rmtree(unique_dir)
+                except OSError:
+                    pass
+            elif os.path.exists(output_base + "_test_vid"):
                 import shutil
 
                 try:
@@ -286,9 +323,13 @@ class TestPlayblastExporter(MayaTkTestCase):
         shader.outColor.connect(sg.surfaceShader)
         pm.sets(sg, forceElement=sphere)
 
-        # Heavy Animation: Keyframes on every frame for 48 frames (2 seconds)
-        start_frame = 1
-        end_frame = 48
+        # Heavy Animation: Keyframes on every frame
+        if FULL_TESTS:
+            start_frame = 1
+            end_frame = 48  # 2 seconds
+        else:
+            start_frame = 1
+            end_frame = 5  # Short test
 
         for i in range(start_frame, end_frame + 1):
             # Move in a circle
@@ -547,10 +588,18 @@ class TestPlayblastExporter(MayaTkTestCase):
         # Set scene to 15 fps ("game")
         pm.currentUnit(time="game")
 
-        # Create animation: 30 frames = 2 seconds at 15fps
-        # If ffmpeg defaults to 25fps input, it would be 30/25 = 1.2 seconds (too short)
-        start, end = 1, 30
-        expected_duration = 2.0
+        # Create animation
+        if FULL_TESTS:
+            # 30 frames = 2 seconds at 15fps
+            start, end = 1, 30
+            expected_duration = 2.0
+        else:
+            # 15 frames = 1 second at 15fps
+            start, end = 1, 15
+            expected_duration = 1.0
+
+        # Explicitly set playback range in the new unit
+        pm.playbackOptions(min=start, max=end)
 
         cube = pm.polyCube()[0]
         pm.setKeyframe(cube, t=start, v=0, at="tx")
