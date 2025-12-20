@@ -11,6 +11,17 @@ import sys
 import os
 from typing import Optional, Literal
 
+# Initialize QApplication for standalone mode
+try:
+    from qtpy import QtWidgets
+
+    if not QtWidgets.QApplication.instance():
+        _app = QtWidgets.QApplication([])
+except ImportError:
+    pass
+except Exception as e:
+    print(f"Warning: Failed to initialize QApplication: {e}")
+
 
 class MayaConnection:
     """Manages connection to Maya for testing purposes."""
@@ -53,10 +64,13 @@ class MayaConnection:
         try:
             import maya.cmds
 
+            # Verify we can actually call commands (initialized)
+            maya.cmds.about(version=True)
+
             self.mode = "interactive"
             self.is_connected = True
             return "interactive"
-        except ImportError:
+        except (ImportError, AttributeError, RuntimeError):
             pass
 
         # Try command port
@@ -94,9 +108,26 @@ class MayaConnection:
             import maya.standalone
 
             maya.standalone.initialize(name="python")
+
+            # Initialize QApplication for UI tests
+            try:
+                from qtpy import QtWidgets
+
+                instance = QtWidgets.QApplication.instance()
+                if not instance:
+                    print("Initializing QApplication...", flush=True)
+                    # Keep reference to avoid garbage collection
+                    self._qapp = QtWidgets.QApplication([])
+                else:
+                    print(f"QApplication already exists: {instance}", flush=True)
+            except ImportError as e:
+                print(f"Could not import qtpy: {e}", flush=True)
+            except Exception as e:
+                print(f"Error initializing QApplication: {e}", flush=True)
+
             self.mode = "standalone"
             self.is_connected = True
-            print("✓ Maya standalone initialized")
+            print("✓ Maya standalone initialized", flush=True)
             return True
         except Exception as e:
             print(f"✗ Could not initialize Maya standalone: {e}")

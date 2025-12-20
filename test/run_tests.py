@@ -28,6 +28,13 @@ import time
 import textwrap
 from pathlib import Path
 
+# Add current directory to path to find maya_connection
+sys.path.append(str(Path(__file__).parent))
+try:
+    import maya_connection
+except ImportError:
+    print("Warning: maya_connection module not found. Standalone mode may not work.")
+
 
 class MayaTestRunner:
     """Test runner for mayatk test suite via Maya command port."""
@@ -37,45 +44,31 @@ class MayaTestRunner:
         self.port = port
         self.test_dir = Path(__file__).parent
         self.results_file = self.test_dir / "test_results.txt"
+        try:
+            self.connection = maya_connection.MayaConnection()
+        except NameError:
+            self.connection = None
 
     def connect_to_maya(self):
-        """Test if Maya command port is responsive."""
-        try:
-            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client.settimeout(3)
-            client.connect((self.host, self.port))
+        """Connect to Maya using MayaConnection."""
+        if not self.connection:
+            print("[ERROR] MayaConnection not available")
+            return False
 
-            # Send simple validation
-            client.sendall(b'print("MAYA_TEST_READY")\\n')
-            client.close()
-
-            print(f"[OK] Connected to Maya on {self.host}:{self.port}")
+        if self.connection.connect(mode="auto", port=self.port, host=self.host):
+            print(f"[OK] Connected to Maya in {self.connection.mode} mode")
             return True
-        except Exception as e:
-            print(f"[ERROR] Connection failed: {e}")
-            print("\nMake sure Maya is running with command ports open.")
-            print("In Maya, run: import mayatk; mayatk.ensure_command_ports()")
+        else:
+            print("[ERROR] Failed to connect to Maya")
             return False
 
     def send_code(self, code):
         """Send Python code to Maya."""
         try:
-            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client.settimeout(10)  # Increased timeout for large test payloads
-            client.connect((self.host, self.port))
-            client.sendall(code.encode("utf-8"))
-            client.close()
+            self.connection.execute(code)
             return True
-        except socket.timeout:
-            print(f"[ERROR] Timeout: Maya didn't respond within 10 seconds")
-            return False
-        except ConnectionRefusedError:
-            print(
-                f"[ERROR] Connection refused: Is Maya running with command ports open?"
-            )
-            return False
         except Exception as e:
-            print(f"[ERROR] Failed to send code: {e}")
+            print(f"[ERROR] Failed to execute code: {e}")
             return False
 
     def discover_tests(self):

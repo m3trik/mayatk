@@ -21,7 +21,7 @@ if scripts_dir not in sys.path:
 
 import pymel.core as pm
 from base_test import MayaTkTestCase
-from mayatk.core_utils.diagnostics.uv import UvDiagnostics
+from mayatk import UvDiagnostics
 
 
 class TestUvAnalysis(MayaTkTestCase):

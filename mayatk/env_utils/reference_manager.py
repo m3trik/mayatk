@@ -237,11 +237,11 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
             return False
 
         # Normalize the file path to ensure consistent comparison
-        normalized_file_path = os.path.normpath(file_path)
+        normalized_file_path = os.path.normcase(os.path.normpath(file_path))
 
         # Check if the file is already referenced
         for ref in self.current_references:
-            if os.path.normpath(ref.path) == normalized_file_path:
+            if os.path.normcase(os.path.normpath(ref.path)) == normalized_file_path:
                 return True  # Exit the method if the file is already referenced
 
         # Sanitize the namespace to ensure it contains only valid characters
@@ -441,8 +441,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
     def _format_table_item(self, item, file_path: str) -> None:
         """Apply enable/disable state based on whether the file is the current scene."""
-        norm_fp = os.path.normpath(file_path)
-        current_scene = os.path.normpath(pm.sceneName()) if pm.sceneName() else ""
+        norm_fp = os.path.normcase(os.path.normpath(file_path))
+        current_scene = (
+            os.path.normcase(os.path.normpath(pm.sceneName())) if pm.sceneName() else ""
+        )
         is_current_scene = norm_fp == current_scene
 
         if is_current_scene:
@@ -545,11 +547,16 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         try:
             t.clearSelection()
             current_references = self.current_references
-            current_scene = os.path.normpath(pm.sceneName()) if pm.sceneName() else ""
+            current_scene = (
+                os.path.normcase(os.path.normpath(pm.sceneName()))
+                if pm.sceneName()
+                else ""
+            )
 
             # Create a mapping from file paths to namespaces for current references
             ref_path_to_namespace = {
-                os.path.normpath(ref.path): ref.namespace for ref in current_references
+                os.path.normcase(os.path.normpath(ref.path)): ref.namespace
+                for ref in current_references
             }
 
             self.logger.debug(
@@ -563,7 +570,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 item = t.item(row, 0)  # Files column is at index 0
                 if item:
                     file_path = item.data(self.sb.QtCore.Qt.UserRole)
-                    norm_fp = os.path.normpath(file_path) if file_path else ""
+                    norm_fp = (
+                        os.path.normcase(os.path.normpath(file_path))
+                        if file_path
+                        else ""
+                    )
 
                     # Check if this file path corresponds to a current reference
                     if norm_fp in ref_path_to_namespace:
@@ -748,12 +759,98 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         file_list = self.workspace_files.get(workspace_path, [])
 
+        # Check for hide binary setting
+        header_menu = self.slot.ui.header.menu
+        hide_binary = getattr(header_menu, "chk_hide_binary", None)
+        if hide_binary and hide_binary.isChecked():
+            file_list = [f for f in file_list if not f.lower().endswith(".mb")]
+
+        # Check for filter by suffix setting
+        filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
+        suffix = getattr(header_menu, "txt_suffix", None)
+        suffix_text = suffix.text() if suffix else ""
+
+        if filter_suffix and filter_suffix.isChecked() and suffix_text:
+            filtered_list = []
+            for f in file_list:
+                name_without_ext = os.path.splitext(os.path.basename(f))[0]
+                if name_without_ext.endswith(suffix_text):
+                    filtered_list.append(f)
+            file_list = filtered_list
+
+        # Check for filter by folder structure setting
+        filter_structure = getattr(header_menu, "chk_filter_folder_structure", None)
+        structure_text = ""
+        txt_structure = getattr(header_menu, "txt_subfolder_structure", None)
+        if txt_structure:
+            structure_text = txt_structure.text().strip()
+
+        chk_enable_folder = getattr(header_menu, "chk_enable_folder", None)
+        use_folder = chk_enable_folder.isChecked() if chk_enable_folder else False
+
+        if filter_structure and filter_structure.isChecked():
+            # Determine the pattern to use
+            pattern = structure_text
+            if not pattern and use_folder:
+                pattern = "{name}"
+
+            if pattern:
+                filtered_list = []
+                # Create a copy of file_list to iterate over
+                for f in list(file_list):
+                    try:
+                        # Get relative path of the file's directory
+                        rel_dir = os.path.relpath(os.path.dirname(f), workspace_path)
+                    except ValueError:
+                        continue
+
+                    base_name = os.path.splitext(os.path.basename(f))[0]
+
+                    # Strip suffix if present and defined
+                    if suffix_text and base_name.endswith(suffix_text):
+                        name_for_path = base_name[: -len(suffix_text)]
+                    else:
+                        name_for_path = base_name
+
+                    workspace_name = os.path.basename(workspace_path)
+                    expected_rel_dir = ptk.StrUtils.replace_placeholders(
+                        pattern,
+                        name=name_for_path,
+                        workspace=workspace_name,
+                        suffix=suffix_text,
+                    )
+
+                    # Normalize paths for comparison (handle case sensitivity on Windows)
+                    rel_dir_norm = os.path.normcase(os.path.normpath(rel_dir))
+                    expected_rel_dir_norm = os.path.normcase(
+                        os.path.normpath(expected_rel_dir)
+                    )
+
+                    # Check if rel_dir ends with expected_rel_dir (handling path separators)
+                    # We split by separator to ensure we match full directory names
+                    # This allows matching even if the file is deeper in the structure (e.g. inside 'scenes')
+                    rel_parts = rel_dir_norm.split(os.sep)
+                    exp_parts = expected_rel_dir_norm.split(os.sep)
+
+                    if (
+                        len(rel_parts) >= len(exp_parts)
+                        and rel_parts[-len(exp_parts) :] == exp_parts
+                    ):
+                        filtered_list.append(f)
+                file_list = filtered_list
+
         filter_text = self.ui.txt001.text().strip()
 
         # Check if filtering is enabled via checkbox
         filter_enabled = getattr(self.ui, "chk004", None)
         filter_enabled = (
             filter_enabled.isChecked() if filter_enabled else True
+        )  # Default to True if checkbox doesn't exist
+
+        # Check if ignore case is enabled via checkbox
+        ignore_case = getattr(self.ui, "chk_ignore_case", None)
+        ignore_case = (
+            ignore_case.isChecked() if ignore_case else True
         )  # Default to True if checkbox doesn't exist
 
         if filter_text and filter_enabled:
@@ -764,6 +861,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 basename_only=True,
                 delimiter=(",", ";"),
                 match_all=True,
+                ignore_case=ignore_case,
             )
 
         # Identify and include external references
@@ -773,16 +871,19 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # Get all files in current workspace to check against (unfiltered)
         full_workspace_files = self.workspace_files.get(workspace_path, [])
         full_workspace_files_set = set(
-            os.path.normpath(f) for f in full_workspace_files
+            os.path.normcase(os.path.normpath(f)) for f in full_workspace_files
         )
 
         for ref in current_refs:
             try:
-                path = os.path.normpath(ref.path)
+                path = os.path.normcase(os.path.normpath(ref.path))
                 # If path is not in the current workspace, it's external
                 if path not in full_workspace_files_set:
                     # Avoid duplicates in external list
-                    if path not in [os.path.normpath(p) for p in external_refs_paths]:
+                    if path not in [
+                        os.path.normcase(os.path.normpath(p))
+                        for p in external_refs_paths
+                    ]:
                         external_refs_paths.append(ref.path)
             except Exception:
                 continue
@@ -799,10 +900,30 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         else:
             self.logger.debug(f"Found {len(file_list)} scenes to populate in table.")
 
+        # Check settings
+        header_menu = self.slot.ui.header.menu
+
+        hide_suffix = getattr(header_menu, "chk_hide_suffix", None)
+        hide_suffix_enabled = hide_suffix.isChecked() if hide_suffix else False
+        suffix = getattr(header_menu, "txt_suffix", None)
+        suffix_text = suffix.text() if suffix else ""
+
+        hide_extension = getattr(header_menu, "chk_hide_extension", None)
+        hide_extension_enabled = hide_extension.isChecked() if hide_extension else False
+
         # Generate file names, marking external references
         file_names = []
         for f in file_list:
             name = os.path.basename(f)
+
+            # Apply hide extension
+            if hide_extension_enabled:
+                name = os.path.splitext(name)[0]
+
+            # Apply hide suffix
+            if hide_suffix_enabled and suffix_text:
+                name = name.replace(suffix_text, "")
+
             if f in external_refs_paths:
                 # Try to find the workspace name for the external reference
                 try:
@@ -816,93 +937,89 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     name = f"{name} (External)"
             file_names.append(name)
 
-        # Check if name stripping is enabled via checkbox
-        strip_enabled = getattr(self.ui, "chk005", None)
-        strip_enabled = (
-            strip_enabled.isChecked() if strip_enabled else False
-        )  # Default to False if checkbox doesn't exist
-
-        if filter_text and strip_enabled:
-            # Strip the filter text from display names
-            # Handle wildcard patterns by extracting the core patterns
-            strip_patterns = self._extract_strip_patterns(filter_text)
-            for strip_pattern in strip_patterns:
-                file_names = [name.replace(strip_pattern, "") for name in file_names]
-            self.logger.debug(f"Stripped {strip_patterns} from file names for display")
-
         self.logger.debug(f"Updating table with {len(file_names)} files.")
         self.update_table(file_names, file_list)
 
     @block_table_selection_method
     def update_table(self, file_names, file_list):
         t = self.ui.tbl000
-        existing = {
-            t.item(row, 0).text(): row
-            for row in range(t.rowCount())
-            if t.item(row, 0)  # Files column is at index 0
-        }
+        sorting_enabled = t.isSortingEnabled()
+        t.setSortingEnabled(False)
+        try:
+            existing = {
+                t.item(row, 0).text(): row
+                for row in range(t.rowCount())
+                if t.item(row, 0)  # Files column is at index 0
+            }
 
-        to_remove = [row for name, row in existing.items() if name not in file_names]
-        self.logger.debug(f"Rows to remove: {to_remove}")
-        for row in reversed(sorted(to_remove)):
-            t.removeRow(row)
+            to_remove = [
+                row for name, row in existing.items() if name not in file_names
+            ]
+            self.logger.debug(f"Rows to remove: {to_remove}")
+            for row in reversed(sorted(to_remove)):
+                t.removeRow(row)
 
-        for idx, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
-            self.logger.debug(f"Inserting row for: {scene_name} ({file_path})")
-            row = existing.get(scene_name)
-            if row is None:
-                row = t.rowCount()
-                t.insertRow(row)
+            for idx, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
+                self.logger.debug(f"Inserting row for: {scene_name} ({file_path})")
+                row = existing.get(scene_name)
+                if row is None:
+                    row = t.rowCount()
+                    t.insertRow(row)
 
-            item = t.item(row, 0)  # Files column is at index 0
-            if not item:
-                # Get the full filename without stripping for rename functionality
-                full_filename = os.path.basename(file_path)
-                item = self.sb.QtWidgets.QTableWidgetItem(scene_name)
-                item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
-                t.setItem(row, 0, item)  # Files column is at index 0
+                item = t.item(row, 0)  # Files column is at index 0
+                if not item:
+                    # Get the full filename without stripping for rename functionality
+                    full_filename = os.path.basename(file_path)
+                    item = self.sb.QtWidgets.QTableWidgetItem(scene_name)
+                    item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
+                    t.setItem(row, 0, item)  # Files column is at index 0
 
-                # Store both the full file path and the full filename for rename functionality
-                item.setData(self.sb.QtCore.Qt.UserRole, file_path)  # Full file path
+                    # Store both the full file path and the full filename for rename functionality
+                    item.setData(
+                        self.sb.QtCore.Qt.UserRole, file_path
+                    )  # Full file path
+                    item.setData(
+                        self.sb.QtCore.Qt.UserRole + 1, full_filename
+                    )  # Full filename for rename
+                    item.setData(
+                        self.sb.QtCore.Qt.UserRole + 2, scene_name
+                    )  # Display name
+
+                item.setText(scene_name)
+                # Update data attributes
+                item.setData(self.sb.QtCore.Qt.UserRole, file_path)
                 item.setData(
-                    self.sb.QtCore.Qt.UserRole + 1, full_filename
-                )  # Full filename for rename
-                item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)  # Display name
-
-            item.setText(scene_name)
-            # Update data attributes
-            item.setData(self.sb.QtCore.Qt.UserRole, file_path)
-            item.setData(self.sb.QtCore.Qt.UserRole + 1, os.path.basename(file_path))
-            item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
-
-            self._format_table_item(item, file_path)
-
-            # Column 1: Notes (Metadata)
-            item_notes = t.item(row, 1)
-            if not item_notes:
-                item_notes = self.sb.QtWidgets.QTableWidgetItem()
-                item_notes.setFlags(
-                    item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
+                    self.sb.QtCore.Qt.UserRole + 1, os.path.basename(file_path)
                 )
-                t.setItem(row, 1, item_notes)
+                item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
 
-            # Store file path in notes item too for easy access during edit
-            item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
+                self._format_table_item(item, file_path)
 
-            # Fetch metadata (Comments)
-            try:
-                use_sidecar = True
-                metadata = ptk.Metadata.get(
-                    file_path, "Comments", use_sidecar=use_sidecar
-                )
-                comments = metadata.get("Comments") or ""
-                if item_notes.text() != comments:
-                    item_notes.setText(comments)
-            except Exception:
-                pass
+                # Column 1: Notes (Metadata)
+                item_notes = t.item(row, 1)
+                if not item_notes:
+                    item_notes = self.sb.QtWidgets.QTableWidgetItem()
+                    item_notes.setFlags(
+                        item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
+                    )
+                    t.setItem(row, 1, item_notes)
 
-        # Apply table formatting
-        t.apply_formatting()
+                # Store file path in notes item too for easy access during edit
+                item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
+
+                try:  # Fetch metadata (Comments)
+                    ptk.Metadata.enable_sidecar = True
+                    metadata = ptk.Metadata.get(file_path, "Comments")
+                    comments = metadata.get("Comments") or ""
+                    if item_notes.text() != comments:
+                        item_notes.setText(comments)
+                except Exception:
+                    pass
+
+            # Apply table formatting
+            t.apply_formatting()
+        finally:
+            t.setSortingEnabled(sorting_enabled)
 
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.
@@ -935,9 +1052,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 new_workspace = EnvUtils.find_workspace_using_path(file_path)
                 if new_workspace:
                     current_workspace = pm.workspace(q=True, rd=True)
-                    if os.path.normpath(current_workspace) != os.path.normpath(
-                        new_workspace
-                    ):
+                    if os.path.normcase(
+                        os.path.normpath(current_workspace)
+                    ) != os.path.normcase(os.path.normpath(new_workspace)):
                         pm.workspace(new_workspace, openWorkspace=True)
                         self.logger.info(f"Set workspace to: {new_workspace}")
                     else:
@@ -1027,7 +1144,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Save the current scene to the workspace, prompting for a name."""
         # Get settings from UI via slot
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enforce_folder.isChecked()
+        use_folder = header_menu.chk_enable_folder.isChecked()
         case_style = header_menu.cmb_case_style.currentText()
         suffix = header_menu.txt_suffix.text()
 
@@ -1051,7 +1168,33 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return
 
         target_dir = workspace
-        if use_folder:
+
+        # Check for custom subfolder structure
+        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
+        subfolder_structure_text = (
+            subfolder_structure.text().strip() if subfolder_structure else ""
+        )
+
+        if subfolder_structure_text:
+            # Use custom structure
+            base_name_formatted = self._format_name(name, case_style, suffix="")
+            workspace_name = os.path.basename(workspace)
+            resolved_path = ptk.StrUtils.replace_placeholders(
+                subfolder_structure_text,
+                name=base_name_formatted,
+                workspace=workspace_name,
+                suffix=suffix,
+            )
+            target_dir = os.path.join(workspace, resolved_path)
+
+            if not os.path.exists(target_dir):
+                try:
+                    os.makedirs(target_dir)
+                except OSError as e:
+                    self.sb.message_box(f"Failed to create directory: {e}")
+                    return
+
+        elif use_folder:
             # Folder name matches the base name (without suffix)
             folder_name = self._format_name(name, case_style, suffix="")
             target_dir = os.path.join(workspace, folder_name)
@@ -1114,7 +1257,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Get settings
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enforce_folder.isChecked()
+        use_folder = header_menu.chk_enable_folder.isChecked()
         case_style = header_menu.cmb_case_style.currentText()
         suffix = header_menu.txt_suffix.text()
 
@@ -1196,7 +1339,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return
 
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enforce_folder.isChecked()
+        use_folder = header_menu.chk_enable_folder.isChecked()
 
         import shutil
 
@@ -1294,10 +1437,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="btn_refresh",
             setToolTip="Refresh the file list.",
         )
-        widget.menu.add("Separator", setTitle="Save Current Scene:")
+        widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
             "QPushButton",
-            setText="Save",
+            setText="Save Current Scene",
             setObjectName="btn_save_scene",
             setToolTip="Save the current scene to the workspace.",
         )
@@ -1322,12 +1465,53 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
         widget.menu.add(
             "QCheckBox",
-            setText="Enforce Folder Structure",
-            setObjectName="chk_enforce_folder",
+            setText="Hide Suffix",
+            setObjectName="chk_hide_suffix",
+            setChecked=False,
+            setToolTip="Hide the suffix from the file list display.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Hide Extension",
+            setObjectName="chk_hide_extension",
+            setChecked=False,
+            setToolTip="Hide the file extension from the file list display.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Enable Folder Structure",
+            setObjectName="chk_enable_folder",
             setChecked=False,
             setToolTip="If checked, new files will be managed within a folder of the same name.",
         )
-        widget.menu.add("Separator", setTitle="Reference Operations:")
+        widget.menu.add(
+            "QLineEdit",
+            setObjectName="txt_subfolder_structure",
+            setPlaceholderText="Subfolder Structure (e.g. {name}/versions)",
+            setToolTip="Optional nested folder structure relative to workspace.\nSupports placeholders: {name}, {workspace}, {suffix}\nNote: {name} excludes the suffix if one is defined, otherwise the full name minus extension is used.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Filter by Folder Structure",
+            setObjectName="chk_filter_folder_structure",
+            setChecked=False,
+            setToolTip="If checked, only show files that match the folder structure pattern.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Hide Binary Files (.mb)",
+            setObjectName="chk_hide_binary",
+            setChecked=False,
+            setToolTip="If checked, hide Maya Binary (.mb) files.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Filter by Suffix",
+            setObjectName="chk_filter_suffix",
+            setChecked=False,
+            setToolTip="If checked, only show files that end with the specified suffix.",
+        )
+        widget.menu.add("Separator", setTitle="Operations:")
         widget.menu.add(
             "QPushButton",
             setText="Convert to Assembly",
@@ -1355,6 +1539,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
+            widget.setSortingEnabled(True)
             widget.verticalHeader().setVisible(False)
 
             # Make the Notes column (index 1) non-selecting so clicking it doesn't trigger reference logic
@@ -1464,10 +1649,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             new_comments = item.text()
             try:
-                use_sidecar = True
-                ptk.Metadata.set(
-                    file_path, Comments=new_comments, use_sidecar=use_sidecar
-                )
+                ptk.Metadata.enable_sidecar = True
+                ptk.Metadata.set(file_path, Comments=new_comments)
                 self.logger.info(f"Updated comments for {file_path}")
             except Exception as e:
                 self.logger.error(f"Failed to set metadata for {file_path}: {e}")
@@ -1628,10 +1811,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             widget.option_box.menu.add(
                 "QCheckBox",
-                setText="Strip From Names",
-                setObjectName="chk005",
-                setChecked=False,
-                setToolTip="Remove the filter text from displayed file names (cosmetic only).",
+                setText="Ignore Case",
+                setObjectName="chk_ignore_case",
+                setChecked=True,
+                setToolTip="Ignore case when filtering.",
             )
 
             self.logger.debug(
@@ -1833,11 +2016,60 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # Refresh the file list when filter enable state changes
         self.controller.refresh_file_list(invalidate=False)
 
-    def chk005(self, checked):
-        """Handle the strip names checkbox."""
-        self.logger.debug(f"chk005 strip names changed: {checked}")
-        # Refresh the file list when strip names state changes
+    def chk_ignore_case(self, checked):
+        """Handle the ignore case checkbox."""
+        self.logger.debug(f"chk_ignore_case changed: {checked}")
         self.controller.refresh_file_list(invalidate=False)
+
+    def chk_hide_binary(self, checked):
+        """Handle the hide binary checkbox."""
+        self.logger.debug(f"chk_hide_binary changed: {checked}")
+        self.controller.refresh_file_list(invalidate=False)
+
+    def chk_filter_suffix(self, checked):
+        """Handle the filter by suffix checkbox."""
+        self.logger.debug(f"chk_filter_suffix changed: {checked}")
+        self.controller.refresh_file_list(invalidate=False)
+
+    def chk_hide_suffix(self, checked):
+        """Handle the hide suffix checkbox."""
+        self.logger.debug(f"chk_hide_suffix changed: {checked}")
+        self.controller.refresh_file_list(invalidate=False)
+
+    def chk_hide_extension(self, checked):
+        """Handle the hide extension checkbox."""
+        self.logger.debug(f"chk_hide_extension changed: {checked}")
+        self.controller.refresh_file_list(invalidate=False)
+
+    def txt_suffix(self, text):
+        """Handle suffix text changes."""
+        # Refresh if hide suffix or filter by suffix is enabled
+        header_menu = self.ui.header.menu
+        hide_suffix = getattr(header_menu, "chk_hide_suffix", None)
+        filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
+
+        should_refresh = False
+        if hide_suffix and hide_suffix.isChecked():
+            should_refresh = True
+        if filter_suffix and filter_suffix.isChecked():
+            should_refresh = True
+
+        if should_refresh:
+            self.controller.refresh_file_list(invalidate=False)
+
+    def chk_filter_folder_structure(self, checked):
+        """Handle the filter by folder structure checkbox."""
+        self.logger.debug(f"chk_filter_folder_structure changed: {checked}")
+        self.controller.refresh_file_list(invalidate=False)
+
+    def txt_subfolder_structure(self, text):
+        """Handle subfolder structure text changes."""
+        # Refresh if filter by folder structure is enabled
+        header_menu = self.ui.header.menu
+        filter_structure = getattr(header_menu, "chk_filter_folder_structure", None)
+
+        if filter_structure and filter_structure.isChecked():
+            self.controller.refresh_file_list(invalidate=False)
 
     def b000(self):
         """Browse for a root directory."""

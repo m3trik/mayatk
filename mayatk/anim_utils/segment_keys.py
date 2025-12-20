@@ -40,6 +40,7 @@ class SegmentKeysInfo:
         object_fmt: Optional[str] = None,
         segment_fmt: Optional[str] = None,
         by_time: bool = False,
+        csv_output: bool = False,
     ):
         """Print formatted time ranges.
 
@@ -52,6 +53,7 @@ class SegmentKeysInfo:
             segment_fmt: Optional format string for segment lines.
                 Available keys: i, start, end, duration
             by_time: If True, prints a flat list of all segments sorted by start time.
+            csv_output: If True, prints in CSV format.
         """
         if not source:
             return
@@ -69,16 +71,25 @@ class SegmentKeysInfo:
         if not ranges:
             return
 
-        if header is None:
-            scene_name = pm.sceneName()
-            if scene_name:
-                scene_name = scene_name.basename()
-            else:
-                scene_name = "Untitled"
-            header = f"Animation Info - {scene_name}"
+        if csv_output:
+            if header is None:
+                if by_time:
+                    print("Object,Start,End,Duration,Segment Index,Total Segments")
+                else:
+                    print("Object,Start,End,Duration,Segments")
+            elif header:
+                print(header)
+        else:
+            if header is None:
+                scene_name = pm.sceneName()
+                if scene_name:
+                    scene_name = scene_name.basename()
+                else:
+                    scene_name = "Untitled"
+                header = f"Animation Info - {scene_name}"
 
-        print(f"\n{header}")
-        print("-" * 60)
+            print(f"\\n{header}")
+            print("-" * 60)
 
         from collections import defaultdict
 
@@ -114,17 +125,24 @@ class SegmentKeysInfo:
 
             for item in annotated:
                 duration = item["end"] - item["start"]
-                suffix = f" [{item['total']} segments]" if item["total"] > 1 else ""
 
-                # Format: Object (Seg i/N) : Start - End (Dur: D) [Total]
-                if item["total"] > 1:
-                    label = f"{item['obj']} (Seg {item['index']}/{item['total']})"
+                if csv_output:
+                    # CSV Format: Object,Start,End,Duration,SegmentIndex,TotalSegments
+                    print(
+                        f"{item['obj']},{item['start']},{item['end']},{duration},{item['index']},{item['total']}"
+                    )
                 else:
-                    label = f"{item['obj']} (Seg {item['index']})"
+                    suffix = f" [{item['total']} segments]" if item["total"] > 1 else ""
 
-                print(
-                    f"{label:<30} : {item['start']:8.2f} - {item['end']:8.2f} (Dur: {duration:6.2f}){suffix}"
-                )
+                    # Format: Object (Seg i/N) : Start - End (Dur: D) [Total]
+                    if item["total"] > 1:
+                        label = f"{item['obj']} (Seg {item['index']}/{item['total']})"
+                    else:
+                        label = f"{item['obj']} (Seg {item['index']})"
+
+                    print(
+                        f"{label:<30} : {item['start']:8.2f} - {item['end']:8.2f} (Dur: {duration:6.2f}){suffix}"
+                    )
 
         else:
             # Group by object
@@ -138,30 +156,37 @@ class SegmentKeysInfo:
                 max_end = max(s[1] for s in segments)
                 total_dur = max_end - min_start
                 count = len(segments)
-                suffix = f" [{count} segments]" if count > 1 else ""
 
-                # Print object line
-                if object_fmt:
-                    print(
-                        object_fmt.format(
-                            obj=obj,
-                            start=min_start,
-                            end=max_end,
-                            duration=total_dur,
-                            count=count,
-                            suffix=suffix,
-                        )
-                    )
+                if csv_output:
+                    # CSV Format: Object,Start,End,Duration,SegmentCount
+                    print(f"{obj},{min_start},{max_end},{total_dur},{count}")
                 else:
-                    print(
-                        f"{obj:<30} : {min_start:8.2f} - {max_end:8.2f} (Dur: {total_dur:6.2f}){suffix}"
-                    )
+                    suffix = f" [{count} segments]" if count > 1 else ""
+
+                    # Print object line
+                    if object_fmt:
+                        print(
+                            object_fmt.format(
+                                obj=obj,
+                                start=min_start,
+                                end=max_end,
+                                duration=total_dur,
+                                count=count,
+                                suffix=suffix,
+                            )
+                        )
+                    else:
+                        print(
+                            f"{obj:<30} : {min_start:8.2f} - {max_end:8.2f} (Dur: {total_dur:6.2f}){suffix}"
+                        )
 
                 # Print segments if requested
                 if per_segment:
                     for i, (start, end) in enumerate(segments, 1):
                         duration = end - start
-                        if segment_fmt:
+                        if csv_output:
+                            print(f"{obj} (Seg {i}),{start},{end},{duration},")
+                        elif segment_fmt:
                             print(
                                 segment_fmt.format(
                                     i=i, start=start, end=end, duration=duration
@@ -172,7 +197,8 @@ class SegmentKeysInfo:
                                 f"    Seg {i:<2}                         : {start:8.2f} - {end:8.2f} (Dur: {duration:6.2f})"
                             )
 
-        print("-" * 60)
+        if not csv_output:
+            print("-" * 60)
 
 
 class SegmentKeys(SegmentKeysInfo):
@@ -333,10 +359,6 @@ class SegmentKeys(SegmentKeysInfo):
                             filtered_segments.append((seg_start, seg_end))
                     active_segments = filtered_segments
             else:
-                active_segments = []
-
-            # If no active segments found, treat entire range as one segment
-            if not active_segments:
                 active_segments = [(keyframes[0], keyframes[-1])]
 
             # Default behavior: absorb trailing holds into the segment so hold keys
@@ -409,13 +431,21 @@ class SegmentKeys(SegmentKeysInfo):
 
     @classmethod
     def print_scene_info(
-        cls, objects: Optional[List["pm.PyNode"]] = None, detailed: bool = True
+        cls,
+        objects: Optional[List["pm.PyNode"]] = None,
+        detailed: bool = True,
+        csv_output: bool = False,
+        by_time: bool = False,
+        ignore_holds: bool = True,
     ):
         """Print animation info for the scene or provided objects.
 
         Args:
             objects: List of objects to analyze. If None, uses selection or all objects.
             detailed: If True, prints individual segments. If False, aggregates per object.
+            csv_output: If True, prints in CSV format.
+            by_time: If True, sorts output by start time.
+            ignore_holds: If True, reports only active animation (excludes static holds).
         """
         if not objects:
             objects = pm.selected(type="transform")
@@ -429,14 +459,19 @@ class SegmentKeys(SegmentKeysInfo):
         # Collect segments with split_static=True to get full detail
         # Pass ignore_visibility_holds=True to see visual segments even if visibility bridges them
         segments = cls.collect_segments(
-            objects, split_static=True, ignore_visibility_holds=detailed
+            objects,
+            split_static=True,
+            ignore_visibility_holds=detailed,
+            ignore_holds=ignore_holds,
         )
 
         if not segments:
             pm.warning("No animation found on the specified objects.")
             return
 
-        cls.print_time_ranges(segments, per_segment=detailed)
+        cls.print_time_ranges(
+            segments, per_segment=detailed, csv_output=csv_output, by_time=by_time
+        )
 
     @classmethod
     def group_segments(
