@@ -42,7 +42,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_scene_audit']
+test_modules = ['test_anim_utils', 'test_cam_utils', 'test_components', 'test_controls', 'test_core_utils', 'test_display_utils', 'test_edit_utils', 'test_env_utils', 'test_image_tracer', 'test_light_utils', 'test_mat_utils', 'test_node_utils', 'test_nurbs_utils', 'test_playblast_exporter', 'test_repro_scale_tangents', 'test_rig_utils', 'test_scale_keys', 'test_scene_audit', 'test_segment_keys', 'test_shader_templates', 'test_stagger_keys', 'test_stingray_arnold_shader', 'test_ui_utils', 'test_uv_diagnostics', 'test_uv_utils', 'test_vis_tangents_repro', 'test_xform_utils']
 total_tests = 0
 total_failures = 0
 total_errors = 0
