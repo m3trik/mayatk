@@ -50,12 +50,12 @@ class CamUtils(ptk.HelpMixin):
         )  # List of default cameras
         all_cameras = pm.ls(type="camera")  # Get all cameras in the scene
         all_camera_transforms = [
-            cam.get_parent() for cam in all_cameras
+            cam.getParent() for cam in all_cameras
         ]  # Get the parent transform nodes of the cameras
 
         if root_only:  # Filter cameras based on the root_only flag
             all_camera_transforms = [
-                cam for cam in all_camera_transforms if cam.get_parent() is None
+                cam for cam in all_camera_transforms if cam.getParent() is None
             ]
 
         # Parent cameras to the group based on the non_default flag
@@ -168,18 +168,32 @@ class CamUtils(ptk.HelpMixin):
                 f"Invalid mode: {mode}. Valid modes are 'manual', 'auto', 'reset'."
             )
 
-        target_cameras = pm.ls(camera) if camera else pm.ls(dag=True, cameras=True)
+        # Resolve camera shapes
+        if camera:
+            raw_cameras = pm.ls(camera)
+            target_cameras = []
+            for cam in raw_cameras:
+                if hasattr(cam, "getShape"):  # Transform
+                    shape = cam.getShape()
+                    if shape and shape.nodeType() == "camera":
+                        target_cameras.append(shape)
+                elif cam.nodeType() == "camera":  # Shape
+                    target_cameras.append(cam)
+        else:
+            target_cameras = pm.ls(dag=True, cameras=True)
+
+        # Filter out startup cameras
         target_cameras = [
             cam
             for cam in target_cameras
-            if "startupCameras" not in pm.listRelatives(cam, parent=True)[0].longName()
+            if not pm.camera(cam, q=True, startupCamera=True)
         ]
 
         for cam in target_cameras:
             if near_clip is not None:
-                pm.setAttr(f"{cam}.nearClipPlane", near_clip)
+                cam.nearClipPlane.set(near_clip)
             if far_clip is not None:
-                pm.setAttr(f"{cam}.farClipPlane", far_clip)
+                cam.farClipPlane.set(far_clip)
 
     @staticmethod
     def _get_default_camera(camera_name):

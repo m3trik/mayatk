@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import glob
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -57,6 +58,12 @@ class PlayblastExporter:
                 self._scene_name = "playblast"
         return self._scene_name
 
+    @staticmethod
+    def _get_scene_fps() -> float:
+        """Get the current scene frames per second."""
+        unit = pm.currentUnit(q=True, time=True)
+        return ptk.VidUtils.get_frame_rate(unit)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -69,6 +76,10 @@ class PlayblastExporter:
         **kwargs: Any,
     ) -> str:
         """Create a playblast using Maya's viewport capture."""
+
+        # Validate camera if provided
+        if camera_name and not pm.objExists(camera_name):
+            raise ValueError(f"Camera '{camera_name}' does not exist.")
 
         user_kwargs = dict(kwargs)
         playblast_format = user_kwargs.get("format", "avi")
@@ -320,14 +331,47 @@ class PlayblastExporter:
                 else:
                     print(f"Playblast ({label}) created: {playblast_output}")
 
-                if (
-                    variation.get("post") == "mp4"
-                    and playblast_kwargs.get("format") != "image"
-                ):
+                if variation.get("post") == "mp4":
+                    input_path = playblast_output
+                    output_path_mp4 = None
+                    fps = self._get_scene_fps()
+                    is_sequence = playblast_kwargs.get("format") == "image"
+
+                    if is_sequence:
+                        ext = playblast_kwargs.get("compression", "png")
+                        padding = playblast_kwargs.get("framePadding", 4)
+
+                        # Determine the prefix used for the sequence
+                        # If make_directory was used, the prefix is scene_name (as target_path was dir/scene_name)
+                        # Otherwise, it's the basename of target_path (e.g. output_path_label)
+                        prefix = os.path.basename(target_path)
+
+                        # Construct pattern: path/to/dir/Prefix.%04d.ext
+                        pattern = os.path.join(
+                            playblast_output, f"{prefix}.%0{padding}d.{ext}"
+                        )
+                        input_path = pattern
+                        # Output in the same directory
+                        output_path_mp4 = os.path.join(
+                            playblast_output, f"{prefix}.mp4"
+                        )
+
                     mp4_path = ptk.compress_video(
-                        input_filepath=playblast_output,
-                        delete_original=True,
+                        input_filepath=input_path,
+                        output_filepath=output_path_mp4,
+                        frame_rate=fps,
+                        delete_original=not is_sequence,  # Manual cleanup for sequences
                     )
+
+                    if is_sequence and mp4_path and os.path.exists(mp4_path):
+                        # Cleanup image sequence
+                        search_pattern = input_path.replace(f"%0{padding}d", "*")
+                        for f in glob.glob(search_pattern):
+                            try:
+                                os.remove(f)
+                            except OSError:
+                                pass
+
                     if mp4_path:
                         summary["compressed"] = mp4_path
                         print(f"Compressed MP4 created for {label}: {mp4_path}")
@@ -347,13 +391,15 @@ class PlayblastExporter:
     def _default_variations() -> List[Dict[str, Any]]:
         variations: List[Dict[str, Any]] = [
             {
-                "label": "avi_uncompressed",
-                "playblast": {"format": "avi", "compression": "none"},
+                "label": "video",
+                "playblast": {
+                    "format": "image",
+                    "compression": "png",
+                    "framePadding": 4,
+                    "offScreen": True,
+                },
                 "post": "mp4",
-            },
-            {
-                "label": "mov_animation",
-                "playblast": {"format": "qt", "compression": "animation"},
+                "make_directory": True,
             },
         ]
 

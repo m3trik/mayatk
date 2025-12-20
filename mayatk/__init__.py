@@ -30,6 +30,7 @@ DEFAULT_INCLUDE = {
     "_xform_utils": "*",
     "_nurbs_utils": "*",
     "_light_utils": "*",
+    # Env utils
     # Animation utilities
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
@@ -38,11 +39,13 @@ DEFAULT_INCLUDE = {
     "core_utils.components": "Components",
     "core_utils.auto_instancer": "AutoInstancer",
     "core_utils.mash->Mash": "*",
-    "core_utils.preview->Preview": "Preview",
+    "core_utils.preview": "Preview",
     "core_utils.diagnostics->Diagnostics": "*",
-    "core_utils.diagnostics.animation": "AnimCurveDiagnostics",
-    "core_utils.diagnostics.scene": "SceneDiagnostics",
-    "core_utils.diagnostics.uv": "UvDiagnostics",
+    "core_utils.diagnostics.scene_diag": [
+        "SceneAnalyzer",
+        "AuditProfile",
+        "SceneDiagnostics",
+    ],
     # Edit utils - specific classes
     "edit_utils.selection": "Selection",
     "edit_utils.naming": "Naming",

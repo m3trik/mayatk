@@ -2,6 +2,7 @@
 # coding=utf-8
 from typing import Optional, Dict, Any, List
 import re
+import math
 
 try:
     import pymel.core as pm
@@ -172,6 +173,16 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.info("Tying keyframes for all objects.")
         AnimUtils.tie_keyframes(self.objects, absolute=True)
         self.logger.info("Keyframes have been tied.")
+
+    def snap_keys_to_frame(self):
+        """Snap all keyframes to the nearest whole frame."""
+        if not self._has_keyframes:
+            self.logger.debug("No keyframes found. Skipping snap operation.")
+            return
+
+        self.logger.info("Snapping keyframes to nearest whole frame.")
+        AnimUtils.snap_keys_to_frames(self.objects)
+        self.logger.info("Keyframes have been snapped.")
 
 
 class _TaskChecksMixin(_TaskDataMixin):
@@ -502,15 +513,40 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no untied keyframes
 
+    def check_floating_point_keys(self) -> tuple:
+        """Check if there are any floating point keyframes on the specified objects."""
+        if not self._has_keyframes:
+            self.logger.debug("No keyframes found. Skipping floating point key check.")
+            return True, []
+
+        log_messages = []
+        offenders = []
+
+        for obj in self.objects:
+            times = pm.keyframe(obj, query=True, timeChange=True)
+            if not times:
+                continue
+
+            for t in times:
+                if not math.isclose(t, round(t), abs_tol=1e-4):
+                    offenders.append(f"{obj} (frame {t:.3f})")
+                    break
+
+        if offenders:
+            log_messages.append("Floating point keys found on:")
+            for offender in offenders:
+                log_messages.append(f"  - {offender}")
+            return False, log_messages
+
+        return True, log_messages
+
 
 class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     """Contains all task-related UI definitions for the Scene Exporter."""
 
     _frame_rate_options: Dict[str, Any] = {
         f"Check Scene FPS: {v}": k
-        for k, v in ptk.insert_into_dict(
-            AnimUtils.FRAME_RATE_VALUES, "OFF", None
-        ).items()
+        for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
     }
 
     _scene_unit_options: Dict[str, Any] = {
@@ -581,6 +617,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QCheckBox",
                 "setText": "Tie All Keyframes",
                 "setToolTip": "Tie all keyframes on the specified objects.",
+                "setChecked": False,
+            },
+            "snap_keys_to_frame": {
+                "widget_type": "QCheckBox",
+                "setText": "Snap Keys To Frame",
+                "setToolTip": "Snap all keyframes to the nearest whole frame.",
                 "setChecked": False,
             },
             "check_and_delete_visibility_keys": {
@@ -681,6 +723,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QCheckBox",
                 "setText": "Check For Untied Keyframes",
                 "setToolTip": "Check for untied keyframes on the specified objects.",
+                "setChecked": True,
+            },
+            "check_floating_point_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Floating Point Keys",
+                "setToolTip": "Check for keyframes that are not on whole frames.",
                 "setChecked": True,
             },
         }

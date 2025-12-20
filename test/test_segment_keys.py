@@ -78,7 +78,10 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         pm.setKeyframe(cube, t=30, v=20, at="tx")
 
         # Collect segments (default behavior absorbs trailing holds)
-        segments = SegmentKeys.collect_segments([cube], split_static=True)
+        # We set exclude_next_start=False to ensure the boundary key at 20 is included
+        segments = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
 
         self.assertEqual(len(segments), 2, "Should find 2 segments")
 
@@ -428,7 +431,10 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         # Second animation segment
         pm.setKeyframe(cube, attribute="translateX", time=30, value=20)
 
-        result = SegmentKeys.collect_segments([cube], split_static=True)
+        # We set exclude_next_start=False to include the boundary key
+        result = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
 
         # Default behavior absorbs trailing holds, so segments become (1-20) and (20-30)
         self.assertEqual(len(result), 2)
@@ -493,6 +499,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
             [cube],
             split_static=True,
             ignore_visibility_holds=False,
+            exclude_next_start=False,
         )
         self.assertEqual(len(segs_bridge), 1)
         self.assertEqual(segs_bridge[0]["start"], 0)
@@ -502,6 +509,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
             [cube],
             split_static=True,
             ignore_visibility_holds=True,
+            exclude_next_start=False,
         )
         # Without visibility bridging, we expect 2 segments (with trailing-hold absorption)
         self.assertEqual(len(segs_no_bridge), 2)
@@ -665,6 +673,187 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0], (0, 10))
         self.assertEqual(result[1], (20, 30))
+
+
+class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
+    """Edge case tests for SegmentKeys."""
+
+    def setUp(self):
+        if pm is None:
+            self.skipTest("Maya not available")
+        super().setUp()
+        pm.newFile(force=True)
+
+    def test_collect_segments_time_range(self):
+        """collect_segments respects time_range parameter."""
+        cube = pm.polyCube(name="time_range_cube")[0]
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        pm.setKeyframe(cube, t=20, v=20, at="tx")
+        pm.setKeyframe(cube, t=30, v=30, at="tx")
+
+        # Range excluding 0 and 30
+        segments = SegmentKeys.collect_segments([cube], time_range=(5, 25))
+
+        self.assertEqual(len(segments), 1)
+        # Should only include keys 10 and 20
+        self.assertEqual(segments[0]["keyframes"], [10.0, 20.0])
+        self.assertEqual(segments[0]["start"], 10.0)
+        self.assertEqual(segments[0]["end"], 20.0)
+
+    def test_collect_segments_selected_keys(self):
+        """collect_segments respects selected_keys_only parameter."""
+        cube = pm.polyCube(name="sel_keys_cube")[0]
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        pm.setKeyframe(cube, t=20, v=20, at="tx")
+
+        # Select only the key at frame 10
+        pm.selectKey(cube, t=(10, 10))
+
+        segments = SegmentKeys.collect_segments([cube], selected_keys_only=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0]["keyframes"], [10.0])
+        self.assertEqual(segments[0]["start"], 10.0)
+        self.assertEqual(segments[0]["end"], 10.0)
+
+    def test_collect_segments_channel_box(self):
+        """collect_segments respects channel_box_attrs parameter."""
+        cube = pm.polyCube(name="cb_cube")[0]
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=0, v=0, at="ty")
+
+        # Filter for tx only
+        segments = SegmentKeys.collect_segments(
+            [cube], channel_box_attrs=["translateX"]
+        )
+
+        self.assertEqual(len(segments), 1)
+        curves = segments[0]["curves"]
+        self.assertEqual(len(curves), 1)
+        self.assertTrue(curves[0].name().endswith("_translateX"))
+
+    def test_collect_segments_exclude_next_start(self):
+        """collect_segments respects exclude_next_start parameter."""
+        cube = pm.polyCube(name="exclude_next_cube")[0]
+        # Segment 1: 0-10
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        # Static gap 10-20
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        # Segment 2: 20-30
+        pm.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Default: exclude_next_start=True
+        # Segment 1 should end at 20 (trailing hold) but exclude next start if it was adjacent?
+        # Here next start is 20.
+        # If exclude_next_start=True, upper bound is 20 - eps. So key at 20 is NOT included in seg 1.
+
+        segs_exclude = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=True
+        )
+        # Seg 1: 0-10 (key at 20 excluded)
+        self.assertEqual(segs_exclude[0]["end"], 10.0)
+        self.assertNotIn(20.0, segs_exclude[0]["keyframes"])
+
+        # exclude_next_start=False
+        # Upper bound is 20. Key at 20 IS included in seg 1.
+        segs_include = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
+        # Seg 1: 0-20 (key at 20 included)
+        self.assertEqual(segs_include[0]["end"], 20.0)
+        self.assertIn(20.0, segs_include[0]["keyframes"])
+
+    def test_collect_segments_static_tolerance(self):
+        """collect_segments respects static_tolerance."""
+        cube = pm.polyCube(name="tol_cube")[0]
+
+        # Case 1: Flat curve (change = 0)
+        pm.cutKey(cube)
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=0, at="tx")
+
+        segs_flat = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=1e-4
+        )
+        self.assertEqual(len(segs_flat), 0, "Flat curve should be static")
+
+        # Case 2: Small change (0.1), Large tolerance (1.0) -> Static
+        pm.cutKey(cube)
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        pm.setKeyframe(cube, t=10, v=0.1, at="tx")
+
+        segs_static = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=1.0
+        )
+        # Debug info if it fails
+        if len(segs_static) > 0:
+            print(
+                f"Failed Static Check: Found {len(segs_static)} segments: {segs_static}"
+            )
+
+        self.assertEqual(len(segs_static), 0, "Change < Tolerance should be static")
+
+        # Case 3: Small change (0.1), Small tolerance (0.01) -> Active
+        segs_active = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=0.01
+        )
+        self.assertEqual(len(segs_active), 1, "Change > Tolerance should be active")
+
+    def test_merge_groups_sharing_curves(self):
+        """merge_groups_sharing_curves merges groups sharing an animation curve."""
+        cube1 = pm.polyCube(name="c1")[0]
+        cube2 = pm.polyCube(name="c2")[0]
+
+        # Create a curve and connect to both
+        pm.setKeyframe(cube1, t=0, v=0, at="tx")
+        pm.setKeyframe(cube1, t=10, v=10, at="tx")
+        curve = pm.listConnections(cube1.tx, type="animCurve")[0]
+        pm.connectAttr(curve.output, cube2.tx, force=True)
+
+        # Create separate groups with overlapping time ranges
+        groups = [
+            {
+                "obj": cube1,
+                "curves": [curve],
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "sub_groups": [],
+            },
+            {
+                "obj": cube2,
+                "curves": [curve],
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "sub_groups": [],
+            },
+        ]
+
+        merged = SegmentKeys.merge_groups_sharing_curves(groups)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0]["objects"]), 2)
+
+    def test_shift_curves_locked(self):
+        """shift_curves handles locked curves gracefully."""
+        cube = pm.polyCube(name="locked_cube")[0]
+        pm.setKeyframe(cube, t=0, v=0, at="tx")
+        curve = pm.listConnections(cube.tx, type="animCurve")[0]
+
+        curve.setLocked(True)
+
+        # Should not raise exception
+        try:
+            SegmentKeys.shift_curves([curve], 10)
+        except Exception as e:
+            self.fail(f"shift_curves raised exception on locked curve: {e}")
+        finally:
+            curve.setLocked(False)
 
 
 if __name__ == "__main__":

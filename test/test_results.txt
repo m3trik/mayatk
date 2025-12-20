@@ -3,13 +3,30 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_components: LOAD ERROR
-  unexpected indent (O:/Cloud/Code/_scripts/mayatk/test/test_components.py, line 336)
+test_scene_audit: FAIL
+  Tests: 7, Failures: 1, Errors: 0, Skipped: 0
+
+  FAILURE: test_print_report (test_scene_audit.TestSceneDiagnostics.test_print_report)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_scene_audit.py", line 168, in test_print_report
+    self.analyzer.print_report(report)
+  File "O:\Cloud/Code/_scripts/mayatk\mayatk\core_utils\diagnostics\scene_diag.py", line 2655, in print_report
+    self.log_table(data, headers, title="Top 5 High Poly")
+    ^^^^^^^^^^^^^^
+AttributeError: 'SceneAnalyzer' object has no attribute 'log_table'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_scene_audit.py", line 170, in test_print_report
+    self.fail(f"print_report failed with populated report: {e}")
+AssertionError: print_report failed with populated report: 'SceneAnalyzer' object has no attribute 'log_table'
+
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_components: LOAD ERROR - unexpected indent (O:/Cloud/Code/_scripts/mayatk/t
+  test_scene_audit: FAIL (7 tests, 1 failures, 0 errors)
 ======================================================================
-Total: 0 tests, 0 failures, 0 errors, 0 skipped
+Total: 7 tests, 1 failures, 0 errors, 0 skipped
 ======================================================================

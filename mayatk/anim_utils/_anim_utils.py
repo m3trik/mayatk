@@ -178,14 +178,38 @@ class _AnimUtilsMixin:
                     # Check connections
                     plugs = curve.outputs(plugs=True)
                     for plug in plugs:
-                        plug_name = plug.partialName(includeNode=False).lower()
+                        # Check plug name
+                        try:
+                            if hasattr(plug, "partialName"):
+                                plug_name = plug.partialName(includeNode=False).lower()
+                            else:
+                                plug_name = plug.longName(fullPath=False).lower()
+                        except Exception:
+                            plug_name = str(plug).split(".")[-1].lower()
+
                         if "visibility" in plug_name:
                             is_visibility = True
                             break
 
+                        # Check attribute type (boolean attributes should be stepped)
+                        try:
+                            # If plug is an Attribute object, we can check it directly
+                            if hasattr(plug, "type"):
+                                attr_type = plug.type()
+                            else:
+                                attr = plug.node().attr(plug.longName(fullPath=False))
+                                attr_type = attr.type()
+
+                            if attr_type == "bool":
+                                is_visibility = True
+                                break
+                        except Exception:
+                            pass
+
                 # Debug print
                 # print(f"DEBUG: Curve {curve} (name={curve_name}) is_vis={is_visibility}")
-            except Exception:
+            except Exception as e:
+                print(f"DEBUG: Outer exception for {curve}: {e}")
                 pass
 
             if is_visibility:
@@ -200,6 +224,7 @@ class _AnimUtilsMixin:
         curves: List["pm.PyNode"],
         tangent_type: str = "auto",
         time_range: Optional[Tuple[float, float]] = None,
+        preserve_stepped: bool = True,
     ) -> None:
         """Apply tangent type to curves, enforcing 'step' for visibility attributes.
 
@@ -207,6 +232,8 @@ class _AnimUtilsMixin:
             curves: List of animation curves to modify.
             tangent_type: The tangent type to apply to standard curves (default: 'auto').
             time_range: Optional (start, end) tuple to limit the effect.
+            preserve_stepped: If True, existing 'step' tangents on non-visibility curves
+                            will be preserved. Default is True.
         """
         if not curves:
             return
@@ -218,16 +245,47 @@ class _AnimUtilsMixin:
         range_args = {"time": time_range} if time_range else {}
 
         if curves_to_smooth:
-            try:
-                pm.keyTangent(
-                    curves_to_smooth,
-                    edit=True,
-                    outTangentType=tangent_type,
-                    inTangentType=tangent_type,
-                    **range_args,
-                )
-            except RuntimeError as e:
-                pm.warning(f"Failed to adjust smooth tangents: {e}")
+            for curve in curves_to_smooth:
+                try:
+                    # If preserving stepped tangents, we need to check existing types
+                    restore_steps = []
+                    if preserve_stepped:
+                        # Query existing tangent types
+                        # Note: keyTangent query returns list of strings
+                        # We must query times first to match them up, as keyTangent might return types for all keys in range
+                        times = pm.keyframe(curve, query=True, tc=True, **range_args)
+                        if times:
+                            types = pm.keyTangent(
+                                curve, query=True, outTangentType=True, **range_args
+                            )
+                            if types and len(types) == len(times):
+                                # Identify stepped keys
+                                for t, type_name in zip(times, types):
+                                    if type_name in ("step", "stepnext"):
+                                        restore_steps.append(t)
+
+                    # Apply smoothing to all (bulk operation is faster)
+                    pm.keyTangent(
+                        curve,
+                        edit=True,
+                        outTangentType=tangent_type,
+                        inTangentType=tangent_type,
+                        **range_args,
+                    )
+
+                    # Restore stepped tangents if any were found
+                    if restore_steps:
+                        for t in restore_steps:
+                            pm.keyTangent(
+                                curve,
+                                edit=True,
+                                time=(t,),
+                                outTangentType="step",
+                                inTangentType="clamped",
+                            )
+
+                except RuntimeError as e:
+                    pm.warning(f"Failed to adjust smooth tangents for {curve}: {e}")
 
         if curves_to_step:
             try:
@@ -464,17 +522,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
        - Get curves first using objects_to_curves() or get_anim_curves()
        - Then query/modify the curves: pm.keyframe(curve, query=True, timeChange=True)
     """
-
-    # Map frame rate types to their numerical values
-    FRAME_RATE_VALUES: ClassVar[Dict[str, int]] = {
-        "game": 15,
-        "film": 24,
-        "pal": 25,
-        "ntsc": 30,
-        "show": 48,
-        "palf": 50,
-        "ntscf": 60,
-    }
 
     @staticmethod
     def objects_to_curves(
@@ -1001,22 +1048,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             )[0],
         }
 
-    @classmethod
-    def format_frame_rate_str(cls, key: str) -> str:
-        """Formats and returns a user-friendly frame rate description based on the internal key.
-
-        Parameters:
-            key (str): The internal frame rate key.
-
-        Returns:
-            str: A formatted frame rate string for display.
-        """
-        value = cls.FRAME_RATE_VALUES.get(key, None)
-        if value is None:
-            return "Unknown Frame Rate"
-        else:
-            return f"{value} fps {key.upper()}"
-
     @staticmethod
     def set_current_frame(
         time: Optional[float] = None,
@@ -1273,9 +1304,17 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
                         # Move the keys using keyframe
                         if time_range:
-                            pm.keyframe(obj, edit=True, time=time_range, relative=True, timeChange=offset)
+                            pm.keyframe(
+                                obj,
+                                edit=True,
+                                time=time_range,
+                                relative=True,
+                                timeChange=offset,
+                            )
                         else:
-                            pm.keyframe(obj, edit=True, relative=True, timeChange=offset)
+                            pm.keyframe(
+                                obj, edit=True, relative=True, timeChange=offset
+                            )
 
                         keys_moved += len(keys)
 
@@ -2068,7 +2107,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         """Move keys on a curve to new times, preserving value and tangents.
 
         Uses a read-cut-set approach to avoid keyframe collisions during retiming.
-        
+
         Parameters:
             curve: The animation curve to modify.
             time_pairs: List of (old_time, new_time) tuples.

@@ -632,7 +632,7 @@ safe_modeling_operation(safe_objects[:5], "cleanup_geometry")
 ### Scene Analysis Tool
 
 ```python
-class SceneAnalyzer:
+class SceneAudit:
     """Custom tool using mayatk for scene analysis"""
     
     def __init__(self):
@@ -712,7 +712,7 @@ class SceneAnalyzer:
             print("Performance Warning: High material count detected")
 
 # Usage
-analyzer = SceneAnalyzer()
+analyzer = SceneAudit()
 scene_report = analyzer.analyze_scene()
 analyzer.print_report(scene_report)
 ```
