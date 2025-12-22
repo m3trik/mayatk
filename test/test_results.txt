@@ -4,26 +4,33 @@ MAYATK TEST RESULTS
 
 
 test_auto_instancer: FAIL
-  Tests: 23, Failures: 2, Errors: 0, Skipped: 1
+  Tests: 23, Failures: 3, Errors: 0, Skipped: 1
 
   FAILURE: test_canisters_random_rotation (test_auto_instancer.TestAutoInstancerAssembly.test_canisters_random_rotation)
   Traceback (most recent call last):
   File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 930, in test_canisters_random_rotation
     self.assertLess(
-AssertionError: 20 not less than 10 : Should have consolidated geometry into few unique shapes
+AssertionError: 19 not less than 10 : Should have consolidated geometry into few unique shapes
+
+
+  FAILURE: test_mixed_assemblies (test_auto_instancer.TestAutoInstancerAssembly.test_mixed_assemblies)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 996, in test_mixed_assemblies
+    self.assertLess(unique_shapes, 25, "Should have consolidated mixed geometry")
+AssertionError: 30 not less than 25 : Should have consolidated mixed geometry
 
 
   FAILURE: test_photo_reconstruction (test_auto_instancer.TestRealWorldPhotoScenario.test_photo_reconstruction)
   Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1212, in test_photo_reconstruction
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1226, in test_photo_reconstruction
     self.assertGreaterEqual(area_counts[25], 5, "Should have 5 Canister Bodies")
-AssertionError: 2 not greater than or equal to 5 : Should have 5 Canister Bodies
+AssertionError: 0 not greater than or equal to 5 : Should have 5 Canister Bodies
 
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_auto_instancer: FAIL (23 tests, 2 failures, 0 errors)
+  test_auto_instancer: FAIL (23 tests, 3 failures, 0 errors)
 ======================================================================
-Total: 23 tests, 2 failures, 0 errors, 1 skipped
+Total: 23 tests, 3 failures, 0 errors, 1 skipped
 ======================================================================

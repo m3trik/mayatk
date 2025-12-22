@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Tuple, Any, Union
 from collections import defaultdict
-import math
 
 try:
     import pymel.core as pm
@@ -13,23 +12,10 @@ try:
 except ImportError as error:
     print(__file__, error)
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
-    print("MAYATK: Numpy not found. PCA-based rotation matching will be disabled.")
-
-# Scipy is optional but recommended for spatial indexing and matching
-try:
-    from scipy.spatial import KDTree
-    from scipy.optimize import linear_sum_assignment
-except ImportError:
-    KDTree = None
-    linear_sum_assignment = None
+import numpy as np
+from scipy.spatial import KDTree
 
 import pythontk as ptk
-
-from mayatk.xform_utils.matrices import Matrices
 
 RELOAD_COUNTER = globals().get("RELOAD_COUNTER", 0) + 1
 print(f"MAYATK: Loaded AutoInstancer module (reload #{RELOAD_COUNTER})")
@@ -37,8 +23,6 @@ print(f"MAYATK: Loaded AutoInstancer module (reload #{RELOAD_COUNTER})")
 
 def _calculate_mesh_volume(node):
     """Calculate mesh volume using divergence theorem (numpy)."""
-    if np is None:
-        return 0.0
     try:
         if isinstance(node, pm.nodetypes.Transform):
             shape = node.getShape()
@@ -336,6 +320,13 @@ class AutoInstancer(ptk.LoggingMixin):
                 num_shells = 0
 
             if num_shells > 1:
+                # Unlock normals before separation to prevent polySeparate issues
+                try:
+                    pm.polyNormalPerVertex(shape, unFreezeNormal=True)
+                except Exception:
+                    pass  # Ignore if normals can't be unlocked
+
+            if num_shells > 1:
                 if self.verbose:
                     self.logger.info(
                         "Separating combined mesh: %s (%s shells)", node, num_shells
@@ -382,12 +373,7 @@ class AutoInstancer(ptk.LoggingMixin):
         # 2. Calculate center (Centroid)
         # We use the mean of points (Centroid) instead of Bounding Box center.
         # This ensures the pivot aligns with the PCA centroid, preventing shifts when applying PCA rotation.
-        if np is not None:
-            center = pm.dt.Point(np.mean(pts, axis=0))
-        else:
-            # Fallback if numpy is missing (though it's required for PCA anyway)
-            bb = node.getBoundingBox(space="world")
-            center = bb.center()
+        center = pm.dt.Point(np.mean(pts, axis=0))
 
         # 3. Move transform to center
         node.setTranslation(center, space="world")
@@ -440,9 +426,6 @@ class AutoInstancer(ptk.LoggingMixin):
 
     def _get_pca_basis(self, node: pm.nodetypes.Transform) -> Optional[pm.dt.Matrix]:
         """Returns the PCA basis matrix (rotation only) for the node's mesh."""
-        if np is None:
-            return None
-
         shape = node.getShape()
         if not shape or not isinstance(shape, pm.nodetypes.Mesh):
             return None
@@ -536,62 +519,8 @@ class AutoInstancer(ptk.LoggingMixin):
         median_area = sig_avg_areas[len(sig_avg_areas) // 2] if sig_avg_areas else 0.0
 
         # Adaptive thresholds using 1D K-Means (k=3) to separate "Small" from "Large" classes.
-        # This handles cases like [Lid(1.6), Junk(2.1), Body(28)] where median (2.1) is too low.
-        def get_kmeans_threshold(values):
-            if not values:
-                return 0.0
-            if len(values) == 1:
-                return values[0] * 0.5  # If only one class, treat it as Body
-
-            # K-Means k=3
-            # Init with min, median, max
-            unique_vals = sorted(list(set(values)))
-            if len(unique_vals) < 3:
-                # Fallback for very few unique sizes
-                if len(unique_vals) == 2:
-                    return sum(unique_vals) / 2.0
-                return unique_vals[0] * 0.5
-
-            c0 = unique_vals[0]
-            c1 = unique_vals[len(unique_vals) // 2]
-            c2 = unique_vals[-1]
-
-            for _ in range(10):
-                g0 = []
-                g1 = []
-                g2 = []
-                for v in unique_vals:
-                    d0 = abs(v - c0)
-                    d1 = abs(v - c1)
-                    d2 = abs(v - c2)
-                    if d0 <= d1 and d0 <= d2:
-                        g0.append(v)
-                    elif d1 <= d0 and d1 <= d2:
-                        g1.append(v)
-                    else:
-                        g2.append(v)
-
-                nc0 = sum(g0) / len(g0) if g0 else c0
-                nc1 = sum(g1) / len(g1) if g1 else c1
-                nc2 = sum(g2) / len(g2) if g2 else c2
-
-                if nc0 == c0 and nc1 == c1 and nc2 == c2:
-                    break
-                c0, c1, c2 = nc0, nc1, nc2
-
-            # Merge Logic
-            # If Middle cluster is close to Small cluster (in ratio), merge them.
-            # Ratio 3.0 approximates log-space clustering.
-            if c1 < c0 * 3.0:
-                # Merge g1 into g0 (conceptually)
-                # Threshold is between c1 and c2
-                return (c1 + c2) / 2.0
-            else:
-                # Threshold is between c0 and c1
-                return (c0 + c1) / 2.0
-
-        vol_threshold = max(get_kmeans_threshold(sig_avg_vols), 1.0)
-        area_threshold = max(get_kmeans_threshold(sig_avg_areas), 5.0)
+        vol_threshold = max(ptk.MathUtils.get_kmeans_threshold(sig_avg_vols), 1.0)
+        area_threshold = max(ptk.MathUtils.get_kmeans_threshold(sig_avg_areas), 5.0)
 
         large_body_threshold_vol = max(median_vol * 20.0, 100.0)
         large_body_threshold_area = max(median_area * 20.0, 500.0)
@@ -678,7 +607,7 @@ class AutoInstancer(ptk.LoggingMixin):
 
         # Spatial index for neighbor lookup
         all_centroids = [(s.centroid.x, s.centroid.y, s.centroid.z) for s in shells]
-        tree = KDTree(all_centroids) if KDTree else None
+        tree = KDTree(all_centroids)
 
         # Competitive Assignment:
         # Instead of Roots claiming Children greedily, we collect all potential links
@@ -975,15 +904,9 @@ class AutoInstancer(ptk.LoggingMixin):
                     try:
                         # Center group on assembly centroid to ensure consistent relative positions
                         points = [root.centroid] + [c.centroid for c in children]
-                        if np is not None:
-                            centroid = pm.dt.Point(
-                                np.mean([(p.x, p.y, p.z) for p in points], axis=0)
-                            )
-                        else:
-                            cx = sum(p.x for p in points) / len(points)
-                            cy = sum(p.y for p in points) / len(points)
-                            cz = sum(p.z for p in points) / len(points)
-                            centroid = pm.dt.Point(cx, cy, cz)
+                        centroid = pm.dt.Point(
+                            np.mean([(p.x, p.y, p.z) for p in points], axis=0)
+                        )
 
                         assembly_grp.setTranslation(centroid, space="world")
                         # Align group orientation to root to ensure rotation invariance
@@ -1425,22 +1348,21 @@ class AutoInstancer(ptk.LoggingMixin):
 
         # PCA Signature (Eigenvalues)
         pca_sig = ()
-        if np is not None:
-            try:
-                points = np.array(mesh.getPoints(space="object"))
-                if len(points) > 3:
-                    # 1. Center
-                    centroid = np.mean(points, axis=0)
-                    centered = points - centroid
-                    # 2. Covariance
-                    cov = np.cov(centered, rowvar=False)
-                    # 3. Eigenvalues
-                    evals, _ = np.linalg.eigh(cov)
-                    # Sort and round for stability
-                    pca_sig = tuple(sorted([self._quantize(e, 3) for e in evals]))
-            except Exception as e:
-                if self.verbose:
-                    print(f"PCA failed for {transform}: {e}")
+        try:
+            points = np.array(mesh.getPoints(space="object"))
+            if len(points) > 3:
+                # 1. Center
+                centroid = np.mean(points, axis=0)
+                centered = points - centroid
+                # 2. Covariance
+                cov = np.cov(centered, rowvar=False)
+                # 3. Eigenvalues
+                evals, _ = np.linalg.eigh(cov)
+                # Sort and round for stability
+                pca_sig = tuple(sorted([self._quantize(e, 3) for e in evals]))
+        except Exception as e:
+            if self.verbose:
+                print(f"PCA failed for {transform}: {e}")
 
         materials = ()
         if self.require_same_material and not self.combine_assemblies:
@@ -1597,7 +1519,13 @@ class AutoInstancer(ptk.LoggingMixin):
     def _are_meshes_identical(
         self, t1: pm.nodetypes.Transform, t2: pm.nodetypes.Transform
     ) -> bool:
-        """Detailed geometric comparison."""
+        """Detailed geometric comparison using robust PCA alignment.
+
+        Tests:
+        1. Fast path: Direct vertex-order comparison
+        2. KDTree match: Order-invariant nearest-neighbor check (requires scipy)
+        3. Robust PCA: Handles baked rotations and cylindrical symmetry (requires scipy)
+        """
         m1 = t1.getShape()
         m2 = t2.getShape()
         if not m1 or not m2:
@@ -1615,191 +1543,37 @@ class AutoInstancer(ptk.LoggingMixin):
         else:
             if self.verbose:
                 print(f"[DEBUG] Fast path matched for {t1} vs {t2}")
-                # Debug why it matched
-                print(f"  pts1[0]: {pts1[0]}")
-                print(f"  pts2[0]: {pts2[0]}")
             return True
 
         # Robust path: order-invariant nearest-neighbor check
-        # (This fixes your "PCA rejected" cases when vertex ordering differs.)
-        if KDTree:
-            import numpy as _np  # numpy already optional; KDTree implies scipy, but still guard
+        pts1_array = np.asarray(
+            [(float(p.x), float(p.y), float(p.z)) for p in pts1], dtype=float
+        )
+        pts2_array = np.asarray(
+            [(float(p.x), float(p.y), float(p.z)) for p in pts2], dtype=float
+        )
 
-            if _np is None:
-                return False
+        tree = KDTree(pts2_array)
+        dists, _ = tree.query(pts1_array, k=1)
+        if float(dists.max()) <= float(self.tolerance):
+            if self.verbose:
+                print(f"[DEBUG] KDTree matched for {t1} vs {t2}")
+            return True
 
-            a = _np.asarray(
-                [(float(p.x), float(p.y), float(p.z)) for p in pts1], dtype=float
-            )
-            b = _np.asarray(
-                [(float(p.x), float(p.y), float(p.z)) for p in pts2], dtype=float
-            )
+        # Robust PCA Alignment (handles baked rotations and symmetry)
+        matrix_list = ptk.MathUtils.get_pca_transform(
+            pts1_array, pts2_array, tolerance=self.tolerance, robust=True
+        )
 
-            tree = KDTree(b)
-            dists, _ = tree.query(a, k=1)
-            if bool(float(dists.max()) <= float(self.tolerance)):
-                if self.verbose:
-                    print(f"[DEBUG] KDTree matched for {t1} vs {t2}")
-                return True
+        if matrix_list:
+            uuid = pm.cmds.ls(t2.name(), uuid=True)[0]
+            self._relative_transforms[uuid] = pm.dt.Matrix(matrix_list)
+            if self.verbose:
+                print(f"[DEBUG] Robust PCA matched for {t1} vs {t2}")
+            return True
 
-        # Fallback: PCA Alignment (for baked rotations)
-        if np is not None:
-            pts1_list = [(p.x, p.y, p.z) for p in pts1]
-            pts2_list = [(p.x, p.y, p.z) for p in pts2]
-
-        # Fallback: PCA Alignment (for baked rotations)
-        if np is not None:
-            # Try ptk first (fast C++ implementation if available)
-            pts1_list = [(p.x, p.y, p.z) for p in pts1]
-            pts2_list = [(p.x, p.y, p.z) for p in pts2]
-
-            matrix_list = ptk.MathUtils.get_pca_transform(
-                pts1_list, pts2_list, self.tolerance
-            )
-
-            if matrix_list:
-                # Store relative transform for later use (PyNode attributes don't persist across instances)
-                uuid = pm.cmds.ls(t2.name(), uuid=True)[0]
-                self._relative_transforms[uuid] = pm.dt.Matrix(matrix_list)
-                if self.verbose:
-                    print(
-                        f"[DEBUG] PTK PCA matched for {t1} vs {t2}. Matrix: {matrix_list}"
-                    )
-                return True
-
-            # Robust PCA with KDTree verification (handles vertex reordering + PCA ambiguity)
-            try:
-                p1 = np.array(pts1_list)
-                p2 = np.array(pts2_list)
-
-                c1 = np.mean(p1, axis=0)
-                c2 = np.mean(p2, axis=0)
-
-                q1 = p1 - c1
-                q2 = p2 - c2
-
-                cov1 = np.cov(q1, rowvar=False)
-                cov2 = np.cov(q2, rowvar=False)
-
-                evals1, evecs1 = np.linalg.eigh(cov1)
-                evals2, evecs2 = np.linalg.eigh(cov2)
-
-                # Sort eigenvectors by eigenvalue (ascending)
-                # eigh returns sorted eigenvalues, so evecs are already sorted
-
-                B1 = evecs1
-                B2 = evecs2
-
-                # Ensure right-handed coordinate system
-                if np.linalg.det(B1) < 0:
-                    B1[:, 2] *= -1
-                if np.linalg.det(B2) < 0:
-                    B2[:, 2] *= -1
-
-                # Base candidates (Sign flips)
-                flips = [
-                    np.diag([1, 1, 1]),
-                    np.diag([1, -1, -1]),
-                    np.diag([-1, 1, -1]),
-                    np.diag([-1, -1, 1]),
-                ]
-
-                basis_candidates = [B2 @ F for F in flips]
-
-                # Symmetry Check (Cylindrical)
-                # evals are sorted ascending.
-                # Case 1: evals[0] ~= evals[1] (Long Cylinder) -> Rotate around axis 2
-                # Case 2: evals[1] ~= evals[2] (Flat Disk) -> Rotate around axis 0
-
-                max_eval = evals2[-1]
-                if max_eval > 1e-6:
-                    norm_evals = evals2 / max_eval
-
-                    # Check Case 1 (Axis 0 ~= Axis 1)
-                    if abs(norm_evals[0] - norm_evals[1]) < 0.1:
-                        # Rotate around Z (index 2)
-                        angles = np.arange(15, 360, 15)
-                        for deg in angles:
-                            rad = np.radians(deg)
-                            c, s = np.cos(rad), np.sin(rad)
-                            Rz = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
-                            for F in flips:
-                                basis_candidates.append((B2 @ F) @ Rz)
-
-                    # Check Case 2 (Axis 1 ~= Axis 2)
-                    elif abs(norm_evals[1] - norm_evals[2]) < 0.1:
-                        # Rotate around X (index 0)
-                        angles = np.arange(15, 360, 15)
-                        for deg in angles:
-                            rad = np.radians(deg)
-                            c, s = np.cos(rad), np.sin(rad)
-                            Rx = np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
-                            for F in flips:
-                                basis_candidates.append((B2 @ F) @ Rx)
-
-                # Build KDTree once for q1
-                if KDTree:
-                    tree = KDTree(q1)
-                else:
-                    tree = None
-
-                best_dist = float("inf")
-                best_R = None
-
-                for B2_prime in basis_candidates:
-                    # Rotation R that maps B2' to B1: R @ B2' = B1 => R = B1 @ B2'.T
-                    R = B1 @ B2_prime.T
-
-                    # Apply R to q2: q2_rot = R @ q2
-                    q2_rot = (R @ q2.T).T
-
-                    # Check match
-                    if tree:
-                        dists, _ = tree.query(q2_rot, k=1)
-                        max_dist = dists.max()
-                    else:
-                        # Brute force nearest neighbor (memory efficient loop)
-                        max_dist = 0.0
-                        for p in q2_rot:
-                            # Distance from p to all points in q1
-                            d = np.linalg.norm(q1 - p, axis=1).min()
-                            if d > max_dist:
-                                max_dist = d
-                            if max_dist > self.tolerance:
-                                break
-
-                    if max_dist < best_dist:
-                        best_dist = max_dist
-
-                    if max_dist <= self.tolerance:
-                        # Found match!
-                        # Construct Maya Matrix (Row-Major)
-                        # Rotation part is R.T
-                        # Translation part is C1 - C2 @ R.T
-
-                        M_maya = np.eye(4)
-                        M_maya[:3, :3] = R.T
-                        M_maya[3, :3] = c1 - (c2 @ R.T)
-
-                        # Store relative transform for later use
-                        # Use UUID as key because names might change (e.g. during assembly reassembly)
-                        uuid = pm.cmds.ls(t2.name(), uuid=True)[0]
-                        self._relative_transforms[uuid] = pm.dt.Matrix(M_maya.tolist())
-                        if self.verbose:
-                            print(
-                                f"[DEBUG] Robust PCA matched for {t1} vs {t2}. Matrix: {M_maya.tolist()}"
-                            )
-                        return True
-
-                print(
-                    f"[DEBUG] PCA Alignment failed for {t1} vs {t2}. Best dist: {best_dist:.4f}"
-                )
-                return False
-
-            except Exception as e:
-                print(f"[DEBUG] Robust PCA failed: {e}")
-                return False
-
+        if self.verbose:
+            print(f"[DEBUG] PCA Alignment failed for {t1} vs {t2}")
         return False
 
     def _convert_group_to_instances(
