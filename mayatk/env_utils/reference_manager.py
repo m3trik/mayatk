@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import re
+import time
 from functools import partial, wraps
 from typing import Optional
 
@@ -352,6 +353,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._last_dir_valid = None
         self._updating_directory = False  # Flag to prevent cascading UI events
         self._editing_item = None  # Track which item is being edited
+        self.last_unlink_time = 0  # Track last unlink time to prevent double-firing
         self.logger.debug("ReferenceManagerController initialized.")
 
     @property
@@ -1106,6 +1108,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         self.import_references(namespaces=namespaces, remove_namespace=True)
         self.refresh_file_list()
+        self.last_unlink_time = time.time()
         self.logger.info(f"Unlinked {count} references.")
 
     @block_table_selection_method
@@ -1693,14 +1696,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
         return selected_namespaces
 
-    def btn_unlink_import(self):
-        """Unlink and import the selected references."""
-        namespaces = self._get_selected_reference_namespaces()
-        if not namespaces:
-            self.sb.message_box("No active references selected.")
-            return
-        self.controller.unlink_references(namespaces)
-
     def btn_open_scene(self):
         """Open the selected scene file."""
         t = self.ui.tbl000
@@ -2120,6 +2115,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def btn_unlink_import(self):
         """Unlink and import the selected reference(s)."""
+        # Check if we just performed an unlink operation (within 1 second)
+        # This prevents double-firing events from showing confusing messages
+        if time.time() - getattr(self.controller, "last_unlink_time", 0) < 1.0:
+            return
+
         namespaces = self._get_selected_reference_namespaces()
         if not namespaces:
             self.sb.message_box("No active references selected.")

@@ -1,6 +1,14 @@
 
 import sys
 import os
+
+# Set extended tests flag
+if False:
+    os.environ['MAYATK_EXTENDED_TESTS'] = '1'
+else:
+    if 'MAYATK_EXTENDED_TESTS' in os.environ:
+        del os.environ['MAYATK_EXTENDED_TESTS']
+
 sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test')
 # Add all package roots to sys.path
 package_roots = [
@@ -24,6 +32,24 @@ try:
     import mayatk
     reloaded = reloader.reload(mayatk)
     print(f"[ModuleReloader] Reloaded {len(reloaded)} mayatk modules")
+
+    # Force reload base_test by removing it from sys.modules
+    if 'base_test' in sys.modules:
+        del sys.modules['base_test']
+        print("[ModuleReloader] Removed base_test from sys.modules to force reload")
+
+    # Debug: Check if base_test can be imported and has the attribute
+    try:
+        import base_test
+        print(f"[Debug] Imported base_test from: {base_test.__file__}")
+        if hasattr(base_test, 'skipUnlessExtended'):
+            print("[Debug] base_test has skipUnlessExtended")
+        else:
+            print("[Debug] base_test MISSING skipUnlessExtended")
+            print(f"[Debug] dir(base_test): {dir(base_test)}")
+    except ImportError as e:
+        print(f"[Debug] Could not import base_test: {e}")
+
 except Exception as e:
     # Fallback to simple module clearing if reloader fails
     modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
@@ -42,7 +68,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_anim_utils', 'test_cam_utils', 'test_components', 'test_controls', 'test_core_utils', 'test_display_utils', 'test_edit_utils', 'test_env_utils', 'test_image_tracer', 'test_light_utils', 'test_mat_utils', 'test_node_utils', 'test_nurbs_utils', 'test_playblast_exporter', 'test_repro_scale_tangents', 'test_rig_utils', 'test_scale_keys', 'test_scene_audit', 'test_segment_keys', 'test_shader_templates', 'test_stagger_keys', 'test_stingray_arnold_shader', 'test_ui_utils', 'test_uv_diagnostics', 'test_uv_utils', 'test_vis_tangents_repro', 'test_xform_utils']
+test_modules = ['test_auto_instancer']
 total_tests = 0
 total_failures = 0
 total_errors = 0

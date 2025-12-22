@@ -111,10 +111,12 @@ class CamUtils(ptk.HelpMixin):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
         current_panel = None
-        for panel in UiUtils.get_panel(all=True):
-            if UiUtils.get_panel(typeOf=panel) == "modelPanel":
-                current_panel = panel
-                break
+        panels = UiUtils.get_panel(all=True)
+        if panels:
+            for panel in panels:
+                if UiUtils.get_panel(typeOf=panel) == "modelPanel":
+                    current_panel = panel
+                    break
 
         if current_panel:
             if UiUtils.get_panel(typeOf=current_panel) == "modelPanel":
@@ -129,49 +131,26 @@ class CamUtils(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def adjust_camera_clipping(
-        camera=None, near_clip=None, far_clip=None, mode="manual"
-    ):
-        """Adjusts the near and far clipping planes of one or multiple cameras in Autodesk Maya.
+    def adjust_camera_clipping(camera=None, near_clip=None, far_clip=None):
+        """Adjusts the near and far clipping planes of one or multiple cameras.
 
         Parameters:
-            camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts all cameras in the scene.
-            near_clip (float/optional): The value to set for the near clipping plane. Only used when mode is 'manual'.
-            far_clip (float/optional): The value to set for the far clipping plane. Only used when mode is 'manual'.
-            mode (str/optional): The mode to operate in. Choices are 'manual', 'auto', 'reset'. Default is 'manual'.
-                - 'manual': Uses the near_clip and far_clip values provided. Ignores them if None.
-                - 'auto': Automatically sets the near and far clipping based on scene geometry.
-                - 'reset': Resets the near and far clipping to default values (0.1 and 10000).
-
-        Examples:
-            adjust_camera_clipping(near_clip=0.2, far_clip=1000)  # manual is default mode
-            adjust_camera_clipping("persp", near_clip=0.2, far_clip=1000, mode='manual')
-            adjust_camera_clipping(["persp", "top"], mode='auto')
-            adjust_camera_clipping(mode='reset')
+            camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts all non-startup cameras.
+            near_clip (float/str/optional): The value for the near clipping plane.
+                - If None (default): Do not change.
+                - If 'auto': Automatically calculated based on scene geometry.
+                - If 'reset': Resets to default (0.1).
+                - If float: Sets to the specific value.
+            far_clip (float/str/optional): The value for the far clipping plane.
+                - If None (default): Do not change.
+                - If 'auto': Automatically calculated based on scene geometry.
+                - If 'reset': Resets to default (10000).
+                - If float: Sets to the specific value.
         """
-        if mode == "reset":
-            near_clip = 0.1
-            far_clip = 10000
-        elif mode == "auto":
-            all_geo = pm.ls(dag=True, long=True, geometry=True)
-            if not all_geo:
-                raise ValueError(
-                    "No geometry found in the scene for automatic clipping adjustment."
-                )
-            bbox = pm.exactWorldBoundingBox(all_geo)
-            size = [bbox[i + 3] - bbox[i] for i in range(3)]
-            max_size = max(size)
-            near_clip = 0.001 * max_size
-            far_clip = 5.0 * max_size
-        elif mode != "manual":
-            raise ValueError(
-                f"Invalid mode: {mode}. Valid modes are 'manual', 'auto', 'reset'."
-            )
-
         # Resolve camera shapes
+        target_cameras = []
         if camera:
             raw_cameras = pm.ls(camera)
-            target_cameras = []
             for cam in raw_cameras:
                 if hasattr(cam, "getShape"):  # Transform
                     shape = cam.getShape()
@@ -180,20 +159,96 @@ class CamUtils(ptk.HelpMixin):
                 elif cam.nodeType() == "camera":  # Shape
                     target_cameras.append(cam)
         else:
-            target_cameras = pm.ls(dag=True, cameras=True)
+            # If no camera specified, get all cameras but filter out startup ones
+            all_cameras = pm.ls(dag=True, cameras=True)
+            target_cameras = [
+                cam
+                for cam in all_cameras
+                if not pm.camera(cam, q=True, startupCamera=True)
+            ]
 
-        # Filter out startup cameras
-        target_cameras = [
-            cam
-            for cam in target_cameras
-            if not pm.camera(cam, q=True, startupCamera=True)
-        ]
+        if not target_cameras:
+            return
+
+        # Check if we need auto calculation
+        needs_auto = (near_clip == "auto") or (far_clip == "auto")
+
+        # Pre-calculate scene bbox if needed for auto mode
+        bbox = None
+        bbox_points = None
+
+        if needs_auto:
+            all_geo = pm.ls(dag=True, geometry=True, visible=True)
+            if not all_geo:
+                all_geo = pm.ls(dag=True, geometry=True)
+
+            if all_geo:
+                bbox = pm.exactWorldBoundingBox(all_geo)
+                # bbox is [xmin, ymin, zmin, xmax, ymax, zmax]
+                min_pt = pm.dt.Vector(bbox[0], bbox[1], bbox[2])
+                max_pt = pm.dt.Vector(bbox[3], bbox[4], bbox[5])
+
+                # Calculate 8 corners for far clip calculation
+                bbox_points = [
+                    pm.dt.Vector(x, y, z)
+                    for x in (min_pt.x, max_pt.x)
+                    for y in (min_pt.y, max_pt.y)
+                    for z in (min_pt.z, max_pt.z)
+                ]
 
         for cam in target_cameras:
+            # Only get camera position if we are doing auto calculations
+            cam_pos = None
+            if needs_auto:
+                cam_transform = cam.getParent()
+                cam_pos = pm.dt.Vector(pm.xform(cam_transform, q=True, ws=True, t=True))
+
+            # Determine Near Clip
             if near_clip is not None:
-                cam.nearClipPlane.set(near_clip)
+                new_near = None
+                if near_clip == "reset":
+                    new_near = 0.1
+                elif near_clip == "auto":
+                    if bbox and cam_pos:
+                        # Distance to AABB logic
+                        dx = max(bbox[0] - cam_pos.x, 0, cam_pos.x - bbox[3])
+                        dy = max(bbox[1] - cam_pos.y, 0, cam_pos.y - bbox[4])
+                        dz = max(bbox[2] - cam_pos.z, 0, cam_pos.z - bbox[5])
+                        dist_to_box = (dx * dx + dy * dy + dz * dz) ** 0.5
+
+                        if dist_to_box > 0:
+                            new_near = dist_to_box * 0.9
+                            new_near = max(new_near, 0.01)
+                        else:
+                            new_near = 0.01
+                    else:
+                        new_near = 0.1
+                elif isinstance(near_clip, (int, float)):
+                    new_near = near_clip
+
+                if new_near is not None:
+                    cam.nearClipPlane.set(new_near)
+
+            # Determine Far Clip
             if far_clip is not None:
-                cam.farClipPlane.set(far_clip)
+                new_far = None
+                if far_clip == "reset":
+                    new_far = 10000.0
+                elif far_clip == "auto":
+                    if bbox_points and cam_pos:
+                        max_dist = 0
+                        for pt in bbox_points:
+                            d = (pt - cam_pos).length()
+                            if d > max_dist:
+                                max_dist = d
+                        new_far = max_dist * 1.2
+                    else:
+                        new_far = 10000.0
+                elif isinstance(far_clip, (int, float)):
+                    new_far = far_clip
+
+                if new_far is not None:
+                    cam.farClipPlane.set(new_far)
 
     @staticmethod
     def _get_default_camera(camera_name):

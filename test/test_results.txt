@@ -3,50 +3,27 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_anim_utils: PASS
-  Tests: 26, Failures: 0, Errors: 0, Skipped: 0
+test_auto_instancer: FAIL
+  Tests: 23, Failures: 2, Errors: 0, Skipped: 1
 
-test_cam_utils: PASS
-  Tests: 14, Failures: 0, Errors: 0, Skipped: 0
+  FAILURE: test_canisters_random_rotation (test_auto_instancer.TestAutoInstancerAssembly.test_canisters_random_rotation)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 930, in test_canisters_random_rotation
+    self.assertLess(
+AssertionError: 20 not less than 10 : Should have consolidated geometry into few unique shapes
 
-test_components: PASS
-  Tests: 27, Failures: 0, Errors: 0, Skipped: 0
 
-test_controls: PASS
-  Tests: 18, Failures: 0, Errors: 0, Skipped: 0
+  FAILURE: test_photo_reconstruction (test_auto_instancer.TestRealWorldPhotoScenario.test_photo_reconstruction)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1212, in test_photo_reconstruction
+    self.assertGreaterEqual(area_counts[25], 5, "Should have 5 Canister Bodies")
+AssertionError: 2 not greater than or equal to 5 : Should have 5 Canister Bodies
 
-test_core_utils: PASS
-  Tests: 26, Failures: 0, Errors: 0, Skipped: 0
 
-test_display_utils: PASS
-  Tests: 4, Failures: 0, Errors: 0, Skipped: 0
-
-test_edit_utils: PASS
-  Tests: 18, Failures: 0, Errors: 0, Skipped: 0
-
-test_env_utils: PASS
-  Tests: 12, Failures: 0, Errors: 0, Skipped: 0
-
-test_image_tracer: PASS
-  Tests: 4, Failures: 0, Errors: 0, Skipped: 0
-
-test_light_utils: PASS
-  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
-
-test_mat_utils: PASS
-  Tests: 13, Failures: 0, Errors: 0, Skipped: 0
-
-test_node_utils: PASS
-  Tests: 16, Failures: 0, Errors: 0, Skipped: 0
-
-test_nurbs_utils: PASS
-  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
-
-test_playblast_exporter: PASS
-  Tests: 14, Failures: 0, Errors: 0, Skipped: 0
-
-test_repro_scale_tangents: PASS
-  Tests: 1, Failures: 0, Errors: 0, Skipped: 0
-
-test_rig_utils: PASS
-  Tests: 11, Failures: 0, Errors: 0, Skipped: 0
+======================================================================
+SUMMARY
+======================================================================
+  test_auto_instancer: FAIL (23 tests, 2 failures, 0 errors)
+======================================================================
+Total: 23 tests, 2 failures, 0 errors, 1 skipped
+======================================================================

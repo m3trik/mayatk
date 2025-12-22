@@ -388,7 +388,7 @@ class AuditProfile:
     max_tris: int = 20000
     max_slots: int = 4
     max_tex_res: int = 4096
-    max_uvs: int = 2
+    max_uvs: int = 1
     name: str = "Standard"
     texture_compression: str = "BC7"  # BC7, ASTC, None
     adaptive_tris: bool = False
