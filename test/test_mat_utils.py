@@ -103,7 +103,9 @@ class TestMatUtils(MayaTkTestCase):
         """Test creating a random material type."""
         random_mat = MatUtils.create_mat(mat_type="random", name="random_mat")
         self.assertTrue(pm.objExists(random_mat))
-        self.assertTrue(random_mat.name().startswith("random_mat"))
+        # Handle both string and PyNode return types
+        mat_name = random_mat.name() if hasattr(random_mat, "name") else random_mat
+        self.assertTrue(mat_name.startswith("random_mat"))
 
     def test_create_mat_specific(self):
         """Test creating specific material types."""

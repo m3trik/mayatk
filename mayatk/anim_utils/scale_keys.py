@@ -727,9 +727,6 @@ class ScaleKeys:
 
                     if current_duration > 1e-6:
                         effective_factor = factor / current_duration
-                        print(
-                            f"DEBUG: Obj {info['object']} GroupMode {group_mode} GrpDur {current_duration} Factor {factor} -> EffFactor {effective_factor} Pivot {pivot_time}"
-                        )
                     else:
                         continue
 
@@ -752,7 +749,7 @@ class ScaleKeys:
                 query_time_arg = None
                 if time_arg:
                     try:
-                        eps = 1e-3
+                        eps = 0.5
                         query_time_arg = (
                             float(time_arg[0]) - eps,
                             float(time_arg[1]) + eps,
@@ -766,10 +763,15 @@ class ScaleKeys:
                         kwargs = {"query": True, "tc": True}
                         if self.selected_keys_only:
                             kwargs["selected"] = True
-                        if query_time_arg:
-                            kwargs["time"] = query_time_arg
+                        # Manual filtering for large frame numbers where Maya's time query fails
+                        # if query_time_arg:
+                        #     kwargs["time"] = query_time_arg
 
                         times = pm.keyframe(curve, **kwargs)
+
+                        if query_time_arg and times:
+                            start, end = query_time_arg
+                            times = [t for t in times if start <= t <= end]
                         if times:
                             curve_times_map[curve] = list(times)
 

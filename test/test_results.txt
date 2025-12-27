@@ -3,34 +3,21 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_auto_instancer: FAIL
-  Tests: 23, Failures: 3, Errors: 0, Skipped: 1
+test_texture_map_factory: LOAD ERROR
+  [Errno 2] No such file or directory: 'O:/Cloud/Code/_scripts/mayatk/test/test_texture_map_factory.py'
 
-  FAILURE: test_canisters_random_rotation (test_auto_instancer.TestAutoInstancerAssembly.test_canisters_random_rotation)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 930, in test_canisters_random_rotation
-    self.assertLess(
-AssertionError: 19 not less than 10 : Should have consolidated geometry into few unique shapes
+test_game_shader: PASS
+  Tests: 74, Failures: 0, Errors: 0, Skipped: 4
 
-
-  FAILURE: test_mixed_assemblies (test_auto_instancer.TestAutoInstancerAssembly.test_mixed_assemblies)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 996, in test_mixed_assemblies
-    self.assertLess(unique_shapes, 25, "Should have consolidated mixed geometry")
-AssertionError: 30 not less than 25 : Should have consolidated mixed geometry
-
-
-  FAILURE: test_photo_reconstruction (test_auto_instancer.TestRealWorldPhotoScenario.test_photo_reconstruction)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1226, in test_photo_reconstruction
-    self.assertGreaterEqual(area_counts[25], 5, "Should have 5 Canister Bodies")
-AssertionError: 0 not greater than or equal to 5 : Should have 5 Canister Bodies
-
+test_material_updater: PASS
+  Tests: 10, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_auto_instancer: FAIL (23 tests, 3 failures, 0 errors)
+  test_texture_map_factory: LOAD ERROR - [Errno 2] No such file or directory: 'O:/Cloud/Cod
+  test_game_shader: PASS (74 tests, 0 failures, 0 errors)
+  test_material_updater: PASS (10 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 23 tests, 3 failures, 0 errors, 1 skipped
+Total: 84 tests, 0 failures, 0 errors, 4 skipped
 ======================================================================

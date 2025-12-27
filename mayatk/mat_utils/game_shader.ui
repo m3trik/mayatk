@@ -62,7 +62,7 @@
          </font>
         </property>
         <property name="text">
-         <string>CREATE STINGRAY SHADER</string>
+         <string>GAME SHADER</string>
         </property>
        </widget>
       </item>

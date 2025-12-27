@@ -1,14 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import List, Optional, Tuple, Callable, Union
+from typing import List, Optional, Tuple, Callable, Union, Dict, Any
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from pythontk.img_utils.texture_map_factory import TextureMapFactory
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -17,75 +16,9 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-class PBRWorkflowTemplate:
-    """Configuration class for PBR workflow templates.
-
-    Defines standard PBR export configurations for different game engines and pipelines.
-    Each template specifies how textures should be packed/combined for the target platform.
-    Templates are indexed by their position in the UI combo box (0-6).
-    """
-
-    # Template configurations indexed by combo box position
-    # Format: (albedo_transparency, metallic_smoothness, mask_map, orm_map, convert_specgloss)
-    TEMPLATE_CONFIGS = [
-        (
-            False,
-            False,
-            False,
-            False,
-            False,
-        ),  # 0: PBR Metallic/Roughness (Separate Maps)
-        (
-            True,
-            True,
-            False,
-            False,
-            False,
-        ),  # 1: Unity URP Lit (Packed: Albedo+Alpha, Metallic+Smoothness)
-        (
-            False,
-            False,
-            True,
-            False,
-            False,
-        ),  # 2: Unity HDRP Lit (Mask Map: Metallic+AO+Detail+Smoothness)
-        (
-            True,
-            False,
-            False,
-            True,
-            False,
-        ),  # 3: Unreal Engine (Packed: BaseColor+Alpha, ORM)
-        (False, False, False, True, False),  # 4: glTF 2.0 (ORM: AO+Roughness+Metallic)
-        (
-            False,
-            False,
-            False,
-            False,
-            False,
-        ),  # 5: Godot (Separate: Albedo, Metallic, Roughness)
-        (False, True, False, False, True),  # 6: PBR Specular/Glossiness Workflow
-    ]
-
-    @classmethod
-    def get_template_config(cls, index: int) -> Tuple[bool, bool, bool, bool, bool]:
-        """Get configuration for a template by its combo box index.
-
-        Parameters:
-            index: The combo box index (0-6)
-
-        Returns:
-            Tuple of (albedo_transparency, metallic_smoothness, mask_map, orm_map, convert_specgloss_to_pbr)
-        """
-        if 0 <= index < len(cls.TEMPLATE_CONFIGS):
-            return cls.TEMPLATE_CONFIGS[index]
-        # Default to standard PBR if index out of range
-        return (False, False, False, False, False)
-
-
-class StingrayArnoldShader:
-    """A class to manage the creation of a shader network using StingrayPBS and optionally Arnold shaders.
-    This class facilitates the automatic setup of textures into a StingrayPBS shader and, if requested,
+class GameShader:
+    """A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+    This class facilitates the automatic setup of textures into a shader and, if requested,
     an Arnold shader network, linking necessary nodes and setting up the shader graph based on the provided textures.
     """
 
@@ -110,6 +43,7 @@ class StingrayArnoldShader:
         cleanup_base_color: bool = False,
         output_extension: str = "png",
         callback: Callable = print,
+        **kwargs,
     ) -> Union[Optional[object], List[Optional[object]]]:
         """Create a PBR shader network with textures.
 
@@ -149,11 +83,11 @@ class StingrayArnoldShader:
             "output_extension": output_extension,
         }
 
-        prepared_data = TextureMapFactory.prepare_maps(
+        prepared_data = ptk.TextureMapFactory.prepare_maps(
             textures,
-            workflow_config,
             callback=callback,
             group_by_set=(not bool(name)),
+            **workflow_config,
         )
 
         if isinstance(prepared_data, dict):
@@ -191,11 +125,36 @@ class StingrayArnoldShader:
             )
             return None
 
-        opacity_map = ptk.filter_images_by_type(
+        opacity_map = ptk.TextureMapFactory.filter_images_by_type(
             textures, ["Opacity", "Albedo_Transparency"]
         )
 
-        name = name if name else ptk.get_base_texture_name(textures[0])
+        name = (
+            name if name else ptk.TextureMapFactory.get_base_texture_name(textures[0])
+        )
+
+        # Prioritize packed maps to avoid conflicts
+        # If ORM exists, remove MSAO and Metallic_Smoothness
+        # If MSAO exists, remove Metallic_Smoothness
+        orm_maps = ptk.TextureMapFactory.filter_images_by_type(textures, "ORM")
+        msao_maps = ptk.TextureMapFactory.filter_images_by_type(textures, "MSAO")
+
+        if orm_maps:
+            # Remove MSAO and Metallic_Smoothness from the list we process
+            textures = [
+                t
+                for t in textures
+                if ptk.TextureMapFactory.resolve_map_type(t)
+                not in ["MSAO", "Metallic_Smoothness"]
+            ]
+        elif msao_maps:
+            # Remove Metallic_Smoothness
+            textures = [
+                t
+                for t in textures
+                if ptk.TextureMapFactory.resolve_map_type(t)
+                not in ["Metallic_Smoothness"]
+            ]
 
         # Create the base shader based on shader_type
         if shader_type == "standard_surface":
@@ -214,7 +173,7 @@ class StingrayArnoldShader:
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.resolve_map_type(
+            texture_type = ptk.TextureMapFactory.resolve_map_type(
                 texture,
             )
 
@@ -290,7 +249,20 @@ class StingrayArnoldShader:
                 "StingrayPBS",
                 "Standard_Transparent.sfx",
             )
-            pm.shaderfx(sfxnode="StingrayPBS1", loadGraph=graph)
+            pm.cmds.shaderfx(sfxnode=sr_node.name(), loadGraph=graph)
+        else:
+            # Ensure standard graph is loaded (crucial for batch mode)
+            maya_install_path = EnvUtils.get_env_info("install_path")
+            graph = os.path.join(
+                maya_install_path,
+                "presets",
+                "ShaderFX",
+                "Scenes",
+                "StingrayPBS",
+                "Standard.sfx",
+            )
+            if os.path.exists(graph):
+                pm.cmds.shaderfx(sfxnode=sr_node.name(), loadGraph=graph)
 
         return sr_node
 
@@ -370,6 +342,102 @@ class StingrayArnoldShader:
 
         return std_node
 
+    def _connect_channel(self, source_plug, node, attr_name):
+        """Helper to connect a source plug to a target attribute, handling compound attributes.
+
+        Args:
+            source_plug (pm.Attribute): The source attribute to connect from.
+            node (pm.PyNode): The target node.
+            attr_name (str): The name of the target attribute.
+        """
+        # Check if attribute exists
+        if not pm.attributeQuery(attr_name, node=node, exists=True):
+            print(f"Warning: Attribute {attr_name} not found on {node}")
+            return False
+
+        # Try to find children (R, G, B or X, Y, Z)
+        children = []
+        for suffix in ["R", "G", "B"]:
+            if pm.attributeQuery(attr_name + suffix, node=node, exists=True):
+                children.append(attr_name + suffix)
+
+        if not children:
+            for suffix in ["X", "Y", "Z"]:
+                if pm.attributeQuery(attr_name + suffix, node=node, exists=True):
+                    children.append(attr_name + suffix)
+
+        if children and len(children) >= 3:
+            # Explicitly break connection to parent attribute if it exists
+            # This prevents "ghost" connections where parent remains connected to old node
+            try:
+                if pm.attributeQuery(attr_name, node=node, exists=True):
+                    inputs = pm.listConnections(
+                        f"{node}.{attr_name}",
+                        plugs=True,
+                        source=True,
+                        destination=False,
+                    )
+                    if inputs:
+                        pm.disconnectAttr(inputs[0], f"{node}.{attr_name}")
+            except Exception as e:
+                print(f"Warning: Failed to disconnect parent {attr_name}: {e}")
+
+            # Connect to all 3 children
+            for child in children[:3]:
+                pm.connectAttr(source_plug, f"{node}.{child}", force=True)
+            return True
+        else:
+            # Fallback: try connecting to parent directly
+            try:
+                pm.connectAttr(source_plug, f"{node}.{attr_name}", force=True)
+                return True
+            except Exception as e:
+                print(f"Failed to connect {source_plug} to {node}.{attr_name}: {e}")
+                return False
+
+    def _ensure_fbx_safe_connection(self, texture_node, shader_node, attr_name):
+        """Creates a dummy connection to a custom attribute to ensure FBX export preserves the texture reference.
+
+        This addresses issues where FBX exporters drop textures connected via:
+        1. Individual channels (e.g. outColorR -> metalness)
+        2. Secondary nodes (e.g. outAlpha -> Reverse -> roughness)
+
+        Args:
+            texture_node: The file texture node.
+            shader_node: The shader node.
+            attr_name: The name of the custom attribute to create (e.g. 'MSAO_Map').
+        """
+        if not pm.attributeQuery(attr_name, node=shader_node, exists=True):
+            pm.addAttr(
+                shader_node,
+                longName=attr_name,
+                attributeType="float3",
+                usedAsColor=True,
+            )
+            pm.addAttr(
+                shader_node,
+                longName=f"{attr_name}R",
+                attributeType="float",
+                parent=attr_name,
+            )
+            pm.addAttr(
+                shader_node,
+                longName=f"{attr_name}G",
+                attributeType="float",
+                parent=attr_name,
+            )
+            pm.addAttr(
+                shader_node,
+                longName=f"{attr_name}B",
+                attributeType="float",
+                parent=attr_name,
+            )
+
+        target_plug = f"{shader_node}.{attr_name}"
+        if not pm.isConnected(texture_node.outColor, target_plug):
+            pm.connectAttr(texture_node.outColor, target_plug, force=True)
+
+    @CoreUtils.undoable
     def connect_stingray_nodes(
         self, texture: str, texture_type: str, sr_node: object
     ) -> bool:
@@ -396,51 +464,81 @@ class StingrayArnoldShader:
                 "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
-            pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
+            if sr_node.hasAttr("opacity"):
+                pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
+                sr_node.use_opacity_map.set(1)
             sr_node.use_color_map.set(1)
-            sr_node.use_opacity_map.set(1)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
-            target_attr = (
-                sr_node.TEX_roughness_map
+            target_attr_name = (
+                "TEX_roughness_map"
                 if texture_type == "Roughness"
-                else sr_node.TEX_metallic_map
+                else "TEX_metallic_map"
             )
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
-            pm.connectAttr(texture_node.outColor, target_attr, force=True)
+            # Use helper to connect to R/G/B or X/Y/Z children if needed
+            # Use outColorR (scalar) to ensure compatibility with float children
+            self._connect_channel(texture_node.outColorR, sr_node, target_attr_name)
             sr_node.setAttr(f"use_{texture_type.lower()}_map", 1)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
-            pm.connectAttr(
-                texture_node.outAlpha, sr_node.TEX_roughness_mapX, force=True
-            )
-            sr_node.use_metallic_map.set(1)
+            # Metallic (RGB) -> Metallic Map
+            # Use outColorR (scalar)
+            self._connect_channel(texture_node.outColorR, sr_node, "TEX_metallic_map")
             sr_node.use_roughness_map.set(1)
 
-        elif texture_type == "MSAO":
-            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
-            # StingrayPBS expects RGB color connections, not individual channels
+            # Ensure FBX export preserves the texture
+            self._ensure_fbx_safe_connection(
+                texture_node, sr_node, "Metallic_Smoothness_Map"
+            )
+
+        elif texture_type == "ORM":
+            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
-            # Connect full color output - StingrayPBS will use red channel for metallic
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
-            # Connect full color output - StingrayPBS will use all channels for AO
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
-            # Connect alpha channel (smoothness) - this connection works for alpha
-            pm.connectAttr(
-                texture_node.outAlpha, sr_node.TEX_roughness_mapX, force=True
+            self._connect_channel(texture_node.outColorR, sr_node, "TEX_ao_map")
+            self._connect_channel(texture_node.outColorG, sr_node, "TEX_roughness_map")
+            self._connect_channel(texture_node.outColorB, sr_node, "TEX_metallic_map")
+            sr_node.use_ao_map.set(1)
+            sr_node.use_roughness_map.set(1)
+            sr_node.use_metallic_map.set(1)
+            self._ensure_fbx_safe_connection(texture_node, sr_node, "ORM_Map")
+
+        elif texture_type == "MSAO":
+            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
+            texture_node = NodeUtils.create_render_node(
+                "file", "as2DTexture", fileTextureName=texture
             )
+
+            # Connect metallic channel (R) -> TEX_metallic_map
+            self._connect_channel(texture_node.outColorR, sr_node, "TEX_metallic_map")
+
+            # Connect AO channel (G) -> TEX_ao_map
+            self._connect_channel(texture_node.outColorG, sr_node, "TEX_ao_map")
+
+            # Connect smoothness channel (A) -> Invert -> TEX_roughness_map
+            # Unity Smoothness is inverse of Roughness
+            rev_node = NodeUtils.create_render_node("reverse")
+            pm.connectAttr(texture_node.outAlpha, rev_node.inputX, force=True)
+            pm.connectAttr(texture_node.outAlpha, rev_node.inputY, force=True)
+            pm.connectAttr(texture_node.outAlpha, rev_node.inputZ, force=True)
+
+            # Use reverse output X (float) for roughness
+            self._connect_channel(rev_node.outputX, sr_node, "TEX_roughness_map")
+
             sr_node.use_metallic_map.set(1)
             sr_node.use_ao_map.set(1)
             sr_node.use_roughness_map.set(1)
+
+            # Ensure FBX export preserves the texture
+            self._ensure_fbx_safe_connection(texture_node, sr_node, "MSAO_Map")
 
         elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
@@ -460,7 +558,8 @@ class StingrayArnoldShader:
             texture_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", fileTextureName=texture
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
+            # Use outColorR (scalar)
+            self._connect_channel(texture_node.outColorR, sr_node, "TEX_ao_map")
             sr_node.use_ao_map.set(1)
 
         elif texture_type == "Opacity":
@@ -469,6 +568,32 @@ class StingrayArnoldShader:
             )
             pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
             sr_node.use_opacity_map.set(1)
+
+        elif texture_type == "Specular":
+            if sr_node.hasAttr("TEX_specular_map"):
+                texture_node = NodeUtils.create_render_node(
+                    "file", "as2DTexture", fileTextureName=texture
+                )
+                pm.connectAttr(
+                    texture_node.outColor, sr_node.TEX_specular_map, force=True
+                )
+                if sr_node.hasAttr("use_specular_map"):
+                    sr_node.use_specular_map.set(1)
+                return True
+            return False
+
+        elif texture_type == "Glossiness":
+            if sr_node.hasAttr("TEX_glossiness_map"):
+                texture_node = NodeUtils.create_render_node(
+                    "file", "as2DTexture", fileTextureName=texture
+                )
+                self._connect_channel(
+                    texture_node.outColorR, sr_node, "TEX_glossiness_map"
+                )
+                if sr_node.hasAttr("use_glossiness_map"):
+                    sr_node.use_glossiness_map.set(1)
+                return True
+            return False
 
         else:  # Unsupported texture type
             return False
@@ -564,6 +689,31 @@ class StingrayArnoldShader:
                 reverse_node.outputX, ai_node.transmissionExtraRoughness, force=True
             )
             pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
+
+        elif texture_type == "ORM":
+            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=0,
+                ignoreColorSpaceFileRules=1,
+            )
+            # Metallic (B)
+            pm.connectAttr(texture_node.outColorB, ai_node.metalness, force=True)
+            # Roughness (G)
+            pm.connectAttr(
+                texture_node.outColorG, ai_node.specularRoughness, force=True
+            )
+            pm.connectAttr(
+                texture_node.outColorG, ai_node.transmissionExtraRoughness, force=True
+            )
+            # AO (R) -> Multiply with Base Color (using aiMultiply)
+            # Connect R channel to all RGB inputs of input2 to multiply uniformly
+            pm.connectAttr(texture_node.outColorR, aiMult_node.input2R, force=True)
+            pm.connectAttr(texture_node.outColorR, aiMult_node.input2G, force=True)
+            pm.connectAttr(texture_node.outColorR, aiMult_node.input2B, force=True)
 
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
@@ -661,7 +811,10 @@ class StingrayArnoldShader:
                 "file", "as2DTexture", fileTextureName=texture
             )
             pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
-            pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
+            # Opacity is RGB, connect alpha to all channels
+            pm.connectAttr(texture_node.outAlpha, std_node.opacityR, force=True)
+            pm.connectAttr(texture_node.outAlpha, std_node.opacityG, force=True)
+            pm.connectAttr(texture_node.outAlpha, std_node.opacityB, force=True)
             return True
 
         elif texture_type == "Roughness":
@@ -702,6 +855,40 @@ class StingrayArnoldShader:
             pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
             pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
 
+            # Ensure FBX export preserves the texture
+            self._ensure_fbx_safe_connection(
+                texture_node, std_node, "Metallic_Smoothness_Map"
+            )
+
+        elif texture_type == "ORM":
+            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                "as2DTexture",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=0,
+            )
+            # Metallic (B)
+            pm.connectAttr(texture_node.outColorB, std_node.metalness, force=True)
+            # Roughness (G)
+            pm.connectAttr(
+                texture_node.outColorG, std_node.specularRoughness, force=True
+            )
+            # AO (R) -> Multiply with Base Color
+            existing_conn = pm.listConnections(
+                std_node.baseColor, source=True, destination=False
+            )
+            if existing_conn:
+                mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
+                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
+                pm.connectAttr(texture_node.outColorR, mult_node.input2X, force=True)
+                pm.connectAttr(texture_node.outColorR, mult_node.input2Y, force=True)
+                pm.connectAttr(texture_node.outColorR, mult_node.input2Z, force=True)
+                pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+
+            self._ensure_fbx_safe_connection(texture_node, std_node, "ORM_Map")
+
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
             texture_node = NodeUtils.create_render_node(
@@ -730,6 +917,9 @@ class StingrayArnoldShader:
                 pm.connectAttr(texture_node.outColorG, mult_node.input2Y, force=True)
                 pm.connectAttr(texture_node.outColorG, mult_node.input2Z, force=True)
                 pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+
+            # Ensure FBX export preserves the texture
+            self._ensure_fbx_safe_connection(texture_node, std_node, "MSAO_Map")
 
         elif "Normal" in texture_type:
             # Standard Surface uses bump2d for normal maps
@@ -801,19 +991,29 @@ class StingrayArnoldShader:
         Returns:
             List[str]: The modified list of texture file paths with the correct normal map type.
         """
-        other_textures = [tex for tex in textures if not ptk.is_normal_map(tex)]
+        other_textures = [
+            tex for tex in textures if not ptk.TextureMapFactory.is_normal_map(tex)
+        ]
 
         # Filter normal maps by type
-        opengl_maps = ptk.filter_images_by_type(textures, ["Normal_OpenGL"])
-        directx_maps = ptk.filter_images_by_type(textures, ["Normal_DirectX"])
-        generic_normal_maps = ptk.filter_images_by_type(textures, ["Normal"])
+        opengl_maps = ptk.TextureMapFactory.filter_images_by_type(
+            textures, ["Normal_OpenGL"]
+        )
+        directx_maps = ptk.TextureMapFactory.filter_images_by_type(
+            textures, ["Normal_DirectX"]
+        )
+        generic_normal_maps = ptk.TextureMapFactory.filter_images_by_type(
+            textures, ["Normal"]
+        )
 
         if desired_normal_type == "OpenGL":
             if opengl_maps:
                 return other_textures + opengl_maps
             elif directx_maps:
                 for nm in directx_maps:
-                    converted_map = ptk.create_gl_from_dx(nm)
+                    converted_map = ptk.TextureMapFactory.convert_normal_map_format(
+                        nm, target_format="opengl"
+                    )
                     if converted_map:
                         return other_textures + [converted_map]
         elif desired_normal_type == "DirectX":
@@ -821,7 +1021,9 @@ class StingrayArnoldShader:
                 return other_textures + directx_maps
             elif opengl_maps:
                 for nm in opengl_maps:
-                    converted_map = ptk.create_dx_from_gl(nm)
+                    converted_map = ptk.TextureMapFactory.convert_normal_map_format(
+                        nm, target_format="directx"
+                    )
                     if converted_map:
                         return other_textures + [converted_map]
 
@@ -851,13 +1053,17 @@ class StingrayArnoldShader:
             List[str]: Modified list of texture file paths with the correct metallic map handling.
         """
         # Filter for existing maps
-        metallic_smoothness_map = ptk.filter_images_by_type(
+        metallic_smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
             textures, "Metallic_Smoothness"
         )
-        metallic_map = ptk.filter_images_by_type(textures, "Metallic")
-        roughness_map = ptk.filter_images_by_type(textures, "Roughness")
-        smoothness_map = ptk.filter_images_by_type(textures, "Smoothness")
-        specular_map = ptk.filter_images_by_type(textures, "Specular")
+        metallic_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Metallic")
+        roughness_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Roughness"
+        )
+        smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Smoothness"
+        )
+        specular_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Specular")
 
         filtered_textures = textures.copy()
 
@@ -877,7 +1083,7 @@ class StingrayArnoldShader:
                 created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
 
                 # Save these images to disk and get their file paths
-                base_name = ptk.get_base_texture_name(specular_map[0])
+                base_name = ptk.TextureMapFactory.get_base_texture_name(specular_map[0])
                 out_dir = os.path.dirname(specular_map[0])
 
                 rough_path = os.path.join(
@@ -951,7 +1157,7 @@ class StingrayArnoldShader:
         Unity HDRP Mask Map format:
         - R: Metallic
         - G: Ambient Occlusion
-        - B: Detail Mask (unused, set to 0)
+        - B: Detail Mask
         - A: Smoothness
 
         Parameters:
@@ -963,10 +1169,19 @@ class StingrayArnoldShader:
             List[str]: Modified list with mask map replacing individual maps.
         """
         # Filter for required maps
-        metallic_map = ptk.filter_images_by_type(textures, "Metallic")
-        ao_map = ptk.filter_images_by_type(textures, ["Ambient_Occlusion", "AO"])
-        roughness_map = ptk.filter_images_by_type(textures, "Roughness")
-        smoothness_map = ptk.filter_images_by_type(textures, "Smoothness")
+        metallic_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Metallic")
+        ao_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, ["Ambient_Occlusion", "AO"]
+        )
+        detail_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Detail_Mask"
+        )
+        roughness_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Roughness"
+        )
+        smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Smoothness"
+        )
 
         # Need at least metallic map to create mask map
         if not metallic_map:
@@ -997,18 +1212,21 @@ class StingrayArnoldShader:
 
         try:
             # Create the MSAO mask map
-            base_name = ptk.get_base_texture_name(metallic_map[0])
+            base_name = ptk.TextureMapFactory.get_base_texture_name(metallic_map[0])
             out_dir = os.path.dirname(metallic_map[0])
 
             # Use pythontk's pack_msao_texture function
             mask_map_path = ptk.pack_msao_texture(
                 metallic_map_path=metallic_map[0],
                 ao_map_path=(
-                    ao_map[0] if ao_map else metallic_map[0]
-                ),  # Use metallic as placeholder if no AO
+                    ao_map[0] if ao_map else None
+                ),  # Use None if no AO (will be filled with white)
                 alpha_map_path=(
-                    alpha_map if alpha_map else metallic_map[0]
-                ),  # Use metallic as placeholder
+                    alpha_map if alpha_map else None
+                ),  # Use None if no alpha (will be filled with default)
+                detail_map_path=(
+                    detail_map[0] if detail_map else None
+                ),  # Use None if no detail (will be filled with black)
                 output_dir=out_dir,
                 suffix="_MaskMap",
                 invert_alpha=invert_alpha,
@@ -1022,7 +1240,12 @@ class StingrayArnoldShader:
             filtered_textures = [
                 tex
                 for tex in textures
-                if tex not in metallic_map + ao_map + roughness_map + smoothness_map
+                if tex
+                not in metallic_map
+                + ao_map
+                + roughness_map
+                + smoothness_map
+                + detail_map
             ] + [mask_map_path]
 
             return filtered_textures
@@ -1039,7 +1262,6 @@ class StingrayArnoldShader:
         """Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency parameter.
         Prioritizes an albedo transparency map over separate albedo and transparency maps when use_albedo_transparency is True.
         If use_albedo_transparency is False, filters out any albedo transparency maps from the textures.
-        Falls back to diffuse map if no base color map is found.
 
         Parameters:
             textures (List[str]): List of texture file paths.
@@ -1048,12 +1270,15 @@ class StingrayArnoldShader:
         Returns:
             List[str]: Modified list of texture file paths with the correct albedo map handling.
         """
-        albedo_transparency_map = ptk.filter_images_by_type(
+        albedo_transparency_map = ptk.TextureMapFactory.filter_images_by_type(
             textures, "Albedo_Transparency"
         )
-        base_color_map = ptk.filter_images_by_type(textures, "Base_Color")
-        diffuse_map = ptk.filter_images_by_type(textures, "Diffuse")
-        transparency_map = ptk.filter_images_by_type(textures, "Opacity")
+        base_color_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, ["Base_Color", "Diffuse"]
+        )
+        transparency_map = ptk.TextureMapFactory.filter_images_by_type(
+            textures, "Opacity"
+        )
 
         if use_albedo_transparency:
             if albedo_transparency_map:
@@ -1061,7 +1286,7 @@ class StingrayArnoldShader:
                 return [
                     tex
                     for tex in textures
-                    if tex not in base_color_map + transparency_map + diffuse_map
+                    if tex not in base_color_map + transparency_map
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
@@ -1073,29 +1298,12 @@ class StingrayArnoldShader:
                     for tex in textures
                     if tex not in base_color_map + transparency_map
                 ] + [combined_map]
-            elif diffuse_map and transparency_map:
-                # Create an albedo transparency map from diffuse and transparency maps, then update the list
-                combined_map = ptk.pack_transparency_into_albedo(
-                    diffuse_map[0], transparency_map[0]
-                )
-                return [
-                    tex
-                    for tex in textures
-                    if tex not in base_color_map + transparency_map + diffuse_map
-                ] + [combined_map]
-        else:
-            if base_color_map:
-                return textures
-            elif diffuse_map:
-                return [
-                    tex for tex in textures if tex not in base_color_map
-                ] + diffuse_map
 
         # If no base color or diffuse map is found, return the list unchanged
         return textures
 
 
-class StingrayArnoldShaderSlots(StingrayArnoldShader):
+class GameShaderSlots(GameShader):
     msg_intro = """<u>To setup the material:</u>
         <br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
         <br>• Click the <b>Create Network</b> button to create the shader connections. This will bridge Stingray PBS and (optionally) Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
@@ -1110,7 +1318,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
         super().__init__()
 
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.stingray_arnold_shader
+        self.ui = self.sb.loaded_ui.game_shader
 
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
@@ -1119,6 +1327,11 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
         self.ui.txt001.setText(self.msg_intro)
         self.ui.progressBar.setValue(0)
+
+        # Populate template combo box from presets
+        self.ui.cmb002.clear()
+        self.ui.cmb002.addItems(list(ptk.MapRegistry().get_workflow_presets().keys()))
+
         # self.init_header_menu()
 
     def header_init(self, widget):
@@ -1195,15 +1408,9 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 
             create_arnold = self.ui.chk000.isChecked()
 
-            # Get template configuration using combo box index
-            template_index = self.ui.cmb002.currentIndex()
-            (
-                albedo_transparency,
-                metallic_smoothness,
-                mask_map,
-                orm_map,
-                convert_specgloss_to_pbr,
-            ) = PBRWorkflowTemplate.get_template_config(template_index)
+            # Get template configuration using combo box text
+            template_name = self.ui.cmb002.currentText()
+            config = ptk.MapRegistry().get_workflow_presets().get(template_name, {})
 
             self.last_created_shader = self.create_network(
                 self.image_files,
@@ -1211,14 +1418,10 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
                 shader_type=self.shader_type,
                 normal_type=self.normal_map_type,
                 create_arnold=create_arnold,
-                albedo_transparency=albedo_transparency,
-                metallic_smoothness=metallic_smoothness,
-                mask_map=mask_map,
-                orm_map=orm_map,
-                convert_specgloss_to_pbr=convert_specgloss_to_pbr,
                 cleanup_base_color=False,  # Can be exposed in UI later if needed
                 output_extension=self.output_extension,
                 callback=self.callback,
+                **config,
             )
 
             self.callback(self.msg_completed)
@@ -1272,7 +1475,7 @@ class StingrayArnoldShaderSlots(StingrayArnoldShader):
 if __name__ == "__main__":
     from mayatk.ui_utils.ui_manager import UiManager
 
-    ui = UiManager.instance().get("stingray_arnold_shader", reload=True)
+    ui = UiManager.instance().get("game_shader", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

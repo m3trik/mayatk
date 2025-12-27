@@ -354,7 +354,31 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._updating_directory = False  # Flag to prevent cascading UI events
         self._editing_item = None  # Track which item is being edited
         self.last_unlink_time = 0  # Track last unlink time to prevent double-firing
+        self._warned_scene_placeholder_typo = False
         self.logger.debug("ReferenceManagerController initialized.")
+
+    def _normalize_subfolder_structure_pattern(self, pattern: str) -> str:
+        """Normalize and validate the user-entered folder structure pattern.
+
+        Notes:
+            - `{scenes}` is the supported placeholder.
+            - `{scene}` is a common typo; we warn (once) and auto-correct to `{scenes}`.
+        """
+        pattern = (pattern or "").strip()
+        if "{scene}" in pattern:
+            if not self._warned_scene_placeholder_typo:
+                self._warned_scene_placeholder_typo = True
+                msg = (
+                    "Folder Structure: '{scene}' is not a supported placeholder. "
+                    "Did you mean '{scenes}'? Auto-correcting for this operation."
+                )
+                try:
+                    pm.displayWarning(msg)
+                except Exception:
+                    pass
+                self.logger.warning(msg)
+            pattern = pattern.replace("{scene}", "{scenes}")
+        return pattern
 
     @property
     def current_working_dir(self):
@@ -646,6 +670,65 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         finally:
             self._updating_directory = False
 
+    def set_workspace(self, workspace_path: str, invalidate: bool = True) -> bool:
+        """Set the current workspace and optionally sync Maya's project workspace.
+
+        This is the centralized method for changing workspaces. It handles:
+        - Updating current_working_dir
+        - Syncing Maya workspace (if chk_sync_workspace is enabled)
+        - Showing user notification
+        - Refreshing the file list
+
+        Parameters:
+            workspace_path: Path to the workspace directory
+            invalidate: Whether to invalidate the file cache when refreshing
+
+        Returns:
+            True if workspace was set successfully, False otherwise
+        """
+        if not workspace_path or not os.path.isdir(workspace_path):
+            self.logger.warning(
+                f"set_workspace: Invalid workspace path: {workspace_path}"
+            )
+            return False
+
+        # Check if the workspace is already set to the requested path
+        current_workspace = self.current_working_dir
+        is_same_workspace = current_workspace and os.path.normcase(
+            os.path.normpath(workspace_path)
+        ) == os.path.normcase(os.path.normpath(current_workspace))
+
+        if not is_same_workspace:
+            self.logger.debug(f"set_workspace: Setting workspace to: {workspace_path}")
+            self.current_working_dir = workspace_path
+
+            # Check if we should sync the Maya scene workspace
+            chk_sync = getattr(
+                self.ui.cmb000.option_box.menu, "chk_sync_workspace", None
+            )
+            if chk_sync and chk_sync.isChecked():
+                try:
+                    pm.workspace(workspace_path, openWorkspace=True)
+                    self.logger.info(
+                        f"set_workspace: Synced Maya workspace to: {workspace_path}"
+                    )
+                    workspace_name = os.path.basename(workspace_path)
+                    self.sb.message_box(
+                        f"Workspace changed to:<br><b>{workspace_name}</b>"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"set_workspace: Failed to sync Maya workspace: {e}"
+                    )
+        else:
+            self.logger.debug(
+                f"set_workspace: Workspace already set to {workspace_path} - skipping workspace sync"
+            )
+
+        # Refresh file list
+        self.refresh_file_list(invalidate=invalidate)
+        return True
+
     def _update_workspace_combo(self):
         """Update the workspace combo box and refresh the file list."""
         self.logger.debug("_update_workspace_combo: Updating workspace combo box")
@@ -704,15 +787,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 self.ui.cmb000.currentIndex()
             )
             self.logger.debug(
-                f"_update_workspace_combo: Refreshing file list for workspace: {selected_workspace_path}"
+                f"_update_workspace_combo: Setting workspace to: {selected_workspace_path}"
             )
-            # Also update the current working dir to match the selected workspace
-            if selected_workspace_path and os.path.isdir(selected_workspace_path):
-                self.current_working_dir = selected_workspace_path
-
-            # Invalidate cache to ensure we pick up any changes in workspace files
-            # This is important when switching directories or when workspace contents might have changed
-            self.refresh_file_list(invalidate=True)
+            # Use centralized method - invalidate=True to pick up any file changes
+            self.set_workspace(selected_workspace_path, invalidate=True)
         else:
             # Clear the table if no workspaces
             self.logger.debug(
@@ -787,16 +865,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         if txt_structure:
             structure_text = txt_structure.text().strip()
 
-        chk_enable_folder = getattr(header_menu, "chk_enable_folder", None)
-        use_folder = chk_enable_folder.isChecked() if chk_enable_folder else False
-
         if filter_structure and filter_structure.isChecked():
             # Determine the pattern to use
-            pattern = structure_text
-            if not pattern and use_folder:
-                pattern = "{name}"
+            pattern = self._normalize_subfolder_structure_pattern(structure_text)
 
             if pattern:
+                # Resolve the {scenes} placeholder to the workspace's scenes folder
+                try:
+                    scenes_folder = pm.workspace.fileRules.get("scene", "scenes")
+                except Exception:
+                    scenes_folder = "scenes"
+
                 filtered_list = []
                 # Create a copy of file_list to iterate over
                 for f in list(file_list):
@@ -815,12 +894,18 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                         name_for_path = base_name
 
                     workspace_name = os.path.basename(workspace_path)
-                    expected_rel_dir = ptk.StrUtils.replace_placeholders(
-                        pattern,
-                        name=name_for_path,
-                        workspace=workspace_name,
-                        suffix=suffix_text,
-                    )
+                    try:
+                        expected_rel_dir = ptk.StrUtils.replace_placeholders(
+                            pattern,
+                            scenes=scenes_folder,
+                            name=name_for_path,
+                            workspace=workspace_name,
+                            suffix=suffix_text,
+                        )
+                    except ValueError:
+                        # Handle invalid format string (e.g. single '{' or '}')
+                        # Just skip filtering for this file if pattern is invalid
+                        continue
 
                     # Normalize paths for comparison (handle case sensitivity on Windows)
                     rel_dir_norm = os.path.normcase(os.path.normpath(rel_dir))
@@ -1147,7 +1232,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Save the current scene to the workspace, prompting for a name."""
         # Get settings from UI via slot
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enable_folder.isChecked()
         case_style = header_menu.cmb_case_style.currentText()
         suffix = header_menu.txt_suffix.text()
 
@@ -1156,6 +1240,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         current_scene = pm.sceneName()
         if current_scene:
             base_name = os.path.basename(current_scene).split(".")[0]
+            # If the current scene already includes the configured suffix, strip it
+            # so the UI doesn't double-append it when the user saves.
+            suffix_text = (suffix or "").strip()
+            if suffix_text and base_name.lower().endswith(suffix_text.lower()):
+                base_name = base_name[: -len(suffix_text)]
+
             # Apply case formatting to the default name (without suffix)
             default_name = self._format_name(base_name, case_style, suffix="")
 
@@ -1172,35 +1262,36 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         target_dir = workspace
 
-        # Check for custom subfolder structure
+        # Get folder structure from UI
         subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
         subfolder_structure_text = (
             subfolder_structure.text().strip() if subfolder_structure else ""
         )
 
         if subfolder_structure_text:
-            # Use custom structure
+            # Resolve the {scenes} placeholder to the workspace's scenes folder
+            try:
+                scenes_folder = pm.workspace.fileRules.get("scene", "scenes")
+            except Exception:
+                scenes_folder = "scenes"
+
+            # Use custom structure with all placeholders
             base_name_formatted = self._format_name(name, case_style, suffix="")
             workspace_name = os.path.basename(workspace)
+
+            pattern = self._normalize_subfolder_structure_pattern(
+                subfolder_structure_text
+            )
+
             resolved_path = ptk.StrUtils.replace_placeholders(
-                subfolder_structure_text,
+                pattern,
+                scenes=scenes_folder,
                 name=base_name_formatted,
                 workspace=workspace_name,
                 suffix=suffix,
             )
             target_dir = os.path.join(workspace, resolved_path)
 
-            if not os.path.exists(target_dir):
-                try:
-                    os.makedirs(target_dir)
-                except OSError as e:
-                    self.sb.message_box(f"Failed to create directory: {e}")
-                    return
-
-        elif use_folder:
-            # Folder name matches the base name (without suffix)
-            folder_name = self._format_name(name, case_style, suffix="")
-            target_dir = os.path.join(workspace, folder_name)
             if not os.path.exists(target_dir):
                 try:
                     os.makedirs(target_dir)
@@ -1260,9 +1351,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Get settings
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enable_folder.isChecked()
         case_style = header_menu.cmb_case_style.currentText()
         suffix = header_menu.txt_suffix.text()
+
+        # Check if folder structure uses {name} placeholder (indicates per-scene folders)
+        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
+        structure_text = (
+            subfolder_structure.text().strip() if subfolder_structure else ""
+        )
+        use_folder = "{name}" in structure_text
 
         formatted_name = self._format_name(new_base, case_style, suffix)
         new_filename = formatted_name + ext
@@ -1278,7 +1375,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             os.rename(old_path, new_path)
             self.logger.info(f"Renamed {old_path} to {new_path}")
 
-            # Handle folder rename
+            # Handle folder rename if using {name} placeholder in structure
             if use_folder:
                 parent_dir_name = os.path.basename(old_dir)
                 # Check if parent folder name is contained in the old file base name
@@ -1342,7 +1439,13 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return
 
         header_menu = self.slot.ui.header.menu
-        use_folder = header_menu.chk_enable_folder.isChecked()
+
+        # Check if folder structure uses {name} placeholder (indicates per-scene folders)
+        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
+        structure_text = (
+            subfolder_structure.text().strip() if subfolder_structure else ""
+        )
+        use_folder = "{name}" in structure_text
 
         import shutil
 
@@ -1448,6 +1551,28 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setToolTip="Save the current scene to the workspace.",
         )
         widget.menu.add(
+            "QLineEdit",
+            setObjectName="txt_subfolder_structure",
+            setText="{scenes}",
+            setPlaceholderText="Folder Structure (e.g. {scenes}/{name})",
+            setToolTip="Folder structure for saving/organizing scene files.\n\n"
+            "Supports placeholders:\n"
+            "  {scenes} - Workspace scenes folder (from workspace.mel)\n"
+            "  {name} - Scene name (excludes suffix if defined)\n"
+            "  {workspace} - Workspace folder name\n"
+            "  {suffix} - The defined suffix\n\n"
+            "Examples:\n"
+            "  {scenes} - Save directly in scenes folder\n"
+            "  {scenes}/{name} - Each scene in its own subfolder\n"
+            "  {scenes}/{name}/versions - Nested versions folder",
+        )
+        widget.menu.add(
+            "QLineEdit",
+            setObjectName="txt_suffix",
+            setPlaceholderText="Suffix",
+            setToolTip="Optional suffix to append to filenames (excluded from case formatting).",
+        )
+        widget.menu.add(
             "QComboBox",
             setObjectName="cmb_case_style",
             setToolTip="Enforce a specific case style for new filenames.",
@@ -1461,10 +1586,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             ],
         )
         widget.menu.add(
-            "QLineEdit",
-            setObjectName="txt_suffix",
-            setPlaceholderText="Suffix",
-            setToolTip="Optional suffix to append to filenames (excluded from case formatting).",
+            "QCheckBox",
+            setText="Filter by Folder Structure",
+            setObjectName="chk_filter_folder_structure",
+            setChecked=False,
+            setToolTip="If checked, only show files that match the folder structure pattern.",
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Filter by Suffix",
+            setObjectName="chk_filter_suffix",
+            setChecked=False,
+            setToolTip="If checked, only show files that end with the specified suffix.",
         )
         widget.menu.add(
             "QCheckBox",
@@ -1482,37 +1615,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
         widget.menu.add(
             "QCheckBox",
-            setText="Enable Folder Structure",
-            setObjectName="chk_enable_folder",
-            setChecked=False,
-            setToolTip="If checked, new files will be managed within a folder of the same name.",
-        )
-        widget.menu.add(
-            "QLineEdit",
-            setObjectName="txt_subfolder_structure",
-            setPlaceholderText="Subfolder Structure (e.g. {name}/versions)",
-            setToolTip="Optional nested folder structure relative to workspace.\nSupports placeholders: {name}, {workspace}, {suffix}\nNote: {name} excludes the suffix if one is defined, otherwise the full name minus extension is used.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Filter by Folder Structure",
-            setObjectName="chk_filter_folder_structure",
-            setChecked=False,
-            setToolTip="If checked, only show files that match the folder structure pattern.",
-        )
-        widget.menu.add(
-            "QCheckBox",
             setText="Hide Binary Files (.mb)",
             setObjectName="chk_hide_binary",
             setChecked=False,
             setToolTip="If checked, hide Maya Binary (.mb) files.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Filter by Suffix",
-            setObjectName="chk_filter_suffix",
-            setChecked=False,
-            setToolTip="If checked, only show files that end with the specified suffix.",
         )
         widget.menu.add("Separator", setTitle="Operations:")
         widget.menu.add(
@@ -1823,6 +1929,19 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller.refresh_file_list(invalidate=True)
 
     def cmb000_init(self, widget):
+        # Add option_box menu for workspace sync setting
+        if not widget.is_initialized:
+            widget.option_box.menu.add(
+                "QCheckBox",
+                setText="Sync Scene Workspace",
+                setObjectName="chk_sync_workspace",
+                setChecked=False,
+                setToolTip="Automatically update the Maya scene workspace to match the selected workspace.",
+            )
+            self.logger.debug(
+                "cmb000 option_box menu initialized with sync workspace option."
+            )
+
         # Use the controller's current_working_dir for consistency
         root_dir = self.controller.current_working_dir
 
@@ -1880,46 +1999,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         path = widget.itemData(index)
         self.logger.debug(f"cmb000 changed to index {index}, path: {path}")
 
-        # Add debugging to track what happens next
-        current_index_before = widget.currentIndex()
-        self.logger.debug(
-            f"cmb000: Current index before operations: {current_index_before}"
-        )
-
         if path and os.path.isdir(path):
-            # Update the current working dir to the selected workspace
-            old_working_dir = self.controller.current_working_dir
-            self.logger.debug(
-                f"cmb000: Changing current_working_dir from {old_working_dir} to {path}"
-            )
-            self.controller.current_working_dir = path
-
-            current_index_after_set = widget.currentIndex()
-            self.logger.debug(
-                f"cmb000: Current index after setting working dir: {current_index_after_set}"
-            )
-
-            # Refresh the file list for this workspace
-            self.logger.debug(
-                f"cmb000: About to refresh file list for directory: {path}"
-            )
-
-            # Check if workspace files cache has this directory
-            workspace_files = self.controller.workspace_files.get(path, [])
-            self.logger.debug(
-                f"cmb000: Found {len(workspace_files)} cached files for workspace"
-            )
-
-            self.controller.refresh_file_list(invalidate=False)
-
-            current_index_after_refresh = widget.currentIndex()
-            self.logger.debug(
-                f"cmb000: Current index after refresh: {current_index_after_refresh}"
-            )
-
-            # Verify table was updated
-            table_row_count = self.controller.ui.tbl000.rowCount()
-            self.logger.debug(f"cmb000: Table now has {table_row_count} rows")
+            # Use centralized method - invalidate=False since we're just switching workspaces
+            self.controller.set_workspace(path, invalidate=False)
         else:
             self.logger.warning(f"Invalid workspace path selected: {path}")
 
@@ -2056,15 +2138,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Handle the filter by folder structure checkbox."""
         self.logger.debug(f"chk_filter_folder_structure changed: {checked}")
         self.controller.refresh_file_list(invalidate=False)
-
-    def txt_subfolder_structure(self, text):
-        """Handle subfolder structure text changes."""
-        # Refresh if filter by folder structure is enabled
-        header_menu = self.ui.header.menu
-        filter_structure = getattr(header_menu, "chk_filter_folder_structure", None)
-
-        if filter_structure and filter_structure.isChecked():
-            self.controller.refresh_file_list(invalidate=False)
 
     def b000(self):
         """Browse for a root directory."""

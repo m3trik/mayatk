@@ -522,19 +522,15 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             for obj, components in components_dict.items():
                 ...
         """
-        objects_components_dict = {}
+        from collections import defaultdict
 
+        result = defaultdict(list)
         for component in pm.ls(components_list, flatten=True):
             try:
-                obj_name = component.node().name()
+                result[component.node().name()].append(component)
             except AttributeError:
                 continue
-            try:
-                objects_components_dict[obj_name].append(component)
-            except KeyError:
-                objects_components_dict[obj_name] = [component]
-
-        return objects_components_dict
+        return dict(result)
 
     @classmethod
     def get_contigious_edges(cls, components):
@@ -1312,18 +1308,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         objects: Union[str, object, List],
         low_angle: float = 0,
         high_angle: float = 180,
-    ) -> List[object]:
+        return_angles: bool = False,
+    ) -> Union[List[object], tuple]:
         """Return edges whose adjacent face-normal angle falls within a range.
 
         Parameters:
             objects: Any of Transform, Mesh, MeshEdge, MeshFace, MeshVertex, or their strings.
             low_angle: The lower bound of the normal angle range.
             high_angle: The upper bound of the normal angle range.
+            return_angles: If True, also return a dict mapping edge names to computed angles.
 
         Returns:
-            A list of polygon edges that have normals within the specified angle range.
+            List of polygon edges within the specified angle range.
+            If return_angles=True, returns (edges, {edge_name: angle}) tuple.
         """
-        # Normalize any supported input to MeshEdge objects using the shared converter
+        # Normalize any supported input to MeshEdge objects
         edges: List[pm.general.MeshEdge] = pm.ls(
             cls.convert_component_type(
                 objects, "edge", returned_type="obj", flatten=True
@@ -1331,13 +1330,17 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             flatten=True,
         )
 
-        # Filter edges by normal angle
-        filtered_edges = [
-            edge
-            for edge in edges
-            if low_angle <= cls.get_normal_angle(edge) <= high_angle
-        ]
+        # Compute angles once and filter (use edge name as key since MeshEdge is unhashable)
+        filtered_edges = []
+        edge_angles = {}
+        for edge in edges:
+            angle = cls.get_normal_angle(edge)
+            edge_angles[edge.name()] = angle
+            if low_angle <= angle <= high_angle:
+                filtered_edges.append(edge)
 
+        if return_angles:
+            return filtered_edges, edge_angles
         return filtered_edges
 
     @classmethod
@@ -1349,38 +1352,39 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         upper_hardness: float = None,
         lower_hardness: float = None,
     ) -> None:
-        """Set edge hardness based on normal angle thresholds using the enhanced get_edges_by_normal_angle.
+        """Set edge hardness based on normal angle thresholds.
 
         Parameters:
-            cls: The class the method belongs to.
             objects: Objects or collections of objects to process.
             angle_threshold: Angle in degrees to classify edges.
             upper_hardness: Hardness to apply to edges above the angle threshold.
             lower_hardness: Hardness to apply to edges below the angle threshold.
         """
-        # Retrieve all edges within the specified angle range
-        all_edges = cls.get_edges_by_normal_angle(objects, 0, 180)
+        # Early exit if no hardness values provided
+        if upper_hardness is None and lower_hardness is None:
+            return
 
-        # Map components to their respective objects to ensure single object operation
+        # Get all edges with cached angles (computed once, keyed by edge name)
+        all_edges, edge_angles = cls.get_edges_by_normal_angle(
+            objects, 0, 180, return_angles=True
+        )
+
+        # Map edges to their objects
         object_to_edges = cls.map_components_to_objects(all_edges)
 
-        # Iterate over each object and apply edge hardness settings
+        # Classify and apply hardness per object
         for obj, edges in object_to_edges.items():
-            # Filter edges for upper and lower hardness
-            upper_edges = [
-                edge
-                for edge in edges
-                if cls.get_normal_angle(edge) >= angle_threshold
-                and upper_hardness is not None
-            ]
-            lower_edges = [
-                edge
-                for edge in edges
-                if cls.get_normal_angle(edge) < angle_threshold
-                and lower_hardness is not None
-            ]
+            upper_edges = (
+                [e for e in edges if edge_angles[e.name()] >= angle_threshold]
+                if upper_hardness is not None
+                else []
+            )
+            lower_edges = (
+                [e for e in edges if edge_angles[e.name()] < angle_threshold]
+                if lower_hardness is not None
+                else []
+            )
 
-            # Apply hardness settings to the filtered edges
             if upper_edges:
                 pm.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
             if lower_edges:

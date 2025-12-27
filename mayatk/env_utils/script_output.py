@@ -6,6 +6,7 @@ from maya.OpenMayaUI import MQtUtil
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 from shiboken6 import wrapInstance
 import pymel.core as pm
+from mayatk.env_utils import maya_connection
 
 
 class ScriptHighlightRule:
@@ -77,10 +78,8 @@ class ScriptOutput(QtWidgets.QTextEdit):
         self.clear()
 
         # Clear the actual Maya Script Editor
-        try:
-            pm.mel.eval("cmdScrollFieldReporter -edit -clear cmdScrollFieldReporter1;")
-        except Exception as e:
-            print(f"Failed to clear Maya Script Editor: {e}")
+        if not maya_connection.clear_script_editor_text():
+            print("Failed to clear Maya Script Editor")
 
     def _context_menu(self, pos: QtCore.QPoint):
         # Create a simple context menu

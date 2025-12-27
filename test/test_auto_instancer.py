@@ -893,7 +893,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         # Create assemblies
         for i in range(num_canisters):
             grp, _, _ = self.create_canister(f"Canister_{i}")
-            self.randomize_transform(grp)
+            self.randomize_transform(grp, pos_range=50)
             assemblies.append(grp)
 
         # Ungroup and Combine

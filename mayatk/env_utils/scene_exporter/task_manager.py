@@ -6,6 +6,7 @@ import math
 
 try:
     import pymel.core as pm
+    from maya.cmds import ls, attributeQuery, getAttr
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -116,20 +117,22 @@ class _TaskActionsMixin(_TaskDataMixin):
     def delete_env_nodes(self) -> None:
         """Delete environment file nodes based on filtered texture path patterns."""
         env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
-        file_nodes = pm.ls(type="file")
 
-        file_nodes = [
-            node
-            for node in file_nodes
-            if node.hasAttr("fileTextureName")
-            and any(
-                keyword in node.fileTextureName.get().lower()
-                for keyword in env_keywords
-            )
-        ]
-        if file_nodes:
-            pm.delete(file_nodes)
-            self.logger.info(f"Deleted {len(file_nodes)} environment file nodes.")
+        # Use cmds for performance to avoid creating PyNodes for all file nodes
+        file_nodes = ls(type="file") or []
+        to_delete = []
+
+        for node in file_nodes:
+            if attributeQuery("fileTextureName", node=node, exists=True):
+                texture_path = getAttr(f"{node}.fileTextureName")
+                if texture_path and any(
+                    keyword in texture_path.lower() for keyword in env_keywords
+                ):
+                    to_delete.append(node)
+
+        if to_delete:
+            pm.delete(to_delete)
+            self.logger.info(f"Deleted {len(to_delete)} environment file nodes.")
         else:
             self.logger.info("No environment file nodes found.")
 
@@ -353,7 +356,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check if any referenced objects are present in the scene."""
         log_messages = []
         # Check all referenced objects in the scene, not just the selected objects
-        referenced_objects = pm.ls(references=True)
+        referenced_objects = ls(references=True) or []
 
         if referenced_objects:
             for ref in referenced_objects:

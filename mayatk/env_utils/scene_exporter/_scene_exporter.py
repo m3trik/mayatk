@@ -47,11 +47,13 @@ class SceneExporter(ptk.LoggingMixin):
         self, objects: Optional[Union[List[str], Callable]]
     ) -> List:
         """Initialize objects for the scene, including all descendants that will be exported."""
+        from maya import cmds
+
         if objects is None:
             self.logger.debug(
                 "No objects provided. Defaulting to all transforms in the scene."
             )
-            objects = pm.selected()
+            objects = cmds.ls(selection=True, long=True)
         elif callable(objects):
             self.logger.debug(
                 "Callable provided for objects. Resolving objects dynamically."
@@ -60,7 +62,10 @@ class SceneExporter(ptk.LoggingMixin):
         else:
             self.logger.debug("Static list or query provided for objects. Validating.")
 
-        objs = pm.ls(objects, long=True, flatten=True)
+        # Use cmds.ls to ensure we have a list of full path strings
+        # This handles PyNodes, strings, or mixed lists
+        objs = cmds.ls(objects, long=True, flatten=True) or []
+
         if hasattr(self, "task_manager"):
             self.task_manager.objects = objs
 
@@ -84,6 +89,8 @@ class SceneExporter(ptk.LoggingMixin):
         tasks: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, bool]]:
         """Perform the export operation, including initialization and task management."""
+        from maya import cmds
+
         start_time = time.time()  # Track export duration
         self.logger.info("Starting export process ...")
 
@@ -130,18 +137,27 @@ class SceneExporter(ptk.LoggingMixin):
 
         # Select objects to export
         if export_visible:
-            pm.select(self.task_manager.objects, replace=True)
+            # Use cmds.select for performance (avoids PyNode overhead)
+            cmds.select(self.task_manager.objects, replace=True)
             self.logger.info(
                 f"Selected {len(self.task_manager.objects)} objects for export."
             )
 
-        if not pm.selected():
+        if not cmds.ls(selection=True):
             self.logger.error("No objects to export.")
             return False
 
         # Perform the actual export
         try:
-            pm.exportSelected(self.export_path, type=file_format, force=True)
+            # Use cmds.file for export to avoid PyMel overhead
+            # pm.exportSelected wraps cmds.file(..., exportSelected=True)
+            cmds.file(
+                self.export_path,
+                force=True,
+                options="v=0;",
+                type=file_format,
+                exportSelected=True,
+            )
             self.logger.info(f"File exported: {self.export_path}")
         except Exception as e:
             self.logger.error(f"Failed to export objects: {e}")
@@ -633,14 +649,16 @@ class SceneExporterSlots(SceneExporter):
         export_mode = task_params.pop("export_visible_objects", "visible")
 
         def objects_to_export():
+            from maya import cmds
+
             if export_mode == "visible":
                 return DisplayUtils.get_visible_geometry(
                     consider_templated_visible=False, inherit_parent_visibility=True
                 )
             elif export_mode == "selected":
-                return pm.selected()
+                return cmds.ls(selection=True, long=True)
             elif export_mode == "all":
-                return pm.ls(transforms=True, geometry=True)
+                return cmds.ls(transforms=True, geometry=True, long=True)
             else:
                 # Default to visible if unknown mode
                 return DisplayUtils.get_visible_geometry(

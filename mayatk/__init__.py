@@ -62,7 +62,7 @@ DEFAULT_INCLUDE = {
     "edit_utils.mirror": "Mirror",
     "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
-    "env_utils.command_port": "CommandPort",
+    "env_utils.maya_connection": "*",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
@@ -70,7 +70,8 @@ DEFAULT_INCLUDE = {
     "env_utils.script_output": "ScriptOutput",
     "env_utils.hierarchy_manager": "HierarchyManager",
     # Material utils
-    "mat_utils.stingray_arnold_shader": "*",
+    "mat_utils.game_shader": "GameShader",
+    "mat_utils.material_updater": "MaterialUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils

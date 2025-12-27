@@ -5,6 +5,7 @@ from typing import List, Tuple, Union, Dict, Any, Optional
 
 try:
     import pymel.core as pm
+    from maya import cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -39,38 +40,66 @@ class MatUtilsInternals(ptk.HelpMixin):
         materials: Optional[List[Any]] = None,
         file_nodes: Optional[List[Any]] = None,
         fallback_to_scene: bool = False,
+        as_strings: bool = False,
     ) -> Dict[str, List[Any]]:
         """Normalize objects/materials/file nodes for texture operations."""
+        from maya import cmds
 
-        resolved_objects = pm.ls(objects or [], flatten=True) if objects else []
+        # Helper to get long names
+        def to_long(nodes):
+            if not nodes:
+                return []
+            # Handle PyNodes or strings
+            names = [str(n) for n in nodes]
+            return cmds.ls(names, long=True, flatten=True) or []
 
-        resolved_materials: List[Any] = []
+        resolved_objects = to_long(objects) if objects else []
+
+        resolved_materials_set = set()
         if materials:
-            resolved_materials.extend(pm.ls(materials, mat=True))
-        if resolved_objects:
-            resolved_materials.extend(cls.get_mats(resolved_objects))
-        resolved_materials = cls._unique_ordered(resolved_materials)
+            mats = cmds.ls(to_long(materials), mat=True, long=True) or []
+            resolved_materials_set.update(mats)
 
-        resolved_file_nodes: List[Any] = []
-        for mat in resolved_materials:
-            resolved_file_nodes.extend(pm.listConnections(mat, type="file") or [])
+        if resolved_objects:
+            # Use optimized get_mats with as_strings=True
+            found_mats = cls.get_mats(resolved_objects, as_strings=True)
+            resolved_materials_set.update(found_mats)
+
+        resolved_materials = sorted(list(resolved_materials_set))
+
+        resolved_file_nodes_set = set()
+
+        if resolved_materials:
+            # cmds.listConnections on a list of nodes works and is fast
+            files = cmds.listConnections(resolved_materials, type="file") or []
+            resolved_file_nodes_set.update(files)
 
         if file_nodes:
-            resolved_file_nodes.extend(pm.ls(file_nodes, type="file"))
+            files = cmds.ls(to_long(file_nodes), type="file", long=True) or []
+            resolved_file_nodes_set.update(files)
 
-        if not resolved_file_nodes and fallback_to_scene:
-            resolved_file_nodes = pm.ls(type="file")
+        if not resolved_file_nodes_set and fallback_to_scene:
+            files = cmds.ls(type="file", long=True) or []
+            resolved_file_nodes_set.update(files)
 
-        resolved_file_nodes = cls._unique_ordered(resolved_file_nodes)
+        if as_strings:
+            return {
+                "objects": resolved_objects,
+                "materials": resolved_materials,
+                "file_nodes": sorted(list(resolved_file_nodes_set)),
+            }
 
+        # Convert to PyNodes at the end to maintain API compatibility
         return {
-            "objects": resolved_objects,
-            "materials": resolved_materials,
-            "file_nodes": resolved_file_nodes,
+            "objects": [pm.PyNode(o) for o in resolved_objects],
+            "materials": [pm.PyNode(m) for m in resolved_materials],
+            "file_nodes": [pm.PyNode(f) for f in sorted(list(resolved_file_nodes_set))],
         }
 
     @staticmethod
-    def _paths_from_file_nodes(file_nodes: List[Any]) -> List[str]:
+    def _paths_from_file_nodes(
+        file_nodes: List[Any], absolute: bool = False
+    ) -> List[str]:
         project_sourceimages = EnvUtils.get_env_info("sourceimages")
         project_sourceimages = (
             os.path.abspath(project_sourceimages) if project_sourceimages else ""
@@ -84,7 +113,10 @@ class MatUtilsInternals(ptk.HelpMixin):
         textures: List[str] = []
         for node in file_nodes or []:
             try:
-                file_path = node.fileTextureName.get()
+                if hasattr(node, "fileTextureName"):
+                    file_path = node.fileTextureName.get()
+                else:
+                    file_path = cmds.getAttr(f"{node}.fileTextureName")
             except Exception:
                 continue
             if not file_path:
@@ -100,6 +132,10 @@ class MatUtilsInternals(ptk.HelpMixin):
                 if not os.path.isabs(file_path)
                 else os.path.abspath(file_path)
             )
+
+            if absolute:
+                textures.append(abs_path)
+                continue
 
             if abs_path.startswith(project_sourceimages):
                 rel_path = os.path.relpath(abs_path, project_sourceimages).replace(
@@ -137,18 +173,34 @@ class MatUtilsInternals(ptk.HelpMixin):
             color (tuple, optional): RGB color tuple (0-1 range) to apply to the shader.
             return_type (str): What to return:
                 - 'type': shader type string ('standardSurface' or 'lambert') [default]
-                - 'shader': created shader node
-                - 'shading_group': created shading group connected to shader
-                - 'both': tuple of (shader, shading_group)
+                - 'shader': created shader node name
+                - 'shading_group': created shading group name
+                - 'both': tuple of (shader_name, shading_group_name)
 
         Returns:
-            str, pm.PyNode, or tuple: Depends on return_type parameter.
+            str or tuple: Depends on return_type parameter.
         """
+        from maya import cmds
+
         # Determine the preferred shader type
         try:
-            test_mat = pm.shadingNode("standardSurface", asShader=True)
-            pm.delete(test_mat)
-            shader_type = "standardSurface"
+            # Check if standardSurface is available
+            if cmds.pluginInfo("mtoa", query=True, loaded=True) or cmds.nodeType(
+                "standardSurface", isTypeName=True
+            ):
+                shader_type = "standardSurface"
+            else:
+                # Try creating one to be sure (some versions might have it without plugin?)
+                # Actually, checking nodeType is safer.
+                # If standardSurface is not a valid node type, fallback.
+                # But nodeType(isTypeName=True) might not work for plugins not yet loaded?
+                # Let's stick to the try-create pattern but with cmds
+                try:
+                    test = cmds.shadingNode("standardSurface", asShader=True)
+                    cmds.delete(test)
+                    shader_type = "standardSurface"
+                except Exception:
+                    shader_type = "lambert"
         except Exception:
             shader_type = "lambert"
 
@@ -158,12 +210,12 @@ class MatUtilsInternals(ptk.HelpMixin):
 
         # Create the shader node
         shader_name = name or f"material_{shader_type}"
-        shader = pm.shadingNode(shader_type, asShader=True, name=shader_name)
+        shader = cmds.shadingNode(shader_type, asShader=True, name=shader_name)
 
         # Apply color if provided
         if color:
             color_attr = "baseColor" if shader_type == "standardSurface" else "color"
-            pm.setAttr(
+            cmds.setAttr(
                 f"{shader}.{color_attr}", color[0], color[1], color[2], type="double3"
             )
 
@@ -173,13 +225,13 @@ class MatUtilsInternals(ptk.HelpMixin):
 
         # Create shading group
         sg_name = f"{shader_name}_SG" if name else f"{shader}_SG"
-        sg = pm.sets(
+        sg = cmds.sets(
             renderable=True,
             noSurfaceShader=True,
             empty=True,
             name=sg_name,
         )
-        shader.outColor.connect(sg.surfaceShader, force=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
 
         if return_type == "shading_group":
             return sg
@@ -193,54 +245,167 @@ class MatUtilsInternals(ptk.HelpMixin):
 
 class MatUtils(MatUtilsInternals):
     @staticmethod
-    def get_mats(objs=None) -> List[str]:
+    def get_mats(objs=None, as_strings=False) -> List[Union[str, "pm.PyNode"]]:
         """Returns the set of materials assigned to a given list of objects or components.
 
         Parameters:
             objs (list): The objects or components to retrieve the material from.
                         If None, current selection will be used.
+            as_strings (bool): If True, returns list of strings instead of PyNodes.
         Returns:
             list: Materials assigned to the objects or components (duplicates removed).
         """
+        from maya import cmds
+
         if objs is None:
-            objs = pm.ls(selection=True)
+            objs = cmds.ls(selection=True, long=True)
+
         if not objs:
             return []
 
-        target_objs = pm.ls(objs)
+        # Ensure we have a flat list of long names
+        # Handle PyNodes passed in input
+        if objs:
+            if not isinstance(objs, (list, tuple, set)):
+                objs = [objs]
+
+            # Convert PyNodes or other objects to strings safely
+            objs = [o.name() if hasattr(o, "name") else str(o) for o in objs]
+
+        target_objs = cmds.ls(objs, long=True, flatten=True) or []
         mats = set()
 
-        for obj in target_objs:
-            if isinstance(obj, pm.MeshFace):
-                shading_grps = [
-                    sg
-                    for sg in pm.ls(type="shadingEngine")
-                    if pm.sets(sg, isMember=obj)
-                ]
-                if not shading_grps:
-                    pm.hyperShade(obj, shaderNetworksSelectMaterialNodes=True)
-                    mats.update(pm.ls(pm.selected(), materials=True))
-                else:  # Get materials from the shading groups
-                    for sg in shading_grps:
-                        mats.update(
-                            pm.ls(
-                                pm.listConnections(sg.surfaceShader),
-                                materials=True,
-                            )
-                        )
-            else:
-                shape = obj.getShape() if hasattr(obj, "getShape") else None
-                if shape:
-                    shading_grps = pm.listConnections(shape, type="shadingEngine") or []
-                    for sg in shading_grps:
-                        mats.update(
-                            pm.ls(
-                                pm.listConnections(sg.surfaceShader),
-                                materials=True,
-                            )
-                        )
+        # Separate faces and objects for optimized processing
+        faces = [obj for obj in target_objs if ".f[" in obj]
+        objects = [obj for obj in target_objs if ".f[" not in obj]
 
-        return list(mats)
+        # Process objects (transforms/shapes)
+        if objects:
+            # Get shapes from transforms
+            # Use listRelatives for direct children shapes
+            shapes = cmds.listRelatives(objects, shapes=True, fullPath=True) or []
+            # Also include objects that are already shapes
+            for obj in objects:
+                if cmds.nodeType(obj) in ["mesh", "nurbsSurface", "subdiv"]:
+                    shapes.append(obj)
+
+            shapes = list(set(shapes))
+
+            # Get shading engines connected to shapes
+            if shapes:
+                # Batch query shading engines
+                shading_engines = set()
+                for shape in shapes:
+                    # listSets is the primary way to check set membership
+                    sgs = cmds.listSets(object=shape, type=1) or []
+                    if not sgs:
+                        # Fallback to connections
+                        sgs = cmds.listConnections(shape, type="shadingEngine") or []
+
+                    shading_engines.update(sgs)
+
+                # Get materials from shading engines
+                for sg in shading_engines:
+                    # ShadingEngine.surfaceShader -> Material is a source connection
+                    connections = (
+                        cmds.listConnections(
+                            f"{sg}.surfaceShader", source=True, destination=False
+                        )
+                        or []
+                    )
+                    mats.update(connections)
+
+        # Process faces
+        if faces:
+            for face in faces:
+                # listSets is faster than checking membership in all shading engines
+                face_sgs = (
+                    cmds.listSets(object=face, type=1) or []
+                )  # type=1 = shadingEngine
+                if face_sgs:
+                    for sg in face_sgs:
+                        connections = (
+                            cmds.listConnections(
+                                f"{sg}.surfaceShader", source=True, destination=False
+                            )
+                            or []
+                        )
+                        mats.update(connections)
+                else:
+                    # Fallback for faces with no direct shading group assignment
+                    # This is tricky with cmds, but we can try to get the object's material
+                    obj_name = face.split(".")[0]
+                    obj_shapes = (
+                        cmds.listRelatives(obj_name, shapes=True, fullPath=True) or []
+                    )
+                    for shape in obj_shapes:
+                        sgs = (
+                            cmds.listConnections(
+                                shape,
+                                type="shadingEngine",
+                                source=False,
+                                destination=True,
+                            )
+                            or []
+                        )
+                        for sg in sgs:
+                            connections = (
+                                cmds.listConnections(
+                                    f"{sg}.surfaceShader",
+                                    source=True,
+                                    destination=False,
+                                )
+                                or []
+                            )
+                            mats.update(connections)
+
+        if as_strings:
+            return list(mats)
+
+        # Convert to PyNodes at the very end
+        return [pm.PyNode(m) for m in mats if m]
+
+    @classmethod
+    def get_texture_info(
+        cls,
+        objects=None,
+        materials=None,
+        file_nodes=None,
+        texture_names=None,
+    ):
+        """Get information about texture files.
+
+        Parameters:
+            objects (list): Objects to derive textures from.
+            materials (list): Materials to derive textures from.
+            file_nodes (list): File nodes to derive textures from.
+            texture_names (list): Direct list of texture file paths.
+
+        Returns:
+            list[dict]: List of dictionaries containing texture info.
+        """
+        # Resolve targets
+        targets = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=(not texture_names),
+            as_strings=True,
+        )
+
+        resolved_file_nodes = targets["file_nodes"]
+
+        # Get paths from file nodes
+        file_paths = cls._paths_from_file_nodes(resolved_file_nodes, absolute=True)
+
+        # Add explicit texture names
+        if texture_names:
+            file_paths.extend(texture_names)
+
+        # Remove duplicates
+        file_paths = list(set(file_paths))
+
+        return ptk.ImgUtils.get_image_info(file_paths)
 
     @staticmethod
     def get_scene_mats(
@@ -328,59 +493,105 @@ class MatUtils(MatUtilsInternals):
             list: List of tuples or single values based on return_type.
                   Each tuple contains the requested columns in the specified order.
         """
-        file_nodes = pm.ls(type="file")
+        from maya import cmds
 
-        # Filter by materials (optional)
+        # Use cmds for faster batch queries (via PyMEL's internal reference)
+        file_node_names = cmds.ls(type="file") or []
+        if not file_node_names:
+            return []
+
+        workspace_dir = cmds.workspace(q=True, rd=True) or ""
+        columns = return_type.split("|")
+        needs_shader = (
+            "shader" in columns or "shaderName" in columns or materials is not None
+        )
+
+        # Build file_node -> shader mapping only if needed
+        file_to_shader_name = {}
+        if needs_shader:
+            # OPTIMIZATION: Build mapping by traversing from shading engines once
+            # Instead of calling listHistory for every shader, we:
+            # 1. Get all shading engines
+            # 2. For each, get the connected shader
+            # 3. Get upstream file nodes via listHistory (one call per shader, not per file node)
+            shading_engines = cmds.ls(type="shadingEngine") or []
+            shader_attrs = ["surfaceShader", "volumeShader", "displacementShader"]
+
+            for sg in shading_engines:
+                for attr_name in shader_attrs:
+                    try:
+                        connections = cmds.listConnections(
+                            f"{sg}.{attr_name}", source=True, destination=False
+                        )
+                        if connections:
+                            shader_name = connections[0]
+                            # Get all file nodes in this shader's history
+                            history = (
+                                cmds.listHistory(shader_name, pruneDagObjects=True)
+                                or []
+                            )
+                            for node in history:
+                                if cmds.nodeType(node) == "file":
+                                    if node not in file_to_shader_name:
+                                        file_to_shader_name[node] = shader_name
+                    except Exception:
+                        pass
+
+        # Filter by materials if specified
         if materials:
-            mat_objs = pm.ls(materials, materials=True)
-            filtered_nodes = []
-            for fn in file_nodes:
-                connected_mats = [c for c in fn.listConnections() if c in mat_objs]
-                if connected_mats:
-                    filtered_nodes.append(fn)
-            file_nodes = filtered_nodes
+            mat_names = set(
+                m if isinstance(m, str) else m.name() if hasattr(m, "name") else str(m)
+                for m in materials
+            )
+            # Keep only file nodes connected to the specified materials
+            filtered_nodes = [
+                fn for fn in file_node_names if file_to_shader_name.get(fn) in mat_names
+            ]
+            file_node_names = filtered_nodes
 
-        workspace_dir = pm.workspace(q=True, rd=True)
+        # Batch get all file paths at once using cmds (faster than PyMEL)
+        file_paths = {}
+        for fn in file_node_names:
+            try:
+                path = cmds.getAttr(f"{fn}.fileTextureName") or ""
+                if raw and path.startswith(workspace_dir):
+                    path = os.path.relpath(path, workspace_dir)
+                file_paths[fn] = path
+            except Exception:
+                file_paths[fn] = ""
+
+        # Build result rows
         file_info = []
+        needs_pynode_shader = "shader" in columns
+        needs_pynode_file = "fileNode" in columns
 
-        # Optimization: Pre-calculate file_node -> shader mapping
-        file_to_shader = {}
-        for sg in pm.ls(type="shadingEngine"):
-            for attr_name in ["surfaceShader", "volumeShader", "displacementShader"]:
+        # Cache PyNode conversions for reuse
+        pynode_cache = {}
+
+        def get_pynode(name):
+            if name not in pynode_cache:
                 try:
-                    connections = getattr(sg, attr_name).inputs()
-                    if connections:
-                        shader = connections[0]
-                        # Use listHistory to find all upstream file nodes efficiently
-                        for fn in pm.listHistory(shader, type="file"):
-                            if fn not in file_to_shader:
-                                file_to_shader[fn] = shader
-                except (AttributeError, Exception):
-                    pass
+                    pynode_cache[name] = pm.PyNode(name)
+                except Exception:
+                    pynode_cache[name] = None
+            return pynode_cache[name]
 
-        for file_node in file_nodes:
-            file_path = file_node.fileTextureName.get()
-            if raw and file_path.startswith(workspace_dir):
-                file_path_out = os.path.relpath(file_path, workspace_dir)
-            else:
-                file_path_out = file_path
+        for file_node_name in file_node_names:
+            shader_name = file_to_shader_name.get(file_node_name, "")
+            file_path = file_paths.get(file_node_name, "")
 
-            shader = file_to_shader.get(file_node)
-            shader_name = shader.name() if shader else ""
-
-            columns = return_type.split("|")
             row = []
             for col in columns:
                 if col == "shader":
-                    row.append(shader)
+                    row.append(get_pynode(shader_name) if shader_name else None)
                 elif col == "shaderName":
                     row.append(shader_name)
                 elif col == "path":
-                    row.append(file_path_out)
+                    row.append(file_path)
                 elif col == "fileNode":
-                    row.append(file_node)
+                    row.append(get_pynode(file_node_name))
                 elif col == "fileNodeName":
-                    row.append(file_node.name())
+                    row.append(file_node_name)
                 else:
                     row.append("")
             file_info.append(tuple(row) if len(row) > 1 else row[0])
@@ -446,20 +657,21 @@ class MatUtils(MatUtilsInternals):
             name (str, optional): The name of the material. Defaults to "".
 
         Returns:
-            obj: The created material.
+            str: The created material name.
         """
         import random
+        from maya import cmds
 
         if mat_type == "random":
             # Use preferred material type (standardSurface if available, otherwise lambert)
-            preferred_type = MatUtils._create_standard_shader()
+            preferred_type = MatUtils._create_standard_shader(return_type="type")
             rgb = [
                 random.randint(0, 255) for _ in range(3)
             ]  # Generate a list containing 3 values between 0-255
             name = "{}{}_{}_{}_{}".format(
                 prefix, name, str(rgb[0]), str(rgb[1]), str(rgb[2])
             )
-            mat = pm.shadingNode(preferred_type, asShader=True, name=name)
+            mat = cmds.shadingNode(preferred_type, asShader=True, name=name)
             convertedRGB = [round(float(v) / 255, 3) for v in rgb]
             # Set color attribute (works for both lambert and standardSurface)
             color_attr = (
@@ -467,10 +679,16 @@ class MatUtils(MatUtilsInternals):
                 if preferred_type == "standardSurface"
                 else f"{name}.color"
             )
-            pm.setAttr(color_attr, convertedRGB)
+            cmds.setAttr(
+                color_attr,
+                convertedRGB[0],
+                convertedRGB[1],
+                convertedRGB[2],
+                type="double3",
+            )
         else:
             name = prefix + name if name else mat_type
-            mat = pm.shadingNode(mat_type, asShader=True, name=name)
+            mat = cmds.shadingNode(mat_type, asShader=True, name=name)
 
         return mat
 
@@ -484,31 +702,41 @@ class MatUtils(MatUtilsInternals):
             objects (str/obj/list): The objects or components to assign the material to.
             mat_name (str): The name of the material to assign.
         """
+        from maya import cmds
+
         if not objects:
             raise ValueError("No objects provided to assign material.")
 
-        try:  # Retrieve or create material
-            mat = pm.PyNode(mat_name)
-        except pm.MayaNodeError:
+        # Retrieve or create material
+        if cmds.objExists(mat_name):
+            mat = mat_name
+        else:
             # Use preferred material type (standardSurface if available, otherwise lambert)
-            preferred_type = MatUtils._create_standard_shader()
-            mat = pm.shadingNode(preferred_type, name=mat_name, asShader=True)
+            preferred_type = MatUtils._create_standard_shader(return_type="type")
+            mat = cmds.shadingNode(preferred_type, name=mat_name, asShader=True)
 
         # Check if the material has a shading engine, otherwise create one
-        shading_groups = mat.listConnections(type="shadingEngine")
+        shading_groups = cmds.listConnections(mat, type="shadingEngine")
         if not shading_groups:
-            shading_group = pm.sets(
+            shading_group = cmds.sets(
                 name=f"{mat_name}SG", renderable=True, noSurfaceShader=True, empty=True
             )
-            pm.connectAttr(
+            cmds.connectAttr(
                 f"{mat}.outColor", f"{shading_group}.surfaceShader", force=True
             )
         else:
             shading_group = shading_groups[0]
 
         # Filter for valid objects and assign the material
-        valid_objects = pm.ls(objects, type="transform", flatten=True)
-        pm.sets(shading_group, forceElement=valid_objects)
+        # Handle PyNodes if passed
+        if objects:
+            if not isinstance(objects, (list, tuple, set)):
+                objects = [objects]
+            objects = [o.name() if hasattr(o, "name") else str(o) for o in objects]
+
+        valid_objects = cmds.ls(objects, flatten=True)
+        if valid_objects:
+            cmds.sets(valid_objects, forceElement=shading_group)
 
     @classmethod
     def find_by_mat_id(
@@ -533,52 +761,62 @@ class MatUtils(MatUtilsInternals):
                        contains transform nodes if `shell` is True, otherwise it contains individual
                        faces.
         """
-        if pm.nodeType(material) == "VRayMultiSubTex":
+        if cmds.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
             )
 
-        if not pm.objExists(material):
+        if not cmds.objExists(material):
             print(f"Material '{material}' does not exist.")
             return []
 
-        shading_groups = pm.listConnections(material, type="shadingEngine")
+        shading_groups = cmds.listConnections(material, type="shadingEngine")
         if not shading_groups:
             print(f"No shading groups found for material '{material}'.")
             return []
 
         objs_with_material = []
-        transform_nodes = NodeUtils.get_transform_node(objects)
+
+        # Prepare target transforms set for fast lookup
+        target_transforms = set()
+        if objects:
+            for obj in objects:
+                if cmds.objExists(obj):
+                    if cmds.nodeType(obj) == "transform":
+                        target_transforms.add(obj)
+                    else:
+                        parents = cmds.listRelatives(obj, parent=True, fullPath=True)
+                        if parents:
+                            target_transforms.add(parents[0])
 
         for sg in shading_groups:
-            members = pm.sets(sg, query=True, noIntermediate=True)
+            members = cmds.sets(sg, query=True, noIntermediate=True) or []
             for member in members:
-                # Check if the member is a face component directly
-                if isinstance(member, pm.MeshFace):
-                    transform_node = member.node().getParent()
-                    # Filter by objects if specified
-                    if objects and transform_node not in transform_nodes:
-                        continue
-                    if not shell:
-                        objs_with_material.append(member)
-                    else:
-                        if transform_node not in objs_with_material:
-                            objs_with_material.append(transform_node)
+                # Determine transform
+                if "." in member:
+                    node = member.split(".")[0]
                 else:
-                    # Handle other types (like full mesh objects)
-                    transform_node = NodeUtils.get_transform_node(member)
-                    if objects and transform_node not in transform_nodes:
-                        continue
-                    if shell:
-                        if transform_node not in objs_with_material:
-                            objs_with_material.append(transform_node)
-                    else:
-                        faces = transform_node.faces
-                        for face in faces:
-                            if sg in pm.listSets(object=face, type=1):
-                                objs_with_material.append(face)
+                    node = member
 
-        return objs_with_material
+                # Get transform name
+                if cmds.nodeType(node) == "transform":
+                    transform = node
+                else:
+                    parents = cmds.listRelatives(node, parent=True, fullPath=True)
+                    transform = parents[0] if parents else node
+
+                # Filter
+                if objects and transform not in target_transforms:
+                    continue
+
+                if shell:
+                    if transform not in objs_with_material:
+                        objs_with_material.append(transform)
+                else:
+                    objs_with_material.append(member)
+
+        # Convert to PyNodes for backward compatibility
+        return [pm.PyNode(obj) for obj in objs_with_material]
 
     @staticmethod
     @ptk.filter_results
@@ -601,23 +839,43 @@ class MatUtils(MatUtilsInternals):
         Returns:
             Union[List[str], List[Tuple[str, ...]]]: List of file paths or tuples containing requested info.
         """
-        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+        if materials is None:
+            materials = cmds.ls(mat=True)
+        else:
+            # Ensure strings
+            materials = [m.name() if hasattr(m, "name") else m for m in materials]
+            materials = cmds.ls(materials, mat=True)
+
         attributes = attributes or ["fileTextureName"]
 
         material_paths = []
-        project_sourceimages = os.path.abspath(EnvUtils.get_env_info("sourceimages"))
-        sourceimages_name = os.path.basename(project_sourceimages).replace("\\", "/")
+        try:
+            project_sourceimages = os.path.abspath(
+                EnvUtils.get_env_info("sourceimages")
+            )
+        except Exception:
+            project_sourceimages = ""
+
+        sourceimages_name = (
+            os.path.basename(project_sourceimages).replace("\\", "/")
+            if project_sourceimages
+            else "sourceimages"
+        )
 
         for material in materials:
             for attr in attributes:
-                file_nodes = pm.listConnections(material, type="file")
+                file_nodes = cmds.listConnections(material, type="file") or []
                 for file_node in file_nodes:
-                    try:
-                        file_path = file_node.attr(attr).get()
-                        if not file_path:
-                            continue
+                    if not cmds.attributeQuery(attr, node=file_node, exists=True):
+                        continue
 
-                        file_path = file_path.replace("\\", "/")
+                    file_path = cmds.getAttr(f"{file_node}.{attr}")
+                    if not file_path:
+                        continue
+
+                    file_path = file_path.replace("\\", "/")
+
+                    if project_sourceimages:
                         abs_file_path = (
                             os.path.abspath(
                                 os.path.join(project_sourceimages, file_path)
@@ -631,26 +889,27 @@ class MatUtils(MatUtilsInternals):
                             if abs_file_path.startswith(project_sourceimages)
                             else "Absolute"
                         )
+                    else:
+                        abs_file_path = os.path.abspath(file_path)
+                        path_type = "Absolute"
 
-                        if path_type == "Relative":
-                            rel_path = os.path.relpath(
-                                abs_file_path, project_sourceimages
-                            ).replace("\\", "/")
-                            if not rel_path.startswith(sourceimages_name + "/"):
-                                rel_path = f"{sourceimages_name}/{rel_path}"
-                            path_out = abs_file_path if resolve_full_path else rel_path
-                        else:
-                            path_out = abs_file_path
+                    if path_type == "Relative":
+                        rel_path = os.path.relpath(
+                            abs_file_path, project_sourceimages
+                        ).replace("\\", "/")
+                        if not rel_path.startswith(sourceimages_name + "/"):
+                            rel_path = f"{sourceimages_name}/{rel_path}"
+                        path_out = abs_file_path if resolve_full_path else rel_path
+                    else:
+                        path_out = abs_file_path
 
-                        entry = (path_out,)
-                        if inc_mat_name:
-                            entry = (material,) + entry
-                        if inc_path_type:
-                            entry = entry[:1] + (path_type,) + entry[1:]
+                    entry = (path_out,)
+                    if inc_mat_name:
+                        entry = (material,) + entry
+                    if inc_path_type:
+                        entry = entry[:1] + (path_type,) + entry[1:]
 
-                        material_paths.append(entry)
-                    except pm.MayaAttributeError:
-                        continue
+                    material_paths.append(entry)
 
         return material_paths
 
@@ -676,19 +935,33 @@ class MatUtils(MatUtilsInternals):
         sourceimages_dir = EnvUtils.get_env_info("sourceimages")
         sourceimages_dir_norm = os.path.normpath(sourceimages_dir).replace("\\", "/")
 
-        limit_nodes = (
-            set(pm.ls(limit_to_nodes, type="file")) if limit_to_nodes else None
-        )
+        # Optimization: Use cmds instead of pm for faster iteration
+        if limit_to_nodes:
+            # Ensure we have strings for cmds
+            node_names = []
+            for n in limit_to_nodes:
+                if hasattr(n, "name"):
+                    node_names.append(n.name())
+                else:
+                    node_names.append(str(n))
 
-        file_nodes: Dict[str, List[pm.nt.File]] = {}
+            # Filter for valid file nodes
+            nodes_to_process = cmds.ls(node_names, type="file") or []
+        else:
+            nodes_to_process = cmds.ls(type="file") or []
+
+        file_nodes: Dict[str, List[str]] = {}
 
         # Build lookup: rel path if under sourceimages, else just filename
-        for fn in pm.ls(type="file"):
-            if limit_nodes is not None and fn not in limit_nodes:
+        for fn in nodes_to_process:
+            try:
+                file_path = cmds.getAttr(f"{fn}.fileTextureName")
+            except Exception:
                 continue
-            file_path = fn.fileTextureName.get()
+
             if not file_path:
                 continue
+
             file_path_norm = os.path.normpath(file_path).replace("\\", "/")
 
             key = None
@@ -711,15 +984,21 @@ class MatUtils(MatUtilsInternals):
 
         for key, new_full_path, maya_path in remap_data:
             if key in file_nodes:
-                for fn in file_nodes[key]:
-                    if not silent:
-                        pm.displayInfo(f"\n[Remap Attempt]")
-                        pm.displayInfo(f"  original path: {new_full_path}")
-                        pm.displayInfo(f"  lookup key:    {key}")
-                        pm.displayInfo(f"  maya path:     {maya_path}")
-                        pm.displayInfo(f"  remapped:      {fn.name()}")
-                    fn.fileTextureName.set(maya_path)
-                    remapped_nodes.append(fn)
+                for fn_name in file_nodes[key]:
+                    # Check if update is needed
+                    current_val = cmds.getAttr(f"{fn_name}.fileTextureName")
+                    if current_val != maya_path:
+                        if not silent:
+                            pm.displayInfo(f"\n[Remap Attempt]")
+                            pm.displayInfo(f"  original path: {new_full_path}")
+                            pm.displayInfo(f"  lookup key:    {key}")
+                            pm.displayInfo(f"  maya path:     {maya_path}")
+                            pm.displayInfo(f"  remapped:      {fn_name}")
+
+                        cmds.setAttr(
+                            f"{fn_name}.fileTextureName", maya_path, type="string"
+                        )
+                        remapped_nodes.append(pm.PyNode(fn_name))
             else:
                 pm.warning(
                     f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"
@@ -758,6 +1037,7 @@ class MatUtils(MatUtilsInternals):
             materials=materials,
             file_nodes=file_nodes,
             fallback_to_scene=fallback_to_scene,
+            as_strings=True,
         )
         resolved_nodes = scope["file_nodes"]
 
@@ -799,17 +1079,17 @@ class MatUtils(MatUtilsInternals):
     @classmethod
     def find_materials_with_duplicate_textures(
         cls,
-        materials: Optional[List["pm.nt.DependNode"]] = None,
+        materials: Optional[List[Union[str, "pm.nt.DependNode"]]] = None,
         strict: bool = False,
-    ) -> Dict["pm.nt.DependNode", List["pm.nt.DependNode"]]:
+    ) -> Dict[str, List[str]]:
         """Find duplicate materials based on their texture file names or full paths.
 
         Parameters:
-            materials (Optional[List[pm.nt.DependNode]]): List of material nodes.
+            materials (Optional[List[str]]): List of material nodes.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
 
         Returns:
-            Dict[pm.nt.DependNode, List[pm.nt.DependNode]]:
+            Dict[str, List[str]]:
                 Each key is the original material, and each value is a list of duplicate materials.
         """
 
@@ -818,42 +1098,51 @@ class MatUtils(MatUtilsInternals):
             filename = os.path.basename(path).lower()
             return os.path.splitext(filename)[0]
 
-        materials = pm.ls(mat=True) if materials is None else pm.ls(materials, mat=True)
+        if materials is None:
+            materials = cmds.ls(mat=True)
+        else:
+            materials = [m.name() if hasattr(m, "name") else m for m in materials]
+            materials = cmds.ls(materials, mat=True)
 
         # Dictionary to store relevant material data (texture names or paths)
         material_data = {}
         for material in materials:
             # Collect file nodes connected to the material or its shading engine
-            file_nodes = pm.listConnections(
-                material, source=True, destination=False, type="file"
+            file_nodes = (
+                cmds.listConnections(
+                    material, source=True, destination=False, type="file"
+                )
+                or []
             )
+
             # Check shading engine connections if no direct file nodes
             if not file_nodes:
-                shading_engines = pm.listConnections(material, type="shadingEngine")
-                file_nodes = [
-                    file
-                    for engine in shading_engines
-                    for file in pm.listConnections(
-                        engine, source=True, destination=False, type="file"
+                shading_engines = (
+                    cmds.listConnections(material, type="shadingEngine") or []
+                )
+                for engine in shading_engines:
+                    engine_files = (
+                        cmds.listConnections(
+                            engine, source=True, destination=False, type="file"
+                        )
+                        or []
                     )
-                ]
+                    file_nodes.extend(engine_files)
 
             if not file_nodes:  # Skip materials without file nodes
                 continue
 
             # Collect texture paths or names based on 'strict' flag
-            if strict:  # Use full paths for comparison when strict is True
-                texture_names = [
-                    pm.getAttr(f"{file_node}.fileTextureName").lower()
-                    for file_node in file_nodes
-                    if pm.objExists(f"{file_node}.fileTextureName")
-                ]
-            else:  # Use only the texture names without paths or extensions
-                texture_names = [
-                    get_texture_name(pm.getAttr(f"{file_node}.fileTextureName"))
-                    for file_node in file_nodes
-                    if pm.objExists(f"{file_node}.fileTextureName")
-                ]
+            texture_names = []
+            for file_node in file_nodes:
+                if cmds.objExists(f"{file_node}.fileTextureName"):
+                    path = cmds.getAttr(f"{file_node}.fileTextureName")
+                    if path:
+                        if strict:
+                            texture_names.append(path.lower())
+                        else:
+                            texture_names.append(get_texture_name(path))
+
             if not texture_names:
                 continue
 
@@ -877,7 +1166,8 @@ class MatUtils(MatUtilsInternals):
         # Process duplicates
         for materials_list in seen_materials.values():
             if len(materials_list) > 1:
-                materials_list.sort(key=lambda x: (len(x.name()), x.name()))
+                # Sort by name length then name to prefer shorter names (often original)
+                materials_list.sort(key=lambda x: (len(x), x))
                 original = materials_list[0]
                 duplicates[original] = materials_list[1:]  # Always exclude the original
 
@@ -901,7 +1191,7 @@ class MatUtils(MatUtilsInternals):
             delete (bool): Whether to delete the duplicate materials after reassignment.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
         """
-        if materials is None:  # Filter out invalid objects and warn about them
+        if materials is not None:  # Filter out invalid objects and warn about them
             valid_objects = []
             for m in materials:
                 if pm.objExists(m):
@@ -923,7 +1213,7 @@ class MatUtils(MatUtilsInternals):
         duplicates_to_delete = []
         for original, duplicates in duplicate_to_original.items():
             # Get the shading group of the original material
-            original_sgs = original.shadingGroups()
+            original_sgs = cmds.listConnections(original, type="shadingEngine")
             if not original_sgs:
                 continue
             original_sg = original_sgs[0]
@@ -931,30 +1221,34 @@ class MatUtils(MatUtilsInternals):
             # Reassign all duplicates to the original material
             for duplicate in duplicates:
                 try:  # Get the shading groups of the duplicate material
-                    duplicate_sgs = duplicate.shadingGroups()
+                    duplicate_sgs = cmds.listConnections(
+                        duplicate, type="shadingEngine"
+                    )
+                    if not duplicate_sgs:
+                        continue
+
                     for dup_sg in duplicate_sgs:
                         # Get the members (faces or objects) of the duplicate shading group
-                        members = pm.sets(dup_sg, q=True)
+                        members = cmds.sets(dup_sg, q=True)
                         if members:
                             # Reassign the faces or objects to the original shading group
-                            pm.sets(original_sg, forceElement=members)
+                            cmds.sets(members, forceElement=original_sg)
                             print(
                                 f"Reassigned material from {duplicate} to {original} on members: {members}"
                             )
                     # Add the duplicate material to the deletion list
                     duplicates_to_delete.append(duplicate)
-                except pm.MayaAttributeError as e:
+                except Exception as e:
                     print(f"Error processing material {duplicate}: {e}")
                     continue
-                except pm.MayaNodeError as e:
-                    print(f"Error with shading group nodes for {duplicate}: {e}")
-                    continue
+
         if delete:  # Delete all duplicate materials after successful reassignment
             for duplicate in duplicates_to_delete:
                 try:
-                    pm.delete(duplicate)
-                    print(f"Deleted duplicate material: {duplicate}")
-                except pm.MayaAttributeError as e:
+                    if cmds.objExists(duplicate):
+                        cmds.delete(duplicate)
+                        print(f"Deleted duplicate material: {duplicate}")
+                except Exception as e:
                     print(f"Error deleting material {duplicate}: {e}")
                 except pm.MayaNodeError as e:
                     print(f"Error deleting node for material {duplicate}: {e}")
@@ -1427,8 +1721,9 @@ class MatUtils(MatUtilsInternals):
             wrap_value = {"black": 0, "clamp": 1, "repeat": 2}.get(wrap_mode, 0)
 
             # Connect the bump file to bump2d
+            # Use outAlpha as standard for bump maps (height maps)
             pm.connectAttr(
-                f"{bump_node.name()}.outColor", f"{bump2d_node.name()}.bumpValue"
+                f"{bump_node.name()}.outAlpha", f"{bump2d_node.name()}.bumpValue"
             )
 
             # Handle format-specific adjustments

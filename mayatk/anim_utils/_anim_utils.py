@@ -2127,9 +2127,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
             # Maya's keyframe query is most reliable when the time argument is a
             # (start, end) pair, even when targeting a single key time.
+            # Use a small epsilon to ensure we catch the key even with float precision issues
+            eps = 0.5
             values = pm.keyframe(
-                curve, query=True, time=(old_time, old_time), valueChange=True
+                curve,
+                query=True,
+                time=(old_time - eps, old_time + eps),
+                valueChange=True,
             )
+            # print(f"DEBUG: _move_curve_keys query old_time={old_time} range={old_time-eps}-{old_time+eps} found={values}")
             if not values:
                 continue
 
@@ -2989,7 +2995,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def delete_keys(objects, *attributes, time=None, channel_box_only=False):
+    def delete_keys(objects=None, *attributes, time=None, channel_box_only=False):
         """Deletes keyframes for specified attributes on given objects, optionally within a time range.
 
         This function can delete keyframes for all attributes or specified attributes, and within the entire timeline
@@ -3064,18 +3070,21 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 )
             return
 
-        for obj in objects:
-            if attributes:  # Delete keyframes for specified attributes
-                for attr in attributes:
-                    if time_range:
-                        pm.cutKey(f"{obj}.{attr}", time=time_range, clear=True)
-                    else:
-                        pm.cutKey(f"{obj}.{attr}", clear=True)
-            else:  # Delete keyframes for all attributes
+        # Optimized: batch cutKey operations
+        if attributes:
+            # Build list of attribute plugs for all objects
+            attr_plugs = [f"{obj}.{attr}" for obj in objects for attr in attributes]
+            if attr_plugs:
                 if time_range:
-                    pm.cutKey(obj, time=time_range, clear=True)
+                    pm.cutKey(attr_plugs, time=time_range, clear=True)
                 else:
-                    pm.cutKey(obj, clear=True)
+                    pm.cutKey(attr_plugs, clear=True)
+        else:
+            # Delete keyframes for all attributes - pass all objects at once
+            if time_range:
+                pm.cutKey(objects, time=time_range, clear=True)
+            else:
+                pm.cutKey(objects, clear=True)
 
     @staticmethod
     def select_keys(

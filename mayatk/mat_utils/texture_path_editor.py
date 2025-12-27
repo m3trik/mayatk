@@ -6,9 +6,11 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+from uitk.widgets.footer import FooterStatusController
+
+# From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
-from uitk.widgets.footer import FooterStatusController
 
 
 class TexturePathEditorSlots:
@@ -343,42 +345,51 @@ class TexturePathEditorSlots:
 
     def _refresh_table_content(self, widget):
         """Refresh the table content with current scene data."""
-        widget.clear()
-        # Optimization: Request 'shader' object directly to avoid re-creating PyNodes
-        rows = MatUtils.get_file_nodes(
-            return_type="shader|shaderName|path|fileNodeName|fileNode", raw=True
-        )
-        if not rows:
-            rows = [(None, "", "", "No file nodes found", None)]
-
-        formatted = []
-        for shader_node, shader_name, path, file_node_name, file_node in rows:
-            # shader_node is already a PyNode or None (from MatUtils)
-            formatted.append(
-                [(shader_name, shader_node), path, (file_node_name, file_node)]
+        # Show wait cursor during refresh for large scenes
+        pm.waitCursor(state=True)
+        try:
+            widget.setUpdatesEnabled(False)
+            widget.clear()
+            # Optimization: Request strings only to avoid PyNode creation overhead
+            rows = MatUtils.get_file_nodes(
+                return_type="shaderName|path|fileNodeName", raw=True
             )
+            if not rows:
+                rows = [("", "", "No file nodes found")]
 
-        widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
+            formatted = []
+            for shader_name, path, file_node_name in rows:
+                # Pass strings for display; PyNodes will be resolved on-demand by context menu actions
+                formatted.append([shader_name, path, file_node_name])
 
-        # Configure column resizing behavior
-        header = widget.horizontalHeader()
-        header.setSectionsMovable(False)  # Prevent column reordering
-        header.setSectionResizeMode(
-            0, self.sb.QtWidgets.QHeaderView.Interactive
-        )  # Shader column - manually resizable
-        header.setSectionResizeMode(
-            1, self.sb.QtWidgets.QHeaderView.Stretch
-        )  # Texture Path column - stretches to fill
-        header.setSectionResizeMode(
-            2, self.sb.QtWidgets.QHeaderView.Interactive
-        )  # File Node column - manually resizable
+            widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
 
-        # Set minimum column widths for usability
-        widget.setColumnWidth(0, 200)  # Shader column minimum width
-        widget.setColumnWidth(2, 200)  # File Node column minimum width
+            # Configure column resizing behavior
+            header = widget.horizontalHeader()
+            header.setSectionsMovable(False)  # Prevent column reordering
+            header.setSectionResizeMode(
+                0, self.sb.QtWidgets.QHeaderView.Interactive
+            )  # Shader column - manually resizable
+            header.setSectionResizeMode(
+                1, self.sb.QtWidgets.QHeaderView.Stretch
+            )  # Texture Path column - stretches to fill
+            header.setSectionResizeMode(
+                2, self.sb.QtWidgets.QHeaderView.Interactive
+            )  # File Node column - manually resizable
 
-        self.setup_formatting(widget)
-        widget.apply_formatting()
+            # Set minimum column widths for usability
+            widget.setColumnWidth(0, 200)  # Shader column minimum width
+            widget.setColumnWidth(2, 200)  # File Node column minimum width
+
+            # Setup and apply formatting in one pass (avoid double formatting)
+            self.setup_formatting(widget)
+            # Note: widget.add() already calls apply_formatting(), but we need our
+            # custom formatter applied, so we call it once more after setup
+            widget.apply_formatting()
+        finally:
+            widget.setUpdatesEnabled(True)
+            pm.waitCursor(state=False)
+
         if self._footer_controller:
             self._footer_controller.update()
 
@@ -420,7 +431,53 @@ class TexturePathEditorSlots:
 
     def setup_formatting(self, widget):
         source_root = EnvUtils.get_env_info("workspace")
-        path_cache = {}  # Cache for file existence checks
+
+        # Pre-compute all unique paths and check existence in batch
+        # This avoids repeated os.path.exists() calls during formatting
+        path_cache = {}
+
+        # Collect all unique paths first
+        unique_paths = set()
+        for row in range(widget.rowCount()):
+            item = widget.item(row, 1)
+            if item:
+                path = str(item.text()).strip()
+                if path:
+                    unique_paths.add(path)
+
+        # Batch check file existence (potentially parallelized for network paths)
+        def resolve_and_check(path):
+            abs_path = (
+                os.path.normpath(os.path.join(source_root, path))
+                if not os.path.isabs(path)
+                else os.path.normpath(path)
+            )
+            return path, os.path.exists(abs_path), abs_path
+
+        # For small datasets, check inline; for large datasets, use threading
+        if len(unique_paths) > 50:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {
+                    executor.submit(resolve_and_check, p): p for p in unique_paths
+                }
+                for future in as_completed(futures):
+                    try:
+                        path, exists, abs_path = future.result(timeout=5)
+                        path_cache[path] = (exists, abs_path)
+                    except Exception:
+                        path = futures[future]
+                        abs_path = (
+                            os.path.normpath(os.path.join(source_root, path))
+                            if not os.path.isabs(path)
+                            else os.path.normpath(path)
+                        )
+                        path_cache[path] = (False, abs_path)
+        else:
+            for path in unique_paths:
+                _, exists, abs_path = resolve_and_check(path)
+                path_cache[path] = (exists, abs_path)
 
         def format_if_invalid(item, value, row, col, *_):
             path = str(value).strip()
@@ -428,6 +485,7 @@ class TexturePathEditorSlots:
             if path in path_cache:
                 exists, abs_path = path_cache[path]
             else:
+                # Fallback for any paths not in cache
                 abs_path = (
                     os.path.normpath(os.path.join(source_root, path))
                     if not os.path.isabs(path)
@@ -461,16 +519,16 @@ class TexturePathEditorSlots:
             except Exception:
                 file_node_data = None
 
+        # OPTIMIZATION: Use file_node_data directly if available instead of
+        # calling get_file_nodes which is expensive
         material_file_nodes = []
         if file_node_data:
             material_file_nodes = [file_node_data]
-        elif shader_name:
+        elif shader_node:
+            # Use listHistory directly on the shader - much faster than get_file_nodes
             try:
-                nodes = MatUtils.get_file_nodes(
-                    materials=[shader_name], return_type="fileNode"
-                )
-                nodes = pm.ls(nodes, type="file") if nodes else []
-                material_file_nodes = MatUtils._unique_ordered(nodes)
+                history = pm.listHistory(shader_node, type="file") or []
+                material_file_nodes = list(dict.fromkeys(history))  # unique, ordered
             except Exception:
                 material_file_nodes = []
 
@@ -858,14 +916,20 @@ class TexturePathEditorSlots:
             pm.warning("No materials found on selected objects.")
             return
 
-        # Get file nodes associated with these materials
-        nodes = MatUtils.get_file_nodes(materials=mats, return_type="fileNode")
-        if not nodes:
+        # OPTIMIZATION: Get file nodes directly via listHistory on materials
+        # instead of calling get_file_nodes which rebuilds the entire mapping
+        target_node_names = set()
+        for mat in mats:
+            try:
+                file_nodes = pm.listHistory(mat, type="file") or []
+                for fn in file_nodes:
+                    target_node_names.add(fn.name())
+            except Exception:
+                pass
+
+        if not target_node_names:
             pm.warning("No file nodes found for selected objects.")
             return
-
-        # Convert to set of names for comparison
-        target_node_names = {n.name() if hasattr(n, "name") else str(n) for n in nodes}
 
         table = self.ui.tbl000
         table.clearSelection()

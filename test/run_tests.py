@@ -22,18 +22,22 @@ Directory Structure:
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
 import re
-import socket
 import sys
 import time
 import textwrap
 from pathlib import Path
 
-# Add current directory to path to find maya_connection
-sys.path.append(str(Path(__file__).parent))
+# Ensure mayatk is in path
+scripts_dir = r"O:\Cloud\Code\_scripts"
+if scripts_dir not in sys.path:
+    sys.path.insert(0, scripts_dir)
+
 try:
-    import maya_connection
+    from mayatk.env_utils import maya_connection
 except ImportError:
-    print("Warning: maya_connection module not found. Standalone mode may not work.")
+    print(
+        "Warning: mayatk.env_utils.maya_connection module not found. Standalone mode may not work."
+    )
 
 
 class MayaTestRunner:
@@ -241,7 +245,11 @@ except Exception as e:
             # Use ModuleReloader to properly reload mayatk modules
             try:
                 from pythontk import ModuleReloader
-                reloader = ModuleReloader(include_submodules=True)
+                reloader = ModuleReloader(include_submodules=True)                
+                # Reload pythontk first to ensure core utilities are up to date
+                import pythontk
+                reloader.reload(pythontk)
+                print("[ModuleReloader] Reloaded pythontk")
                 import mayatk
                 reloaded = reloader.reload(mayatk)
                 print(f"[ModuleReloader] Reloaded {{len(reloaded)}} mayatk modules")

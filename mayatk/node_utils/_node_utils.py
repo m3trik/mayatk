@@ -429,6 +429,13 @@ class NodeUtils(ptk.HelpMixin):
         pm.optionVar(intValue=("createTexturesWithPlacement", create_placement))
 
         try:
+            # Ensure createRenderNodeCB is available
+            if not pm.mel.exists("createRenderNodeCB"):
+                try:
+                    pm.mel.source("createRenderNode.mel")
+                except Exception:
+                    pass
+
             node_name = pm.mel.eval(
                 f'createRenderNodeCB "-{classification}" "{category}" "{node_type}" ""'
             )

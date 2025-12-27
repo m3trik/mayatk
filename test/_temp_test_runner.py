@@ -28,7 +28,11 @@ import importlib.util
 # Use ModuleReloader to properly reload mayatk modules
 try:
     from pythontk import ModuleReloader
-    reloader = ModuleReloader(include_submodules=True)
+    reloader = ModuleReloader(include_submodules=True)                
+    # Reload pythontk first to ensure core utilities are up to date
+    import pythontk
+    reloader.reload(pythontk)
+    print("[ModuleReloader] Reloaded pythontk")
     import mayatk
     reloaded = reloader.reload(mayatk)
     print(f"[ModuleReloader] Reloaded {len(reloaded)} mayatk modules")
@@ -68,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_auto_instancer']
+test_modules = ['test_texture_map_factory', 'test_game_shader', 'test_material_updater']
 total_tests = 0
 total_failures = 0
 total_errors = 0

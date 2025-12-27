@@ -95,9 +95,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "edit_utils/snap.ui",
             "slot": "edit_utils.snap.SnapSlots",
         },
-        "stingray_arnold_shader": {
-            "ui": "mat_utils/stingray_arnold_shader.ui",
-            "slot": "mat_utils.stingray_arnold_shader.StingrayArnoldShaderSlots",
+        "game_shader": {
+            "ui": "mat_utils/game_shader.ui",
+            "slot": "mat_utils.game_shader.GameShaderSlots",
         },
         "texture_path_editor": {
             "ui": "mat_utils/texture_path_editor.ui",
