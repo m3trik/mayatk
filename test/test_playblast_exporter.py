@@ -193,6 +193,7 @@ class TestPlayblastExporter(MayaTkTestCase):
         # Cleanup before run to avoid leftover frames from previous runs
         if os.path.exists(output_base + "_test_vid"):
             import shutil
+
             try:
                 shutil.rmtree(output_base + "_test_vid")
             except OSError:
@@ -201,7 +202,10 @@ class TestPlayblastExporter(MayaTkTestCase):
         # The exporter creates files with prefix output_base + "_test_vid"
         # We should probably use a unique directory to be safe
         import uuid
-        unique_dir = os.path.join(os.environ["TEMP"], f"test_metadata_{uuid.uuid4().hex}")
+
+        unique_dir = os.path.join(
+            os.environ["TEMP"], f"test_metadata_{uuid.uuid4().hex}"
+        )
         os.makedirs(unique_dir, exist_ok=True)
         output_base = os.path.join(unique_dir, "test_export")
 
@@ -284,8 +288,9 @@ class TestPlayblastExporter(MayaTkTestCase):
                 self.fail(f"Playblast failed: {e}")
         finally:
             # Cleanup
-            if 'unique_dir' in locals() and os.path.exists(unique_dir):
+            if "unique_dir" in locals() and os.path.exists(unique_dir):
                 import shutil
+
                 try:
                     shutil.rmtree(unique_dir)
                 except OSError:

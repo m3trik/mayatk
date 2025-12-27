@@ -72,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_texture_map_factory', 'test_game_shader', 'test_material_updater']
+test_modules = ['test_image_tracer']
 total_tests = 0
 total_failures = 0
 total_errors = 0

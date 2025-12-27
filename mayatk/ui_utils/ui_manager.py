@@ -35,6 +35,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "edit_utils/bridge.ui",
             "slot": "edit_utils.bridge.BridgeSlots",
         },
+        "calculator": {
+            "ui": "ui_utils/calculator.ui",
+            "slot": "ui_utils.calculator.CalculatorSlots",
+        },
         "color_manager": {
             "ui": "display_utils/color_manager.ui",
             "slot": "display_utils.color_manager.ColorManagerSlots",

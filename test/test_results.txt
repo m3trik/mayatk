@@ -3,21 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_texture_map_factory: LOAD ERROR
-  [Errno 2] No such file or directory: 'O:/Cloud/Code/_scripts/mayatk/test/test_texture_map_factory.py'
-
-test_game_shader: PASS
-  Tests: 74, Failures: 0, Errors: 0, Skipped: 4
-
-test_material_updater: PASS
-  Tests: 10, Failures: 0, Errors: 0, Skipped: 0
+test_image_tracer: PASS
+  Tests: 5, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_texture_map_factory: LOAD ERROR - [Errno 2] No such file or directory: 'O:/Cloud/Cod
-  test_game_shader: PASS (74 tests, 0 failures, 0 errors)
-  test_material_updater: PASS (10 tests, 0 failures, 0 errors)
+  test_image_tracer: PASS (5 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 84 tests, 0 failures, 0 errors, 4 skipped
+Total: 5 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

@@ -116,6 +116,9 @@ class MaterialUpdater:
                     except Exception:
                         continue
 
+                # Ensure unique paths
+                files = sorted(list(set(files)))
+
                 if files:
                     mat_to_files[mat] = files
                     all_files.update(files)
@@ -153,6 +156,9 @@ class MaterialUpdater:
                             files.append(path)
                     except Exception:
                         continue
+
+                # Ensure unique paths
+                files = sorted(list(set(files)))
 
             if not files:
                 log(f"  No valid texture paths for {mat_name}, skipping.")
@@ -201,10 +207,6 @@ class MaterialUpdater:
                                 group_by_set=False,  # Always force single set for per-material context
                                 **config_obj,
                             )
-                            texture_cache[cache_key] = processed_files
-                        except Exception as e:
-                            log(f"  Error preparing maps: {e}")
-
                             texture_cache[cache_key] = processed_files
                         except Exception as e:
                             log(f"  Error preparing maps: {e}")
