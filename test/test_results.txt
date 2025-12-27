@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_image_tracer: PASS
-  Tests: 5, Failures: 0, Errors: 0, Skipped: 0
+test_material_updater: PASS
+  Tests: 10, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_image_tracer: PASS (5 tests, 0 failures, 0 errors)
+  test_material_updater: PASS (10 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 5 tests, 0 failures, 0 errors, 0 skipped
+Total: 10 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

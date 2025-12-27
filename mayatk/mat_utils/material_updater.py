@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import re
 from typing import List, Dict, Any, Union, Optional
 
 try:
@@ -41,9 +42,11 @@ class MaterialUpdater:
         """
 
         # Define callback
-        def log(msg, **kwargs):
+        def log(msg, *args, **kwargs):
             if verbose:
-                print(msg)
+                # Strip HTML tags
+                clean_msg = re.sub(r"<[^>]+>", "", str(msg))
+                print(clean_msg)
 
         if materials is None:
             materials = pm.ls(
@@ -127,11 +130,15 @@ class MaterialUpdater:
             if all_files:
                 log(f"Batch processing {len(all_files)} unique textures...")
                 try:
+                    # Extract max_workers to avoid double argument error
+                    batch_config = config_obj.copy()
+                    max_workers = batch_config.pop("max_workers", 1)
+
                     processed_sets = ptk.TextureMapFactory.prepare_maps(
                         list(all_files),
                         callback=log,
-                        max_workers=8,
-                        **config_obj,
+                        max_workers=max_workers,
+                        **batch_config,
                     )
                 except Exception as e:
                     log(f"Batch processing failed: {e}", "error")
@@ -201,11 +208,16 @@ class MaterialUpdater:
                             log(f"  Preparing maps...")
 
                         try:
+                            # Extract max_workers to avoid collision with kwargs
+                            manual_config = config_obj.copy()
+                            max_workers = manual_config.pop("max_workers", 1)
+
                             processed_files = ptk.TextureMapFactory.prepare_maps(
                                 files,
                                 callback=log,
                                 group_by_set=False,  # Always force single set for per-material context
-                                **config_obj,
+                                max_workers=max_workers,
+                                **manual_config,
                             )
                             texture_cache[cache_key] = processed_files
                         except Exception as e:
@@ -308,7 +320,7 @@ if __name__ == "__main__":
         optimize=True,
         convert=True,
         verbose=1,
-        dry_run=1,
+        dry_run=0,
     )
 
     # Print summary
