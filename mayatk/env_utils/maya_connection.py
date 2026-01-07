@@ -26,58 +26,141 @@ except Exception as e:
     print(f"Warning: Failed to initialize QApplication: {e}")
 
 
-def get_script_editor_text() -> str:
-    """Get the text from the Maya Script Editor."""
-    import maya.cmds as cmds
-    import maya.mel as mel
-
-    if not cmds.control("cmdScrollFieldReporter1", exists=True):
-        mel.eval("ScriptEditor;")
-    return cmds.cmdScrollFieldReporter("cmdScrollFieldReporter1", query=True, text=True)
-
-
-def clear_script_editor_text() -> bool:
-    """Clear the Maya Script Editor."""
-    import maya.cmds as cmds
-    import maya.mel as mel
-
-    try:
-        if not cmds.control("cmdScrollFieldReporter1", exists=True):
-            mel.eval("ScriptEditor;")
-        cmds.cmdScrollFieldReporter("cmdScrollFieldReporter1", edit=True, clear=True)
-        return True
-    except Exception:
-        return False
-
-
-def open_command_ports(**kwargs):
-    """Open command ports for external script editor.
-
-    Parameters:
-        kwargs (str) = 'source type':'port name'
-            source type (str) = The string argument is used to indicate which source type would be passed to the commandPort, ex. "mel" or "python".
-            port name (str) = Specifies the name of the command port which this command creates.
-    Example:
-        open_command_ports(mel=':7001', python=':7002')
-    """
-    import maya.cmds as cmds
-
-    for source_type, port in kwargs.items():
-        try:  # close existing open port.
-            cmds.commandPort(name=port, close=True)
-        except RuntimeError:
-            pass
-
-        try:  # open new port.
-            cmds.commandPort(name=port, sourceType=source_type)
-        except RuntimeError:
-            print(f"Warning: Could not open {source_type} port {port}")
-
-
 class MayaConnection:
     """Manages connection to Maya for testing purposes."""
 
     ConnectionMode = Literal["port", "standalone", "interactive"]
+    _instance = None
+
+    @staticmethod
+    def get_instance() -> "MayaConnection":
+        """Get the global Maya connection instance."""
+        if MayaConnection._instance is None:
+            MayaConnection._instance = MayaConnection()
+        return MayaConnection._instance
+
+    @staticmethod
+    def _get_script_editor_text() -> str:
+        """Get the text from the Maya Script Editor (Internal)."""
+        import maya.cmds as cmds
+        import maya.mel as mel
+
+        if not cmds.control("cmdScrollFieldReporter1", exists=True):
+            mel.eval("ScriptEditor;")
+        return cmds.cmdScrollFieldReporter(
+            "cmdScrollFieldReporter1", query=True, text=True
+        )
+
+    @staticmethod
+    def _clear_script_editor_text() -> bool:
+        """Clear the Maya Script Editor (Internal)."""
+        import maya.cmds as cmds
+        import maya.mel as mel
+
+        try:
+            if not cmds.control("cmdScrollFieldReporter1", exists=True):
+                mel.eval("ScriptEditor;")
+            cmds.cmdScrollFieldReporter(
+                "cmdScrollFieldReporter1", edit=True, clear=True
+            )
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def open_command_ports(**kwargs):
+        """Open command ports for external script editor.
+
+        Parameters:
+            kwargs (str) = 'source type':'port name'
+                source type (str) = The string argument is used to indicate which source type would be passed to the commandPort, ex. "mel" or "python".
+                port name (str) = Specifies the name of the command port which this command creates.
+        Example:
+            MayaConnection.open_command_ports(mel=':7001', python=':7002')
+        """
+        import maya.cmds as cmds
+
+        for source_type, port in kwargs.items():
+            try:  # close existing open port.
+                cmds.commandPort(name=port, close=True)
+            except RuntimeError:
+                pass
+
+            try:  # open new port.
+                cmds.commandPort(name=port, sourceType=source_type)
+            except RuntimeError:
+                print(f"Warning: Could not open {source_type} port {port}")
+
+    @staticmethod
+    def reload_modules(
+        modules: Union[str, List[str]],
+        include_submodules: bool = True,
+        verbose: bool = True,
+    ) -> List[str]:
+        """
+        Reload specified modules and their submodules using pythontk.ModuleReloader.
+
+        Args:
+            modules: Single module name or list of module names to reload.
+            include_submodules: Whether to reload submodules recursively.
+            verbose: Whether to print reload status.
+
+        Returns:
+            List of reloaded module names.
+        """
+        if isinstance(modules, str):
+            modules = [modules]
+
+        reloaded_all = []
+
+        try:
+            from pythontk import ModuleReloader
+
+            reloader = ModuleReloader(include_submodules=include_submodules)
+
+            for mod_name in modules:
+                try:
+                    # Import first to ensure it's loaded
+                    __import__(mod_name)
+                    mod = sys.modules[mod_name]
+
+                    reloaded = reloader.reload(mod)
+                    # Convert module objects to names
+                    reloaded_names = [m.__name__ for m in reloaded]
+                    reloaded_all.extend(reloaded_names)
+
+                    if verbose:
+                        print(
+                            f"[ModuleReloader] Reloaded {len(reloaded)} modules for '{mod_name}'"
+                        )
+                except ImportError:
+                    if verbose:
+                        print(
+                            f"[ModuleReloader] Module '{mod_name}' not found/imported, skipping."
+                        )
+                except Exception as e:
+                    print(f"[ModuleReloader] Error reloading '{mod_name}': {e}")
+
+        except ImportError:
+            # Fallback if pythontk is not available
+            if verbose:
+                print(
+                    "[ModuleReloader] pythontk not found, using simple sys.modules clearing fallback."
+                )
+
+            for mod_name in modules:
+                modules_to_clear = [
+                    k for k in list(sys.modules.keys()) if mod_name in k
+                ]
+                for k in modules_to_clear:
+                    del sys.modules[k]
+                reloaded_all.extend(modules_to_clear)
+                if verbose:
+                    print(
+                        f"[Fallback] Cleared {len(modules_to_clear)} modules matching '{mod_name}'"
+                    )
+
+        return reloaded_all
 
     def __init__(self):
         self.mode: Optional[self.ConnectionMode] = None
@@ -295,7 +378,7 @@ class MayaConnection:
             String containing the script editor text, or None if failed.
         """
         if self.mode in ("interactive", "standalone"):
-            text = get_script_editor_text()
+            text = self._get_script_editor_text()
             if last_n_chars and text and len(text) > last_n_chars:
                 return text[-last_n_chars:]
             return text
@@ -369,7 +452,7 @@ if cmds.control("cmdScrollFieldReporter1", exists=True):
             True if successful.
         """
         if self.mode in ("interactive", "standalone"):
-            return clear_script_editor_text()
+            return self._clear_script_editor_text()
 
         # Port mode: Use cmdScrollFieldReporter directly
         code = """
@@ -477,114 +560,18 @@ _mayatk_last_captured_output = "".join(_mayatk_output_buffer)
         print("[OK] Disconnected from Maya")
 
 
-def reload_modules(
-    modules: Union[str, List[str]],
-    include_submodules: bool = True,
-    verbose: bool = True,
-) -> List[str]:
-    """
-    Reload specified modules and their submodules using pythontk.ModuleReloader.
-
-    Args:
-        modules: Single module name or list of module names to reload.
-        include_submodules: Whether to reload submodules recursively.
-        verbose: Whether to print reload status.
-
-    Returns:
-        List of reloaded module names.
-    """
-    if isinstance(modules, str):
-        modules = [modules]
-
-    reloaded_all = []
-
-    try:
-        from pythontk import ModuleReloader
-
-        reloader = ModuleReloader(include_submodules=include_submodules)
-
-        for mod_name in modules:
-            try:
-                # Import first to ensure it's loaded
-                __import__(mod_name)
-                mod = sys.modules[mod_name]
-
-                reloaded = reloader.reload(mod)
-                # Convert module objects to names
-                reloaded_names = [m.__name__ for m in reloaded]
-                reloaded_all.extend(reloaded_names)
-
-                if verbose:
-                    print(
-                        f"[ModuleReloader] Reloaded {len(reloaded)} modules for '{mod_name}'"
-                    )
-            except ImportError:
-                if verbose:
-                    print(
-                        f"[ModuleReloader] Module '{mod_name}' not found/imported, skipping."
-                    )
-            except Exception as e:
-                print(f"[ModuleReloader] Error reloading '{mod_name}': {e}")
-
-    except ImportError:
-        # Fallback if pythontk is not available
-        if verbose:
-            print(
-                "[ModuleReloader] pythontk not found, using simple sys.modules clearing fallback."
-            )
-
-        for mod_name in modules:
-            modules_to_clear = [k for k in list(sys.modules.keys()) if mod_name in k]
-            for k in modules_to_clear:
-                del sys.modules[k]
-            reloaded_all.extend(modules_to_clear)
-            if verbose:
-                print(
-                    f"[Fallback] Cleared {len(modules_to_clear)} modules matching '{mod_name}'"
-                )
-
-    return reloaded_all
+# Module-level aliases for backward compatibility and ease of use
+def open_command_ports(**kwargs):
+    """Wrapper for MayaConnection.open_command_ports."""
+    MayaConnection.open_command_ports(**kwargs)
 
 
-# Singleton instance
-_connection = None
+if __name__ == "__main__":
 
-
-def get_connection() -> MayaConnection:
-    """Get the global Maya connection instance."""
-    global _connection
-    if _connection is None:
-        _connection = MayaConnection()
-    return _connection
-
-
-def ensure_maya_connection(mode: str = "auto") -> MayaConnection:
-    """
-    Ensure Maya is connected and return the connection instance.
-
-    Parameters:
-        mode: Connection mode - "port", "standalone", "interactive", or "auto"
-
-    Returns:
-        MayaConnection instance
-    """
-    conn = get_connection()
-    if not conn.is_connected:
-        conn.connect(mode=mode)
-    return conn
-
-
-# Convenience functions
-def connect_maya(mode: str = "auto", port: int = 7002) -> bool:
-    """Connect to Maya. Returns True if successful."""
-    return get_connection().connect(mode=mode, port=port)
-
-
-def execute_in_maya(code: str) -> Optional[str]:
-    """Execute Python code in Maya."""
-    return get_connection().execute(code)
-
-
-def disconnect_maya():
-    """Disconnect from Maya."""
-    get_connection().disconnect()
+    MayaConnection.reload_modules(["mayatk"], include_submodules=True, verbose=True)
+    # Example usage
+    conn = MayaConnection.get_instance()
+    if conn.connect(mode="auto"):
+        output = conn.execute('print("Hello from Maya!")', capture_output=True)
+        print("Maya Output:", output)
+        conn.disconnect()

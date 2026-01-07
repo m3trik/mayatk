@@ -446,8 +446,16 @@ class TestShaderTemplates(MayaTkTestCase):
 
             # Check file path
             file_path = pm.getAttr(input_node.fileTextureName)
+
+            # Allow ORM packed map for Metallic, Roughness, AO
+            is_orm_packed = "ORM" in file_path and attr_name in [
+                "TEX_metallic_map",
+                "TEX_roughness_map",
+                "TEX_ao_map",
+            ]
+
             self.assertTrue(
-                file_path.replace("\\", "/").endswith(tex_name),
+                file_path.replace("\\", "/").endswith(tex_name) or is_orm_packed,
                 f"File node for {attr_name} should point to {tex_name}, got {file_path}",
             )
 

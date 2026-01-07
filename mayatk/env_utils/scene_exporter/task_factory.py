@@ -37,7 +37,7 @@ class TaskFactory:
             yield {}
             return
 
-        self.logger.info(f"Running {len(valid_tasks)} tasks")
+        # self.logger.info(f"Running {len(valid_tasks)} tasks")
 
         for index, (task_name, value) in enumerate(valid_tasks.items(), start=1):
             method = self._method_cache[task_name]  # Already cached
@@ -86,6 +86,9 @@ class TaskFactory:
             )
 
             if param_count == 0:
+                # If the method takes no arguments, treat 'value' as a boolean flag
+                if not value:
+                    return True
                 return method()
             elif param_count == 1:
                 return method(value)

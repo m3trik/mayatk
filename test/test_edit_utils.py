@@ -162,8 +162,8 @@ class TestEditUtils(MayaTkTestCase):
         """Test finding duplicate objects."""
         dup = pm.duplicate(self.cube)[0]
         duplicates = EditUtils.get_overlapping_duplicates([self.cube, dup])
-        self.assertIn(dup, duplicates)
-        self.assertNotIn(self.cube, duplicates)  # Should keep one
+        self.assertIn(dup.longName(), duplicates)
+        self.assertNotIn(self.cube.longName(), duplicates)  # Should keep one
 
     def test_get_overlapping_vertices(self):
         """Test finding overlapping vertices."""

@@ -129,13 +129,13 @@ class CamUtils(ptk.HelpMixin):
         else:
             print("No modelPanel found")
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
-    def adjust_camera_clipping(camera=None, near_clip=None, far_clip=None):
+    def adjust_camera_clipping(cls, camera=None, near_clip=None, far_clip=None):
         """Adjusts the near and far clipping planes of one or multiple cameras.
 
         Parameters:
-            camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts all non-startup cameras.
+            camera (str/list/optional): The camera or list of cameras to adjust. If None, adjusts the current viewport camera.
             near_clip (float/str/optional): The value for the near clipping plane.
                 - If None (default): Do not change.
                 - If 'auto': Automatically calculated based on scene geometry.
@@ -159,13 +159,16 @@ class CamUtils(ptk.HelpMixin):
                 elif cam.nodeType() == "camera":  # Shape
                     target_cameras.append(cam)
         else:
-            # If no camera specified, get all cameras but filter out startup ones
-            all_cameras = pm.ls(dag=True, cameras=True)
-            target_cameras = [
-                cam
-                for cam in all_cameras
-                if not pm.camera(cam, q=True, startupCamera=True)
-            ]
+            # If no camera specified, use the current viewport camera
+            current_cam = cls.get_current_cam()
+            if current_cam:
+                cam_node = pm.PyNode(current_cam)
+                if cam_node.nodeType() == "camera":
+                    target_cameras.append(cam_node)
+                elif hasattr(cam_node, "getShape"):
+                    shape = cam_node.getShape()
+                    if shape and shape.nodeType() == "camera":
+                        target_cameras.append(shape)
 
         if not target_cameras:
             return

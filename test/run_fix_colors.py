@@ -9,12 +9,14 @@ scripts_root = os.path.dirname(mayatk_root)
 if mayatk_root not in sys.path:
     sys.path.append(mayatk_root)
 
-from mayatk.env_utils.maya_connection import ensure_maya_connection
+from mayatk.env_utils.maya_connection import MayaConnection
 
 
 def run_fix():
     print("Connecting to Maya...")
-    conn = ensure_maya_connection(mode="auto")
+    conn = MayaConnection.get_instance()
+    if not conn.is_connected:
+        conn.connect(mode="auto")
 
     if not conn.is_connected:
         print(
@@ -40,11 +42,11 @@ for p in paths:
         sys.path.append(p)
 
 import pymel.core as pm
-from mayatk.env_utils.maya_connection import reload_modules
+from mayatk.env_utils.maya_connection import MayaConnection
 from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
 
 # Reload to ensure we have the latest code
-reload_modules(["mayatk.core_utils.diagnostics.scene_diag"], verbose=True)
+MayaConnection.reload_modules(["mayatk.core_utils.diagnostics.scene_diag"], verbose=True)
 
 print("\n" + "="*50)
 print("RUNNING FIX COLOR SPACES DIAGNOSTIC")

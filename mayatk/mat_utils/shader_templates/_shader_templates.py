@@ -8,10 +8,10 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from pythontk.img_utils.texture_map_factory import (
+from pythontk.img_utils.map_factory import (
     ConversionRegistry,
-    ProcessingContext,
-    TextureMapFactory,
+    TextureProcessor,
+    MapFactory,
 )
 
 # from this package:
@@ -99,7 +99,7 @@ class GraphCollector:
         # Adding metadata for file nodes regarding their map type
         if node_type == "file":
             image_name = attributes.get("fileTextureName", "")
-            map_type = ptk.resolve_map_type(image_name)
+            map_type = MapFactory.resolve_map_type(image_name)
             graph_info[placeholder_name]["metadata"]["map_type"] = map_type
 
     def _is_connected_to_shading_engine(self, node):
@@ -219,7 +219,7 @@ class GraphRestorer:
         # Dictionary to hold available map types and their paths
         available_map_types = {}
         for path in self.texture_paths:
-            map_type = ptk.resolve_map_type(path)
+            map_type = MapFactory.resolve_map_type(path)
             if map_type:
                 available_map_types[map_type] = path
                 logger.info(f"Resolved '{os.path.basename(path)}' as '{map_type}'")
@@ -251,25 +251,39 @@ class GraphRestorer:
             base_name = ptk.get_base_texture_name(first_path)
             ext = os.path.splitext(first_path)[1].lstrip(".")
 
-        context = ProcessingContext(
+        context = TextureProcessor(
             inventory=available_map_types,
             config={},
             output_dir=output_dir,
             base_name=base_name,
             ext=ext,
-            callback=lambda msg: logger.info(
-                msg.replace("<br>", "").replace("<hl>", "").replace("</hl>", "")
-            ),
+            logger=logger,
             conversion_registry=self.registry,
         )
 
         file_path = None
         if required_map_type:
-            fallbacks = TextureMapFactory.get_map_fallbacks(required_map_type)
+            fallbacks = MapFactory.get_map_fallbacks(required_map_type)
             candidates = [required_map_type] + list(fallbacks)
             file_path = context.resolve_map(*candidates, allow_conversion=True)
 
         # Set the file path if available
+        if file_path:
+            # Handle in-memory images (e.g. from conversions)
+            if not isinstance(file_path, (str, bytes, os.PathLike)):
+                import tempfile
+
+                temp_dir = tempfile.gettempdir()
+                # Create a unique name
+                temp_name = f"generated_{required_map_type}_{id(file_path)}.png"
+                temp_path = os.path.join(temp_dir, temp_name)
+                try:
+                    file_path.save(temp_path)
+                    file_path = temp_path
+                except Exception as e:
+                    logger.error(f"Failed to save generated map: {e}")
+                    file_path = None
+
         if file_path:
             attributes["fileTextureName"] = file_path
             logger.info(

@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_material_updater: PASS
-  Tests: 10, Failures: 0, Errors: 0, Skipped: 0
+test_game_shader: PASS
+  Tests: 75, Failures: 0, Errors: 0, Skipped: 4
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_material_updater: PASS (10 tests, 0 failures, 0 errors)
+  test_game_shader: PASS (75 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 10 tests, 0 failures, 0 errors, 0 skipped
+Total: 75 tests, 0 failures, 0 errors, 4 skipped
 ======================================================================

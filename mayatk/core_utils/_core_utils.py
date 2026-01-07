@@ -186,10 +186,11 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         def wrapped(*args, **kwargs) -> Any:
             instance, node_args = ptk.parse_method_args(args)
 
-            if not args or not args[0] or len(args[0]) < 2:
-                raise ValueError(
-                    "Insufficient arguments provided. At least two Maya nodes are required."
-                )
+            if not args or not args[0]:
+                if instance:
+                    return func(instance, *node_args, **kwargs)
+                else:
+                    return func(*node_args, **kwargs)
 
             mesh_nodes = []
             for arg in args[0]:

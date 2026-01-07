@@ -1,10 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import logging
 from typing import List, Optional, Tuple, Callable, Union, Dict, Any
+from qtpy import QtGui
 
 try:
     import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -16,33 +19,19 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-class GameShader:
+class GameShader(ptk.LoggingMixin):
     """A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
     This class facilitates the automatic setup of textures into a shader and, if requested,
     an Arnold shader network, linking necessary nodes and setting up the shader graph based on the provided textures.
     """
-
-    color_info = "rgb(100, 100, 160)"
-    color_success = "rgb(100, 160, 100)"
-    color_warning = "rgb(200, 200, 100)"
-    color_error = "rgb(255, 100, 100)"
 
     @CoreUtils.undoable
     def create_network(
         self,
         textures: List[str],
         name: str = "",
-        shader_type: str = "stingray",  # "stingray" or "standard_surface"
-        normal_type: str = "OpenGL",
-        create_arnold: bool = False,
-        albedo_transparency: bool = False,
-        metallic_smoothness: bool = False,
-        mask_map: bool = False,
-        orm_map: bool = False,
-        convert_specgloss_to_pbr: bool = False,
-        cleanup_base_color: bool = False,
-        output_extension: str = "png",
-        callback: Callable = print,
+        prefix: str = "",
+        config: Union[str, Dict[str, Any]] = None,
         **kwargs,
     ) -> Union[Optional[object], List[Optional[object]]]:
         """Create a PBR shader network with textures.
@@ -50,65 +39,107 @@ class GameShader:
         Parameters:
             textures: List of texture file paths
             name: Shader name (auto-generated from texture if empty)
-            shader_type: "stingray" for Stingray PBS (legacy) or "standard_surface" for Maya Standard Surface (modern)
-            normal_type: "OpenGL" or "DirectX" normal map format
-            create_arnold: Also create Arnold aiStandardSurface for rendering
-            albedo_transparency: Combine albedo and opacity into single map
-            metallic_smoothness: Combine metallic and smoothness into single map
-            mask_map: Create Unity HDRP Mask Map (MSAO: Metallic+AO+Detail+Smoothness)
-            orm_map: Create Unreal/glTF ORM Map (Occlusion+Roughness+Metallic)
-            convert_specgloss_to_pbr: Auto-convert Specular/Glossiness workflow to PBR Metal/Rough
-            cleanup_base_color: Remove baked reflections from base color (requires metallic map)
-            output_extension: File extension for generated combined maps
-            callback: Progress callback function
+            config: Configuration preset name (str) or dictionary.
+            **kwargs: Configuration overrides (e.g. shader_type, normal_type, etc.)
 
         Returns:
             The created shader node(s) (Stingray PBS or Standard Surface)
         """
         if not textures:
-            callback(
-                f'<br><hl style="color:{self.color_error};"><b>Error:</b> No textures given to create_network.</hl>'
-            )
+            self.logger.error("No textures given to create_network.")
             return None
 
-        # Use TextureMapFactory for DRY texture preparation
-        workflow_config = {
-            "albedo_transparency": albedo_transparency,
-            "metallic_smoothness": metallic_smoothness,
-            "mask_map": mask_map,
-            "orm_map": orm_map,
-            "convert_specgloss_to_pbr": convert_specgloss_to_pbr,
-            "cleanup_base_color": cleanup_base_color,
-            "normal_type": normal_type,
-            "output_extension": output_extension,
+        # Resolve Config
+        cfg = ptk.MapRegistry().resolve_config(config, **kwargs)
+
+        # Set defaults for missing keys
+        defaults = {
+            "shader_type": "stingray",
+            "normal_type": "OpenGL",
+            "create_arnold": False,
+            "albedo_transparency": False,
+            "metallic_smoothness": False,
+            "mask_map": False,
+            "orm_map": False,
+            "convert_specgloss_to_pbr": False,
+            "cleanup_base_color": False,
+            "output_extension": "png",
         }
 
-        prepared_data = ptk.TextureMapFactory.prepare_maps(
+        for k, v in defaults.items():
+            if k not in cfg:
+                cfg[k] = v
+
+        # Log Header
+        self.logger.info("Creating Shader Network...", preset="header")
+        self.logger.log_divider()
+
+        # Log Configuration
+        config_info = [
+            ["Shader Type", cfg["shader_type"]],
+            ["Normal Type", cfg["normal_type"]],
+            ["Create Arnold", str(cfg["create_arnold"])],
+            ["Albedo Transparency", str(cfg["albedo_transparency"])],
+            ["Metallic Smoothness", str(cfg["metallic_smoothness"])],
+            ["Mask Map", str(cfg["mask_map"])],
+            ["ORM Map", str(cfg["orm_map"])],
+        ]
+        self.log_table(config_info, headers=["Option", "Value"], title="Configuration")
+
+        prepared_data = ptk.MapFactory.prepare_maps(
             textures,
-            callback=callback,
+            logger=self.logger,
             group_by_set=(not bool(name)),
-            **workflow_config,
+            **cfg,
         )
 
         if isinstance(prepared_data, dict):
             # Batch mode
+            self.logger.info(f"Batch processing {len(prepared_data)} texture sets...")
             results = []
+            created_shaders = []
+
             for set_name, set_textures in prepared_data.items():
-                callback(f"Creating network for set: {set_name}")
+                self.logger.log_divider()
+                self.logger.info(f"Set: {set_name}", preset="header")
                 node = self._create_single_network(
                     set_textures,
                     set_name,  # Use set name for shader name
-                    shader_type,
-                    create_arnold,
-                    callback,
+                    cfg["shader_type"],
+                    cfg["create_arnold"],
+                    prefix=prefix,
                 )
                 results.append(node)
+
+                status = "Success" if node else "Failed"
+                node_name = node.name() if hasattr(node, "name") else str(node)
+                created_shaders.append([set_name, node_name, status])
+
+            # Log Summary
+            self.logger.log_box("Batch Creation Summary")
+            self.log_table(
+                created_shaders,
+                headers=["Set Name", "Node Name", "Status"],
+            )
             return results
         else:
             # Single mode
-            return self._create_single_network(
-                prepared_data, name, shader_type, create_arnold, callback
+            self.logger.log_divider()
+            node = self._create_single_network(
+                prepared_data,
+                name,
+                cfg["shader_type"],
+                cfg["create_arnold"],
+                prefix=prefix,
             )
+
+            if node:
+                node_name = node.name() if hasattr(node, "name") else str(node)
+                self.logger.success(f"Successfully created shader: {node_name}")
+            else:
+                self.logger.error("Failed to create shader.")
+
+            return node
 
     def _create_single_network(
         self,
@@ -116,35 +147,37 @@ class GameShader:
         name: str,
         shader_type: str,
         create_arnold: bool,
-        callback: Callable,
+        prefix: str = "",
     ) -> Optional[object]:
         """Internal method to create a single shader network from prepared textures."""
         if not textures:
-            callback(
-                f'<br><hl style="color:{self.color_error};"><b>Error:</b> No valid textures after preparation.</hl>'
-            )
+            self.logger.error("No valid textures after preparation.")
             return None
 
-        opacity_map = ptk.TextureMapFactory.filter_images_by_type(
+        opacity_map = ptk.MapFactory.filter_images_by_type(
             textures, ["Opacity", "Albedo_Transparency"]
         )
 
-        name = (
-            name if name else ptk.TextureMapFactory.get_base_texture_name(textures[0])
-        )
+        name = name if name else ptk.MapFactory.get_base_texture_name(textures[0])
+
+        if prefix:
+            name = f"{prefix}{name}"
+
+        # Log creation start with fancy formatting
+        self.logger.info(f"Creating Shader: {name}", "INFO", "header")
 
         # Prioritize packed maps to avoid conflicts
         # If ORM exists, remove MSAO and Metallic_Smoothness
         # If MSAO exists, remove Metallic_Smoothness
-        orm_maps = ptk.TextureMapFactory.filter_images_by_type(textures, "ORM")
-        msao_maps = ptk.TextureMapFactory.filter_images_by_type(textures, "MSAO")
+        orm_maps = ptk.MapFactory.filter_images_by_type(textures, "ORM")
+        msao_maps = ptk.MapFactory.filter_images_by_type(textures, "MSAO")
 
         if orm_maps:
             # Remove MSAO and Metallic_Smoothness from the list we process
             textures = [
                 t
                 for t in textures
-                if ptk.TextureMapFactory.resolve_map_type(t)
+                if ptk.MapFactory.resolve_map_type(t)
                 not in ["MSAO", "Metallic_Smoothness"]
             ]
         elif msao_maps:
@@ -152,8 +185,7 @@ class GameShader:
             textures = [
                 t
                 for t in textures
-                if ptk.TextureMapFactory.resolve_map_type(t)
-                not in ["Metallic_Smoothness"]
+                if ptk.MapFactory.resolve_map_type(t) not in ["Metallic_Smoothness"]
             ]
 
         # Create the base shader based on shader_type
@@ -170,18 +202,18 @@ class GameShader:
         length = len(textures)
         progress = 0
         base_dir = EnvUtils.get_env_info("sourceimages")
+
+        connection_log = []
+
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.TextureMapFactory.resolve_map_type(
+            texture_type = ptk.MapFactory.resolve_map_type(
                 texture,
             )
 
             if texture_type is None:
-                callback(
-                    f'<br><hl style="color:{self.color_error};"><b>Unknown map type: </b>{texture_name}.</hl>',
-                    [progress, length],
-                )
+                self.logger.warning(f"Unknown map type: {texture_name}.")
                 continue
 
             # Connect shader nodes based on type
@@ -195,21 +227,19 @@ class GameShader:
                 )
 
             if success:
-                callback(
-                    f'<br><hl style="color:{self.color_success};">Map type: <b>{texture_type}</b> connected.</hl>',
-                    [progress, length],
-                )
+                connection_log.append(f"  • {texture_type}: {texture_name}")
             else:
-                callback(
-                    f'<br><hl style="color:{self.color_warning};">Map type: <b>{texture_type}</b> not connected.</hl>',
-                    [progress, length],
-                )
+                self.logger.warning(f"  • {texture_type}: Failed to connect")
 
             # Conditional Arnold nodes connection
             if create_arnold and success:
                 self.connect_arnold_nodes(
                     texture, texture_type, ai_node, aiMult_node, bump_node
                 )
+
+        # Log connections
+        if connection_log:
+            self.logger.info("\n".join(connection_log))
 
         # Return the shading engine (not the shader node itself)
         # Find the connected shading engine
@@ -454,14 +484,18 @@ class GameShader:
         """
         if texture_type in ["Base_Color", "Diffuse"]:
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
             sr_node.use_color_map.set(1)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
             if sr_node.hasAttr("opacity"):
@@ -477,48 +511,56 @@ class GameShader:
                 else "TEX_metallic_map"
             )
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
-            # Use helper to connect to R/G/B or X/Y/Z children if needed
-            # Use outColorR (scalar) to ensure compatibility with float children
-            self._connect_channel(texture_node.outColorR, sr_node, target_attr_name)
+            # Connect RGB directly to ensure FBX export (Single channel maps are usually grayscale so RGB matches)
+            pm.connectAttr(
+                texture_node.outColor, f"{sr_node}.{target_attr_name}", force=True
+            )
             sr_node.setAttr(f"use_{texture_type.lower()}_map", 1)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             # Metallic (RGB) -> Metallic Map
-            # Use outColorR (scalar)
-            self._connect_channel(texture_node.outColorR, sr_node, "TEX_metallic_map")
+            # Connect RGB directly to ensure FBX export (Metallic is usually grayscale so RGB matches)
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
             sr_node.use_roughness_map.set(1)
-
-            # Ensure FBX export preserves the texture
-            self._ensure_fbx_safe_connection(
-                texture_node, sr_node, "Metallic_Smoothness_Map"
-            )
 
         elif texture_type == "ORM":
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
-            self._connect_channel(texture_node.outColorR, sr_node, "TEX_ao_map")
+            # Connect RGB directly to AO map (R channel matches AO) to ensure FBX export
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
+
+            # Connect other channels individually
             self._connect_channel(texture_node.outColorG, sr_node, "TEX_roughness_map")
             self._connect_channel(texture_node.outColorB, sr_node, "TEX_metallic_map")
+
             sr_node.use_ao_map.set(1)
             sr_node.use_roughness_map.set(1)
             sr_node.use_metallic_map.set(1)
-            self._ensure_fbx_safe_connection(texture_node, sr_node, "ORM_Map")
 
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
 
             # Connect metallic channel (R) -> TEX_metallic_map
-            self._connect_channel(texture_node.outColorR, sr_node, "TEX_metallic_map")
+            # Connect RGB directly to ensure FBX export (R=Metallic matches)
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
 
             # Connect AO channel (G) -> TEX_ao_map
             self._connect_channel(texture_node.outColorG, sr_node, "TEX_ao_map")
@@ -537,34 +579,39 @@ class GameShader:
             sr_node.use_ao_map.set(1)
             sr_node.use_roughness_map.set(1)
 
-            # Ensure FBX export preserves the texture
-            self._ensure_fbx_safe_connection(texture_node, sr_node, "MSAO_Map")
-
         elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_normal_map, force=True)
             sr_node.use_normal_map.set(1)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, sr_node.TEX_emissive_map, force=True)
             sr_node.use_emissive_map.set(1)
 
         elif texture_type == "Ambient_Occlusion":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
-            # Use outColorR (scalar)
-            self._connect_channel(texture_node.outColorR, sr_node, "TEX_ao_map")
+            # Connect RGB directly to ensure FBX export (AO is usually grayscale so RGB matches)
+            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
             sr_node.use_ao_map.set(1)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
             sr_node.use_opacity_map.set(1)
@@ -572,7 +619,9 @@ class GameShader:
         elif texture_type == "Specular":
             if sr_node.hasAttr("TEX_specular_map"):
                 texture_node = NodeUtils.create_render_node(
-                    "file", "as2DTexture", fileTextureName=texture
+                    "file",
+                    fileTextureName=texture,
+                    name=ptk.format_path(texture, section="name"),
                 )
                 pm.connectAttr(
                     texture_node.outColor, sr_node.TEX_specular_map, force=True
@@ -585,10 +634,13 @@ class GameShader:
         elif texture_type == "Glossiness":
             if sr_node.hasAttr("TEX_glossiness_map"):
                 texture_node = NodeUtils.create_render_node(
-                    "file", "as2DTexture", fileTextureName=texture
+                    "file",
+                    fileTextureName=texture,
+                    name=ptk.format_path(texture, section="name"),
                 )
-                self._connect_channel(
-                    texture_node.outColorR, sr_node, "TEX_glossiness_map"
+                # Connect RGB directly to ensure FBX export
+                pm.connectAttr(
+                    texture_node.outColor, sr_node.TEX_glossiness_map, force=True
                 )
                 if sr_node.hasAttr("use_glossiness_map"):
                     sr_node.use_glossiness_map.set(1)
@@ -600,8 +652,8 @@ class GameShader:
 
         return True
 
-    @staticmethod
     def connect_arnold_nodes(
+        self,
         texture: str,
         texture_type: str,
         ai_node: object,
@@ -623,20 +675,20 @@ class GameShader:
         if texture_type in ["Base_Color", "Diffuse"]:
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, aiMult_node.input1, force=True)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Connect base color
             pm.connectAttr(texture_node.outColor, aiMult_node.input1, force=True)
@@ -647,11 +699,11 @@ class GameShader:
         elif texture_type == "Roughness":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, ai_node.specularRoughness, force=True)
             # Opacity: same roughness map used in Specular Roughness to provide additional blurriness of refraction.
@@ -662,26 +714,26 @@ class GameShader:
         elif texture_type == "Metallic":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, ai_node.metalness, force=True)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Create a reverse node to invert the alpha channel
-            reverse_node = pm.shadingNode(
-                "reverse", asUtility=True, name="invertSmoothness"
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
             )
             pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
             pm.connectAttr(reverse_node.outputX, ai_node.specularRoughness, force=True)
@@ -694,11 +746,11 @@ class GameShader:
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=0,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Metallic (B)
             pm.connectAttr(texture_node.outColorB, ai_node.metalness, force=True)
@@ -719,17 +771,17 @@ class GameShader:
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Metallic from red channel
             pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
             # Smoothness in alpha needs to be inverted to roughness
-            reverse_node = pm.shadingNode(
-                "reverse", asUtility=True, name="invertSmoothness"
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
             )
             pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
             pm.connectAttr(reverse_node.outputX, ai_node.specularRoughness, force=True)
@@ -743,10 +795,10 @@ class GameShader:
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, ai_node.emission, force=True)
             pm.connectAttr(texture_node.outColor, ai_node.emissionColor, force=True)
@@ -754,32 +806,32 @@ class GameShader:
         elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, bump_node.bumpValue, force=True)
 
         elif texture_type == "Ambient_Occlusion":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, aiMult_node.input2, force=True)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
                 ignoreColorSpaceFileRules=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, ai_node.transmission, force=True)
             pm.connectAttr(texture_node.outColor, ai_node.opacity, force=True)
@@ -802,13 +854,17 @@ class GameShader:
         """
         if texture_type in ["Base_Color", "Diffuse"]:
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
             # Opacity is RGB, connect alpha to all channels
@@ -820,10 +876,10 @@ class GameShader:
         elif texture_type == "Roughness":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(
                 texture_node.outAlpha, std_node.specularRoughness, force=True
@@ -832,24 +888,24 @@ class GameShader:
         elif texture_type == "Metallic":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, std_node.metalness, force=True)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Metallic in RGB, smoothness in alpha (need to invert for roughness)
-            reverse_node = pm.shadingNode(
-                "reverse", asUtility=True, name="invertSmoothness"
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
             )
             pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
             pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
@@ -864,10 +920,10 @@ class GameShader:
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=0,
+                name=ptk.format_path(texture, section="name"),
             )
             # Metallic (B)
             pm.connectAttr(texture_node.outColorB, std_node.metalness, force=True)
@@ -893,16 +949,16 @@ class GameShader:
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
             )
             # Connect red channel (metallic) to metalness
             pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
             # Smoothness in alpha needs to be inverted to roughness
-            reverse_node = pm.shadingNode(
-                "reverse", asUtility=True, name="invertSmoothness"
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
             )
             pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
             pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
@@ -925,9 +981,9 @@ class GameShader:
             # Standard Surface uses bump2d for normal maps
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
+                name=ptk.format_path(texture, section="name"),
             )
             bump_node = pm.shadingNode("bump2d", asUtility=True)
             bump_node.bumpInterp.set(1)  # Tangent space normals
@@ -937,7 +993,9 @@ class GameShader:
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
-                "file", "as2DTexture", fileTextureName=texture
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outColor, std_node.emissionColor, force=True)
             std_node.emission.set(1.0)
@@ -946,9 +1004,9 @@ class GameShader:
             # Standard Surface doesn't have direct AO input, multiply with base color
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
+                name=ptk.format_path(texture, section="name"),
             )
             # Create multiply node to combine AO with base color
             mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
@@ -964,10 +1022,10 @@ class GameShader:
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
                 "file",
-                "as2DTexture",
                 fileTextureName=texture,
                 colorSpace="Raw",
                 alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
             std_node.transmission.set(1.0)
@@ -992,26 +1050,22 @@ class GameShader:
             List[str]: The modified list of texture file paths with the correct normal map type.
         """
         other_textures = [
-            tex for tex in textures if not ptk.TextureMapFactory.is_normal_map(tex)
+            tex for tex in textures if not ptk.MapFactory.is_normal_map(tex)
         ]
 
         # Filter normal maps by type
-        opengl_maps = ptk.TextureMapFactory.filter_images_by_type(
-            textures, ["Normal_OpenGL"]
-        )
-        directx_maps = ptk.TextureMapFactory.filter_images_by_type(
+        opengl_maps = ptk.MapFactory.filter_images_by_type(textures, ["Normal_OpenGL"])
+        directx_maps = ptk.MapFactory.filter_images_by_type(
             textures, ["Normal_DirectX"]
         )
-        generic_normal_maps = ptk.TextureMapFactory.filter_images_by_type(
-            textures, ["Normal"]
-        )
+        generic_normal_maps = ptk.MapFactory.filter_images_by_type(textures, ["Normal"])
 
         if desired_normal_type == "OpenGL":
             if opengl_maps:
                 return other_textures + opengl_maps
             elif directx_maps:
                 for nm in directx_maps:
-                    converted_map = ptk.TextureMapFactory.convert_normal_map_format(
+                    converted_map = ptk.MapFactory.convert_normal_map_format(
                         nm, target_format="opengl"
                     )
                     if converted_map:
@@ -1021,7 +1075,7 @@ class GameShader:
                 return other_textures + directx_maps
             elif opengl_maps:
                 for nm in opengl_maps:
-                    converted_map = ptk.TextureMapFactory.convert_normal_map_format(
+                    converted_map = ptk.MapFactory.convert_normal_map_format(
                         nm, target_format="directx"
                     )
                     if converted_map:
@@ -1053,17 +1107,13 @@ class GameShader:
             List[str]: Modified list of texture file paths with the correct metallic map handling.
         """
         # Filter for existing maps
-        metallic_smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
+        metallic_smoothness_map = ptk.MapFactory.filter_images_by_type(
             textures, "Metallic_Smoothness"
         )
-        metallic_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Metallic")
-        roughness_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Roughness"
-        )
-        smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Smoothness"
-        )
-        specular_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Specular")
+        metallic_map = ptk.MapFactory.filter_images_by_type(textures, "Metallic")
+        roughness_map = ptk.MapFactory.filter_images_by_type(textures, "Roughness")
+        smoothness_map = ptk.MapFactory.filter_images_by_type(textures, "Smoothness")
+        specular_map = ptk.MapFactory.filter_images_by_type(textures, "Specular")
 
         filtered_textures = textures.copy()
 
@@ -1083,7 +1133,7 @@ class GameShader:
                 created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
 
                 # Save these images to disk and get their file paths
-                base_name = ptk.TextureMapFactory.get_base_texture_name(specular_map[0])
+                base_name = ptk.MapFactory.get_base_texture_name(specular_map[0])
                 out_dir = os.path.dirname(specular_map[0])
 
                 rough_path = os.path.join(
@@ -1097,8 +1147,14 @@ class GameShader:
                 created_metallic_map.save(metal_path)
 
                 # Now you can combine using file paths:
+                combined_map_name = f"{base_name}_MetallicSmoothness.{output_extension}"
+                combined_map_path = os.path.join(out_dir, combined_map_name)
+
                 combined_map = ptk.pack_smoothness_into_metallic(
-                    metal_path, rough_path, invert_alpha=True
+                    metal_path,
+                    rough_path,
+                    invert_alpha=True,
+                    output_path=combined_map_path,
                 )
 
                 # Remove individual metallic, roughness, smoothness maps and the newly created maps
@@ -1113,8 +1169,17 @@ class GameShader:
                 # If metallic and roughness/smoothness maps exist, combine them into a metallic smoothness map
                 alpha_map = roughness_map[0] if roughness_map else smoothness_map[0]
                 invert_alpha = bool(roughness_map)
+
+                base_name = ptk.MapFactory.get_base_texture_name(metallic_map[0])
+                out_dir = os.path.dirname(metallic_map[0])
+                combined_map_name = f"{base_name}_MetallicSmoothness.{output_extension}"
+                combined_map_path = os.path.join(out_dir, combined_map_name)
+
                 combined_map = ptk.pack_smoothness_into_metallic(
-                    metallic_map[0], alpha_map, invert_alpha=invert_alpha
+                    metallic_map[0],
+                    alpha_map,
+                    invert_alpha=invert_alpha,
+                    output_path=combined_map_path,
                 )
                 filtered_textures = [
                     tex
@@ -1150,7 +1215,6 @@ class GameShader:
         self,
         textures: List[str],
         output_extension: str = "png",
-        callback: Callable = print,
     ) -> List[str]:
         """Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
 
@@ -1163,30 +1227,23 @@ class GameShader:
         Parameters:
             textures (List[str]): List of texture file paths.
             output_extension (str): File extension for generated mask map.
-            callback (Callable): Progress callback function.
 
         Returns:
             List[str]: Modified list with mask map replacing individual maps.
         """
         # Filter for required maps
-        metallic_map = ptk.TextureMapFactory.filter_images_by_type(textures, "Metallic")
-        ao_map = ptk.TextureMapFactory.filter_images_by_type(
+        metallic_map = ptk.MapFactory.filter_images_by_type(textures, "Metallic")
+        ao_map = ptk.MapFactory.filter_images_by_type(
             textures, ["Ambient_Occlusion", "AO"]
         )
-        detail_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Detail_Mask"
-        )
-        roughness_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Roughness"
-        )
-        smoothness_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Smoothness"
-        )
+        detail_map = ptk.MapFactory.filter_images_by_type(textures, "Detail_Mask")
+        roughness_map = ptk.MapFactory.filter_images_by_type(textures, "Roughness")
+        smoothness_map = ptk.MapFactory.filter_images_by_type(textures, "Smoothness")
 
         # Need at least metallic map to create mask map
         if not metallic_map:
-            callback(
-                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No metallic map found for Mask Map creation. Skipping MSAO packing.</hl>'
+            self.logger.warning(
+                "No metallic map found for Mask Map creation. Skipping MSAO packing."
             )
             return textures
 
@@ -1198,22 +1255,26 @@ class GameShader:
             alpha_map = roughness_map[0]
             invert_alpha = True  # Invert roughness to get smoothness
         else:
-            callback(
-                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No roughness or smoothness map found for Mask Map alpha channel.</hl>'
+            self.logger.warning(
+                "No roughness or smoothness map found for Mask Map alpha channel."
             )
             alpha_map = None
 
         # Use AO if available, otherwise create a white map
         if not ao_map:
-            callback(
-                f'<br><hl style="color:{self.color_warning};"><b>Warning:</b> No AO map found. Using white (255) for AO channel in Mask Map.</hl>'
+            self.logger.warning(
+                "No AO map found. Using white (255) for AO channel in Mask Map."
             )
             # Will be handled by pack_msao_texture with fill_values
 
         try:
             # Create the MSAO mask map
-            base_name = ptk.TextureMapFactory.get_base_texture_name(metallic_map[0])
+            base_name = ptk.MapFactory.get_base_texture_name(metallic_map[0])
             out_dir = os.path.dirname(metallic_map[0])
+
+            # Construct output path with extension
+            mask_map_name = f"{base_name}_MaskMap.{output_extension}"
+            mask_map_full_path = os.path.join(out_dir, mask_map_name)
 
             # Use pythontk's pack_msao_texture function
             mask_map_path = ptk.pack_msao_texture(
@@ -1230,11 +1291,10 @@ class GameShader:
                 output_dir=out_dir,
                 suffix="_MaskMap",
                 invert_alpha=invert_alpha,
+                output_path=mask_map_full_path,
             )
 
-            callback(
-                f'<br><hl style="color:{self.color_success};"><b>Created Mask Map:</b> {os.path.basename(mask_map_path)}</hl>'
-            )
+            self.logger.info(f"Created Mask Map: {os.path.basename(mask_map_path)}")
 
             # Remove individual maps and add mask map
             filtered_textures = [
@@ -1251,9 +1311,7 @@ class GameShader:
             return filtered_textures
 
         except Exception as e:
-            callback(
-                f'<br><hl style="color:{self.color_error};"><b>Error creating Mask Map:</b> {str(e)}</hl>'
-            )
+            self.logger.error(f"Error creating Mask Map: {str(e)}")
             return textures
 
     def filter_for_correct_base_color_map(
@@ -1270,15 +1328,13 @@ class GameShader:
         Returns:
             List[str]: Modified list of texture file paths with the correct albedo map handling.
         """
-        albedo_transparency_map = ptk.TextureMapFactory.filter_images_by_type(
+        albedo_transparency_map = ptk.MapFactory.filter_images_by_type(
             textures, "Albedo_Transparency"
         )
-        base_color_map = ptk.TextureMapFactory.filter_images_by_type(
+        base_color_map = ptk.MapFactory.filter_images_by_type(
             textures, ["Base_Color", "Diffuse"]
         )
-        transparency_map = ptk.TextureMapFactory.filter_images_by_type(
-            textures, "Opacity"
-        )
+        transparency_map = ptk.MapFactory.filter_images_by_type(textures, "Opacity")
 
         if use_albedo_transparency:
             if albedo_transparency_map:
@@ -1303,10 +1359,21 @@ class GameShader:
         return textures
 
 
+class CallbackLogHandler(logging.Handler):
+    """Log handler that calls a callback function with the formatted message."""
+
+    def __init__(self, callback: Callable):
+        super().__init__()
+        self.callback = callback
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.callback(msg)
+
+
 class GameShaderSlots(GameShader):
     msg_intro = """<u>To setup the material:</u>
-        <br>• Use the <b>Get Texture Maps</b> button to load the images you intend to use.
-        <br>• Click the <b>Create Network</b> button to create the shader connections. This will bridge Stingray PBS and (optionally) Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
+        <br>• Click the <b>Create Network</b> button to select texture maps and create the shader connections. This will bridge Stingray PBS and (optionally) Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
 
         <p><b>Note:</b> To correctly render opacity and transmission in Maya, the Opaque setting needs to be disabled on the Shape node.
         If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by
@@ -1326,17 +1393,19 @@ class GameShaderSlots(GameShader):
         self.last_created_shader = None
 
         self.ui.txt001.setText(self.msg_intro)
-        self.ui.progressBar.setValue(0)
 
-        # Populate template combo box from presets
-        self.ui.cmb002.clear()
-        self.ui.cmb002.addItems(list(ptk.MapRegistry().get_workflow_presets().keys()))
+        # Set monospace font for log output
+        font = QtGui.QFont("Consolas")
+        font.setStyleHint(QtGui.QFont.Monospace)
+        self.ui.txt001.setFont(font)
 
-        # self.init_header_menu()
+        # Redirect logs to UI callback
+        self.log_handler = CallbackLogHandler(self.callback)
+        self.logger.addHandler(self.log_handler)
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        widget.setTitle("Stingray Arnold Shader")
+        widget.menu.setTitle("Global Options")
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setObjectName="lbl_graph_material",
@@ -1362,6 +1431,13 @@ class GameShaderSlots(GameShader):
         """
         text = self.ui.txt000.text()
         return text
+
+    @property
+    def mat_prefix(self) -> str:
+        """Get the material prefix from the UI."""
+        if hasattr(self.ui, "txt002"):
+            return self.ui.txt002.text()
+        return ""
 
     @property
     def normal_map_type(self) -> str:
@@ -1398,39 +1474,23 @@ class GameShaderSlots(GameShader):
                 return "standard_surface"
         return "stingray"
 
+    def cmb002_init(self, widget):
+        """Initialize Presets"""
+        if not widget.is_initialized:
+            # Populate template combo box from presets
+            widget.add(list(ptk.MapRegistry().get_workflow_presets().keys()))
+
+    def cmb003_init(self, widget):
+        """Initialize Output Extension"""
+        if not widget.is_initialized:
+            # Populate with common image file extensions
+            file_types = ptk.ImgUtils.texture_file_types
+            widget.add(file_types)
+
     def b000(self):
         """Create network."""
-        if self.image_files:
-            # pm.mel.HypershadeWindow() #open the hypershade window.
-
-            self.ui.txt001.clear()
-            self.callback("Creating network ..<br>")
-
-            create_arnold = self.ui.chk000.isChecked()
-
-            # Get template configuration using combo box text
-            template_name = self.ui.cmb002.currentText()
-            config = ptk.MapRegistry().get_workflow_presets().get(template_name, {})
-
-            self.last_created_shader = self.create_network(
-                self.image_files,
-                self.mat_name,
-                shader_type=self.shader_type,
-                normal_type=self.normal_map_type,
-                create_arnold=create_arnold,
-                cleanup_base_color=False,  # Can be exposed in UI later if needed
-                output_extension=self.output_extension,
-                callback=self.callback,
-                **config,
-            )
-
-            self.callback(self.msg_completed)
-            # pm.mel.hyperShadePanelGraphCommand('hyperShadePanel1', 'rearrangeGraph')
-
-    def b001(self):
-        """Get texture maps."""
         image_files = self.sb.file_dialog(
-            file_types=["*.png", "*.jpg", "*.bmp", "*.tga", "*.tiff", "*.gif"],
+            file_types=[f"*.{ext}" for ext in ptk.ImgUtils.texture_file_types],
             title="Select one or more image files to open.",
             start_dir=self.source_images_dir,
         )
@@ -1444,13 +1504,38 @@ class GameShaderSlots(GameShader):
                 i
             ) in msg_mat_selection:  # format msg_intro using the map_types in imtools.
                 self.callback(ptk.truncate(i, 60))
+        else:
+            return
 
-            self.ui.b000.setDisabled(False)
-        elif not self.image_files:
-            self.ui.b000.setDisabled(True)
+        if self.image_files:
+            # pm.mel.HypershadeWindow() #open the hypershade window.
+
+            self.ui.txt001.clear()
+            self.callback("Creating network ..<br>")
+
+            create_arnold = self.ui.chk000.isChecked()
+
+            # Get template configuration using combo box text
+            template_name = self.ui.cmb002.currentText()
+
+            self.last_created_shader = self.create_network(
+                self.image_files,
+                self.mat_name,
+                prefix=self.mat_prefix,
+                config=template_name,
+                shader_type=self.shader_type,
+                normal_type=self.normal_map_type,
+                create_arnold=create_arnold,
+                cleanup_base_color=False,  # Can be exposed in UI later if needed
+                output_extension=self.output_extension,
+            )
+
+            self.callback(self.msg_completed)
+            # pm.mel.hyperShadePanelGraphCommand('hyperShadePanel1', 'rearrangeGraph')
 
     def callback(self, string, progress=None, clear=False):
-        """
+        """Callback function to output messages to the UI textEdit and update progress bar.
+
         Parameters:
             string (str): The text to output to a textEdit widget.
             progress (int/list): The progress amount to register with the progressBar.
@@ -1466,7 +1551,7 @@ class GameShaderSlots(GameShader):
         self.ui.txt001.append(string)
 
         if progress is not None:
-            self.ui.progressBar.setValue(progress)
+            # self.ui.progressBar.setValue(progress)
             self.sb.QtWidgets.QApplication.instance().processEvents()
 
 

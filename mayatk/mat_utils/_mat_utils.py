@@ -245,6 +245,48 @@ class MatUtilsInternals(ptk.HelpMixin):
 
 class MatUtils(MatUtilsInternals):
     @staticmethod
+    def resolve_path(path: str) -> Union[str, None]:
+        """Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs."""
+        if not path:
+            return None
+
+        # Helper to check existence with UDIM support
+        def check_exists(p):
+            check_p = p.replace("<UDIM>", "1001") if "<UDIM>" in p else p
+            return os.path.exists(check_p)
+
+        # 1. Try standard expansion (handles env vars)
+        expanded = os.path.expandvars(path)
+        if check_exists(expanded):
+            return expanded
+
+        # 2. Try Maya workspace resolution (handles project relative)
+        try:
+            ws_path = pm.workspace(expandName=path)
+            if check_exists(ws_path):
+                return ws_path
+        except Exception:
+            pass
+
+        # 3. Try explicit sourceimages resolution (fallback)
+        try:
+            ws_root = pm.workspace(q=True, rd=True)
+            source_images = os.path.join(ws_root, "sourceimages")
+            si_path = os.path.join(source_images, path)
+            if check_exists(si_path):
+                return si_path
+
+            # 4. Try basename in sourceimages (handle absolute paths from other machines)
+            basename = os.path.basename(path)
+            si_basename_path = os.path.join(source_images, basename)
+            if check_exists(si_basename_path):
+                return si_basename_path
+        except Exception:
+            pass
+
+        return None
+
+    @staticmethod
     def get_mats(objs=None, as_strings=False) -> List[Union[str, "pm.PyNode"]]:
         """Returns the set of materials assigned to a given list of objects or components.
 
@@ -281,6 +323,14 @@ class MatUtils(MatUtilsInternals):
 
         # Process objects (transforms/shapes)
         if objects:
+            # Check if any objects are already materials
+            potential_mats = cmds.ls(objects, mat=True, long=True) or []
+            if potential_mats:
+                mats.update(potential_mats)
+                # Filter out materials from objects list
+                potential_mats_set = set(potential_mats)
+                objects = [o for o in objects if o not in potential_mats_set]
+
             # Get shapes from transforms
             # Use listRelatives for direct children shapes
             shapes = cmds.listRelatives(objects, shapes=True, fullPath=True) or []
@@ -364,6 +414,118 @@ class MatUtils(MatUtilsInternals):
 
         # Convert to PyNodes at the very end
         return [pm.PyNode(m) for m in mats if m]
+
+    @staticmethod
+    def _cluster_objects_by_distance(objects, threshold):
+        """Clusters objects based on spatial proximity using a flood-fill approach."""
+        from maya import cmds
+
+        if not objects:
+            return []
+        if len(objects) == 1:
+            return [objects]
+
+        # Cache positions
+        positions = {}
+        for obj in objects:
+            # Use bounding box center for better accuracy with large objects
+            xmin, ymin, zmin, xmax, ymax, zmax = cmds.xform(
+                obj, q=True, ws=True, bb=True
+            )
+            positions[obj] = (
+                (xmin + xmax) * 0.5,
+                (ymin + ymax) * 0.5,
+                (zmin + zmax) * 0.5,
+            )
+
+        clusters = []
+        processed = set()
+        threshold_sq = threshold * threshold
+
+        # Convert to list for indexing if needed, but we iterate
+        obj_list = list(objects)
+
+        for i, obj in enumerate(obj_list):
+            if obj in processed:
+                continue
+
+            current_cluster = [obj]
+            processed.add(obj)
+            queue = [obj]
+
+            while queue:
+                current = queue.pop(0)
+                p1 = positions[current]
+
+                for candidate in obj_list:
+                    if candidate in processed:
+                        continue
+
+                    p2 = positions[candidate]
+                    dist_sq = (
+                        (p1[0] - p2[0]) ** 2
+                        + (p1[1] - p2[1]) ** 2
+                        + (p1[2] - p2[2]) ** 2
+                    )
+
+                    if dist_sq <= threshold_sq:
+                        processed.add(candidate)
+                        current_cluster.append(candidate)
+                        queue.append(candidate)
+
+            clusters.append(current_cluster)
+
+        return clusters
+
+    @staticmethod
+    def group_objects_by_material(
+        objects, cluster_by_distance=False, threshold=10000.0
+    ):
+        """Groups objects based on their assigned material(s).
+
+        Args:
+            objects (list): A list of objects (transforms or shapes).
+            cluster_by_distance (bool): If True, further subdivide groups based on spatial proximity.
+            threshold (float): The maximum distance between objects to be considered in the same cluster.
+
+        Returns:
+            dict: A dictionary where keys are material names (or tuples of names for multi-material objects)
+                  and values are lists of objects.
+        """
+        from maya import cmds
+
+        groups = {}
+
+        # Ensure we work with long names
+        objects = cmds.ls(objects, long=True) or []
+
+        for obj in objects:
+            mats = MatUtils.get_mats([obj], as_strings=True)
+
+            if not mats:
+                key = "None"
+            elif len(mats) > 1:
+                mats.sort()
+                key = tuple(mats)
+            else:
+                key = mats[0]
+
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(obj)
+
+        if cluster_by_distance:
+            clustered_groups = {}
+            for mat_key, objs in groups.items():
+                clusters = MatUtils._cluster_objects_by_distance(objs, threshold)
+                for i, cluster in enumerate(clusters):
+                    # Create a unique key for each cluster
+                    # e.g. "mat1" -> "mat1_cluster0", "mat1_cluster1"
+                    # Or just use a tuple key: (mat_key, cluster_index)
+                    new_key = (mat_key, i) if len(clusters) > 1 else mat_key
+                    clustered_groups[new_key] = cluster
+            return clustered_groups
+        return groups
 
     @classmethod
     def get_texture_info(
@@ -707,6 +869,12 @@ class MatUtils(MatUtilsInternals):
         if not objects:
             raise ValueError("No objects provided to assign material.")
 
+        # Ensure mat_name is a string
+        if hasattr(mat_name, "name"):
+            mat_name = mat_name.name()
+        else:
+            mat_name = str(mat_name)
+
         # Retrieve or create material
         if cmds.objExists(mat_name):
             mat = mat_name
@@ -761,6 +929,12 @@ class MatUtils(MatUtilsInternals):
                        contains transform nodes if `shell` is True, otherwise it contains individual
                        faces.
         """
+        # Ensure material is a string
+        if hasattr(material, "name"):
+            material = material.name()
+        else:
+            material = str(material)
+
         if cmds.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
@@ -780,6 +954,11 @@ class MatUtils(MatUtilsInternals):
         # Prepare target transforms set for fast lookup
         target_transforms = set()
         if objects:
+            # Handle PyNodes or strings and normalize to long names
+            objects = [o.name() if hasattr(o, "name") else str(o) for o in objects]
+            # Get long names
+            objects = cmds.ls(objects, long=True) or []
+
             for obj in objects:
                 if cmds.objExists(obj):
                     if cmds.nodeType(obj) == "transform":
@@ -791,6 +970,9 @@ class MatUtils(MatUtilsInternals):
 
         for sg in shading_groups:
             members = cmds.sets(sg, query=True, noIntermediate=True) or []
+            # Normalize members to long names
+            members = cmds.ls(members, long=True) or []
+
             for member in members:
                 # Determine transform
                 if "." in member:
@@ -1202,7 +1384,8 @@ class MatUtils(MatUtilsInternals):
             # Collect valid materials
             collected_materials = pm.ls(valid_objects, mat=True)
             if not collected_materials:
-                raise ValueError(f"No valid materials found in {materials}")
+                pm.warning(f"No valid materials found in {materials}")
+                return
         else:  # Collect all materials in the scene
             collected_materials = pm.ls(mat=True)
 
@@ -1254,24 +1437,19 @@ class MatUtils(MatUtilsInternals):
                     print(f"Error deleting node for material {duplicate}: {e}")
 
     @staticmethod
-    def filter_materials_by_objects(objects: List[str]) -> List[str]:
+    def filter_materials_by_objects(
+        objects: List[str], as_strings: bool = False
+    ) -> List[Union[str, "pm.nt.ShadingNode"]]:
         """Filter materials assigned to the given objects.
 
         Parameters:
             objects (List[str]): List of object names.
+            as_strings (bool): If True, returns list of strings instead of PyNodes.
 
         Returns:
             List[str]: List of material names assigned to the given objects.
         """
-        assigned_materials = set()
-        for obj in objects:  # Get shape nodes if the object is a transform
-            shapes = pm.listRelatives(obj, shapes=True, fullPath=True) or [obj]
-            for shape in shapes:
-                shading_groups = pm.listConnections(shape, type="shadingEngine")
-                for sg in shading_groups:
-                    materials = pm.listConnections(f"{sg}.surfaceShader")
-                    assigned_materials.update(materials)
-        return list(assigned_materials)
+        return MatUtils.get_mats(objects, as_strings=as_strings)
 
     @staticmethod
     def reload_textures(
@@ -1417,6 +1595,8 @@ class MatUtils(MatUtilsInternals):
         Returns:
             List[str] or List[Tuple[str, str]]: Filepaths or (dir, filename) based on return_dir.
         """
+        from maya import cmds
+
         if not ptk.is_valid(source_dir, "dir"):
             pm.warning(f"Invalid source directory: {source_dir}")
             return []
@@ -1435,32 +1615,57 @@ class MatUtils(MatUtilsInternals):
             )
             return []
 
-        texture_filenames = set(
-            filename
-            for filename in cls._filenames_from_file_nodes(texture_nodes)
-            if filename
-        )
+        # Collect target filenames
+        target_filenames = set()
+        for node in texture_nodes:
+            try:
+                # Handle both PyNodes and strings
+                node_name = node.name() if hasattr(node, "name") else str(node)
+                path = cmds.getAttr(f"{node_name}.fileTextureName")
+                if path:
+                    filename = os.path.basename(path)
+                    if filename:
+                        target_filenames.add(filename.lower())
+            except Exception:
+                continue
 
-        if not texture_filenames:
+        if not target_filenames:
             pm.warning("No texture names available for lookup.")
             return []
 
-        all_files = ptk.FileUtils.get_dir_contents(
-            source_dir, content="filepath", recursive=recursive
+        results = []
+
+        # Progress window setup
+        pm.progressWindow(
+            title="Finding Textures",
+            progress=0,
+            status="Starting search...",
+            isInterruptable=True,
         )
 
-        filename_to_path = {os.path.basename(fp): fp for fp in all_files}
+        try:
+            for root, dirs, files in os.walk(source_dir):
+                # Check for cancellation
+                if pm.progressWindow(query=True, isCancelled=True):
+                    pm.warning("Search cancelled by user.")
+                    break
 
-        results = []
-        for tex_file in texture_filenames:
-            match = filename_to_path.get(tex_file)
-            if match:
-                dir_path = os.path.dirname(match).replace("\\", "/")
-                file_name = os.path.basename(match)
-                if return_dir:
-                    results.append((dir_path, file_name))
-                else:
-                    results.append(match.replace("\\", "/"))
+                # Update progress status (truncated path for readability)
+                display_root = (root[:60] + "...") if len(root) > 60 else root
+                pm.progressWindow(edit=True, status=f"Scanning: {display_root}")
+
+                for file in files:
+                    if file.lower() in target_filenames:
+                        full_path = os.path.join(root, file).replace("\\", "/")
+                        if return_dir:
+                            results.append((root.replace("\\", "/"), file))
+                        else:
+                            results.append(full_path)
+
+                if not recursive:
+                    break
+        finally:
+            pm.progressWindow(endProgress=True)
 
         if not quiet:
             pm.displayInfo("\n[Texture Files Found]")

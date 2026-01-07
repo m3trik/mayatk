@@ -284,7 +284,7 @@ class TestNodeUtils(MayaTkTestCase):
 
             # Create a texture with placement
             tex = NodeUtils.create_render_node(
-                "checker", name="test_checker", create_placement=True
+                "checker", name="test_checker", create_placement_nodes=True
             )
             if tex:
                 self.assertNodeExists("test_checker")

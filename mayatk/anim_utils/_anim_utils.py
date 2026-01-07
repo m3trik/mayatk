@@ -527,7 +527,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     def objects_to_curves(
         objects: Union["pm.PyNode", str, List[Union["pm.PyNode", str]]],
         recursive: bool = False,
-    ) -> List["pm.PyNode"]:
+        as_strings: bool = False,
+    ) -> Union[List["pm.PyNode"], List[str]]:
         """Converts objects into a list of animation curves.
         Optionally recurses through the objects to find animation curves on children.
         Ensures no duplicates are returned.
@@ -535,25 +536,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Parameters:
             objects: Single object, string, or list of objects (can be keyed objects or curves).
             recursive: Whether to recursively search through children of objects for curves.
+            as_strings: If True, returns a list of strings instead of PyNodes.
 
         Returns:
             A list of unique animation curves.
         """
-        # Use pm.ls to handle various forms of input (single object, string, list)
-        objects = pm.ls(objects, flatten=True)
+        import maya.cmds as cmds
+
+        # Use cmds.ls to handle various forms of input (single object, string, list)
+        # Ensure input is a list of strings for cmds
+        if isinstance(objects, (str, pm.PyNode)):
+            objects = [str(objects)]
+        elif isinstance(objects, list):
+            objects = [str(o) for o in objects]
+        elif objects is None:
+            objects = []
+        else:
+            objects = [str(objects)]
+
+        objects = cmds.ls(objects, flatten=True)
         anim_curves = set()  # Use a set to ensure no duplicates
 
         for obj in objects:
             # Early return if obj doesn't exist
-            if not pm.objExists(obj):
+            if not cmds.objExists(obj):
                 continue
 
             # If the object is an animCurve, add it directly
-            if pm.nodeType(obj).startswith("animCurve"):
+            if cmds.nodeType(obj).startswith("animCurve"):
                 anim_curves.add(obj)
             else:  # Otherwise, list connections for animCurves of the object
-                connected_curves = pm.listConnections(
-                    obj, type="animCurve", s=True, d=False
+                connected_curves = cmds.listConnections(
+                    obj, type="animCurve", source=True, destination=False
                 )
                 if connected_curves:
                     anim_curves.update(connected_curves)
@@ -561,18 +575,23 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 # If recursive, look through all descendants for animation curves
                 if recursive:
                     descendants = (
-                        pm.listRelatives(obj, allDescendents=True, type="transform")
+                        cmds.listRelatives(
+                            obj, allDescendents=True, type="transform", fullPath=True
+                        )
                         or []
                     )
                     for desc in descendants:
-                        connected_curves = pm.listConnections(
-                            desc, type="animCurve", s=True, d=False
+                        connected_curves = cmds.listConnections(
+                            desc, type="animCurve", source=True, destination=False
                         )
                         if connected_curves:
                             anim_curves.update(connected_curves)
 
         # Return the results as a list, preserving the unique set of animCurves
-        return list(anim_curves)
+        result = list(anim_curves)
+        if as_strings:
+            return result
+        return [pm.PyNode(c) for c in result]
 
     @classmethod
     def get_anim_curves(
@@ -633,32 +652,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         objects: List["pm.PyNode"],
         value_tolerance: float = 1e-5,
         recursive: bool = False,
-    ) -> List["pm.PyNode"]:
+        as_strings: bool = False,
+    ) -> Union[List["pm.PyNode"], List[str]]:
         """Detects static curves (curves with constant values).
 
         Parameters:
             objects: List of PyNodes (curves or objects).
             value_tolerance: The value tolerance to consider for static curves (difference between keyframe values).
             recursive: Whether to recursively search through children of objects for curves.
+            as_strings: If True, returns a list of strings instead of PyNodes.
 
         Returns:
             A list of static curves.
         """
         from math import isclose
+        import maya.cmds as cmds
 
-        curves = cls.objects_to_curves(objects, recursive=recursive)
+        curves = cls.objects_to_curves(objects, recursive=recursive, as_strings=True)
         static_curves = []
 
         for curve in curves:
-            values = pm.keyframe(curve, query=True, valueChange=True)
+            values = cmds.keyframe(curve, query=True, valueChange=True)
             if not values or len(values) <= 1:
                 continue
 
             # Check if the curve is static (all values are the same)
-            if all(isclose(v, values[0], abs_tol=value_tolerance) for v in values):
+            first_val = values[0]
+            if all(isclose(v, first_val, abs_tol=value_tolerance) for v in values):
                 static_curves.append(curve)
 
-        return static_curves
+        if as_strings:
+            return static_curves
+        return [pm.PyNode(c) for c in static_curves]
 
     @classmethod
     @CoreUtils.undoable
@@ -681,17 +706,18 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             A list of redundant key ranges as tuples (start_time, end_time).
         """
         import numpy as np
+        import maya.cmds as cmds
 
-        curves = cls.objects_to_curves(objects, recursive=recursive)
+        curves = cls.objects_to_curves(objects, recursive=recursive, as_strings=True)
         redundant = []
 
         for curve in curves:
-            times = pm.keyframe(curve, query=True, timeChange=True) or []
+            times = cmds.keyframe(curve, query=True, timeChange=True) or []
             if len(times) < 3:
                 continue
 
             # Use actual keyframe values instead of curve.evaluate() to avoid interpolation issues
-            values = pm.keyframe(curve, query=True, valueChange=True) or []
+            values = cmds.keyframe(curve, query=True, valueChange=True) or []
             if len(values) != len(times):
                 continue  # Safety check
 
@@ -726,15 +752,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     i += 1
 
             # Remove keys at the identified times
-            removed_times = []
             if remove and remove_indices:
                 # Remove in reverse order to avoid index shifting issues
                 for idx in sorted(set(remove_indices), reverse=True):
-                    pm.cutKey(curve, time=(times[idx], times[idx]), option="keys")
-                    removed_times.append(times[idx])
+                    cmds.cutKey(curve, time=(times[idx], times[idx]), option="keys")
 
             if remove_indices:
-                redundant.append((curve, [times[idx] for idx in remove_indices]))
+                redundant.append(
+                    (pm.PyNode(curve), [times[idx] for idx in remove_indices])
+                )
 
         return redundant
 
@@ -745,7 +771,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         value_tolerance: float = 1e-5,
         time_tolerance: float = 1e-5,
         recursive: bool = False,
-    ) -> List["pm.PyNode"]:
+        as_strings: bool = False,
+    ) -> Union[List["pm.PyNode"], List[str]]:
         """Simplifies curves by removing unnecessary keyframes.
 
         Parameters:
@@ -753,26 +780,30 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             value_tolerance: The value tolerance for simplification.
             time_tolerance: The time tolerance for simplification.
             recursive: Whether to recursively search through children of objects for curves.
+            as_strings: If True, returns a list of strings instead of PyNodes.
 
         Returns:
             A list of simplified curves.
         """
-        curves = cls.objects_to_curves(objects, recursive=recursive)
+        import maya.cmds as cmds
+
+        curves = cls.objects_to_curves(objects, recursive=recursive, as_strings=True)
         simplified_curves = []
 
         for curve in curves:
-            plugs = pm.listConnections(
-                curve, plugs=True, source=False, destination=True
-            )
-            if plugs and pm.objExists(plugs[0].node()):
-                pm.simplify(
-                    plugs[0],
+            try:
+                cmds.simplify(
+                    curve,
                     valueTolerance=value_tolerance,
                     timeTolerance=time_tolerance,
                 )
                 simplified_curves.append(curve)
+            except Exception:
+                pass
 
-        return simplified_curves
+        if as_strings:
+            return simplified_curves
+        return [pm.PyNode(c) for c in simplified_curves]
 
     @classmethod
     @CoreUtils.undoable
@@ -836,14 +867,25 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Returns:
             list: A list of modified curves.
         """
+        import maya.cmds as cmds
+
         modified = []
         static_curves_deleted = 0
         flat_keys_deleted = 0
-        simplified_curves = 0
+        simplified_curves_count = 0
 
         # Convert the input objects into curves (avoid duplicates)
-        targets = pm.ls(objects, flatten=True)
-        anim_curves = cls.objects_to_curves(targets, recursive=recursive)
+        if isinstance(objects, (str, pm.PyNode)):
+            objects = [str(objects)]
+        elif isinstance(objects, list):
+            objects = [str(o) for o in objects]
+        else:
+            objects = []
+
+        targets = cmds.ls(objects, flatten=True)
+        anim_curves = cls.objects_to_curves(
+            targets, recursive=recursive, as_strings=True
+        )
 
         if not quiet:
             print(f"[optimize] Processing {len(anim_curves)} curves...")
@@ -851,12 +893,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Phase 1: Remove static curves (if remove_static_curves is True)
         if remove_static_curves:
             static_curves = cls.get_static_curves(
-                anim_curves, value_tolerance=value_tolerance
+                anim_curves, value_tolerance=value_tolerance, as_strings=True
             )
             static_curves_deleted += len(static_curves)
-            for curve in static_curves:
-                anim_curves.remove(curve)  # Remove deleted curve from anim_curves
-                pm.delete(curve)
+            if static_curves:
+                cmds.delete(static_curves)
+                # Remove deleted curves from anim_curves list
+                static_set = set(static_curves)
+                anim_curves = [c for c in anim_curves if c not in static_set]
 
         # Phase 2: Remove redundant flat keys (if remove_flat_keys is True)
         if remove_flat_keys:
@@ -867,21 +911,22 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # Phase 3: Simplify curves (if simplify_keys is True)
         if simplify_keys:
-            cls.simplify_curve(
+            simplified = cls.simplify_curve(
                 anim_curves,
                 value_tolerance=value_tolerance,
                 time_tolerance=time_tolerance,
+                as_strings=True,
             )
-            simplified_curves += len(anim_curves)
+            simplified_curves_count += len(simplified)
 
         modified.extend(anim_curves)
 
         if not quiet:
             print(f"[optimize] → {static_curves_deleted} static curves deleted")
             print(f"[optimize] → {flat_keys_deleted} flat keys removed")
-            print(f"[optimize] → {simplified_curves} curves simplified")
+            print(f"[optimize] → {simplified_curves_count} curves simplified")
 
-        return modified
+        return [pm.PyNode(c) for c in modified if cmds.objExists(c)]
 
     @staticmethod
     def get_keyframe_times(
@@ -911,36 +956,26 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             - List[float]: Sorted unique keyframe times (if as_range=False)
             - Tuple[float, float]: (start_time, end_time) range (if as_range=True)
             - None: If no keyframes found
-
-        Example:
-            # Get all keyframe times from objects
-            times = AnimUtils.get_keyframe_times(pm.selected())
-            # Returns: [1.0, 5.0, 10.0, 20.0, 30.0]
-
-            # Get time range from objects
-            start, end = AnimUtils.get_keyframe_times(pm.selected(), as_range=True)
-            # Returns: (1.0, 30.0)
-
-            # Get only selected keyframe times (returns None if none selected)
-            times = AnimUtils.get_keyframe_times(pm.selected(), mode="selected")
-
-            # Try selected, fallback to all (common pattern)
-            times = AnimUtils.get_keyframe_times(pm.selected(), mode="selected_or_all")
-
-            # Get times from curves directly
-            curves = AnimUtils.objects_to_curves(pm.selected())
-            times = AnimUtils.get_keyframe_times(curves, from_curves=True)
-
-            # Filter to specific time range
-            times = AnimUtils.get_keyframe_times(obj, time_range=(10, 50))
         """
-        sources = pm.ls(sources, flatten=True)
+        import maya.cmds as cmds
+
+        # Ensure sources is a list of strings
+        if isinstance(sources, (str, pm.PyNode)):
+            sources = [str(sources)]
+        elif isinstance(sources, list):
+            sources = [str(s) for s in sources]
+        elif sources is None:
+            sources = []
+        else:
+            sources = [str(sources)]
+
+        sources = cmds.ls(sources, flatten=True)
         if not sources:
             return None
 
         # Auto-detect if working with curves
         if from_curves is None:
-            from_curves = any(pm.nodeType(s).startswith("animCurve") for s in sources)
+            from_curves = any(cmds.nodeType(s).startswith("animCurve") for s in sources)
 
         all_times = set()
 
@@ -950,7 +985,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 times = None
                 if mode in ("selected", "selected_or_all"):
                     times = (
-                        pm.keyframe(
+                        cmds.keyframe(
                             curve,
                             query=True,
                             selected=True,
@@ -958,7 +993,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             time=time_range,
                         )
                         if time_range
-                        else pm.keyframe(
+                        else cmds.keyframe(
                             curve, query=True, selected=True, timeChange=True
                         )
                     )
@@ -966,9 +1001,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 # If mode is "all" or "selected_or_all" and no selected times found
                 if mode == "all" or (mode == "selected_or_all" and not times):
                     times = (
-                        pm.keyframe(curve, query=True, timeChange=True, time=time_range)
+                        cmds.keyframe(
+                            curve, query=True, timeChange=True, time=time_range
+                        )
                         if time_range
-                        else pm.keyframe(curve, query=True, timeChange=True)
+                        else cmds.keyframe(curve, query=True, timeChange=True)
                     )
 
                 if times:
@@ -980,11 +1017,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if mode in ("selected", "selected_or_all"):
                 for obj in sources:
                     # Get selected keyframe times from this object
-                    curve_nodes = pm.keyframe(obj, query=True, name=True, selected=True)
+                    curve_nodes = cmds.keyframe(
+                        obj, query=True, name=True, selected=True
+                    )
                     if curve_nodes:
                         for curve in curve_nodes:
                             times = (
-                                pm.keyframe(
+                                cmds.keyframe(
                                     curve,
                                     query=True,
                                     selected=True,
@@ -992,7 +1031,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                                     time=time_range,
                                 )
                                 if time_range
-                                else pm.keyframe(
+                                else cmds.keyframe(
                                     curve, query=True, selected=True, timeChange=True
                                 )
                             )
@@ -1003,14 +1042,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if selected_times:
                 all_times = selected_times
             elif mode == "all" or (mode == "selected_or_all" and not selected_times):
-                for obj in sources:
-                    times = (
-                        pm.keyframe(obj, query=True, timeChange=True, time=time_range)
-                        if time_range
-                        else pm.keyframe(obj, query=True, timeChange=True)
-                    )
-                    if times:
-                        all_times.update(times)
+                # Batch query all objects at once for performance
+                times = (
+                    cmds.keyframe(sources, query=True, timeChange=True, time=time_range)
+                    if time_range
+                    else cmds.keyframe(sources, query=True, timeChange=True)
+                )
+                if times:
+                    all_times.update(times)
 
         if not all_times:
             return None
@@ -2671,66 +2710,85 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Snap to preferred round numbers (aggressive)
             snap_keys_to_frames(method="aggressive_preferred")
         """
+        import maya.cmds as cmds
+
         # Get objects to work with
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True)
+        else:
+            if isinstance(objects, (str, pm.PyNode)):
+                objects = [str(objects)]
+            elif isinstance(objects, list):
+                objects = [str(o) for o in objects]
+            else:
+                objects = []
 
         if not objects:
             pm.warning("No objects specified or selected.")
             return 0
 
         # Ensure we have PyMel objects
-        objects = pm.ls(objects, flatten=True)
+        objects = cmds.ls(objects, flatten=True)
 
         keys_snapped = 0
         keys_to_move = (
             {}
         )  # Store keyframe data to move: {(obj, attr, old_time): new_time}
 
-        for obj in objects:
-            # Get animation curves
-            if selected_only:
-                curve_nodes = pm.keyframe(obj, query=True, name=True, selected=True)
-            else:
-                curve_nodes = pm.keyframe(obj, query=True, name=True)
+        # Optimization: Batch query all curves
+        if selected_only:
+            # If selected only, we can't easily batch query curves that have selected keys without iterating?
+            # Actually, cmds.keyframe(objects, query=True, name=True, selected=True) works!
+            all_curves = (
+                cmds.keyframe(objects, query=True, name=True, selected=True) or []
+            )
+        else:
+            # Use listConnections for speed
+            all_curves = (
+                cmds.listConnections(
+                    objects, type="animCurve", source=True, destination=False
+                )
+                or []
+            )
 
-            if not curve_nodes:
+        all_curves = list(set(all_curves))
+
+        for curve in all_curves:
+            # Query keyframe times
+            mode = "selected" if selected_only else "all"
+            keyframe_times = AnimUtils.get_keyframe_times(
+                curve, mode=mode, from_curves=True, time_range=time_range
+            )
+
+            if not keyframe_times:
                 continue
 
-            for curve in curve_nodes:
-                # Query keyframe times
-                mode = "selected" if selected_only else "all"
-                keyframe_times = AnimUtils.get_keyframe_times(
-                    curve, mode=mode, from_curves=True, time_range=time_range
-                )
+            # Get the attribute name for this curve
+            connections = cmds.listConnections(
+                curve, plugs=True, destination=True, source=False
+            )
+            if not connections:
+                continue
 
-                if not keyframe_times:
-                    continue
+            attr_name = str(connections[0])
+            # Extract object name from attribute (e.g. "pCube1.tx" -> "pCube1")
+            obj = attr_name.split(".")[0]
 
-                # Get the attribute name for this curve
-                connections = pm.listConnections(
-                    curve, plugs=True, destination=True, source=False
-                )
-                if not connections:
-                    continue
+            # Find keyframes with decimal values
+            for time in keyframe_times:
+                # Check if time has decimal places
+                if time != int(time):
+                    new_time = ptk.MathUtils.round_value(time, mode=method)
 
-                attr_name = str(connections[0])
-
-                # Find keyframes with decimal values
-                for time in keyframe_times:
-                    # Check if time has decimal places
-                    if time != int(time):
-                        new_time = ptk.MathUtils.round_value(time, mode=method)
-
-                        # Store the keyframe data for moving
-                        key = (obj, attr_name, time)
-                        keys_to_move[key] = new_time
+                    # Store the keyframe data for moving
+                    key = (obj, attr_name, time)
+                    keys_to_move[key] = new_time
 
         # Now move all the keyframes
         for (obj, attr_name, old_time), new_time in keys_to_move.items():
             try:
                 # Get the keyframe value and tangent info at the old time
-                value = pm.keyframe(
+                value = cmds.keyframe(
                     attr_name, query=True, time=(old_time,), valueChange=True
                 )
                 if not value:
@@ -2738,25 +2796,25 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 value = value[0]
 
                 # Get tangent information
-                in_tangent_type = pm.keyTangent(
+                in_tangent_type = cmds.keyTangent(
                     attr_name, query=True, time=(old_time,), inTangentType=True
                 )[0]
-                out_tangent_type = pm.keyTangent(
+                out_tangent_type = cmds.keyTangent(
                     attr_name, query=True, time=(old_time,), outTangentType=True
                 )[0]
 
                 # Try to get angle and weight info
                 try:
-                    in_angle = pm.keyTangent(
+                    in_angle = cmds.keyTangent(
                         attr_name, query=True, time=(old_time,), inAngle=True
                     )[0]
-                    out_angle = pm.keyTangent(
+                    out_angle = cmds.keyTangent(
                         attr_name, query=True, time=(old_time,), outAngle=True
                     )[0]
-                    in_weight = pm.keyTangent(
+                    in_weight = cmds.keyTangent(
                         attr_name, query=True, time=(old_time,), inWeight=True
                     )[0]
-                    out_weight = pm.keyTangent(
+                    out_weight = cmds.keyTangent(
                         attr_name, query=True, time=(old_time,), outWeight=True
                     )[0]
                     has_tangent_data = True
@@ -2764,13 +2822,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     has_tangent_data = False
 
                 # Delete the old keyframe
-                pm.cutKey(attr_name, time=(old_time, old_time), option="keys")
+                cmds.cutKey(attr_name, time=(old_time, old_time), option="keys")
 
                 # Create new keyframe at rounded time
-                pm.setKeyframe(attr_name, time=new_time, value=value)
+                cmds.setKeyframe(attr_name, time=new_time, value=value)
 
                 # Restore tangent types
-                pm.keyTangent(
+                cmds.keyTangent(
                     attr_name,
                     edit=True,
                     time=(new_time,),
@@ -2781,7 +2839,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 # Restore tangent angles and weights if available
                 if has_tangent_data:
                     try:
-                        pm.keyTangent(
+                        cmds.keyTangent(
                             attr_name,
                             edit=True,
                             time=(new_time,),
@@ -3329,12 +3387,24 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if my_obj in tied_keys:
                 print(f"Object has tied keys: {tied_keys[my_obj]}")
         """
+        import maya.cmds as cmds
+
         # Get objects to check
         if objects is None:
-            objects = pm.ls(type="transform")
-            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+            objects = cmds.ls(type="transform")
+            # Filter objects that have keyframes
+            objects = [
+                obj
+                for obj in objects
+                if cmds.keyframe(obj, query=True, timeChange=True)
+            ]
         else:
-            objects = pm.ls(objects, flatten=True)
+            if isinstance(objects, (str, pm.PyNode)):
+                objects = [str(objects)]
+            elif isinstance(objects, list):
+                objects = [str(o) for o in objects]
+            else:
+                objects = []
 
         if not objects:
             return {}
@@ -3343,7 +3413,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         for obj in objects:
             # Get all animation curves for this object
-            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+            keyed_attrs = cmds.keyframe(obj, query=True, name=True)
 
             if not keyed_attrs:
                 continue
@@ -3352,7 +3422,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
             for attr in keyed_attrs:
                 # Get all keyframe times for this attribute
-                keyframe_times = pm.keyframe(attr, query=True, timeChange=True)
+                keyframe_times = cmds.keyframe(attr, query=True, timeChange=True)
 
                 if not keyframe_times or len(keyframe_times) < 2:
                     continue  # Need at least 2 keys to have potential ties
@@ -3362,13 +3432,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
                 # Check start keyframe - is it a tie (same value as next key)?
                 if len(keyframe_times) > 1:
-                    start_value = pm.keyframe(
+                    start_value = cmds.keyframe(
                         attr,
                         query=True,
                         time=(keyframe_times[0],),
                         valueChange=True,
                     )[0]
-                    next_value = pm.keyframe(
+                    next_value = cmds.keyframe(
                         attr,
                         query=True,
                         time=(keyframe_times[1],),
@@ -3381,13 +3451,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
                 # Check end keyframe - is it a tie (same value as previous key)?
                 if len(keyframe_times) > 1:
-                    end_value = pm.keyframe(
+                    end_value = cmds.keyframe(
                         attr,
                         query=True,
                         time=(keyframe_times[-1],),
                         valueChange=True,
                     )[0]
-                    prev_value = pm.keyframe(
+                    prev_value = cmds.keyframe(
                         attr,
                         query=True,
                         time=(keyframe_times[-2],),
@@ -3404,7 +3474,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
             # Store object's tied keyframes if any were found
             if obj_tied_keys:
-                tied_keyframes[obj] = obj_tied_keys
+                tied_keyframes[pm.PyNode(obj)] = obj_tied_keys
 
         return tied_keyframes
 
@@ -3414,6 +3484,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         objects: List["pm.nt.Transform"] = None,
         absolute: bool = False,
         padding: int = 0,
+        custom_range: Optional[Tuple[float, float]] = None,
     ):
         """Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)
         by setting keyframes only on the attributes that already have keyframes,
@@ -3427,6 +3498,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             padding (int, optional): Number of frames to extend the tie keyframes beyond the range.
                 Positive values add padding (e.g., 5 = tie 5 frames before start and 5 frames after end).
                 Negative values shrink the range inward. Default is 0.
+            custom_range (Tuple[float, float], optional): Explicit (start, end) range to use.
+                If provided, overrides absolute and scene range settings.
 
         Example:
             # Tie keyframes at the exact playback range (e.g., 10-100)
@@ -3438,37 +3511,97 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Use with absolute=True to add padding around actual keyframes
             tie_keyframes(absolute=True, padding=10)  # Adds 10 frame hold before/after animation
         """
+        import maya.cmds as cmds
+        import time
+
         if objects is None:  # Get all objects that have keyframes
-            objects = pm.ls(type="transform")
-            objects = [obj for obj in objects if pm.keyframe(obj, query=True)]
+            objects = cmds.ls(type="transform")
+            # Filter objects that have keyframes
+            objects = [
+                obj
+                for obj in objects
+                if cmds.keyframe(obj, query=True, timeChange=True)
+            ]
+        else:
+            # Ensure objects are strings
+            if isinstance(objects, (str, pm.PyNode)):
+                objects = [str(objects)]
+            elif isinstance(objects, list):
+                objects = [str(o) for o in objects]
+            else:
+                objects = []
 
         if not objects:
             pm.warning("No keyed objects found.")
             return
 
         # Determine the keyframe range
-        if absolute:  # Use the absolute start and end keyframes of all objects
+        if custom_range:
+            start_frame, end_frame = custom_range
+        elif absolute:  # Use the absolute start and end keyframes of all objects
             range_result = AnimUtils.get_keyframe_times(objects, as_range=True)
             if range_result is None:
                 pm.warning("No keyframes found on any objects.")
                 return
             start_frame, end_frame = range_result
         else:  # Use the start and end frames of the entire scene's playback range
-            start_frame = pm.playbackOptions(query=True, minTime=True)
-            end_frame = pm.playbackOptions(query=True, maxTime=True)
+            start_frame = cmds.playbackOptions(query=True, minTime=True)
+            end_frame = cmds.playbackOptions(query=True, maxTime=True)
 
         # Apply padding
         tie_start_frame = start_frame - padding
         tie_end_frame = end_frame + padding
 
-        for obj in objects:  # Get all the attributes that have keyframes
-            keyed_attrs = pm.keyframe(obj, query=True, name=True)
+        # Collect all keyed attributes (curves) first
+        import time
 
-            if keyed_attrs:
-                for attr in keyed_attrs:
-                    # Set a keyframe at the start and end of the determined range for the specific attribute
-                    pm.setKeyframe(attr, time=tie_start_frame)
-                    pm.setKeyframe(attr, time=tie_end_frame)
+        t0 = time.time()
+        # Use listConnections for speed (much faster than keyframe query)
+        all_keyed_curves = (
+            cmds.listConnections(
+                objects, type="animCurve", source=True, destination=False
+            )
+            or []
+        )
+        # Ensure uniqueness
+        all_keyed_curves = list(set(all_keyed_curves))
+        t1 = time.time()
+        pm.displayInfo(
+            f"Query curves took: {t1-t0:.4f}s. Found {len(all_keyed_curves)} curves."
+        )
+
+        if all_keyed_curves:
+            t2 = time.time()
+            cmds.setKeyframe(all_keyed_curves, time=tie_start_frame)
+            t3 = time.time()
+            cmds.setKeyframe(all_keyed_curves, time=tie_end_frame)
+            t4 = time.time()
+            pm.displayInfo(f"SetKeyframe start took: {t3-t2:.4f}s")
+            pm.displayInfo(f"SetKeyframe end took: {t4-t3:.4f}s")
+
+        if all_keyed_curves:
+            # Batch set keyframes
+            # Note: setKeyframe on a curve node sets a key on that curve.
+            # If we pass a list of curves, it sets keys on all of them.
+            # However, setKeyframe usually inserts a key at the current value of the attribute at that time.
+            # If we pass curves directly, does it evaluate the attribute?
+            # Yes, because the curve is connected to the attribute.
+            # But wait, if we pass the curve name, does Maya know which attribute it drives to get the value?
+            # Yes, usually.
+            # But to be safe and fast, we just want to insert a key.
+            # If insert=True is not specified, it defaults to insert=True?
+            # "If the -insert flag is not used, setKeyframe will add a keyframe at the current time with the current value."
+            # We want to add a key at tie_start_frame with the value evaluated at tie_start_frame?
+            # No, usually tie_keyframes means "extend the hold".
+            # If we just say setKeyframe(time=T), it evaluates the curve at T and sets a key there.
+            # This effectively "bakes" the value at that time.
+            # This is exactly what we want for tying (bookending).
+
+            # Split into chunks if too many curves to avoid command line length limits?
+            # Maya commands can handle large lists usually.
+
+            cmds.setKeyframe(all_keyed_curves, time=tie_start_frame)
+            cmds.setKeyframe(all_keyed_curves, time=tie_end_frame)
 
         pm.displayInfo(
             f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."

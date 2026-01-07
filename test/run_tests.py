@@ -49,7 +49,7 @@ class MayaTestRunner:
         self.test_dir = Path(__file__).parent
         self.results_file = self.test_dir / "test_results.txt"
         try:
-            self.connection = maya_connection.MayaConnection()
+            self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:
             self.connection = None
 
@@ -116,20 +116,21 @@ class MayaTestRunner:
         code = """
 import sys
 sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts')
+sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\test')
 
 print("\\\\n" + "="*70)
 print("QUICK TEST: test_core_utils (first class only)")
 print("="*70)
 
 try:
-    import mayatk.test.test_core_utils as test_mod
+    import test_core_utils as test_mod
     import unittest
     
     # Run first test class
     for attr_name in dir(test_mod):
         attr = getattr(test_mod, attr_name)
         if isinstance(attr, type) and issubclass(attr, unittest.TestCase):
-            if attr is not unittest.TestCase:
+            if attr is not unittest.TestCase and attr.__name__ != "MayaTkTestCase":
                 suite = unittest.makeSuite(attr)
                 runner = unittest.TextTestRunner(verbosity=2)
                 result = runner.run(suite)

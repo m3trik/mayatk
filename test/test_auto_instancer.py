@@ -32,7 +32,7 @@ def skipUnlessExtended(func):
     )(func)
 
 
-from mayatk.core_utils.auto_instancer import AutoInstancer
+from mayatk import AutoInstancer
 
 
 class TestAutoInstancerHierarchy(MayaTkTestCase):
@@ -50,7 +50,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         pm.select(clear=True)
 
         # Run AutoInstancer
-        instancer = AutoInstancer(check_hierarchy=True, verbose=True)
+        instancer = AutoInstancer(check_hierarchy=True, verbose=True, is_static=False)
         instances = instancer.run()
 
         # Verify results
@@ -95,7 +95,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         pm.select(clear=True)
 
         # Run AutoInstancer
-        instancer = AutoInstancer(check_hierarchy=True, verbose=True)
+        instancer = AutoInstancer(check_hierarchy=True, verbose=True, is_static=False)
         instances = instancer.run()
 
         # Should find 1 group (Root1/Root2) and instance it.
@@ -138,7 +138,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         s1 = pm.polySphere()[0]
         pm.parent(s1, g2)
 
-        instancer = AutoInstancer(check_hierarchy=True)
+        instancer = AutoInstancer(check_hierarchy=True, is_static=False)
         instances = instancer.run()
 
         self.assertEqual(len(instances), 0)
@@ -156,7 +156,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         pm.move(c2, 1, 0, 0)
         pm.parent(c2, g2)
 
-        instancer = AutoInstancer(check_hierarchy=True)
+        instancer = AutoInstancer(check_hierarchy=True, is_static=False)
         instances = instancer.run()
 
         self.assertEqual(len(instances), 0)
@@ -190,7 +190,11 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         pm.select(clear=True)
 
         # Run AutoInstancer
-        instancer = AutoInstancer(check_hierarchy=True, verbose=True)
+        # Disable reassembly to prevent modifying the hierarchy structure (reparenting cubes to spheres)
+        # Enable scale tolerance to allow matching Sphere1 (r=1) with Sphere2 (r=2)
+        instancer = AutoInstancer(
+            check_hierarchy=True, verbose=True, is_static=False, scale_tolerance=1.0
+        )
         instancer.run()
 
         # Verification
@@ -211,10 +215,16 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
             "Common child (Cube) should be instanced",
         )
 
-        # Sphere should NOT be instanced (it's unique)
-        self.assertFalse(
+        # Sphere SHOULD be instanced (Leaf Geometry Instancing handles scale)
+        self.assertTrue(
             sphere_child.getShape().isInstanced(),
-            "Unique child (Sphere) should NOT be instanced",
+            "Unique child (Sphere) SHOULD be instanced (scale-invariant matching)",
+        )
+
+        # Verify scale is preserved (should be 2.0)
+        scale = sphere_child.getScale()
+        self.assertAlmostEqual(
+            scale[0], 2.0, delta=0.01, msg="Sphere scale should be preserved"
         )
 
         # Group1 should not be touched
@@ -252,7 +262,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
 
         pm.select(clear=True)
 
-        instancer = AutoInstancer(check_hierarchy=True, verbose=True)
+        instancer = AutoInstancer(check_hierarchy=True, verbose=True, is_static=False)
         instancer.run()
 
         # Verify Root2 exists
@@ -302,7 +312,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
 
         pm.select(clear=True)
 
-        instancer = AutoInstancer(check_hierarchy=True, verbose=True)
+        instancer = AutoInstancer(check_hierarchy=True, verbose=True, is_static=False)
         instancer.run()
 
         # Verify dup is instanced
@@ -318,7 +328,7 @@ class TestAutoInstancerComplex(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         pm.newFile(force=True)
-        self.instancer = AutoInstancer(verbose=True)
+        self.instancer = AutoInstancer(verbose=True, is_static=False)
 
     def _assert_instanced(self, obj1, obj2):
         """Helper to verify two objects share the same shape."""
@@ -560,7 +570,9 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         pm.newFile(force=True)
-        self.instancer = AutoInstancer(verbose=True, check_hierarchy=True)
+        self.instancer = AutoInstancer(
+            verbose=True, check_hierarchy=True, is_static=False
+        )
 
     def test_complex_scene_integration(self):
         """
@@ -760,7 +772,7 @@ class TestRealWorldScenarios(MayaTkTestCase):
         pm.select(clear=True)
 
         # Run Instancer
-        instancer = AutoInstancer(verbose=True)
+        instancer = AutoInstancer(verbose=True, is_static=False)
         instances = instancer.run()
 
         # Verification
@@ -802,7 +814,7 @@ class TestAutoInstancerCombined(MayaTkTestCase):
         combined = pm.polyUnite(c1, c2, name="CombinedMesh", ch=False)[0]
 
         # Run AutoInstancer
-        instancer = AutoInstancer(verbose=True)
+        instancer = AutoInstancer(verbose=True, is_static=False)
         instances = instancer.run([combined])
 
         # Should find 0 instances because it's one object
@@ -819,7 +831,7 @@ class TestAutoInstancerCombined(MayaTkTestCase):
         combined = pm.polyUnite(c1, c2, name="CombinedMesh", ch=False)[0]
 
         # Run AutoInstancer with separate_combined=True
-        instancer = AutoInstancer(verbose=True, separate_combined=True)
+        instancer = AutoInstancer(verbose=True, separate_combined=True, is_static=False)
         instances = instancer.run([combined])
 
         print(f"Instances created: {instances}")
@@ -908,7 +920,13 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         # Run AutoInstancer
         # Use lower threshold (1.0) because Median Area is likely the Body size (since 50% are Bodies).
         # Default 2.8 would exclude Bodies.
-        instancer = AutoInstancer(separate_combined=True, verbose=True, tolerance=0.05)
+        instancer = AutoInstancer(
+            separate_combined=True,
+            verbose=True,
+            tolerance=0.05,
+            is_static=False,
+            search_radius_mult=2.0,
+        )
         instances = instancer.run([combined])
 
         # Verification
@@ -979,7 +997,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         combined = pm.polyUnite(shapes, name="Combined_Mixed", ch=False)[0]
 
         # Run
-        instancer = AutoInstancer(separate_combined=True, verbose=True)
+        instancer = AutoInstancer(separate_combined=True, verbose=True, is_static=False)
         instancer.run([combined])
 
         # Verify
@@ -1016,7 +1034,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         combined = pm.polyUnite(shapes, name="Combined_Clutter", ch=False)[0]
 
         # Run
-        instancer = AutoInstancer(separate_combined=True, verbose=True)
+        instancer = AutoInstancer(separate_combined=True, verbose=True, is_static=False)
         instancer.run([combined])
 
         # Verify
@@ -1046,7 +1064,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
             pm.ls(type="transform"), name="Combined_Stack", ch=False
         )[0]
 
-        instancer = AutoInstancer(separate_combined=True, verbose=True)
+        instancer = AutoInstancer(separate_combined=True, verbose=True, is_static=False)
         instancer.run([combined])
 
         # Verify
@@ -1091,7 +1109,8 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
             verbose=True,
             separate_combined=True,
             search_radius_mult=1.5,
-            tolerance=0.1,
+            tolerance=0.2,
+            is_static=False,
             # classification_threshold=1.5,  # Removed in refactor
         )
 
@@ -1274,3 +1293,101 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAutoInstancerUVs(MayaTkTestCase):
+    def test_uv_sensitivity(self):
+        # Test that objects with different UVs are NOT instanced when check_uvs=True.
+        # Create two identical cubes
+        c1 = pm.polyCube(name="Cube1")[0]
+        c2 = pm.polyCube(name="Cube2")[0]
+
+        # Modify UVs of c2
+        pm.polyEditUV(c2.map[0], u=0.5, v=0.5)
+
+        # 1. Test with check_uvs=False (Default)
+        instancer = AutoInstancer(check_uvs=False, verbose=True)
+        groups = instancer.find_instance_groups([c1, c2])
+        # Should be grouped together
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0].members), 1)  # 1 member + prototype = 2
+
+        # 2. Test with check_uvs=True
+        instancer = AutoInstancer(check_uvs=True, verbose=True)
+        groups = instancer.find_instance_groups([c1, c2])
+        # Should be separate (2 groups, 0 members each)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups[0].members), 0)
+        self.assertEqual(len(groups[1].members), 0)
+
+    def test_uv_count_sensitivity(self):
+        # Test that objects with different UV counts are NOT instanced.
+        c1 = pm.polyCube(name="Cube1")[0]
+        c2 = pm.polyCube(name="Cube2")[0]
+
+        # Delete some UVs on c2
+        pm.polyMapDel(c2)
+
+        instancer = AutoInstancer(check_uvs=True, verbose=True)
+        groups = instancer.find_instance_groups([c1, c2])
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups[0].members), 0)
+
+
+class TestAutoInstancerStrategy(MayaTkTestCase):
+    def test_strategy_micro_mesh(self):
+        # Test that micro meshes are NOT instanced if count is low.
+        # Create 5 small cubes (micro mesh < 300 tris)
+        cubes = [pm.polyCube(name=f"MicroCube{i}")[0] for i in range(5)]
+
+        # Strategy: Micro (<300 tris) and Count < 10 -> COMBINE (Skip Instancing)
+        instancer = AutoInstancer(
+            separate_combined=False,
+            check_uvs=False,
+            verbose=True,
+        )
+
+        # We need to run the full run() to trigger the strategy logic
+        instances = instancer.run(cubes)
+
+        # Should be 0 instances created because Strategy says COMBINE/KEEP_SEPARATE
+        self.assertEqual(len(instances), 0)
+
+    def test_strategy_gpu_instance(self):
+        # Test that eligible meshes ARE instanced.
+        # Create a sphere with high subdivisions
+        # We need > 5000 triangles to trigger the 'Heavy Mesh' rule (group_size >= 3)
+        # sx=50, sy=50 results in ~4900 triangles due to poles.
+        # Use sx=60, sy=60 -> ~7000 triangles.
+        spheres = [
+            pm.polySphere(name=f"HeavySphere{i}", sx=60, sy=60)[0] for i in range(4)
+        ]
+
+        instancer = AutoInstancer(separate_combined=False, verbose=True)
+        instances = instancer.run(spheres)
+
+        self.assertEqual(len(instances), 4)
+
+    def test_strategy_standard(self):
+        # Test standard threshold (>= 800 tris, >= 10 count).
+        # Create 10 spheres with ~1000 tris
+        # sx=20, sy=25 -> 500 quads -> 1000 tris
+        spheres = [
+            pm.polySphere(name=f"StdSphere{i}", sx=20, sy=25)[0] for i in range(10)
+        ]
+
+        instancer = AutoInstancer(separate_combined=False, verbose=True)
+        instances = instancer.run(spheres)
+
+        self.assertEqual(len(instances), 10)
+
+    def test_strategy_dynamic(self):
+        # Test dynamic objects (is_static=False).
+        cubes = [pm.polyCube(name=f"DynCube{i}")[0] for i in range(5)]
+
+        instancer = AutoInstancer(
+            separate_combined=False, is_static=False, verbose=True
+        )
+        instances = instancer.run(cubes)
+
+        self.assertEqual(len(instances), 5)

@@ -349,7 +349,7 @@ class SceneExporterSlots(SceneExporter):
         self.ui.txt003.setText("")  # Log Output
 
         # Initialize the export override button
-        self.ui.b009.setEnabled(False)
+        self.ui.b009.setEnabled(True)
         self.ui.b009.setChecked(False)
         self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
 
@@ -679,9 +679,6 @@ class SceneExporterSlots(SceneExporter):
             log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
             tasks={**task_params, **check_params},  # Pass both to perform_export
         )
-
-        self.ui.b009.setChecked(False)
-        self.ui.b009.setEnabled(not export_successful)
 
         output_dir = self.ui.txt000.text()
         self.save_output_dir(output_dir)

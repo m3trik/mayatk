@@ -79,6 +79,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "nurbs_utils/image_tracer.ui",
             "slot": "nurbs_utils.image_tracer.ImageTracerSlots",
         },
+        "material_updater": {
+            "ui": "mat_utils/material_updater.ui",
+            "slot": "mat_utils.material_updater.MaterialUpdaterSlots",
+        },
         "mirror": {
             "ui": "edit_utils/mirror.ui",
             "slot": "edit_utils.mirror.MirrorSlots",
@@ -110,6 +114,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         "tube_rig": {
             "ui": "rig_utils/tube_rig.ui",
             "slot": "rig_utils.tube_rig.TubeRigSlots",
+        },
+        "shadow_rig": {
+            "ui": "rig_utils/shadow_rig.ui",
+            "slot": "rig_utils.shadow_rig.ShadowRigSlots",
         },
         "wheel_rig": {
             "ui": "rig_utils/wheel_rig.ui",

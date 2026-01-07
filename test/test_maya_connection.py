@@ -11,12 +11,14 @@ import os
 from unittest.mock import MagicMock, patch
 
 from base_test import MayaTkTestCase
-from mayatk.env_utils.maya_connection import (
-    MayaConnection,
-    reload_modules,
-    get_connection,
-    ensure_maya_connection,
-)
+from mayatk.env_utils.maya_connection import MayaConnection
+
+try:
+    import maya.cmds
+
+    MAYA_AVAILABLE = True
+except ImportError:
+    MAYA_AVAILABLE = False
 
 
 class TestMayaConnection(MayaTkTestCase):
@@ -25,9 +27,7 @@ class TestMayaConnection(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         # Reset singleton for testing
-        import mayatk.env_utils.maya_connection as mc
-
-        mc._connection = None
+        MayaConnection._instance = None
 
     def test_initialization(self):
         """Test MayaConnection initialization."""
@@ -35,6 +35,7 @@ class TestMayaConnection(MayaTkTestCase):
         self.assertIsNone(conn.mode)
         self.assertFalse(conn.is_connected)
 
+    @unittest.skipUnless(MAYA_AVAILABLE, "Maya not available")
     def test_detect_mode_interactive(self):
         """Test mode detection inside Maya."""
         conn = MayaConnection()
@@ -43,6 +44,7 @@ class TestMayaConnection(MayaTkTestCase):
         self.assertEqual(conn.mode, "interactive")
         self.assertTrue(conn.is_connected)
 
+    @unittest.skipUnless(MAYA_AVAILABLE, "Maya not available")
     def test_connect_interactive(self):
         """Test explicit interactive connection."""
         conn = MayaConnection()
@@ -52,16 +54,19 @@ class TestMayaConnection(MayaTkTestCase):
         self.assertTrue(conn.is_connected)
 
     def test_singleton_access(self):
-        """Test get_connection singleton behavior."""
-        conn1 = get_connection()
-        conn2 = get_connection()
+        """Test get_instance singleton behavior."""
+        conn1 = MayaConnection.get_instance()
+        conn2 = MayaConnection.get_instance()
         self.assertIs(conn1, conn2)
         # Check class name to avoid reload-induced type mismatch
         self.assertEqual(conn1.__class__.__name__, "MayaConnection")
 
+    @unittest.skipUnless(MAYA_AVAILABLE, "Maya not available")
     def test_ensure_connection(self):
-        """Test ensure_maya_connection."""
-        conn = ensure_maya_connection()
+        """Test ensure connection logic."""
+        conn = MayaConnection.get_instance()
+        if not conn.is_connected:
+            conn.connect(mode="auto")
         self.assertTrue(conn.is_connected)
         self.assertEqual(conn.mode, "interactive")
 
@@ -77,7 +82,7 @@ class TestMayaConnection(MayaTkTestCase):
         sys.stdout = captured_output
 
         try:
-            reloaded = reload_modules(mod_name, verbose=True)
+            reloaded = MayaConnection.reload_modules(mod_name, verbose=True)
             sys.stdout = sys.__stdout__
 
             # Verify the module was in the reloaded list
@@ -94,7 +99,7 @@ class TestMayaConnection(MayaTkTestCase):
     def test_reload_modules_list(self):
         """Test reloading a list of modules."""
         modules = ["mayatk.env_utils.maya_connection", "mayatk.core_utils.core_utils"]
-        reloaded = reload_modules(modules, verbose=False)
+        reloaded = MayaConnection.reload_modules(modules, verbose=False)
 
         # Check if at least the connection module is in the list
         self.assertIn("mayatk.env_utils.maya_connection", reloaded)
@@ -104,9 +109,10 @@ class TestMayaConnection(MayaTkTestCase):
         mod_name = "mayatk.non_existent_module_xyz"
 
         # Should not raise exception
-        reloaded = reload_modules(mod_name, verbose=False)
+        reloaded = MayaConnection.reload_modules(mod_name, verbose=False)
         self.assertNotIn(mod_name, reloaded)
 
+    @unittest.skipUnless(MAYA_AVAILABLE, "Maya not available")
     def test_script_editor_output(self):
         """Test getting and clearing script editor output."""
         import maya.cmds as cmds
@@ -206,10 +212,20 @@ class TestMayaConnectionMocked(unittest.TestCase):
 
     def test_connect_standalone(self):
         """Test standalone connection."""
-        conn = MayaConnection()
+        # Mock maya.standalone module if it doesn't exist
+        if "maya.standalone" not in sys.modules:
+            mock_maya = MagicMock()
+            mock_standalone = MagicMock()
+            mock_maya.standalone = mock_standalone
+            with patch.dict(
+                sys.modules, {"maya": mock_maya, "maya.standalone": mock_standalone}
+            ):
+                self._run_connect_standalone_test()
+        else:
+            self._run_connect_standalone_test()
 
-        # Mock maya.standalone.initialize
-        # We patch it where it exists (in the maya.standalone module)
+    def _run_connect_standalone_test(self):
+        conn = MayaConnection()
         with patch("maya.standalone.initialize") as mock_initialize:
             result = conn.connect(mode="standalone")
 
@@ -217,3 +233,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
             self.assertEqual(conn.mode, "standalone")
             self.assertTrue(conn.is_connected)
             mock_initialize.assert_called_with(name="python")
+
+
+if __name__ == "__main__":
+    unittest.main()

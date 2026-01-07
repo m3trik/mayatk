@@ -5,6 +5,7 @@ try:
     import maya.api.OpenMaya as om
 except ImportError as error:
     print(__file__, error)
+import math
 import pythontk as ptk
 
 # from this package:
@@ -42,7 +43,49 @@ class DuplicateLinear:
 
             # Get the pivot point for transformations
             pivot_pos = XformUtils.get_operation_axis_pos(node, pivot)
-            pivot_point = om.MPoint(pivot_pos[0], pivot_pos[1], pivot_pos[2])
+
+            # Matrices for Pivot
+            # T(-P)
+            mat_to_origin_list = [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                -pivot_pos[0],
+                -pivot_pos[1],
+                -pivot_pos[2],
+                1.0,
+            ]
+            mat_to_origin = om.MMatrix(mat_to_origin_list)
+
+            # T(P)
+            mat_from_origin_list = [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                pivot_pos[0],
+                pivot_pos[1],
+                pivot_pos[2],
+                1.0,
+            ]
+            mat_from_origin = om.MMatrix(mat_from_origin_list)
 
             for i in range(num_copies):
                 dup = pm.instance(node)[0]
@@ -55,33 +98,61 @@ class DuplicateLinear:
                     i, num_copies, weight_bias, weight_curve, calculation_mode
                 )
 
-                # Calculate transformations using PyMel (avoids OpenMaya compatibility issues)
+                # Calculate transformations
                 translation_vector = [translate[j] * f_x for j in range(3)]
                 rotation_values = [rotate[j] * f_x for j in range(3)]
                 scale_factors = [(abs(s) ** f_x) * (-1 if s < 0 else 1) for s in scale]
 
-                # Apply translation
-                current_pos = pm.xform(
-                    dup, query=True, worldSpace=True, translation=True
+                # 1. Local Scale
+                m_dup = om.MMatrix(
+                    pm.xform(dup, query=True, worldSpace=True, matrix=True)
                 )
-                new_translation = [
-                    current_pos[j] + translation_vector[j] for j in range(3)
-                ]
-                pm.xform(dup, worldSpace=True, translation=new_translation)
+                tm_dup = om.MTransformationMatrix(m_dup)
 
-                # Apply rotation (relative to current rotation)
-                current_rotation = pm.xform(
-                    dup, query=True, worldSpace=True, rotation=True
-                )
-                new_rotation = [
-                    current_rotation[j] + rotation_values[j] for j in range(3)
-                ]
-                pm.xform(dup, worldSpace=True, rotation=new_rotation)
-
-                # Apply scale (multiplicative)
-                current_scale = pm.xform(dup, query=True, worldSpace=True, scale=True)
+                current_scale = tm_dup.scale(om.MSpace.kObject)
                 new_scale = [current_scale[j] * scale_factors[j] for j in range(3)]
-                pm.xform(dup, worldSpace=True, scale=new_scale)
+                tm_dup.setScale(new_scale, om.MSpace.kObject)
+
+                m_scaled = tm_dup.asMatrix()
+
+                # 2. Rotate around Pivot
+                euler = om.MEulerRotation(
+                    math.radians(rotation_values[0]),
+                    math.radians(rotation_values[1]),
+                    math.radians(rotation_values[2]),
+                    om.MEulerRotation.kXYZ,
+                )
+                mat_rot = euler.asMatrix()
+
+                # M_rot = T(-P) * R * T(P)
+                mat_orbit = mat_to_origin * mat_rot * mat_from_origin
+
+                m_rotated = m_scaled * mat_orbit
+
+                # 3. Apply Translation (World Space)
+                mat_trans_list = [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    translation_vector[0],
+                    translation_vector[1],
+                    translation_vector[2],
+                    1.0,
+                ]
+                mat_trans = om.MMatrix(mat_trans_list)
+
+                m_final = m_rotated * mat_trans
+
+                pm.xform(dup, matrix=list(m_final), worldSpace=True)
 
                 copies.append(dup)
 
@@ -94,6 +165,13 @@ class DuplicateLinearSlots:
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_linear
+
+        # Populate pivot combobox
+        self.ui.cmb000.clear()
+        self.pivot_options = XformUtils.get_pivot_options()
+        self.ui.cmb000.addItems(
+            [p.replace("_", " ").title() for p in self.pivot_options]
+        )
 
         self.preview = Preview(
             self,
@@ -131,15 +209,11 @@ class DuplicateLinearSlots:
         # Initialize the UI state
         self.toggle_weight_ui()
 
-    @staticmethod
-    def _resolve_pivot(pivot_index: int) -> str:
+    def _resolve_pivot(self, pivot_index: int) -> str:
         """Resolve pivot string from UI dropdown index."""
-        pivot_mapping = {
-            0: "object",  # Pivot: Object
-            1: "world",  # Pivot: World
-            2: "center",  # Pivot: Bounding Box (center)
-        }
-        return pivot_mapping.get(pivot_index, "object")
+        if 0 <= pivot_index < len(self.pivot_options):
+            return self.pivot_options[pivot_index]
+        return "object"
 
     @staticmethod
     def _resolve_calculation_mode(mode_index: int) -> str:

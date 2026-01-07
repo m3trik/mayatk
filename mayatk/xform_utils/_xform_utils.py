@@ -976,6 +976,23 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         pm.manipPivot(p=pos, o=rot, **kwargs)
 
     @classmethod
+    def get_pivot_options(cls):
+        """Returns a list of supported pivot options."""
+        return [
+            "object",
+            "world",
+            "center",
+            "manip",
+            "xmin",
+            "xmax",
+            "ymin",
+            "ymax",
+            "zmin",
+            "zmax",
+            "baked",
+        ]
+
+    @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):
         """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
 

@@ -33,11 +33,13 @@ def run_test():
     # The user asked to "test the dry run", implying checking the output logs.
 
     results = updater.update_materials(
-        dry_run=True,
+        config={
+            "preset": "Unity HDRP",  # Use a preset to trigger map logic
+            "dry_run": True,
+            "optimize": True,  # Enable optimization to see size limits
+            "max_size": 2048,  # Set a limit to see if it triggers
+        },
         verbose=True,
-        optimize=True,  # Enable optimization to see size limits
-        max_size=2048,  # Set a limit to see if it triggers
-        config="Unity HDRP",  # Use a preset to trigger map logic
     )
 
     print("\nDry Run Complete.")
