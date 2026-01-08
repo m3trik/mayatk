@@ -1,3 +1,9 @@
-from .geometry_matcher import GeometryMatcher
-from .assembly_reconstructor import AssemblyReconstructor
-from .auto_instancer import AutoInstancer
+# !/usr/bin/python
+# coding=utf-8
+"""Instancing utilities for Maya.
+
+All classes are lazy-loaded via mayatk root package.
+Import from mayatk directly: from mayatk import CoreUtils, MeshDiagnostics, etc.
+"""
+
+# Lazy-loaded via parent package - no explicit imports needed

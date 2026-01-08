@@ -1096,6 +1096,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 try:  # Fetch metadata (Comments)
                     ptk.Metadata.enable_sidecar = True
+                    ptk.Metadata.sidecar_only = True
                     metadata = ptk.Metadata.get(file_path, "Comments")
                     comments = metadata.get("Comments") or ""
                     if item_notes.text() != comments:
@@ -1759,6 +1760,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             new_comments = item.text()
             try:
                 ptk.Metadata.enable_sidecar = True
+                ptk.Metadata.sidecar_only = True
                 ptk.Metadata.set(file_path, Comments=new_comments)
                 self.logger.info(f"Updated comments for {file_path}")
             except Exception as e:

@@ -198,20 +198,19 @@ class MayaConnection:
 
     def _detect_mode(self) -> ConnectionMode:
         """Auto-detect the best connection mode."""
-        # Check if already in Maya
+        # 1. Check if we are in Maya GUI (Interactive)
+        # We skip this if in batch mode (mayapy) so we can act as a runner (port)
         try:
             import maya.cmds
 
-            # Verify we can actually call commands (initialized)
-            maya.cmds.about(version=True)
-
-            self.mode = "interactive"
-            self.is_connected = True
-            return "interactive"
+            if hasattr(maya.cmds, "about") and not maya.cmds.about(batch=True):
+                self.mode = "interactive"
+                self.is_connected = True
+                return "interactive"
         except (ImportError, AttributeError, RuntimeError):
             pass
 
-        # Try command port
+        # 2. Try command port (Runner for mayapy or external python)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
@@ -222,7 +221,7 @@ class MayaConnection:
         except:
             pass
 
-        # Fall back to standalone
+        # 3. Fall back to standalone (mayapy / batch execution)
         return "standalone"
 
     def _connect_via_port(self, host: str, port: int) -> bool:

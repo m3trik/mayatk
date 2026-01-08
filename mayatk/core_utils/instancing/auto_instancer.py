@@ -23,9 +23,6 @@ from mayatk.core_utils.instancing.instancing_strategy import (
     StrategyType,
 )
 
-RELOAD_COUNTER = globals().get("RELOAD_COUNTER", 0) + 1
-print(f"MAYATK: Loaded AutoInstancer module (reload #{RELOAD_COUNTER})")
-
 
 class InstanceCandidate:
     """Holds information about a transform candidate for instancing."""

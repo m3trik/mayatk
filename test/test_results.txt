@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_game_shader: PASS
-  Tests: 75, Failures: 0, Errors: 0, Skipped: 4
+test_maya_menu_handler: PASS
+  Tests: 9, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_game_shader: PASS (75 tests, 0 failures, 0 errors)
+  test_maya_menu_handler: PASS (9 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 75 tests, 0 failures, 0 errors, 4 skipped
+Total: 9 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================
