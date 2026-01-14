@@ -1462,13 +1462,15 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             objects (str/obj/list): The mesh or mesh faces to averge.
             by_uv_shell (bool): Average each UV shell individually.
         """
+        from mayatk.uv_utils._uv_utils import UvUtils
+
         # Map components to their respective objects
         components_dict = cls.map_components_to_objects(objects)
 
         # Loop through each object and its corresponding components
         for obj, components in components_dict.items():
             if by_uv_shell:
-                uv_shell_sets = cls.get_uv_shell_sets(components)
+                uv_shell_sets = UvUtils.get_uv_shell_sets(components)
                 for uv_set in uv_shell_sets:
                     pm.polySoftEdge(uv_set, a=180)
             else:

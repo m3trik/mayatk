@@ -750,7 +750,10 @@ class GameShaderTest(unittest.TestCase):
         std_node = self.shader.setup_standard_surface_node("test_opacity", opacity=True)
 
         self.assertIsNotNone(std_node)
-        self.assertEqual(std_node.transmission.get(), 1.0)
+        # Updated Logic: Opacity map should NOT enable transmission (glass)
+        # It should only be used for alpha cutout (geometry opacity)
+        self.assertEqual(std_node.transmission.get(), 0.0)
+        # Thin walled is still good for foliage/decals, but transmission should be off
         self.assertTrue(std_node.thinWalled.get())
 
     def test_create_network_standard_surface(self):
@@ -1532,9 +1535,7 @@ class GameShaderTest(unittest.TestCase):
         }
 
         # Direct call to prepare_maps
-        result = MapFactory.prepare_maps(
-            textures, callback=print, **workflow_config
-        )
+        result = MapFactory.prepare_maps(textures, callback=print, **workflow_config)
 
         # Should return a list
         self.assertIsInstance(result, list)

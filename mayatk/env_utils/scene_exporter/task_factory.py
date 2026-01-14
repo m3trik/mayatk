@@ -204,6 +204,7 @@ class TaskFactory:
             self.logger.log_box(
                 "SUMMARY OF FAILED CHECKS",
                 [f"- {check}" for check in failed_checks],
+                level="ERROR",
             )
             self.logger.error("Export aborted due to failed checks.")
         else:
@@ -229,11 +230,11 @@ class TaskFactory:
             checks_passed = checks_count - failed_checks_count
             summary_lines.append(f"Checks Passed: {checks_passed}/{checks_count}")
 
-        self.logger.log_box("EXPORT SUCCESSFUL", summary_lines)
+        self.logger.log_box("EXPORT SUCCESSFUL", summary_lines, level="SUCCESS")
 
     def _log_check_failed(self, task_name: str, log_messages: list):
         """Log the 'CHECK FAILED' box after task fails."""
-        self.logger.log_box(f"CHECK FAILED: {task_name}")
+        self.logger.log_box(f"CHECK FAILED: {task_name}", level="ERROR")
         for message in log_messages:
             self.logger.error(message)
 

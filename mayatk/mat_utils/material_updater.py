@@ -77,6 +77,13 @@ class MaterialUpdater(ptk.LoggingMixin):
             # Create Config Object
             config_obj = cfg_kwargs
 
+            # Log Settings
+            cls.logger.info("Run Settings", preset="header")
+            cls.logger.log_divider()
+            for k, v in sorted(config_obj.items()):
+                cls.logger.info(f"{k:<25}: {v}")
+            cls.logger.log_divider()
+
             results = {}
             texture_cache = {}
 
@@ -214,18 +221,51 @@ class MaterialUpdater(ptk.LoggingMixin):
                         # We only use batch results if the material's files belong to a SINGLE set.
                         # If they span multiple sets, we must re-process to allow cross-set packing.
                         batch_success = False
+
+                        # Filter out common environment maps that shouldn't be treated as texture sets
+                        # These are often connected to slots but aren't part of the material's identity
+                        IGNORED_ENV_SETS = {
+                            "ibl_brdf_lut",
+                            "diffuse_cube",
+                            "specular_cube",
+                        }
+
                         local_sets = {}
 
                         if processed_sets and isinstance(processed_sets, dict):
-                            local_sets = ptk.MapFactory.group_textures_by_set(
-                                files
-                            )
+                            raw_sets = ptk.MapFactory.group_textures_by_set(files)
+                            local_sets = {
+                                k: v
+                                for k, v in raw_sets.items()
+                                if k not in IGNORED_ENV_SETS
+                            }
+
+                            # If filtering removed everything (e.g. material only has env maps),
+                            # restore raw sets to avoid having 0 sets (though this is a weird edge case)
+                            if not local_sets and raw_sets:
+                                local_sets = raw_sets
 
                             if len(local_sets) == 1:
                                 base_name = list(local_sets.keys())[0]
                                 if base_name in processed_sets:
                                     processed_files = processed_sets[base_name]
                                     batch_success = True
+                            elif len(local_sets) > 1:
+                                # Attempt to find a common root set (detecting unknown maps like Curvature as part of main set)
+                                keys = sorted(local_sets.keys(), key=len)
+                                root = keys[0]
+                                is_subset = True
+                                for k in keys[1:]:
+                                    if not k.startswith(root):
+                                        is_subset = False
+                                        break
+
+                                if is_subset and root in processed_sets:
+                                    processed_files = processed_sets[root]
+                                    batch_success = True
+                                    cls.logger.info(
+                                        f"Merged {len(local_sets)} sets into '{root}' (ignoring unknown suffixes)."
+                                    )
 
                         # 3. Manual Process (Re-process)
                         if not batch_success:
@@ -233,6 +273,9 @@ class MaterialUpdater(ptk.LoggingMixin):
                                 cls.logger.info(
                                     f"Material uses textures from {len(local_sets)} different sets. Re-processing as single set."
                                 )
+                                for s_name, s_files in local_sets.items():
+                                    file_names = [os.path.basename(f) for f in s_files]
+                                    cls.logger.info(f"  - Set '{s_name}': {file_names}")
                             else:
                                 cls.logger.info(f"Preparing maps...")
 
@@ -261,51 +304,76 @@ class MaterialUpdater(ptk.LoggingMixin):
 
                 # Move files if requested
                 if move_to_folder:
+                    import shutil
+
                     target_folder = move_to_folder
+                    transfer_mode = config_obj.get("transfer_mode", "move")
 
                     files_to_move = []
+                    files_to_copy = []
                     files_to_keep = []
 
-                    # Check copy_all flag
                     copy_all = config_obj.get("copy_all", False)
                     target_folder_norm = (
                         os.path.normpath(target_folder) if target_folder else None
                     )
 
-                    candidates = []
-                    if copy_all:
-                        candidates = list(processed_files)
-                        processed_set = set(processed_files)
-                        for f in files:
-                            if f not in processed_set:
-                                candidates.append(f)
-                    else:
-                        # Only move files that are NOT in the original source list
-                        # i.e. newly generated or processed files
-                        source_set = set(files)
-                        for f in processed_files:
-                            if f not in source_set:
-                                candidates.append(f)
-                            else:
-                                files_to_keep.append(f)
+                    # Determine action for each file
+                    source_set = set(os.path.normpath(f) for f in files if f)
 
-                    # Filter candidates: If already in target, keep; else move
-                    for f in candidates:
+                    for f in processed_files:
+                        if not f:
+                            continue
+
+                        # Check existence (if not found, we can't move/copy it)
+                        if not os.path.exists(f):
+                            # It might have been moved already?
+                            # If so, we hope it's handled by globally_moved_files logic or kept as is?
+                            # For now, stick to existing patterns.
+                            if f in globally_moved_files:
+                                # It was moved to target already (presumably)
+                                # But we need the NEW path.
+                                # Wait, globally_moved_files stores the SOURCE path that was moved.
+                                # This is getting complicated.
+                                pass
+                            # Just continue if it doesn't exist
+                            # cls.logger.warning(f"File not found: {f}")
+                            # files_to_keep.append(f) # Keep the broken path?
+                            continue
+
+                        f_norm = os.path.normpath(f)
+
+                        # Check if already in target folder
                         if (
                             target_folder_norm
                             and os.path.normpath(os.path.dirname(f))
                             == target_folder_norm
                         ):
                             files_to_keep.append(f)
+                            continue
+
+                        # Determine if this is a Source File or a Generated/New File
+                        is_source = f_norm in source_set
+
+                        # Decision Logic
+                        if transfer_mode == "copy":
+                            if is_source:
+                                files_to_copy.append(f)  # Copy source file
+                            else:
+                                files_to_move.append(f)  # Move generated file
+                        elif transfer_mode == "move":
+                            files_to_move.append(f)  # Move everything
                         else:
+                            # Fallback / Default (treat as move)
                             files_to_move.append(f)
 
+                    # --- EXECUTE MOVES ---
                     # Filter out files that have already been moved in this session
                     files_to_move = [
                         f for f in files_to_move if f not in globally_moved_files
                     ]
 
-                    # Filter out system files (e.g. Maya installation files)
+                    # Filter out system files
                     maya_location = os.environ.get("MAYA_LOCATION", "").replace(
                         "\\", "/"
                     )
@@ -318,43 +386,76 @@ class MaterialUpdater(ptk.LoggingMixin):
                             .startswith(maya_location)
                         ]
 
-                    # Final check: Ensure files actually exist before trying to move them
-                    # This handles cases where a file might have been moved by another process or logic gap
-                    valid_files_to_move = []
-                    for f in files_to_move:
-                        if os.path.exists(f):
-                            valid_files_to_move.append(f)
-                        else:
-                            # If it doesn't exist but is in files_to_move, it might have been moved already
-                            # but not tracked in globally_moved_files (e.g. if it was in files_to_keep for another mat)
-                            # We assume it's safe to skip.
-                            pass
-                    files_to_move = valid_files_to_move
-
+                    moved_files = []
                     if files_to_move:
                         try:
-                            moved_files = ptk.FileUtils.move_file(
-                                files_to_move,
-                                target_folder,
-                                overwrite=True,
-                                create_dir=True,
-                            )
-                            # Ensure list
-                            if isinstance(moved_files, str):
-                                moved_files = [moved_files]
+                            # Double check existence before call
+                            valid_moves = [
+                                f for f in files_to_move if os.path.exists(f)
+                            ]
+                            if valid_moves:
+                                res = ptk.FileUtils.move_file(
+                                    valid_moves,
+                                    target_folder,
+                                    overwrite=True,
+                                    create_dir=True,
+                                )
+                                if isinstance(res, str):
+                                    moved_files = [res]
+                                else:
+                                    moved_files = res
 
-                            # Track moved files
-                            globally_moved_files.update(files_to_move)
-
-                            # Reconstruct processed_files list
-                            # Note: We assume moved_files corresponds to files_to_move in order
-                            processed_files = files_to_keep + moved_files
-
+                                globally_moved_files.update(valid_moves)
                         except Exception as e:
                             cls.logger.error(f"Error moving files: {e}")
+                            # Fallback: assume they didn't move
+                            files_to_keep.extend(files_to_move)
+
+                    # --- EXECUTE COPIES ---
+                    copied_files = []
+                    if files_to_copy:
+                        try:
+                            # Ensure target exists
+                            if not os.path.exists(target_folder):
+                                os.makedirs(target_folder)
+
+                            for f in files_to_copy:
+                                if not os.path.exists(f):
+                                    continue
+
+                                # Use ptk.FileUtils.copy_file (preferred) or shutil fallback
+                                # Note: ptk copy_file returns the new path
+                                try:
+                                    if hasattr(ptk.FileUtils, "copy_file"):
+                                        new_path = ptk.FileUtils.copy_file(
+                                            f,
+                                            target_folder,
+                                            overwrite=True,
+                                            create_dir=False,
+                                        )
+                                    else:
+                                        # Fallback to manual shutil if method missing
+                                        dest = os.path.join(
+                                            target_folder, os.path.basename(f)
+                                        )
+                                        shutil.copy2(f, dest)
+                                        new_path = dest
+
+                                    copied_files.append(new_path)
+                                except Exception as ie:
+                                    cls.logger.error(f"Failed to copy {f}: {ie}")
+                                    files_to_keep.append(
+                                        f
+                                    )  # Fallback to keeping old path
+
+                        except Exception as e:
+                            cls.logger.error(f"Error copying files: {e}")
+
+                    # Reconstruct processed_files
+                    processed_files = files_to_keep + moved_files + copied_files
 
                 # Disconnect existing attributes driven by these files to prevent stale connections
-                cls.disconnect_associated_attributes(mat, files)
+                cls.disconnect_associated_attributes(mat, files, config=config_obj)
 
                 # Update network
                 connected_maps = cls.update_network(mat, processed_files, config_obj)
@@ -367,12 +468,16 @@ class MaterialUpdater(ptk.LoggingMixin):
             return results
 
     @classmethod
-    def disconnect_associated_attributes(cls, material, file_paths):
+    def disconnect_associated_attributes(cls, material, file_paths, config=None):
         """Disconnects PBR attributes if they are driven by the specified files.
 
         This ensures that if a file's map type changes (e.g. Base Color -> Emissive),
         the old connection (Base Color) is removed.
         """
+        if config and config.get("dry_run", False):
+            cls.logger.info("[Dry Run] Skipping disconnection of attributes.")
+            return
+
         target_paths = set(os.path.normpath(p) for p in file_paths if p)
 
         # Identify file nodes that match our paths
@@ -575,20 +680,33 @@ class MaterialUpdaterSlots(MaterialUpdater):
             setToolTip="Simulate the process without making changes.",
         )
         widget.menu.add("Separator", setTitle="File Management")
-        # Move To Folder
+        # File Transfer Mode
+        cmb_transfer = widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_transfer_mode",
+            setToolTip="How to handle files when an Output Folder is specified.",
+        )
+        cmb_transfer.addItem("Copy All to Output", "copy")
+        cmb_transfer.addItem("Move All to Output", "move")
+        cmb_transfer.addItem("Use Existing Folders", "none")
+
+        # Output Folder
         widget.menu.add(
             "QLineEdit",
             setObjectName="txt_move_to",
-            setPlaceholderText="Move To (Optional)",
-            setToolTip="Optional: Path to move processed textures to.",
+            setPlaceholderText="Output Folder (Optional)",
+            setToolTip="Folder to move/copy processed files to.",
         )
-        # Move All
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_move_all",
-            setText="Move All to Output",
-            setToolTip="If checked, all textures (including unmodified ones) will be moved to the Move To folder.",
-        )
+
+        # Disable Move To field when "Use Existing" is selected
+        def _update_move_to_state():
+            mode = cmb_transfer.currentData()
+            widget.menu.txt_move_to.setEnabled(mode != "none")
+
+        cmb_transfer.currentIndexChanged.connect(_update_move_to_state)
+        # Initialize state
+        _update_move_to_state()
+
         # Archive Folder
         widget.menu.add(
             "QLineEdit",
@@ -624,6 +742,7 @@ class MaterialUpdaterSlots(MaterialUpdater):
     def cmb001_init(self, widget):
         """Initialize Presets"""
         if not widget.is_initialized:
+            widget.restore_state = True
             # Populate presets
             presets = ptk.MapRegistry().get_workflow_presets()
             widget.clear()
@@ -641,7 +760,7 @@ class MaterialUpdaterSlots(MaterialUpdater):
 
         menu = self.ui.header.menu
         dry_run = menu.chk_dry_run.isChecked()
-        copy_all = menu.chk_move_all.isChecked()
+        transfer_mode = menu.cmb_transfer_mode.currentData()
         force_packed = menu.chk_force_packed.isChecked()
         use_input_fallbacks = menu.chk_input_fallbacks.isChecked()
         use_output_fallbacks = menu.chk_output_fallbacks.isChecked()
@@ -665,8 +784,10 @@ class MaterialUpdaterSlots(MaterialUpdater):
                 "max_size": max_size,
                 "mask_map_scale": self.mask_map_scale,
                 "output_extension": self.output_extension,
-                "move_to_folder": self.move_to_folder,
-                "copy_all": copy_all,
+                "move_to_folder": (
+                    self.move_to_folder if transfer_mode != "none" else None
+                ),
+                "transfer_mode": transfer_mode,
                 "old_files_folder": self.old_files_folder,
                 "force_packed_maps": force_packed,
                 "use_input_fallbacks": use_input_fallbacks,

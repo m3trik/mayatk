@@ -30,7 +30,6 @@ DEFAULT_INCLUDE = {
     "_xform_utils": "*",
     "_nurbs_utils": "*",
     "_light_utils": "*",
-    # Env utils
     # Animation utilities
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",

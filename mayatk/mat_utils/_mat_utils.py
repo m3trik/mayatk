@@ -1635,37 +1635,17 @@ class MatUtils(MatUtilsInternals):
 
         results = []
 
-        # Progress window setup
-        pm.progressWindow(
-            title="Finding Textures",
-            progress=0,
-            status="Starting search...",
-            isInterruptable=True,
-        )
+        for root, dirs, files in os.walk(source_dir):
+            for file in files:
+                if file.lower() in target_filenames:
+                    full_path = os.path.join(root, file).replace("\\", "/")
+                    if return_dir:
+                        results.append((root.replace("\\", "/"), file))
+                    else:
+                        results.append(full_path)
 
-        try:
-            for root, dirs, files in os.walk(source_dir):
-                # Check for cancellation
-                if pm.progressWindow(query=True, isCancelled=True):
-                    pm.warning("Search cancelled by user.")
-                    break
-
-                # Update progress status (truncated path for readability)
-                display_root = (root[:60] + "...") if len(root) > 60 else root
-                pm.progressWindow(edit=True, status=f"Scanning: {display_root}")
-
-                for file in files:
-                    if file.lower() in target_filenames:
-                        full_path = os.path.join(root, file).replace("\\", "/")
-                        if return_dir:
-                            results.append((root.replace("\\", "/"), file))
-                        else:
-                            results.append(full_path)
-
-                if not recursive:
-                    break
-        finally:
-            pm.progressWindow(endProgress=True)
+            if not recursive:
+                break
 
         if not quiet:
             pm.displayInfo("\n[Texture Files Found]")

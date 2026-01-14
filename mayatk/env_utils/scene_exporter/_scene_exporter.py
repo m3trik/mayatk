@@ -552,7 +552,9 @@ class SceneExporterSlots(SceneExporter):
             self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
 
             # Add as (widget, label) tuple for the combo box
-            widget_items.append((created_widget, task_name))
+            # Pass title as label for Separator to ensure uniqueness, but WidgetComboBox will treat it as a widget item
+            label = params.get("title", "") if widget_type == "Separator" else task_name
+            widget_items.append((created_widget, label))
 
         # Add all widgets to the combo box with a header
         widget.add(widget_items, header="Tasks", clear=True)
@@ -582,7 +584,11 @@ class SceneExporterSlots(SceneExporter):
             )
 
             # Add as (widget, label) tuple for the combo box
-            widget_items.append((created_widget, check_name))
+            # Pass title as label for Separator to ensure uniqueness, but WidgetComboBox will treat it as a widget item
+            label = (
+                params.get("title", "") if widget_type == "Separator" else check_name
+            )
+            widget_items.append((created_widget, label))
 
         # Add all widgets to the combo box with a header
         widget.add(widget_items, header="Validation Checks", clear=True)

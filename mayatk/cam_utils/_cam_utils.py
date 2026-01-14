@@ -202,9 +202,17 @@ class CamUtils(ptk.HelpMixin):
         for cam in target_cameras:
             # Only get camera position if we are doing auto calculations
             cam_pos = None
+            max_dist = 0  # Distance to furthest point of bbox
+
             if needs_auto:
                 cam_transform = cam.getParent()
                 cam_pos = pm.dt.Vector(pm.xform(cam_transform, q=True, ws=True, t=True))
+
+                if bbox_points:
+                    for pt in bbox_points:
+                        d = (pt - cam_pos).length()
+                        if d > max_dist:
+                            max_dist = d
 
             # Determine Near Clip
             if near_clip is not None:
@@ -213,17 +221,13 @@ class CamUtils(ptk.HelpMixin):
                     new_near = 0.1
                 elif near_clip == "auto":
                     if bbox and cam_pos:
-                        # Distance to AABB logic
-                        dx = max(bbox[0] - cam_pos.x, 0, cam_pos.x - bbox[3])
-                        dy = max(bbox[1] - cam_pos.y, 0, cam_pos.y - bbox[4])
-                        dz = max(bbox[2] - cam_pos.z, 0, cam_pos.z - bbox[5])
-                        dist_to_box = (dx * dx + dy * dy + dz * dz) ** 0.5
-
-                        if dist_to_box > 0:
-                            new_near = dist_to_box * 0.9
-                            new_near = max(new_near, 0.01)
-                        else:
-                            new_near = 0.01
+                        # Use a safe ratio of the far distance to maintain Z-buffer precision
+                        # while ensuring we don't clip foreground objects excessively.
+                        # Ratio of 3000 is conservative (e.g. Far=3000 -> Near=1.0)
+                        # We also ensure a minimum of 0.1 (standard Maya default)
+                        estimated_far = max_dist * 1.2
+                        new_near = estimated_far / 3000.0
+                        new_near = max(new_near, 0.1)
                     else:
                         new_near = 0.1
                 elif isinstance(near_clip, (int, float)):
@@ -239,11 +243,6 @@ class CamUtils(ptk.HelpMixin):
                     new_far = 10000.0
                 elif far_clip == "auto":
                     if bbox_points and cam_pos:
-                        max_dist = 0
-                        for pt in bbox_points:
-                            d = (pt - cam_pos).length()
-                            if d > max_dist:
-                                max_dist = d
                         new_far = max_dist * 1.2
                     else:
                         new_far = 10000.0

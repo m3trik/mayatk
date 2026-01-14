@@ -350,6 +350,73 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return all_relative, log_messages
 
+    def check_valid_paths(self) -> tuple:
+        """Check if all file paths (textures, references, etc.) exist on disk."""
+        import os
+
+        # We can accept relative paths if they resolve relative to project
+        log_messages = []
+        all_valid = True
+
+        # 1. Texture Paths
+        # Use cmds to avoid PyNodes
+        file_nodes = cmds.ls(type="file") or []
+        for node in file_nodes:
+            if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
+                continue
+
+            path = cmds.getAttr(f"{node}.fileTextureName")
+            if not path:
+                # Some empty file nodes might exist?
+                continue
+
+            expanded_path = os.path.expandvars(path)
+
+            # If absolute check directly
+            if os.path.isabs(expanded_path):
+                if not os.path.exists(expanded_path):
+                    all_valid = False
+                    log_messages.append(f"Missing Texture: {node} -> {path}")
+            else:
+                # If relative, try to resolve
+                workspace_root = cmds.workspace(query=True, rootDirectory=True)
+
+                # Check common relative locations
+                possible_paths = [
+                    os.path.join(workspace_root, expanded_path),
+                    os.path.join(workspace_root, "sourceimages", expanded_path),
+                    os.path.abspath(expanded_path),  # Relative to current working dir
+                ]
+
+                found = False
+                for p in possible_paths:
+                    if os.path.exists(p):
+                        found = True
+                        break
+
+                if not found:
+                    all_valid = False
+                    log_messages.append(f"Missing Texture (Relative): {node} -> {path}")
+
+        # 2. Reference Paths
+        references = cmds.ls(references=True) or []
+        for ref in references:
+            try:
+                # withoutCopyNumber=True gets actual file path
+                path = cmds.referenceQuery(ref, filename=True, withoutCopyNumber=True)
+                if path:
+                    expanded_path = os.path.expandvars(path)
+                    if not os.path.exists(expanded_path):
+                        all_valid = False
+                        log_messages.append(f"Missing Reference: {ref} -> {path}")
+            except Exception:
+                continue
+
+        if all_valid:
+            log_messages.append("All checked paths exist on disk.")
+
+        return all_valid, log_messages
+
     def check_duplicate_locator_names(self) -> tuple:
         """Check for duplicate locator short names among the specified objects.
 
@@ -698,6 +765,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the task definitions for the UI."""
         return {
+            "sep_general": {
+                "widget_type": "Separator",
+                "title": "General",
+            },
             "export_visible_objects": {
                 "widget_type": "ComboBox",
                 "setToolTip": "Choose what objects to export:\n- All Visible Objects: Export all visible geometry in the scene\n- Selected Objects Only: Export only currently selected objects\n- All Scene Objects: Export all objects regardless of visibility or selection",
@@ -715,11 +786,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Determine the workspace directory from the scene path.",
                 "setChecked": True,
             },
-            "delete_env_nodes": {
-                "widget_type": "QCheckBox",
-                "setText": "Delete Environment Nodes",
-                "setToolTip": "Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",
-                "setChecked": False,
+            "sep_materials": {
+                "widget_type": "Separator",
+                "title": "Materials",
             },
             "delete_unused_materials": {
                 "widget_type": "QCheckBox",
@@ -738,6 +807,20 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Convert To Relative Paths",
                 "setToolTip": "Convert absolute paths to relative paths.",
                 "setChecked": True,
+            },
+            "sep_env": {
+                "widget_type": "Separator",
+                "title": "Environment",
+            },
+            "delete_env_nodes": {
+                "widget_type": "QCheckBox",
+                "setText": "Delete Environment Nodes",
+                "setToolTip": "Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",
+                "setChecked": False,
+            },
+            "sep_anim": {
+                "widget_type": "Separator",
+                "title": "Animation",
             },
             "tie_all_keyframes": {
                 "widget_type": "QCheckBox",
@@ -775,10 +858,24 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     def check_definitions(self) -> Dict[str, Dict[str, Any]]:
         """Return the check definitions for the UI."""
         return {
+            "sep_general": {
+                "widget_type": "Separator",
+                "title": "General",
+            },
             "check_framerate": {
                 "widget_type": "ComboBox",
                 "setToolTip": "Check the scene framerate against the target framerate.",
                 "add": self._frame_rate_options,
+            },
+            "check_referenced_objects": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Referenced Objects.",
+                "setToolTip": "Check for referenced objects.",
+                "setChecked": True,
+            },
+            "sep_hierarchy": {
+                "widget_type": "Separator",
+                "title": "Hierarchy & Naming",
             },
             "check_top_level_group_temp": {
                 "widget_type": "QCheckBox",
@@ -798,28 +895,20 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Check for duplicate locator names.",
                 "setChecked": True,
             },
-            "check_duplicate_materials": {
-                "widget_type": "QCheckBox",
-                "setText": "Check For Duplicate Materials.",
-                "setToolTip": "Check for duplicate materials.",
-                "setChecked": True,
-            },
-            "check_hidden_geometry": {
-                "widget_type": "QCheckBox",
-                "setText": "Check For Hidden Geometry.",
-                "setToolTip": "Check for hidden geometry that will be exported.",
-                "setChecked": True,
-            },
             "check_root_default_transforms": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Root Default Transforms",
                 "setToolTip": "Check for default transforms on root group nodes.\nTranslate, rotate, and scale should be (0, 0, 0) and (1, 1, 1) respectively.",
                 "setChecked": True,
             },
-            "check_referenced_objects": {
+            "sep_geometry": {
+                "widget_type": "Separator",
+                "title": "Geometry",
+            },
+            "check_hidden_geometry": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Referenced Objects.",
-                "setToolTip": "Check for referenced objects.",
+                "setText": "Check For Hidden Geometry.",
+                "setToolTip": "Check for hidden geometry that will be exported.",
                 "setChecked": True,
             },
             "check_overlapping_duplicate_mesh": {
@@ -839,11 +928,31 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
+            "sep_materials": {
+                "widget_type": "Separator",
+                "title": "Materials",
+            },
+            "check_duplicate_materials": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Duplicate Materials.",
+                "setToolTip": "Check for duplicate materials.",
+                "setChecked": True,
+            },
             "check_absolute_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Absolute Paths.",
                 "setToolTip": "Check for absolute paths.",
                 "setChecked": True,
+            },
+            "check_valid_paths": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Valid Paths.",
+                "setToolTip": "Check if all file paths (textures, references) exist on disk.",
+                "setChecked": True,
+            },
+            "sep_anim": {
+                "widget_type": "Separator",
+                "title": "Animation",
             },
             "check_untied_keyframes": {
                 "widget_type": "QCheckBox",

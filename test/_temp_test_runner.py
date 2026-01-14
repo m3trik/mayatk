@@ -72,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_maya_menu_handler']
+test_modules = ['test_material_updater']
 total_tests = 0
 total_failures = 0
 total_errors = 0

@@ -68,16 +68,19 @@ class Naming(ptk.HelpMixin):
         """
         objects = pm.ls(objects, flatten=True)
 
-        # Create a mapping of short names to their PyMEL objects (not cached long names)
-        # This prevents issues when renaming changes hierarchy paths
-        short_name_to_obj = {}
+        # Create a mapping of short names to a LIST of their PyMEL objects
+        # This prevents issues when renaming changes hierarchy paths and handles duplicates
+        short_name_to_objs = {}
+        short_names = []
         for obj in objects:
             long_name = obj.name()
             _, short_name = ptk.split_delimited_string(long_name, occurrence=-1)
             short_name = short_name if short_name else long_name
-            short_name_to_obj[short_name] = obj
 
-        short_names = list(short_name_to_obj.keys())
+            if short_name not in short_name_to_objs:
+                short_name_to_objs[short_name] = []
+            short_name_to_objs[short_name].append(obj)
+            short_names.append(short_name)
 
         # Handle empty filter case which causes crashes
         if not fltr:
@@ -143,8 +146,8 @@ class Naming(ptk.HelpMixin):
             # Map short name to the PyMEL object for renaming
             # Using the object reference instead of cached paths prevents issues
             # when earlier renames in the batch change the hierarchy
-            if oldName in short_name_to_obj:
-                obj = short_name_to_obj[oldName]
+            if oldName in short_name_to_objs and short_name_to_objs[oldName]:
+                obj = short_name_to_objs[oldName].pop(0)
                 try:
                     n = pm.rename(obj, newName)  # Rename using the object reference
                     if not n == newName:
@@ -404,8 +407,10 @@ class Naming(ptk.HelpMixin):
         first_obj_as_ref=False,
         alphabetical=False,
         strip_trailing_ints=True,
-        strip_trailing_alpha=True,
+        strip_defined_suffixes=True,
+        valid_suffixes=None,
         reverse=False,
+        independent_groups=False,
     ):
         """Rename objects with a suffix defined by its location from origin.
 
@@ -414,9 +419,15 @@ class Naming(ptk.HelpMixin):
             first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
             alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
             strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
-            strip_trailing_alpha (bool): Strip any trailing uppercase alphanumeric chars that are prefixed with an underscore.  ie. 'cube_A'
+            strip_defined_suffixes (bool): Strip any suffixes found in valid_suffixes kwarg.
+            valid_suffixes (list): List of valid suffixes to strip.
             reverse (bool): Reverse the naming order. (Farthest object first)
+            independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
         """
+        objects = pm.ls(objects, flatten=True)
+        if not objects:
+            return
+
         # Determine the reference point
         reference_point = [0, 0, 0]
         if first_obj_as_ref and objects:
@@ -425,55 +436,126 @@ class Naming(ptk.HelpMixin):
                 (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
             ]
 
-        length = len(objects)
-        if alphabetical:
-            if length <= 26:
-                suffix = string.ascii_uppercase
-            else:
-                suffix = [str(n).zfill(len(str(length))) for n in range(length)]
-        else:
-            suffix = [str(n).zfill(len(str(length))) for n in range(length)]
+        # Helper to determine if we should strip valid suffixes
+        # If independent_groups is True, we generally want to PRESERVE the group suffix (Type)
+        # So we force strip_defined_suffixes to False for the base name calculation in that mode.
+        strip_suffixes_for_grouping = strip_defined_suffixes
+        if independent_groups:
+            strip_suffixes_for_grouping = False
 
-        ordered_objs = XformUtils.order_by_distance(
-            objects, reference_point=reference_point, reverse=reverse
-        )
+        def get_base_name(name):
+            # Sort suffixes by length (descending) to match longest first (e.g. match _GRP before _G)
+            sorted_suffixes = sorted(valid_suffixes or [], key=len, reverse=True)
 
-        newNames = {}  # the object with the new name set as a key.
-        for n, obj in enumerate(ordered_objs):
-            current_name = obj.name()
+            # Loop to handle stacked suffixes (e.g. Name_GRP_01_A)
+            # We continue stripping as long as we find something to strip
+            while True:
+                original_name = name
 
-            while (
-                (current_name[-1] == "_" or current_name[-1].isdigit())
-                and strip_trailing_ints
-            ) or (
-                (
-                    len(current_name) > 1
-                    and current_name[-2] == "_"
-                    and current_name[-1].isupper()
+                # 1. Strip Trailing Integers (e.g. _01, 123)
+                if strip_trailing_ints:
+                    if name and name[-1].isdigit():
+                        # Determine if prefixed with underscore
+                        match = re.search(r"(_\d+|\d+)$", name)
+                        if match:
+                            name = name[: match.start()]
+
+                # 2. Strip Defined Suffixes (e.g. _GRP, _A)
+                # Replaces the old "strip_trailing_alpha" logic which only handled single chars
+                if strip_suffixes_for_grouping and sorted_suffixes:
+                    for suffix in sorted_suffixes:
+                        if name.endswith(suffix):
+                            name = name[: -len(suffix)]
+                            break
+
+                if name == original_name:
+                    break
+
+            return name
+
+        newNames = {}
+        all_ordered_objs = []
+
+        if independent_groups:
+            # Group objects by base name
+            groups = {}
+            for obj in objects:
+                # Use nodeName() to ignore namespace/path for grouping purposes
+                # This ensures similar objects in different hierarchies are grouped together
+                short_name = obj.nodeName()
+                base_name = get_base_name(short_name)
+
+                if base_name not in groups:
+                    groups[base_name] = []
+                groups[base_name].append(obj)
+
+            for base_name, group_objs in groups.items():
+                # Sort group by distance
+                ordered_group = XformUtils.order_by_distance(
+                    group_objs, reference_point=reference_point, reverse=reverse
                 )
-                and strip_trailing_alpha
-            ):
-                if (
-                    current_name[-2] == "_" and current_name[-1].isupper()
-                ) and strip_trailing_alpha:  # trailing underscore and uppercase alphanumeric char.
-                    current_name = re.sub(
-                        re.escape(current_name[-2:]) + "$", "", current_name
-                    )
 
-                if (
-                    current_name[-1] == "_" or current_name[-1].isdigit()
-                ) and strip_trailing_ints:  # trailing underscore and integers.
-                    current_name = re.sub(
-                        re.escape(current_name[-1:]) + "$", "", current_name
-                    )
+                length = len(ordered_group)
+                if alphabetical and length <= 26:
+                    suffix_list = list(string.ascii_uppercase)[:length]
+                else:
+                    pad = max(2, len(str(length)))
+                    suffix_list = [
+                        str(n + 1).zfill(pad) for n in range(length)
+                    ]  # 1-based index (01, 02)
 
-            obj_suffix = suffix[n]
-            newNames[obj] = current_name + "_" + obj_suffix
+                # Determine if checking "Strip Defined Suffixes" should remove the suffix or move it to the end
+                # base_name here includes the suffix (e.g. Name_GRP) because strip_suffixes_for_grouping is False
+                root_name = base_name
+                type_suffix = ""
+
+                # Identify the suffix
+                sorted_valid = sorted(valid_suffixes or [], key=len, reverse=True)
+                for s in sorted_valid:
+                    if base_name.endswith(s):
+                        root_name = base_name[: -len(s)]
+                        type_suffix = s
+                        break
+
+                # If strip_defined_suffixes is True, we discard the suffix (User opted to Strip)
+                # If False, we keep it and append it at the end (User opted to Retain/Move)
+                if strip_defined_suffixes:
+                    type_suffix = ""
+
+                for i, obj in enumerate(ordered_group):
+                    # Construct: Root + _Index + Type
+                    nm = f"{root_name}_{suffix_list[i]}"
+                    if type_suffix:
+                        nm = f"{nm}{type_suffix}"
+
+                    newNames[obj] = nm
+
+                all_ordered_objs.extend(ordered_group)
+        else:
+            ordered_objs = XformUtils.order_by_distance(
+                objects, reference_point=reference_point, reverse=reverse
+            )
+
+            length = len(ordered_objs)
+            if alphabetical and length <= 26:
+                suffix_list = list(string.ascii_uppercase)[:length]
+            else:
+                pad = max(2, len(str(length)))
+                suffix_list = [
+                    str(n + 1).zfill(pad) for n in range(length)
+                ]  # 1-based index
+
+            for n, obj in enumerate(ordered_objs):
+                base_name = get_base_name(obj.name())
+                obj_suffix = suffix_list[n]
+                newNames[obj] = base_name + "_" + obj_suffix
+
+            all_ordered_objs = ordered_objs
 
         # Rename all with a placeholder first so that there are no conflicts.
-        for obj in ordered_objs:
+        for obj in all_ordered_objs:
             pm.rename(obj, "p0000000000")
-        for obj in ordered_objs:  # Rename all with the new names.
+        for obj in all_ordered_objs:  # Rename all with the new names.
             pm.rename(obj, newNames[obj])
 
 

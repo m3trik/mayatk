@@ -214,6 +214,7 @@ class EditUtils(ptk.HelpMixin):
         duplicate: bool = True,
         separate: bool = True,
         offset: bool = False,
+        keep_faces_together: bool = True,
     ) -> Optional[List]:
         """Detach mesh components (vertices or faces) from their parent mesh.
 
@@ -227,6 +228,8 @@ class EditUtils(ptk.HelpMixin):
             separate (bool): For faces, separate the detached faces into individual objects.
             offset (bool): For faces, offset/translate the extracted faces from their
                 original position. If False (default), faces maintain their original shape.
+            keep_faces_together (bool): If True (default), detached faces remain connected.
+                If False, each face is detached individually.
 
         Returns:
             Optional[List]: The resulting objects after separation, or the polyChipOff node
@@ -260,7 +263,7 @@ class EditUtils(ptk.HelpMixin):
             extract = pm.polyChipOff(
                 components,
                 ch=True,
-                keepFacesTogether=True,
+                keepFacesTogether=keep_faces_together,
                 dup=duplicate,
                 off=offset,
             )

@@ -3,13 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_maya_menu_handler: PASS
-  Tests: 9, Failures: 0, Errors: 0, Skipped: 0
+test_material_updater: PASS
+  Tests: 15, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_maya_menu_handler: PASS (9 tests, 0 failures, 0 errors)
+  test_material_updater: PASS (15 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 9 tests, 0 failures, 0 errors, 0 skipped
+Total: 15 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

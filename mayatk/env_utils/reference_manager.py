@@ -1033,26 +1033,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         sorting_enabled = t.isSortingEnabled()
         t.setSortingEnabled(False)
         try:
-            existing = {
-                t.item(row, 0).text(): row
-                for row in range(t.rowCount())
-                if t.item(row, 0)  # Files column is at index 0
-            }
+            # Update row count to match new list size
+            # This handles removal (truncation) and addition (extension) automatically
+            t.setRowCount(len(file_names))
 
-            to_remove = [
-                row for name, row in existing.items() if name not in file_names
-            ]
-            self.logger.debug(f"Rows to remove: {to_remove}")
-            for row in reversed(sorted(to_remove)):
-                t.removeRow(row)
-
-            for idx, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
-                self.logger.debug(f"Inserting row for: {scene_name} ({file_path})")
-                row = existing.get(scene_name)
-                if row is None:
-                    row = t.rowCount()
-                    t.insertRow(row)
-
+            for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
                 if not item:
                     # Get the full filename without stripping for rename functionality

@@ -30,7 +30,7 @@ class GameShaderConfigTest(MayaTkTestCase):
             "mask_map": True,
         }
 
-        with patch("pythontk.TextureMapFactory.prepare_maps") as mock_prepare:
+        with patch("pythontk.img_utils.map_factory.MapFactory.prepare_maps") as mock_prepare:
             # Simulate single mode return
             mock_prepare.return_value = self.textures
 
@@ -65,7 +65,7 @@ class GameShaderConfigTest(MayaTkTestCase):
 
     def test_config_preset(self):
         """Test passing configuration as a preset string."""
-        with patch("pythontk.TextureMapFactory.prepare_maps") as mock_prepare:
+        with patch("pythontk.img_utils.map_factory.MapFactory.prepare_maps") as mock_prepare:
             mock_prepare.return_value = self.textures
 
             node = self.shader.create_network(
@@ -87,7 +87,7 @@ class GameShaderConfigTest(MayaTkTestCase):
         """Test overriding config with explicit argument."""
         config = {"shader_type": "standard_surface"}
 
-        with patch("pythontk.TextureMapFactory.prepare_maps") as mock_prepare:
+        with patch("pythontk.img_utils.map_factory.MapFactory.prepare_maps") as mock_prepare:
             mock_prepare.return_value = self.textures
 
             # Override with explicit arg
@@ -108,7 +108,7 @@ class GameShaderConfigTest(MayaTkTestCase):
         """Test overriding config with kwarg."""
         config = {"shader_type": "standard_surface"}
 
-        with patch("pythontk.TextureMapFactory.prepare_maps") as mock_prepare:
+        with patch("pythontk.img_utils.map_factory.MapFactory.prepare_maps") as mock_prepare:
             mock_prepare.return_value = self.textures
 
             # Override with kwarg

@@ -556,10 +556,24 @@ except Exception as e:
 
 def main():
     """Main entry point."""
-    runner = MayaTestRunner()
-
     # Parse command line arguments
     args = sys.argv[1:]
+
+    # Parse port first
+    port = 7002
+    if "--port" in args:
+        try:
+            p_idx = args.index("--port")
+            if p_idx + 1 < len(args):
+                port = int(args[p_idx + 1])
+                # Remove --port and value from args so they aren't treated as module names
+                args.pop(p_idx)
+                args.pop(p_idx)
+        except (ValueError, IndexError):
+            print("Invalid port specified")
+            return
+
+    runner = MayaTestRunner(port=port)
 
     # Check for flags
     dry_run = "--dry-run" in args or "-d" in args

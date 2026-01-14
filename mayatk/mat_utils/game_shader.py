@@ -3,7 +3,7 @@
 import os
 import logging
 from typing import List, Optional, Tuple, Callable, Union, Dict, Any
-from qtpy import QtGui
+from qtpy import QtCore, QtGui
 
 try:
     import pymel.core as pm
@@ -61,6 +61,9 @@ class GameShader(ptk.LoggingMixin):
             "metallic_smoothness": False,
             "mask_map": False,
             "orm_map": False,
+            "opacity": False,
+            "emissive": False,
+            "ambient_occlusion": False,
             "convert_specgloss_to_pbr": False,
             "cleanup_base_color": False,
             "output_extension": "png",
@@ -83,6 +86,9 @@ class GameShader(ptk.LoggingMixin):
             ["Metallic Smoothness", str(cfg["metallic_smoothness"])],
             ["Mask Map", str(cfg["mask_map"])],
             ["ORM Map", str(cfg["orm_map"])],
+            ["Opacity", str(cfg["opacity"])],
+            ["Emissive", str(cfg["emissive"])],
+            ["Ambient Occlusion", str(cfg["ambient_occlusion"])],
         ]
         self.log_table(config_info, headers=["Option", "Value"], title="Configuration")
 
@@ -193,6 +199,14 @@ class GameShader(ptk.LoggingMixin):
             shader_node = self.setup_standard_surface_node(name, opacity_map)
         else:  # Default to stingray
             shader_node = self.setup_stringray_node(name, opacity_map)
+
+        # Validation: Check for Opacity without Base Color
+        if opacity_map and not ptk.MapFactory.filter_images_by_type(
+            textures, ["Base_Color", "Diffuse", "Albedo_Transparency"]
+        ):
+            self.logger.warning(
+                f"Shader '{name}' has Opacity but no Base Color. Object may appear invisible or black."
+            )
 
         # Optional: Arnold shader creation
         if create_arnold:
@@ -367,7 +381,9 @@ class GameShader(ptk.LoggingMixin):
 
         if opacity:
             # Enable transparency for standard surface
-            std_node.transmission.set(1.0)
+            # Note: We do NOT set transmission to 1.0 (glass).
+            # We ONLY enable thinWalled for correct cutout/foliage behavior.
+            # Opacity is driven by the 'opacity' (alpha) input connection later.
             std_node.thinWalled.set(True)
 
         return std_node
@@ -693,7 +709,9 @@ class GameShader(ptk.LoggingMixin):
             # Connect base color
             pm.connectAttr(texture_node.outColor, aiMult_node.input1, force=True)
             # Handle transparency by connecting alpha to Arnold's standard surface opacity
-            pm.connectAttr(texture_node.outAlpha, ai_node.opacity, force=True)
+            pm.connectAttr(texture_node.outAlpha, ai_node.opacityR, force=True)
+            pm.connectAttr(texture_node.outAlpha, ai_node.opacityG, force=True)
+            pm.connectAttr(texture_node.outAlpha, ai_node.opacityB, force=True)
             return True
 
         elif texture_type == "Roughness":
@@ -833,7 +851,6 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, ai_node.transmission, force=True)
             pm.connectAttr(texture_node.outColor, ai_node.opacity, force=True)
         else:
             return False
@@ -1028,8 +1045,6 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
-            std_node.transmission.set(1.0)
-            std_node.thinWalled.set(True)
 
         else:
             return False
@@ -1477,8 +1492,16 @@ class GameShaderSlots(GameShader):
     def cmb002_init(self, widget):
         """Initialize Presets"""
         if not widget.is_initialized:
-            # Populate template combo box from presets
-            widget.add(list(ptk.MapRegistry().get_workflow_presets().keys()))
+            # Populate template combo box from presets with tooltips
+            presets = ptk.MapRegistry().get_workflow_presets()
+            widget.clear()
+            for name, settings in presets.items():
+                widget.addItem(name)
+                description = settings.get("description")
+                if description:
+                    widget.setItemData(
+                        widget.count() - 1, description, QtCore.Qt.ToolTipRole
+                    )
 
     def cmb003_init(self, widget):
         """Initialize Output Extension"""

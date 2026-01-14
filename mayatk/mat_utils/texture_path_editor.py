@@ -45,7 +45,6 @@ class TexturePathEditorSlots:
             setToolTip="Open the project's sourceimages directory in the file explorer.",
             setObjectName="open_source_images",
         )
-
         widget.menu.add("Separator", setTitle="Path Management")
         widget.menu.add(
             self.sb.registered_widgets.Label,
@@ -57,16 +56,14 @@ class TexturePathEditorSlots:
             self.sb.registered_widgets.Label,
             setText="Find and Copy Textures",
             setToolTip="Search recursively from a source directory for textures used by all file nodes in the scene, then copy them into a destination directory.\n\nNote: Arnold texture nodes are not supported.",
-            setObjectName="lbl011",
+            setObjectName="lbl_find_copy",
         )
-
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setText="Convert to Relative Paths",
             setToolTip="Convert all texture paths in the scene to relative paths based on the project's sourceimages directory.",
             setObjectName="lbl013",
         )
-
         widget.menu.add("Separator", setTitle="Selection")
         widget.menu.add(
             self.sb.registered_widgets.Label,
@@ -109,7 +106,7 @@ class TexturePathEditorSlots:
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
 
-    def lbl011(self):
+    def lbl_find_copy(self):
         """Find and Copy Textures (Global)"""
         all_file_nodes = pm.ls(type="file")
         if not all_file_nodes:
@@ -133,17 +130,6 @@ class TexturePathEditorSlots:
         )
         if not found_textures:
             pm.warning("No textures found.")
-            return
-
-        confirm = pm.confirmDialog(
-            title="Textures Found",
-            message=f"Found {len(found_textures)} textures.\n\nProceed to copy and remap?",
-            button=["Yes", "No"],
-            defaultButton="Yes",
-            cancelButton="No",
-            dismissString="No",
-        )
-        if confirm == "No":
             return
 
         dest_dir = self.sb.dir_dialog(
@@ -170,8 +156,53 @@ class TexturePathEditorSlots:
                 continue
 
         if nodes_to_remap:
-            MatUtils.remap_texture_paths(file_nodes=nodes_to_remap, new_dir=dest_dir)
-            pm.displayInfo(f"Remapped {len(nodes_to_remap)} file nodes.")
+            # We manualy remap here to ensure paths are flattened (matching the copy operation)
+            # using MatUtils.remap_texture_paths would attempt to preserve relative directory structure
+            # which breaks if the file was moved from a subdirectory to the root of dest_dir.
+            project_sourceimages = EnvUtils.get_env_info("sourceimages")
+            sourceimages_name = (
+                os.path.basename(project_sourceimages) if project_sourceimages else ""
+            )
+            if project_sourceimages:
+                project_sourceimages = os.path.abspath(project_sourceimages).replace(
+                    "\\", "/"
+                )
+
+            pm.undoInfo(openChunk=True, chunkName="Remap Found Textures")
+            try:
+                count = 0
+                for node in nodes_to_remap:
+                    path = node.fileTextureName.get()
+                    if not path:
+                        continue
+
+                    # Create new path based on destination directory + original filename (flattened)
+                    filename = os.path.basename(path)
+                    new_abs_path = os.path.normpath(
+                        os.path.join(dest_dir, filename)
+                    ).replace("\\", "/")
+
+                    final_path = new_abs_path
+
+                    # Convert to relative path if inside sourceimages
+                    if project_sourceimages and new_abs_path.lower().startswith(
+                        project_sourceimages.lower()
+                    ):
+                        rel = os.path.relpath(
+                            new_abs_path, project_sourceimages
+                        ).replace("\\", "/")
+                        if sourceimages_name and not rel.startswith(
+                            sourceimages_name + "/"
+                        ):
+                            final_path = f"{sourceimages_name}/{rel}"
+                        else:
+                            final_path = rel
+
+                    node.fileTextureName.set(final_path)
+                    count += 1
+                pm.displayInfo(f"Remapped {count} file nodes.")
+            finally:
+                pm.undoInfo(closeChunk=True)
         else:
             pm.warning("No file nodes matched the copied textures.")
 
