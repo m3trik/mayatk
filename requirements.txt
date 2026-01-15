@@ -1,5 +1,0 @@
-qtpy
-pymel
-scipy>=1.14.0
-pythontk==0.7.54
-uitk==1.0.55

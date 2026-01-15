@@ -1,1 +1,1 @@
-recursive-exclude = pymel *
+recursive-include mayatk *.ui *.yaml *.lua *.bat
