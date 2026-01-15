@@ -682,36 +682,39 @@ class EditMacros:
 
     @staticmethod
     @CoreUtils.undoable
-    @CoreUtils.selected
+    def m_group(objects=None):
+        """Group the given objects (or selection), center the pivot, and rename the group.
+
+        DEPRECATED: Use EditUtils.group_objects instead.
+        """
+        return EditUtils.group_objects(objects)
+
+    @staticmethod
+    @CoreUtils.undoable
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
-    def m_combine(objects, allow_multiple_mats: bool = True):
+    def m_combine(
+        objects=None,
+        group_by_material=False,
+        cluster_by_distance=False,
+        threshold=10000.0,
+        **kwargs,
+    ):
         """Combine multiple meshes.
 
         Parameters:
             objects (list): List of mesh objects to combine.
-            allow_multiple_materials (bool): If False, abort if selected objects use different materials.
+            group_by_material (bool): Combine objects into groups based on their assigned materials.
+            cluster_by_distance (bool): If True, further subdivide material groups based on spatial proximity.
+            threshold (float): The maximum distance between objects to be considered in the same cluster.
         """
-        if not objects or len(objects) < 2:
-            pm.inViewMessage(
-                statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
-                fade=True,
-                position="topCenter",
-            )
-            return None
-
-        if not allow_multiple_mats:
-            all_mats = MatUtils.get_mats(objects)
-            if len(set(all_mats)) > 1:
-                pm.warning(
-                    "Cannot combine: selected objects do not share the same material."
-                )
-                return None
-
-        combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
-        combined_mesh = pm.rename(combined_mesh, objects[0].name())
-
-        return combined_mesh
+        EditUtils.combine_objects(
+            objects=objects,
+            group_by_material=group_by_material,
+            cluster_by_distance=cluster_by_distance,
+            threshold=threshold,
+            **kwargs,
+        )
 
     @staticmethod
     @CoreUtils.undoable
@@ -778,7 +781,8 @@ class EditMacros:
         if is_object_mode:  # Use the .vtx[:] notation directly
             objs = [f"{obj}.vtx[:]" for obj in objects]
         else:  # Convert selected components to vertices if in component mode
-            objs = pm.polyListComponentConversion(objects, toVertex=True)
+            converted = pm.polyListComponentConversion(objects, toVertex=True)
+            objs = pm.ls(converted, flatten=True) if converted else []
 
         if not objs:
             print("No valid objects or components given.")
@@ -905,18 +909,6 @@ class EditMacros:
                     pm.select(clear=True)
                     for obj in objects:
                         pm.select(obj, add=True)
-
-    @staticmethod
-    @CoreUtils.selected
-    def m_group(objects) -> None:
-        """Group selected object(s)."""
-        objects = pm.ls(objects, objectsOnly=True)
-        if objects:
-            grp = pm.group(objects)
-            pm.xform(grp, centerPivots=True)
-            pm.rename(grp, objects[0].name())
-        else:  # If nothing selected, create empty group.
-            pm.group(empty=True, name="null")
 
 
 class SelectionMacros:

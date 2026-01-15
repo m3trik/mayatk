@@ -35,6 +35,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "edit_utils/bridge.ui",
             "slot": "edit_utils.bridge.BridgeSlots",
         },
+        "calculator": {
+            "ui": "ui_utils/calculator.ui",
+            "slot": "ui_utils.calculator.CalculatorSlots",
+        },
         "color_manager": {
             "ui": "display_utils/color_manager.ui",
             "slot": "display_utils.color_manager.ColorManagerSlots",
@@ -75,6 +79,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "nurbs_utils/image_tracer.ui",
             "slot": "nurbs_utils.image_tracer.ImageTracerSlots",
         },
+        "material_updater": {
+            "ui": "mat_utils/material_updater.ui",
+            "slot": "mat_utils.material_updater.MaterialUpdaterSlots",
+        },
         "mirror": {
             "ui": "edit_utils/mirror.ui",
             "slot": "edit_utils.mirror.MirrorSlots",
@@ -95,9 +103,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
             "ui": "edit_utils/snap.ui",
             "slot": "edit_utils.snap.SnapSlots",
         },
-        "stingray_arnold_shader": {
-            "ui": "mat_utils/stingray_arnold_shader.ui",
-            "slot": "mat_utils.stingray_arnold_shader.StingrayArnoldShaderSlots",
+        "game_shader": {
+            "ui": "mat_utils/game_shader.ui",
+            "slot": "mat_utils.game_shader.GameShaderSlots",
         },
         "texture_path_editor": {
             "ui": "mat_utils/texture_path_editor.ui",
@@ -106,6 +114,10 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         "tube_rig": {
             "ui": "rig_utils/tube_rig.ui",
             "slot": "rig_utils.tube_rig.TubeRigSlots",
+        },
+        "shadow_rig": {
+            "ui": "rig_utils/shadow_rig.ui",
+            "slot": "rig_utils.shadow_rig.ShadowRigSlots",
         },
         "wheel_rig": {
             "ui": "rig_utils/wheel_rig.ui",
@@ -253,7 +265,8 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         ui.set_attributes(WA_TranslucentBackground=True)
         ui.set_flags(FramelessWindowHint=True)
         ui.style.set(theme="dark", style_class="translucentBgWithBorder")
-        ui.lock_style = True  # Prevent style changes
+        ui.edit_tags(add="mayatk|maya_menu")
+        # ui.lock_style = True  # Prevent style changes
 
         return ui
 

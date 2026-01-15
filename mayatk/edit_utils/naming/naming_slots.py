@@ -39,7 +39,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             return ["_GRP", "_LOC", "_JNT", "_GEO", "_CRV", "_CAM", "_LGT", "_LYR"]
 
     def txt000_init(self, widget):
-        """ """
+        """Initialize Find"""
         widget.option_box.menu.setTitle("Find")
         # Add clear button to the menu option box
         widget.option_box.clear_option = True
@@ -102,7 +102,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
                 pm.warning(f"No {object_type} found matching '{text}'")
 
     def txt001_init(self, widget):
-        """ """
+        """Initialize Rename"""
         widget.option_box.menu.setTitle("Rename")
         # Add clear button to the menu option box
         widget.option_box.clear_option = True
@@ -157,7 +157,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
 
     def tb000_init(self, widget):
-        """ """
+        """Initialize Convert Case"""
         widget.option_box.menu.setTitle("Convert Case")
         widget.option_box.menu.add(
             "QComboBox",
@@ -175,7 +175,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         self.set_case(objects, case)
 
     def tb001_init(self, widget):
-        """ """
+        """Initialize Suffix By Location"""
         widget.option_box.menu.setTitle("Suffix By Location")
         widget.option_box.menu.add(
             "QCheckBox",
@@ -198,10 +198,16 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
         widget.option_box.menu.add(
             "QCheckBox",
-            setText="Strip Trailing Alphabetical",
+            setText="Strip Defined Suffixes",
             setObjectName="chk003",
             setChecked=True,
-            setToolTip="Strip any trailing uppercase alphabet chars that are prefixed with an underscore.  ie. 'A' of 'cube_A'",
+            setToolTip="Strip any suffixes found in the 'Suffix By Type' settings (e.g. '_GRP', '_LOC').",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Independent Groups",
+            setObjectName="chk007",
+            setToolTip="Group objects by name type and suffix them independently.",
         )
         widget.option_box.menu.add(
             "QCheckBox",
@@ -215,8 +221,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         first_obj_as_ref = widget.option_box.menu.chk006.isChecked()
         alphabetical = widget.option_box.menu.chk005.isChecked()
         strip_trailing_ints = widget.option_box.menu.chk002.isChecked()
-        strip_trailing_alpha = widget.option_box.menu.chk003.isChecked()
+        strip_defined_suffixes = widget.option_box.menu.chk003.isChecked()
         reverse = widget.option_box.menu.chk004.isChecked()
+        # Default to False if widget doesn't exist yet (backward compatibility/initialization check)
+        try:
+            independent_groups = widget.option_box.menu.chk007.isChecked()
+        except AttributeError:
+            independent_groups = False
 
         selection = pm.ls(sl=True, objectsOnly=True, type="transform")
         self.append_location_based_suffix(
@@ -224,12 +235,14 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             first_obj_as_ref=first_obj_as_ref,
             alphabetical=alphabetical,
             strip_trailing_ints=strip_trailing_ints,
-            strip_trailing_alpha=strip_trailing_alpha,
+            strip_defined_suffixes=strip_defined_suffixes,
+            valid_suffixes=self.valid_suffixes,
             reverse=reverse,
+            independent_groups=independent_groups,
         )
 
     def tb002_init(self, widget):
-        """ """
+        """Initialize Strip Chars"""
         widget.option_box.menu.setTitle("Strip Chars")
         widget.option_box.menu.add(
             "QSpinBox",
@@ -256,7 +269,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         self.strip_chars(sel, **kwargs)
 
     def tb003_init(self, widget):
-        """ """
+        """Initialize Suffix By Type"""
         widget.option_box.menu.setTitle("Suffix By Type")
         widget.option_box.menu.add(
             "QLineEdit",

@@ -119,6 +119,23 @@ class TestComponents(MayaTkTestCase):
         cube_key = next(k for k in keys if "test_comp_cube" in k)
         self.assertEqual(len(mapping[cube_key]), 1)
 
+    def test_map_components_to_objects_multiple_per_object(self):
+        """Test mapping multiple components from same object."""
+        comps = [f"{self.cube}.vtx[0]", f"{self.cube}.vtx[1]", f"{self.cube}.vtx[2]"]
+        mapping = Components.map_components_to_objects(comps)
+
+        # Should have one key (cube shape)
+        self.assertEqual(len(mapping), 1)
+
+        # That key should have 3 components
+        cube_key = list(mapping.keys())[0]
+        self.assertEqual(len(mapping[cube_key]), 3)
+
+    def test_map_components_to_objects_empty(self):
+        """Test mapping empty component list."""
+        mapping = Components.map_components_to_objects([])
+        self.assertEqual(mapping, {})
+
     # -------------------------------------------------------------------------
     # Geometric Operations
     # -------------------------------------------------------------------------
@@ -269,10 +286,59 @@ class TestComponents(MayaTkTestCase):
         soft_edges = Components.get_edges_by_normal_angle(self.cube, 0, 10)
         self.assertEqual(len(soft_edges), 0)
 
+    def test_get_edges_by_normal_angle_return_angles(self):
+        """Test return_angles parameter returns edges and angle dict."""
+        result = Components.get_edges_by_normal_angle(
+            self.cube, 80, 100, return_angles=True
+        )
+
+        # Should return a tuple
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+
+        edges, angles = result
+        # Edges should be a list
+        self.assertIsInstance(edges, list)
+        self.assertTrue(len(edges) > 0)
+
+        # Angles should be a dict mapping edge names (strings) to floats
+        self.assertIsInstance(angles, dict)
+        for edge_name, angle in angles.items():
+            self.assertIsInstance(edge_name, str)
+            self.assertIsInstance(angle, float)
+            # All edges in a cube have 90 degree angles
+            self.assertAlmostEqual(angle, 90.0, places=1)
+
+        # The filtered edges should have their names in the angles dict
+        for edge in edges:
+            self.assertIn(edge.name(), angles)
+            self.assertTrue(80 <= angles[edge.name()] <= 100)
+
     def test_set_edge_hardness(self):
-        """Test setting edge hardness."""
-        Components.set_edge_hardness(self.cube, 180, lower_hardness=180)
-        pass
+        """Test setting edge hardness based on angle threshold."""
+        # Cube has all 90-degree edges, set threshold at 45 degrees
+        # All edges should get upper_hardness since 90 > 45
+        Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180
+        )
+
+        # Verify the cube still exists and is valid
+        self.assertTrue(pm.objExists(self.cube))
+
+    def test_set_edge_hardness_no_values(self):
+        """Test set_edge_hardness early exit when no hardness values provided."""
+        # Should not raise, just return early
+        Components.set_edge_hardness(self.cube, 45)
+
+    def test_set_edge_hardness_upper_only(self):
+        """Test setting only upper hardness."""
+        Components.set_edge_hardness(self.cube, 45, upper_hardness=0)
+        self.assertTrue(pm.objExists(self.cube))
+
+    def test_set_edge_hardness_lower_only(self):
+        """Test setting only lower hardness."""
+        Components.set_edge_hardness(self.cube, 45, lower_hardness=180)
+        self.assertTrue(pm.objExists(self.cube))
 
     def test_average_normals(self):
         """Test averaging normals."""

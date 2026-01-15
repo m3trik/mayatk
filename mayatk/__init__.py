@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.9.61"
+__version__ = "0.9.62"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -30,14 +30,13 @@ DEFAULT_INCLUDE = {
     "_xform_utils": "*",
     "_nurbs_utils": "*",
     "_light_utils": "*",
-    # Env utils
     # Animation utilities
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     # Core utils - specific classes
     "core_utils.components": "Components",
-    "core_utils.auto_instancer": "AutoInstancer",
+    "core_utils.instancing.auto_instancer": "AutoInstancer",
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
     "core_utils.diagnostics->Diagnostics": "*",
@@ -62,7 +61,7 @@ DEFAULT_INCLUDE = {
     "edit_utils.mirror": "Mirror",
     "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
-    "env_utils.command_port": "CommandPort",
+    "env_utils.maya_connection": "MayaConnection",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
@@ -70,7 +69,8 @@ DEFAULT_INCLUDE = {
     "env_utils.script_output": "ScriptOutput",
     "env_utils.hierarchy_manager": "HierarchyManager",
     # Material utils
-    "mat_utils.stingray_arnold_shader": "*",
+    "mat_utils.game_shader": "GameShader",
+    "mat_utils.material_updater": "MaterialUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
@@ -82,12 +82,46 @@ DEFAULT_INCLUDE = {
     "nurbs_utils.image_tracer": "ImageTracer",
     # Rig utils
     "rig_utils.controls": "Controls",
+    "rig_utils.shadow_rig": "ShadowRig",
 }
 
 bootstrap_package(
     globals(),
     include=DEFAULT_INCLUDE,
 )
+
+
+# Configure pythontk ExecutionMonitor to use mayapy
+try:
+    import sys
+    import os
+    from pythontk.core_utils.execution_monitor import ExecutionMonitor
+
+    # Only configure if running in Maya GUI
+    executable = sys.executable
+    if os.path.basename(executable).lower() in ["maya.exe", "maya"]:
+        # Try using MAYA_LOCATION first as it's most reliable
+        maya_location = os.environ.get("MAYA_LOCATION")
+        mayapy = None
+
+        if maya_location:
+            if sys.platform == "win32":
+                mayapy = os.path.join(maya_location, "bin", "mayapy.exe")
+            else:
+                mayapy = os.path.join(maya_location, "bin", "mayapy")
+
+        # Fallback to looking relative to executable
+        if not mayapy or not os.path.exists(mayapy):
+            exec_dir = os.path.dirname(executable)
+            if sys.platform == "win32":
+                mayapy = os.path.join(exec_dir, "mayapy.exe")
+            else:
+                mayapy = os.path.join(exec_dir, "mayapy")
+
+        if mayapy and os.path.exists(mayapy):
+            ExecutionMonitor.set_interpreter(mayapy)
+except ImportError:
+    pass
 
 
 # --------------------------------------------------------------------------------------------

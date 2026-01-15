@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>621</width>
-    <height>361</height>
+    <width>723</width>
+    <height>350</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -76,7 +76,14 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="LineEdit" name="txt000"/>
+          <widget class="LineEdit" name="txt000">
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the workspace dir.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="placeholderText">
+            <string>Root Directory:</string>
+           </property>
+          </widget>
          </item>
          <item>
           <widget class="ComboBox" name="cmb000">

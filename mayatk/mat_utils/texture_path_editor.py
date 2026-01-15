@@ -6,9 +6,11 @@ try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+from uitk.widgets.footer import FooterStatusController
+
+# From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
-from uitk.widgets.footer import FooterStatusController
 
 
 class TexturePathEditorSlots:
@@ -29,6 +31,8 @@ class TexturePathEditorSlots:
         """Initialize the header for the texture path editor."""
         # Add a button to open the hypershade editor.
         widget.menu.setTitle("Global Tasks:")
+
+        widget.menu.add("Separator", setTitle="General")
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setText="Refresh Texture List",
@@ -41,6 +45,7 @@ class TexturePathEditorSlots:
             setToolTip="Open the project's sourceimages directory in the file explorer.",
             setObjectName="open_source_images",
         )
+        widget.menu.add("Separator", setTitle="Path Management")
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setText="Set Texture Directory",
@@ -49,27 +54,28 @@ class TexturePathEditorSlots:
         )
         widget.menu.add(
             self.sb.registered_widgets.Label,
-            setText="Find and Move Textures",
+            setText="Find and Copy Textures",
             setToolTip="Search recursively from a source directory for textures used by all file nodes in the scene, then copy them into a destination directory.\n\nNote: Arnold texture nodes are not supported.",
-            setObjectName="lbl011",
+            setObjectName="lbl_find_copy",
         )
         widget.menu.add(
             self.sb.registered_widgets.Label,
-            setText="Migrate Textures",
-            setToolTip="Copy textures for all file nodes in the scene from one directory to another.",
-            setObjectName="lbl012",
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.Label,
-            setText="Remap to Relative Paths",
+            setText="Convert to Relative Paths",
             setToolTip="Convert all texture paths in the scene to relative paths based on the project's sourceimages directory.",
             setObjectName="lbl013",
         )
+        widget.menu.add("Separator", setTitle="Selection")
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setText="Select Textures for Selected Objects",
             setToolTip="Select the texture path cells in the table associated with the currently selected objects in the scene.",
             setObjectName="lbl014",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Select Broken Paths",
+            setToolTip="Select all rows in the table where the texture file is missing.",
+            setObjectName="lbl015",
         )
 
     def open_source_images(self):
@@ -100,8 +106,17 @@ class TexturePathEditorSlots:
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
 
-    def lbl011(self):
-        """Find and Move Textures (Global)"""
+    def lbl_find_copy(self):
+        """Find and Copy Textures (Global)"""
+        all_file_nodes = pm.ls(type="file")
+        if not all_file_nodes:
+            pm.warning("No file nodes in the scene.")
+            return
+
+        self._find_and_copy_workflow(all_file_nodes)
+
+    def _find_and_copy_workflow(self, file_nodes):
+        """Shared workflow for finding and copying textures."""
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
             title="Select a root directory to recursively search for textures:",
@@ -110,13 +125,8 @@ class TexturePathEditorSlots:
         if not source_dir:
             return
 
-        all_file_nodes = pm.ls(type="file")
-        if not all_file_nodes:
-            pm.warning("No file nodes in the scene.")
-            return
-
         found_textures = MatUtils.find_texture_files(
-            file_nodes=all_file_nodes, source_dir=source_dir, recursive=True
+            file_nodes=file_nodes, source_dir=source_dir, recursive=True
         )
         if not found_textures:
             pm.warning("No textures found.")
@@ -133,35 +143,68 @@ class TexturePathEditorSlots:
             found_files=found_textures, new_dir=dest_dir, delete_old=False
         )
 
-        # Remap the file nodes to the new directory
-        MatUtils.remap_texture_paths(file_nodes=all_file_nodes, new_dir=dest_dir)
+        # Filter file nodes to only remap ones that were successfully found and copied
+        found_basenames = {os.path.basename(f).lower() for f in found_textures}
+        nodes_to_remap = []
+        for node in file_nodes:
+            # Check if node's texture name matches one of the found ones
+            try:
+                path = node.fileTextureName.get()
+                if path and os.path.basename(path).lower() in found_basenames:
+                    nodes_to_remap.append(node)
+            except Exception:
+                continue
 
-        # Refresh the table widget to show updated paths
-        self.ui.tbl000.init_slot()
+        if nodes_to_remap:
+            # We manualy remap here to ensure paths are flattened (matching the copy operation)
+            # using MatUtils.remap_texture_paths would attempt to preserve relative directory structure
+            # which breaks if the file was moved from a subdirectory to the root of dest_dir.
+            project_sourceimages = EnvUtils.get_env_info("sourceimages")
+            sourceimages_name = (
+                os.path.basename(project_sourceimages) if project_sourceimages else ""
+            )
+            if project_sourceimages:
+                project_sourceimages = os.path.abspath(project_sourceimages).replace(
+                    "\\", "/"
+                )
 
-    def lbl012(self):
-        """Migrate Textures (Global)"""
-        old_dir = self.sb.dir_dialog(
-            title="Select a directory to migrate textures from:",
-            start_dir=EnvUtils.get_env_info("sourceimages"),
-        )
-        if not old_dir:
-            return
-        new_dir = self.sb.dir_dialog(
-            title="Select a directory to migrate textures to:",
-            start_dir=EnvUtils.get_env_info("sourceimages"),
-        )
-        if not new_dir:
-            return
+            pm.undoInfo(openChunk=True, chunkName="Remap Found Textures")
+            try:
+                count = 0
+                for node in nodes_to_remap:
+                    path = node.fileTextureName.get()
+                    if not path:
+                        continue
 
-        all_file_nodes = pm.ls(type="file")
-        if not all_file_nodes:
-            pm.warning("No file nodes in the scene.")
-            return
+                    # Create new path based on destination directory + original filename (flattened)
+                    filename = os.path.basename(path)
+                    new_abs_path = os.path.normpath(
+                        os.path.join(dest_dir, filename)
+                    ).replace("\\", "/")
 
-        MatUtils.migrate_textures(
-            file_nodes=all_file_nodes, old_dir=old_dir, new_dir=new_dir
-        )
+                    final_path = new_abs_path
+
+                    # Convert to relative path if inside sourceimages
+                    if project_sourceimages and new_abs_path.lower().startswith(
+                        project_sourceimages.lower()
+                    ):
+                        rel = os.path.relpath(
+                            new_abs_path, project_sourceimages
+                        ).replace("\\", "/")
+                        if sourceimages_name and not rel.startswith(
+                            sourceimages_name + "/"
+                        ):
+                            final_path = f"{sourceimages_name}/{rel}"
+                        else:
+                            final_path = rel
+
+                    node.fileTextureName.set(final_path)
+                    count += 1
+                pm.displayInfo(f"Remapped {count} file nodes.")
+            finally:
+                pm.undoInfo(closeChunk=True)
+        else:
+            pm.warning("No file nodes matched the copied textures.")
 
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
@@ -192,6 +235,9 @@ class TexturePathEditorSlots:
                 widget.itemSelectionChanged.connect(self._footer_controller.update)
 
             # Add context menu items using the existing menu system
+            widget.menu.setTitle("Context Tasks:")
+
+            widget.menu.add("Separator", setTitle="Path Management")
             widget.menu.add(
                 "QPushButton",
                 setText="Set Directory",
@@ -200,22 +246,18 @@ class TexturePathEditorSlots:
             )
             widget.menu.add(
                 "QPushButton",
-                setText="Find and Move Texture",
-                setObjectName="row_find_and_move_texture",
+                setText="Find and Copy Texture",
+                setObjectName="row_find_and_copy_texture",
                 setToolTip="Search for this texture in a folder and copy any matches to a destination.",
             )
             widget.menu.add(
                 "QPushButton",
-                setText="Migrate Texture",
-                setObjectName="row_migrate_texture",
-                setToolTip="Copy this texture to a new directory and update the file node path.",
-            )
-            widget.menu.add(
-                "QPushButton",
-                setText="Remap to Relative Path",
+                setText="Convert to Relative Path",
                 setObjectName="remap_to_relative",
                 setToolTip="Convert the selected file node's texture path to a relative path",
             )
+
+            widget.menu.add("Separator", setTitle="Selection")
             widget.menu.add(
                 "QPushButton",
                 setText="Select In Scene",
@@ -234,6 +276,8 @@ class TexturePathEditorSlots:
                 setObjectName="row_show_in_hypershade",
                 setToolTip="Graph the selected file node in the Hypershade editor.",
             )
+
+            widget.menu.add("Separator", setTitle="Edit")
             widget.menu.add(
                 "QPushButton",
                 setText="Delete File Node",
@@ -252,9 +296,9 @@ class TexturePathEditorSlots:
                 "row_set_texture_directory", self.row_set_texture_directory
             )
             _bind_menu_action(
-                "row_find_and_move_texture", self.row_find_and_move_texture
+                "row_find_and_copy_texture", self.row_find_and_copy_texture
             )
-            _bind_menu_action("row_migrate_texture", self.row_migrate_texture)
+
             _bind_menu_action("remap_to_relative", self.remap_to_relative)
             _bind_menu_action("select_material", self.select_material)
             _bind_menu_action("select_file_node", self.select_file_node)
@@ -343,42 +387,56 @@ class TexturePathEditorSlots:
 
     def _refresh_table_content(self, widget):
         """Refresh the table content with current scene data."""
-        widget.clear()
-        # Optimization: Request 'shader' object directly to avoid re-creating PyNodes
-        rows = MatUtils.get_file_nodes(
-            return_type="shader|shaderName|path|fileNodeName|fileNode", raw=True
-        )
-        if not rows:
-            rows = [(None, "", "", "No file nodes found", None)]
-
-        formatted = []
-        for shader_node, shader_name, path, file_node_name, file_node in rows:
-            # shader_node is already a PyNode or None (from MatUtils)
-            formatted.append(
-                [(shader_name, shader_node), path, (file_node_name, file_node)]
+        # Show wait cursor during refresh for large scenes
+        pm.waitCursor(state=True)
+        try:
+            widget.setUpdatesEnabled(False)
+            widget.blockSignals(
+                True
+            )  # Prevent cellChanged from firing during population
+            widget.clear()
+            # Optimization: Request strings only to avoid PyNode creation overhead
+            rows = MatUtils.get_file_nodes(
+                return_type="shaderName|path|fileNodeName", raw=True
             )
+            if not rows:
+                rows = [("", "", "No file nodes found")]
 
-        widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
+            formatted = []
+            for shader_name, path, file_node_name in rows:
+                # Pass strings for display; PyNodes will be resolved on-demand by context menu actions
+                formatted.append([shader_name, path, file_node_name])
 
-        # Configure column resizing behavior
-        header = widget.horizontalHeader()
-        header.setSectionsMovable(False)  # Prevent column reordering
-        header.setSectionResizeMode(
-            0, self.sb.QtWidgets.QHeaderView.Interactive
-        )  # Shader column - manually resizable
-        header.setSectionResizeMode(
-            1, self.sb.QtWidgets.QHeaderView.Stretch
-        )  # Texture Path column - stretches to fill
-        header.setSectionResizeMode(
-            2, self.sb.QtWidgets.QHeaderView.Interactive
-        )  # File Node column - manually resizable
+            # Populate table (triggers cellChanged if signals not blocked)
+            widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
 
-        # Set minimum column widths for usability
-        widget.setColumnWidth(0, 200)  # Shader column minimum width
-        widget.setColumnWidth(2, 200)  # File Node column minimum width
+            # Configure column resizing behavior
+            header = widget.horizontalHeader()
+            header.setSectionsMovable(False)  # Prevent column reordering
+            header.setSectionResizeMode(
+                0, self.sb.QtWidgets.QHeaderView.Interactive
+            )  # Shader column - manually resizable
+            header.setSectionResizeMode(
+                1, self.sb.QtWidgets.QHeaderView.Stretch
+            )  # Texture Path column - stretches to fill
+            header.setSectionResizeMode(
+                2, self.sb.QtWidgets.QHeaderView.Interactive
+            )  # File Node column - manually resizable
 
-        self.setup_formatting(widget)
-        widget.apply_formatting()
+            # Set minimum column widths for usability
+            widget.setColumnWidth(0, 200)  # Shader column minimum width
+            widget.setColumnWidth(2, 200)  # File Node column minimum width
+
+            # Setup and apply formatting in one pass (avoid double formatting)
+            self.setup_formatting(widget)
+            # Note: widget.add() already calls apply_formatting(), but we need our
+            # custom formatter applied, so we call it once more after setup
+            widget.apply_formatting()
+        finally:
+            widget.blockSignals(False)
+            widget.setUpdatesEnabled(True)
+            pm.waitCursor(state=False)
+
         if self._footer_controller:
             self._footer_controller.update()
 
@@ -420,7 +478,53 @@ class TexturePathEditorSlots:
 
     def setup_formatting(self, widget):
         source_root = EnvUtils.get_env_info("workspace")
-        path_cache = {}  # Cache for file existence checks
+
+        # Pre-compute all unique paths and check existence in batch
+        # This avoids repeated os.path.exists() calls during formatting
+        path_cache = {}
+
+        # Collect all unique paths first
+        unique_paths = set()
+        for row in range(widget.rowCount()):
+            item = widget.item(row, 1)
+            if item:
+                path = str(item.text()).strip()
+                if path:
+                    unique_paths.add(path)
+
+        # Batch check file existence (potentially parallelized for network paths)
+        def resolve_and_check(path):
+            abs_path = (
+                os.path.normpath(os.path.join(source_root, path))
+                if not os.path.isabs(path)
+                else os.path.normpath(path)
+            )
+            return path, os.path.exists(abs_path), abs_path
+
+        # For small datasets, check inline; for large datasets, use threading
+        if len(unique_paths) > 50:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {
+                    executor.submit(resolve_and_check, p): p for p in unique_paths
+                }
+                for future in as_completed(futures):
+                    try:
+                        path, exists, abs_path = future.result(timeout=5)
+                        path_cache[path] = (exists, abs_path)
+                    except Exception:
+                        path = futures[future]
+                        abs_path = (
+                            os.path.normpath(os.path.join(source_root, path))
+                            if not os.path.isabs(path)
+                            else os.path.normpath(path)
+                        )
+                        path_cache[path] = (False, abs_path)
+        else:
+            for path in unique_paths:
+                _, exists, abs_path = resolve_and_check(path)
+                path_cache[path] = (exists, abs_path)
 
         def format_if_invalid(item, value, row, col, *_):
             path = str(value).strip()
@@ -428,6 +532,7 @@ class TexturePathEditorSlots:
             if path in path_cache:
                 exists, abs_path = path_cache[path]
             else:
+                # Fallback for any paths not in cache
                 abs_path = (
                     os.path.normpath(os.path.join(source_root, path))
                     if not os.path.isabs(path)
@@ -461,16 +566,16 @@ class TexturePathEditorSlots:
             except Exception:
                 file_node_data = None
 
+        # OPTIMIZATION: Use file_node_data directly if available instead of
+        # calling get_file_nodes which is expensive
         material_file_nodes = []
         if file_node_data:
             material_file_nodes = [file_node_data]
-        elif shader_name:
+        elif shader_node:
+            # Use listHistory directly on the shader - much faster than get_file_nodes
             try:
-                nodes = MatUtils.get_file_nodes(
-                    materials=[shader_name], return_type="fileNode"
-                )
-                nodes = pm.ls(nodes, type="file") if nodes else []
-                material_file_nodes = MatUtils._unique_ordered(nodes)
+                history = pm.listHistory(shader_node, type="file") or []
+                material_file_nodes = list(dict.fromkeys(history))  # unique, ordered
             except Exception:
                 material_file_nodes = []
 
@@ -706,49 +811,7 @@ class TexturePathEditorSlots:
 
         self.ui.tbl000.init_slot()
 
-    def row_find_and_move_texture(self, selection=None):
-        contexts = self._get_selected_contexts(selection)
-        if not contexts:
-            return
-        start_dir = self.sb.dir_dialog(
-            title="Select a root directory to search for these textures:",
-            start_dir=EnvUtils.get_env_info("sourceimages"),
-        )
-        if not start_dir:
-            return
-
-        all_file_nodes = []
-        for context in contexts:
-            all_file_nodes.extend(context["file_nodes"])
-
-        found_files = MatUtils.find_texture_files(
-            objects=None,
-            source_dir=start_dir,
-            recursive=True,
-            return_dir=True,
-            quiet=True,
-            file_nodes=all_file_nodes,
-        )
-        if not found_files:
-            pm.warning("No matching textures found for the selected items.")
-            return
-
-        dest_dir = self.sb.dir_dialog(
-            title="Select a destination directory for these textures:",
-            start_dir=EnvUtils.get_env_info("sourceimages"),
-        )
-        if not dest_dir:
-            return
-
-        MatUtils.move_texture_files(
-            found_files=found_files, new_dir=dest_dir, delete_old=False
-        )
-
-        self._remap_context_textures(contexts, new_dir=dest_dir)
-
-        self.ui.tbl000.init_slot()
-
-    def row_migrate_texture(self, selection=None):
+    def row_find_and_copy_texture(self, selection=None):
         contexts = self._get_selected_contexts(selection)
         if not contexts:
             return
@@ -757,41 +820,11 @@ class TexturePathEditorSlots:
         for context in contexts:
             all_file_nodes.extend(context["file_nodes"])
 
-        current_paths = [
-            self._resolve_absolute_texture_path(node)
-            for node in all_file_nodes
-            if node is not None
-        ]
-        current_paths = [
-            path for path in current_paths if path and os.path.exists(path)
-        ]
-        # Deduplicate paths
-        current_paths = list(set(current_paths))
-
-        if not current_paths:
-            pm.displayWarning(
-                "The current material textures could not be resolved on disk."
-            )
+        if not all_file_nodes:
+            pm.warning("No file nodes found in selection.")
             return
 
-        dest_dir = self.sb.dir_dialog(
-            title="Select a directory to migrate these textures to:",
-            start_dir=(
-                os.path.dirname(current_paths[0])
-                if current_paths
-                else EnvUtils.get_env_info("sourceimages")
-            ),
-        )
-        if not dest_dir:
-            return
-
-        MatUtils.move_texture_files(
-            found_files=current_paths, new_dir=dest_dir, delete_old=False
-        )
-
-        self._remap_context_textures(contexts, new_dir=dest_dir)
-
-        self.ui.tbl000.init_slot()
+        self._find_and_copy_workflow(all_file_nodes)
 
     def handle_cell_edit(self, row: int, col: int):
         tbl = self.ui.tbl000
@@ -828,8 +861,20 @@ class TexturePathEditorSlots:
             node_name = value
             if pm.objExists(node_name):
                 pm.select(node_name, r=True)
-                pm.mel.eval("NodeEditorWindow;")
-                pm.mel.eval("nodeEditor -e -f true nodeEditor1;")
+                try:
+                    pm.mel.eval("NodeEditorWindow;")
+                    # Attempt to find the Node Editor panel
+                    editors = pm.getPanel(scriptType="nodeEditorPanel")
+                    if editors:
+                        # Use the first found editor
+                        editor_name = editors[0] + "NodeEditorEd"
+                        pm.mel.eval(f"nodeEditor -e -f true {editor_name};")
+                    else:
+                        # Fallback to default name if query fails
+                        pm.mel.eval("nodeEditor -e -f true nodeEditor1;")
+                except Exception:
+                    # Fail silently if Node Editor interaction doesn't work (non-critical)
+                    pass
 
     def _create_footer_controller(self):
         footer = getattr(self.ui, "footer", None)
@@ -858,14 +903,20 @@ class TexturePathEditorSlots:
             pm.warning("No materials found on selected objects.")
             return
 
-        # Get file nodes associated with these materials
-        nodes = MatUtils.get_file_nodes(materials=mats, return_type="fileNode")
-        if not nodes:
+        # OPTIMIZATION: Get file nodes directly via listHistory on materials
+        # instead of calling get_file_nodes which rebuilds the entire mapping
+        target_node_names = set()
+        for mat in mats:
+            try:
+                file_nodes = pm.listHistory(mat, type="file") or []
+                for fn in file_nodes:
+                    target_node_names.add(fn.name())
+            except Exception:
+                pass
+
+        if not target_node_names:
             pm.warning("No file nodes found for selected objects.")
             return
-
-        # Convert to set of names for comparison
-        target_node_names = {n.name() if hasattr(n, "name") else str(n) for n in nodes}
 
         table = self.ui.tbl000
         table.clearSelection()
@@ -895,8 +946,57 @@ class TexturePathEditorSlots:
 
         if selected_count > 0:
             pm.displayInfo(f"Selected {selected_count} rows in the table.")
-        else:
-            pm.warning("No matching rows found in the table.")
+
+    def lbl015(self):
+        """Select Broken Paths"""
+        widget = self.ui.tbl000
+        source_root = EnvUtils.get_env_info("workspace")
+
+        # Clear current selection
+        widget.clearSelection()
+
+        # Select rows with broken paths
+        selection_mode = widget.selectionMode()
+        widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
+
+        rows_to_select = []
+        try:
+            for row in range(widget.rowCount()):
+                item = widget.item(row, 1)
+                if not item:
+                    continue
+
+                path = str(item.text()).strip()
+                if not path:
+                    continue
+
+                abs_path = (
+                    os.path.normpath(os.path.join(source_root, path))
+                    if not os.path.isabs(path)
+                    else os.path.normpath(path)
+                )
+
+                if not os.path.exists(abs_path):
+                    rows_to_select.append(row)
+
+            if rows_to_select:
+                for row in rows_to_select:
+                    # Select the Texture Path cell (Column 1)
+                    path_item = widget.item(row, 1)
+                    if path_item:
+                        path_item.setSelected(True)
+
+                # Scroll to first selected
+                widget.scrollToItem(widget.item(rows_to_select[0], 1))
+
+                pm.displayInfo(f"Selected {len(rows_to_select)} broken paths.")
+            else:
+                pm.displayInfo("No broken paths found.")
+
+        except Exception as e:
+            pm.warning(f"Error selecting broken paths: {e}")
+        finally:
+            widget.setSelectionMode(selection_mode)
 
 
 # --------------------------------------------------------------------------------------------

@@ -1,4 +1,0 @@
-qtpy
-pymel
-pythontk==0.7.54
-uitk==1.0.55

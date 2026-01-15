@@ -135,6 +135,65 @@ class TestImageTracer(unittest.TestCase):
         result_grp = tracer.project_on_plane(name="projected_curves")
         self.assertTrue(pm.objExists(result_grp), "Result group should exist")
 
+    def test_blue_pencil_tracing(self):
+        if ImageTracer is None:
+            print("Skipping test: ImageTracer module not found")
+            return
+        if cv2 is None:
+            print("Skipping test: OpenCV not found")
+            return
+
+        # Create a dummy zip file with a png inside
+        import zipfile
+        import tempfile
+        import shutil
+        from unittest.mock import MagicMock, patch
+
+        # Create a test PNG
+        png_path = self.test_image_path
+        if not os.path.exists(png_path):
+            self.create_test_image()
+
+        # Create a zip file containing the PNG
+        temp_dir = tempfile.mkdtemp()
+        zip_source_path = os.path.join(temp_dir, "test_bp_export.zip")
+        with zipfile.ZipFile(zip_source_path, "w") as zf:
+            zf.write(png_path, "test_stroke.png")
+
+        # Mock pm.bluePencilFrame
+        module_name = ImageTracer.__module__
+
+        def side_effect(exportArchive=None, **kwargs):
+            if exportArchive:
+                shutil.copy2(zip_source_path, exportArchive)
+
+        with patch(f"{module_name}.pm") as mock_pm:
+            # Setup the mock to behave like pymel.core
+            mock_pm.pluginInfo.return_value = True  # Plugin loaded
+
+            # Fail Attempt 1 (Native Command)
+            mock_pm.mel.exists.return_value = False
+
+            # Attempt 2 (Export Archive)
+            mock_pm.bluePencilFrame.side_effect = side_effect
+
+            # Mock curve creation
+            mock_curve = MagicMock()
+            mock_curve.getParent.return_value = MagicMock()  # Transform
+            mock_pm.curve.return_value = mock_curve
+            mock_pm.ls.return_value = []  # For existing curves check
+
+            tracer = ImageTracer(use_blue_pencil=True)
+            curves = tracer.trace_curves()
+
+            self.assertTrue(
+                mock_pm.bluePencilFrame.called, "bluePencilFrame should be called"
+            )
+            self.assertTrue(len(curves) > 0, "Should return curves")
+
+        # Cleanup
+        shutil.rmtree(temp_dir)
+
 
 if __name__ == "__main__":
     pm.newFile(f=True)

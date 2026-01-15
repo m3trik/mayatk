@@ -107,16 +107,16 @@ class TestCamUtils(MayaTkTestCase):
 
     def test_adjust_camera_clipping_manual(self):
         """Test manual clipping adjustment."""
-        mtk.adjust_camera_clipping(
-            camera=self.cam1, near_clip=0.5, far_clip=5000, mode="manual"
-        )
+        mtk.adjust_camera_clipping(camera=self.cam1, near_clip=0.5, far_clip=5000)
         self.assertAlmostEqual(self.cam1.nearClipPlane.get(), 0.5)
         self.assertAlmostEqual(self.cam1.farClipPlane.get(), 5000)
 
     def test_adjust_camera_clipping_reset(self):
         """Test resetting clipping."""
         self.cam1.nearClipPlane.set(5.0)
-        mtk.adjust_camera_clipping(camera=self.cam1, mode="reset")
+        mtk.adjust_camera_clipping(
+            camera=self.cam1, near_clip="reset", far_clip="reset"
+        )
         self.assertAlmostEqual(self.cam1.nearClipPlane.get(), 0.1)
         self.assertAlmostEqual(self.cam1.farClipPlane.get(), 10000)
 
@@ -124,9 +124,20 @@ class TestCamUtils(MayaTkTestCase):
         """Test automatic clipping based on geometry."""
         # Move cube far away to force large clip planes
         self.cube.t.set(1000, 1000, 1000)
-        mtk.adjust_camera_clipping(camera=self.cam1, mode="auto")
+        mtk.adjust_camera_clipping(camera=self.cam1, near_clip="auto", far_clip="auto")
         # Just check that values changed from default/previous
         self.assertNotEqual(self.cam1.farClipPlane.get(), 10000)
+
+    def test_adjust_camera_clipping_none(self):
+        """Test None parameter (do nothing)."""
+        self.cam1.nearClipPlane.set(0.5)
+        self.cam1.farClipPlane.set(5000)
+
+        # Should not change anything
+        mtk.adjust_camera_clipping(camera=self.cam1, near_clip=None, far_clip=None)
+
+        self.assertAlmostEqual(self.cam1.nearClipPlane.get(), 0.5)
+        self.assertAlmostEqual(self.cam1.farClipPlane.get(), 5000)
 
     def test_switch_viewport_camera_custom(self):
         """Test switching to a custom camera (creation)."""
@@ -164,11 +175,6 @@ class TestCamUtilsEdgeCases(MayaTkTestCase):
         with self.assertRaises(RuntimeError):
             mtk.group_cameras(name="existing_group")
 
-    def test_adjust_camera_clipping_invalid_mode(self):
-        """Test invalid mode error."""
-        with self.assertRaises(ValueError):
-            mtk.adjust_camera_clipping(mode="invalid_mode")
-
     def test_adjust_camera_clipping_auto_no_geo(self):
         """Test auto clipping with no geometry."""
         # Delete all geometry
@@ -176,8 +182,10 @@ class TestCamUtilsEdgeCases(MayaTkTestCase):
         pm.delete(pm.ls(type="mesh"))
         pm.delete(pm.ls(type="nurbsSurface"))
 
-        with self.assertRaises(ValueError):
-            mtk.adjust_camera_clipping(mode="auto")
+        # Should not raise error, but use defaults
+        mtk.adjust_camera_clipping(camera=self.cam1, near_clip="auto", far_clip="auto")
+        self.assertAlmostEqual(self.cam1.nearClipPlane.get(), 0.1)
+        self.assertAlmostEqual(self.cam1.farClipPlane.get(), 10000)
 
     def test_get_default_camera_fallback(self):
         """Test _get_default_camera fallback logic."""

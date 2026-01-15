@@ -50,8 +50,8 @@ class EnvUtils(ptk.HelpMixin):
             "workspace_path": lambda: ptk.format_path(
                 pm.workspace(q=True, rd=True), "path"
             ),
-            "sourceimages": lambda: os.path.join(
-                pm.workspace(q=True, rd=True), "sourceimages"
+            "sourceimages": lambda: os.path.normpath(
+                os.path.join(pm.workspace(q=True, rd=True), "sourceimages")
             ),
             "scene": lambda: pm.sceneName(),
             "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),

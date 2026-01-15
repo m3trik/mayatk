@@ -9,24 +9,25 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set, Any, Tuple, Callable
 import math
-import pythontk as ptk
-from mayatk.ui_utils._ui_utils import UiUtils
 
 try:
     import pymel.core as pm
 except ImportError as error:  # pragma: no cover - Maya runtime specific
     print(__file__, error)
+import pythontk as ptk
 
 
 class SceneDiagnostics:
     """Operations for inspecting and fixing common scene issues."""
 
-    @staticmethod
+    @classmethod
     def fix_ocio(
+        cls,
         dry_run: bool = False,
         verbose: bool = True,
         prefer_env_ocio: bool = True,
         prefer_aces: bool = True,
+        fix_color_spaces: bool = True,
     ) -> dict:
         """Repair Maya OCIO/Color Management preferences.
 
@@ -44,6 +45,8 @@ class SceneDiagnostics:
             verbose: If True, print a summary of actions.
             prefer_env_ocio: Prefer a valid OCIO config from the OCIO environment variable.
             prefer_aces: Prefer an ACES config when multiple configs are found.
+            fix_color_spaces: If True, automatically fix file nodes with invalid
+                color space names after changing the OCIO config.
 
         Returns:
             dict with keys: changed(bool), previous_config(str|None), new_config(str|None),
@@ -268,6 +271,15 @@ class SceneDiagnostics:
             for n in notes:
                 print(f"  - {n}")
 
+        # If the config changed, file nodes may have invalid color space names
+        # Automatically fix them to use valid names from the new config
+        if fix_color_spaces and changed and not dry_run:
+            color_space_result = cls.fix_missing_color_spaces(verbose=verbose)
+            if color_space_result["fixed_count"] > 0:
+                notes.append(
+                    f"Fixed {color_space_result['fixed_count']} file node(s) with invalid color spaces"
+                )
+
         return {
             "changed": changed,
             "previous_config": str(previous_config) if previous_config else None,
@@ -276,6 +288,519 @@ class SceneDiagnostics:
             "enabled_after": enabled_after,
             "notes": notes,
         }
+
+    # Map types that contain actual color data (should use sRGB)
+    # All others are non-color data and should use Raw/Linear
+    COLOR_MAP_TYPES = frozenset(
+        {
+            "Base_Color",
+            "Albedo_Transparency",
+            "Diffuse",
+            "Emissive",
+            "Specular",
+            "Subsurface_Scattering",
+            "Sheen",
+        }
+    )
+
+    @classmethod
+    def fix_missing_color_spaces(
+        cls,
+        fallback_color_space: Optional[str] = None,
+        fallback_raw_space: Optional[str] = None,
+        auto_detect: bool = True,
+        dry_run: bool = False,
+        verbose: bool = True,
+        scan_all: bool = True,
+        force_update: bool = False,
+    ) -> Dict[str, Any]:
+        """Fix missing color space errors on file texture nodes.
+
+        When opening a Maya scene, file nodes may reference color spaces that are not
+        available in the current OCIO configuration. This method finds those nodes and
+        reassigns them to a valid fallback color space.
+
+        Uses pythontk's TextureMapFactory.resolve_map_type for robust texture type detection
+        based on comprehensive suffix matching.
+
+        Based on Autodesk documentation:
+        - colorManagementPrefs(missingColorSpaceNodes=True) to find affected nodes
+
+        Parameters
+        ----------
+        fallback_color_space : str, optional
+            The color space for color textures (diffuse, albedo, emissive, etc.).
+            If None, auto-detects best sRGB variant from available spaces.
+        fallback_raw_space : str, optional
+            The color space for non-color data (normals, roughness, metallic, etc.).
+            If None, auto-detects best Raw/Linear variant from available spaces.
+        auto_detect : bool
+            If True, attempts to detect texture type from filename using
+            TextureMapFactory.resolve_map_type and assigns appropriate color space.
+        dry_run : bool
+            If True, only report what would be changed without modifying nodes.
+        verbose : bool
+            If True, print information about fixed nodes.
+        scan_all : bool
+            If True, scans ALL file nodes and checks if their colorSpace value
+            is valid (exists in available inputSpaceNames). This catches nodes
+            that missingColorSpaceNodes may miss.
+        force_update : bool
+            If True, re-assigns the color space even if the current value appears
+            valid. This is useful for fixing "not defined in transform collection"
+            warnings where the string matches but the internal reference is stale.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary with keys:
+            - fixed_count (int): Number of nodes fixed
+            - fixed_nodes (List[str]): Names of fixed nodes
+            - changes (List[Dict]): Details of each change
+            - color_space (str): sRGB fallback used
+            - raw_space (str): Raw fallback used
+            - globals_fixed (bool): Whether global CM settings were fixed
+        """
+        result = {
+            "fixed_count": 0,
+            "fixed_nodes": [],
+            "changes": [],
+            "color_space": None,
+            "raw_space": None,
+            "globals_fixed": False,
+        }
+
+        # First, ensure global color management settings are correct.
+        # This is critical because file nodes inherit settings from
+        # defaultColorMgtGlobals via connections.
+        try:
+            result["globals_fixed"] = cls._fix_color_management_globals(verbose=verbose)
+        except Exception as e:
+            if verbose:
+                pm.warning(f"Failed to fix CM globals: {e}")
+
+        # Get available color spaces first (needed for validation)
+        available_spaces = cls._get_available_color_spaces()
+        if not available_spaces:
+            pm.warning("No valid color spaces available in current OCIO config.")
+            return result
+
+        available_set = set(available_spaces)
+
+        # DEBUG: Show first few available spaces
+        if verbose:
+            pm.displayInfo(
+                f"DEBUG: Available spaces ({len(available_spaces)} total): {available_spaces[:5]}..."
+            )
+
+        # Collect nodes to fix
+        nodes_to_fix = set()
+
+        # Method 1: Use Maya's missingColorSpaceNodes query
+        missing_node_names = pm.colorManagementPrefs(
+            query=True, missingColorSpaceNodes=True
+        )
+        if missing_node_names:
+            # Normalize names to prevent duplicates (e.g. ":file1" vs "file1")
+            for n in missing_node_names:
+                try:
+                    # Try to resolve to PyNode and get canonical name
+                    nodes_to_fix.add(pm.PyNode(n).name())
+                except Exception:
+                    # Fallback to raw string if node not found (unlikely but safe)
+                    nodes_to_fix.add(str(n))
+
+            if verbose:
+                pm.displayInfo(
+                    f"DEBUG: missingColorSpaceNodes returned {len(missing_node_names)} nodes"
+                )
+
+        # Method 2: Scan all file nodes for invalid color spaces
+        if scan_all or force_update:
+            scan_found = 0
+            invalid_spaces_found = set()
+            for node in pm.ls(type="file"):
+                if node.hasAttr("colorSpace"):
+                    current_space = node.colorSpace.get()
+                    if force_update or (
+                        current_space and current_space not in available_set
+                    ):
+                        nodes_to_fix.add(node.name())
+                        if current_space not in available_set:
+                            invalid_spaces_found.add(current_space)
+                        scan_found += 1
+            if verbose and scan_found > 0:
+                pm.displayInfo(
+                    f"DEBUG: scan_all found {scan_found} nodes (force_update={force_update})"
+                )
+
+        if not nodes_to_fix:
+            if verbose:
+                pm.displayInfo("No nodes with missing color spaces found.")
+            return result
+
+        # Resolve fallback color spaces
+        color_space = fallback_color_space or cls._find_best_color_space(
+            available_spaces
+        )
+        raw_space = fallback_raw_space or cls._find_best_raw_space(available_spaces)
+        result["color_space"] = color_space
+        result["raw_space"] = raw_space
+
+        # Validate that our fallbacks are actually in the available set
+        if color_space not in available_set:
+            pm.warning(
+                f"Color space fallback '{color_space}' not in available spaces! "
+                f"Available: {available_spaces[:10]}..."
+            )
+        if raw_space not in available_set:
+            pm.warning(
+                f"Raw space fallback '{raw_space}' not in available spaces! "
+                f"Available: {available_spaces[:10]}..."
+            )
+
+        if verbose:
+            action = "(dry-run) " if dry_run else ""
+            pm.displayInfo(
+                f"{action}Found {len(nodes_to_fix)} node(s) with invalid color spaces"
+            )
+            pm.displayInfo(f"{action}Color space fallback: {color_space}")
+            pm.displayInfo(f"{action}Raw/Data space fallback: {raw_space}")
+
+        # Fix each node with missing color space
+        for node_name in sorted(nodes_to_fix):
+            try:
+                node = pm.PyNode(node_name)
+
+                # Get the current (invalid) color space for logging
+                current_space = ""
+                if node.hasAttr("colorSpace"):
+                    current_space = node.colorSpace.get()
+
+                # Determine target color space
+                # Strategy 1: Use Maya's native rules (The "Real Fix")
+                # This resets the node to follow the OCIO config rules, which is the most robust method.
+                rule_based_space = None
+                if node.hasAttr("fileTextureName"):
+                    file_path = node.fileTextureName.get()
+                    if file_path:
+                        try:
+                            # Evaluate what Maya thinks the space SHOULD be
+                            rule_based_space = pm.cmds.colorManagementFileRules(
+                                evaluate=file_path
+                            )
+                        except Exception:
+                            pass
+
+                # Strategy 2: Auto-detect based on our own logic (Fallback)
+                if auto_detect:
+                    detected_space = cls._detect_color_space_for_node(
+                        node, color_space, raw_space
+                    )
+                else:
+                    detected_space = color_space
+
+                # Decide which target to use
+                # If the rule-based space is valid, prefer it.
+                target_space = detected_space  # Default to our logic
+
+                if rule_based_space and rule_based_space in available_set:
+                    # If the rule returns a valid space, use it.
+                    target_space = rule_based_space
+
+                # Note: We intentionally do NOT skip if current_space == target_space.
+                # If the node is in nodes_to_fix, it means Maya flagged it as broken (missingColorSpaceNodes)
+                # or we forced an update. In these cases, we MUST proceed to the reset logic below
+                # to repair the node's internal state, even if the string value appears correct.
+
+                # Validate that target_space is actually valid before applying
+                if target_space not in available_set:
+                    pm.warning(
+                        f"Cannot fix '{node}': target space '{target_space}' is not valid"
+                    )
+                    continue
+
+                change = {
+                    "node": str(node),
+                    "from": current_space,
+                    "to": target_space,
+                }
+                result["changes"].append(change)
+
+                if not dry_run:
+                    # Apply the fix using multiple strategies for robustness.
+                    # Strategy 1: Disable custom rules to allow Maya to apply default rules
+                    if node.hasAttr("ignoreColorSpaceFileRules"):
+                        try:
+                            node.ignoreColorSpaceFileRules.set(False)
+                        except Exception:
+                            pass
+
+                    # Strategy 2: Force Maya to re-evaluate by toggling the file path
+                    # This causes Maya to reapply color space rules from scratch.
+                    if node.hasAttr("fileTextureName"):
+                        try:
+                            path = node.fileTextureName.get()
+                            if path:
+                                # Clear and re-set the path to trigger re-evaluation
+                                node.fileTextureName.set("")
+                                node.fileTextureName.set(path)
+                        except Exception:
+                            pass
+
+                    # Strategy 3: Direct attribute set (swap to temp then target)
+                    # This ensures the attribute value actually changes.
+                    try:
+                        # First swap to a different valid space to force a real change
+                        current_val = node.colorSpace.get()
+                        temp_space = None
+                        for s in available_spaces:
+                            if s != target_space and s != current_val:
+                                temp_space = s
+                                break
+                        if temp_space:
+                            node.colorSpace.set(temp_space)
+                        # Now set to target
+                        node.colorSpace.set(target_space)
+                    except Exception as e:
+                        pm.warning(f"Failed to set colorSpace on '{node}': {e}")
+
+                result["fixed_nodes"].append(str(node))
+                result["fixed_count"] += 1
+
+                if verbose:
+                    action = "Would fix" if dry_run else "Fixed"
+                    pm.displayInfo(
+                        f"{action} '{node}': '{current_space}' -> '{target_space}'"
+                    )
+
+            except Exception as e:
+                pm.warning(f"Failed to fix color space for '{node_name}': {e}")
+
+        if verbose:
+            action = "Would fix" if dry_run else "Fixed"
+            pm.displayInfo(
+                f"{action} {result['fixed_count']} node(s) with missing color spaces."
+            )
+
+        # Refresh color management to update viewport
+        if not dry_run:
+            pm.colorManagementPrefs(refresh=True)
+
+        return result
+
+    @classmethod
+    def _detect_color_space_for_node(
+        cls,
+        node,
+        color_space: str,
+        raw_space: str,
+    ) -> str:
+        """Detect appropriate color space based on texture filename.
+
+        Uses TextureMapFactory.resolve_map_type for robust suffix-based detection.
+        """
+        if not node.hasAttr("fileTextureName"):
+            return color_space
+
+        file_path = node.fileTextureName.get() or ""
+        if not file_path:
+            return color_space
+
+        # Use pythontk's comprehensive map type detection
+        try:
+            map_type = ptk.TextureMapFactory.resolve_map_type(file_path)
+            if map_type:
+                # Color maps get sRGB, everything else gets Raw
+                if map_type in cls.COLOR_MAP_TYPES:
+                    return color_space
+                else:
+                    return raw_space
+        except Exception:
+            pass  # Fall through to default
+
+        return color_space
+
+    @staticmethod
+    def _find_best_color_space(available_spaces: List[str]) -> Optional[str]:
+        """Find the best sRGB color space from available options.
+
+        Returns None if no suitable color space is found (caller must handle).
+        """
+        if not available_spaces:
+            return None
+
+        available_set = set(available_spaces)
+        available_lower = {s.lower(): s for s in available_spaces}
+
+        # Priority order for color textures (exact matches first)
+        exact_preferences = [
+            "sRGB",
+            "Utility - sRGB - Texture",
+            "sRGB - Texture",
+            "Input - Generic - sRGB - Texture",
+            "sRGB texture",
+            "Texture - sRGB",
+            "gamma 2.2 Rec 709",
+            "Rec.709 Gamma 2.2",
+        ]
+
+        for pref in exact_preferences:
+            if pref in available_set:
+                return pref
+
+        # Case-insensitive exact match
+        for pref in exact_preferences:
+            if pref.lower() in available_lower:
+                return available_lower[pref.lower()]
+
+        # Fuzzy match: find any space containing "srgb" and "texture"
+        for space in available_spaces:
+            sl = space.lower()
+            if "srgb" in sl and "texture" in sl:
+                return space
+
+        # Fuzzy match: find any space containing "srgb"
+        for space in available_spaces:
+            if "srgb" in space.lower():
+                return space
+
+        # Last resort: first available space (better than returning invalid value)
+        return available_spaces[0]
+
+    @staticmethod
+    def _find_best_raw_space(available_spaces: List[str]) -> Optional[str]:
+        """Find the best Raw/Linear color space from available options.
+
+        Returns None if no suitable color space is found (caller must handle).
+        """
+        if not available_spaces:
+            return None
+
+        available_set = set(available_spaces)
+        available_lower = {s.lower(): s for s in available_spaces}
+
+        # Priority order for non-color data (exact matches first)
+        exact_preferences = [
+            "Raw",
+            "Utility - Raw",
+            "raw",
+            "ACEScg",
+            "ACES - ACEScg",
+            "Linear",
+            "Utility - Linear - sRGB",
+            "scene-linear Rec.709-sRGB",
+            "Linear sRGB",
+        ]
+
+        for pref in exact_preferences:
+            if pref in available_set:
+                return pref
+
+        # Case-insensitive exact match
+        for pref in exact_preferences:
+            if pref.lower() in available_lower:
+                return available_lower[pref.lower()]
+
+        # Fuzzy match: prefer "raw" over "linear" (more semantically correct for data)
+        for space in available_spaces:
+            if "raw" in space.lower():
+                return space
+
+        # Fuzzy match: linear variants
+        for space in available_spaces:
+            if "linear" in space.lower():
+                return space
+
+        # Fuzzy match: ACEScg (common in ACES configs for non-color data)
+        for space in available_spaces:
+            if "acescg" in space.lower():
+                return space
+
+        # Last resort: first available space
+        return available_spaces[0]
+
+    @classmethod
+    def _fix_color_management_globals(cls, verbose: bool = True) -> bool:
+        """Fix global color management settings in defaultColorMgtGlobals node.
+
+        This is critical for fixing "sRGB is not defined in the selected transform
+        collection" errors. The issue occurs when:
+        1. File nodes have colorManagementConfigFileEnabled connected to
+           defaultColorMgtGlobals.configFileEnabled
+        2. That global value is False, causing OCIO transforms to not load
+
+        IMPORTANT: cmEnabled must be set BEFORE configFileEnabled, otherwise
+        Maya will fail to load the OCIO config properly and produce errors.
+
+        Parameters
+        ----------
+        verbose : bool
+            If True, print information about changes.
+
+        Returns
+        -------
+        bool
+            True if any changes were made, False otherwise.
+        """
+        import maya.cmds as cmds
+
+        changed = False
+        global_node = "defaultColorMgtGlobals"
+
+        if not cmds.objExists(global_node):
+            if verbose:
+                pm.warning(f"Color management globals node '{global_node}' not found")
+            return False
+
+        # STEP 1: Enable cmEnabled FIRST via colorManagementPrefs (the proper way)
+        # This initializes the OCIO system before we try to load configs
+        try:
+            cm_enabled = cmds.colorManagementPrefs(query=True, cmEnabled=True)
+            if not cm_enabled:
+                cmds.colorManagementPrefs(edit=True, cmEnabled=True)
+                changed = True
+                if verbose:
+                    pm.displayInfo("Enabled color management via colorManagementPrefs")
+        except Exception as e:
+            if verbose:
+                pm.warning(f"Failed to enable color management: {e}")
+
+        # STEP 2: Now enable configFileEnabled (after CM is initialized)
+        # This enables the OCIO config file for color space lookups
+        try:
+            current_enabled = cmds.getAttr(f"{global_node}.configFileEnabled")
+            if not current_enabled:
+                cmds.setAttr(f"{global_node}.configFileEnabled", True)
+                changed = True
+                if verbose:
+                    pm.displayInfo(f"Set {global_node}.configFileEnabled = True")
+        except Exception as e:
+            if verbose:
+                pm.warning(f"Failed to set configFileEnabled: {e}")
+
+        # STEP 3: Ensure the config path matches preferences
+        try:
+            current_path = cmds.getAttr(f"{global_node}.configFilePath")
+            prefs_path = pm.colorManagementPrefs(query=True, configFilePath=True)
+
+            if current_path != prefs_path and prefs_path:
+                cmds.setAttr(f"{global_node}.configFilePath", prefs_path, type="string")
+                changed = True
+                if verbose:
+                    pm.displayInfo(
+                        f"Updated {global_node}.configFilePath to: {prefs_path}"
+                    )
+        except Exception as e:
+            if verbose:
+                pm.warning(f"Failed to update configFilePath: {e}")
+
+        return changed
+
+    @staticmethod
+    def _get_available_color_spaces() -> List[str]:
+        """Get a list of all available input color spaces."""
+        return pm.colorManagementPrefs(query=True, inputSpaceNames=True) or []
 
     @staticmethod
     def fix_unknown_plugins(dry_run=False, verbose=True):
@@ -388,7 +913,7 @@ class AuditProfile:
     max_tris: int = 20000
     max_slots: int = 4
     max_tex_res: int = 4096
-    max_uvs: int = 2
+    max_uvs: int = 1
     name: str = "Standard"
     texture_compression: str = "BC7"  # BC7, ASTC, None
     adaptive_tris: bool = False

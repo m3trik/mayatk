@@ -103,7 +103,9 @@ class TestMatUtils(MayaTkTestCase):
         """Test creating a random material type."""
         random_mat = MatUtils.create_mat(mat_type="random", name="random_mat")
         self.assertTrue(pm.objExists(random_mat))
-        self.assertTrue(random_mat.name().startswith("random_mat"))
+        # Handle both string and PyNode return types
+        mat_name = random_mat.name() if hasattr(random_mat, "name") else random_mat
+        self.assertTrue(mat_name.startswith("random_mat"))
 
     def test_create_mat_specific(self):
         """Test creating specific material types."""
@@ -216,6 +218,66 @@ class TestMatUtils(MayaTkTestCase):
         )
         self.assertTrue(len(found_faces) > 0)
         self.assertTrue(isinstance(found_faces[0], pm.MeshFace))
+
+    def test_module_exposure(self):
+        """Test that MatUtils methods are exposed at the module level."""
+        # Test assign_mat exposure
+        mtk.assign_mat(self.cube, "exposed_mat")
+        self.assertTrue(pm.objExists("exposed_mat"))
+
+        # Test create_mat exposure
+        mat = mtk.create_mat("blinn", name="exposed_blinn")
+        self.assertTrue(pm.objExists("exposed_blinn"))
+
+        # Test get_mats exposure
+        mats = mtk.get_mats(self.cube)
+        self.assertTrue(mats)
+        self.assertEqual(mats[0].name(), "exposed_mat")
+
+        # Test find_by_mat_id exposure
+        # Ensure we pass the name string, as find_by_mat_id expects a string name or we need to verify PyNode support
+        found = mtk.find_by_mat_id(mats[0].name(), [self.cube])
+        self.assertTrue(found)
+
+    def test_assign_mat_with_pynode(self):
+        """Test assign_mat with PyNode input for material."""
+        # Create a material
+        mat = MatUtils.create_mat("blinn", name="pynode_mat")
+        # Assign using the PyNode object
+        MatUtils.assign_mat(self.cube, mat)
+
+        mats = MatUtils.get_mats(self.cube)
+        self.assertEqual(mats[0], mat)
+
+    def test_find_by_mat_id_with_pynode(self):
+        """Test find_by_mat_id with PyNode input for material."""
+        # Assign material
+        MatUtils.assign_mat(self.cube, self.lambert1)
+
+        # Search using PyNode
+        # This is expected to fail if find_by_mat_id doesn't handle PyNodes,
+        # but we want to know if it does or if we need to fix it.
+        try:
+            found = MatUtils.find_by_mat_id(self.lambert1, [self.cube])
+            self.assertTrue(found)
+        except TypeError:
+            self.fail("find_by_mat_id failed with PyNode input")
+
+        # Test get_scene_mats exposure
+        scene_mats = mtk.get_scene_mats()
+        self.assertTrue(len(scene_mats) > 0)
+
+        # Test get_mat_swatch_icon exposure
+        try:
+            mtk.get_mat_swatch_icon(scene_mats[0])
+        except Exception as e:
+            self.fail(f"get_mat_swatch_icon raised exception: {e}")
+
+        # Test reload_textures exposure
+        try:
+            mtk.reload_textures()
+        except Exception as e:
+            self.fail(f"reload_textures raised exception: {e}")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
@@ -24,6 +25,110 @@ class EditUtils(ptk.HelpMixin):
 
     snap_closest_verts = staticmethod(Snap.snap_to_closest_vertex)
     conform_to_surface = staticmethod(Snap.snap_to_surface)
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.reparent
+    @DisplayUtils.add_to_isolation
+    def combine_objects(
+        objects=None,
+        group_by_material=False,
+        cluster_by_distance=False,
+        threshold=10000.0,
+        **kwargs,
+    ):
+        """Combine multiple meshes.
+
+        Parameters:
+            objects (list): List of mesh objects to combine.
+            group_by_material (bool): Combine objects into groups based on their assigned materials.
+            cluster_by_distance (bool): If True, further subdivide material groups based on spatial proximity.
+            threshold (float): The maximum distance between objects to be considered in the same cluster.
+        """
+        if objects is None:
+            objects = pm.selected()
+
+        # Handle legacy argument
+        if "allow_multiple_mats" in kwargs:
+            # Legacy: allow_multiple_mats=True -> group_by_material=False
+            # Legacy: allow_multiple_mats=False -> group_by_material=True
+            group_by_material = not kwargs["allow_multiple_mats"]
+
+        if "material_mode" in kwargs:
+            val = kwargs["material_mode"]
+            if val == "group" or val is False:  # False meant "prevent mixed" -> group
+                group_by_material = True
+
+        if not objects or len(objects) < 2:
+            pm.inViewMessage(
+                statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
+                fade=True,
+                position="topCenter",
+            )
+            return None
+
+        if group_by_material:
+            groups = MatUtils.group_objects_by_material(
+                objects, cluster_by_distance=cluster_by_distance, threshold=threshold
+            )
+            combined_meshes = []
+            for mat_key, group_objs in groups.items():
+                if len(group_objs) < 2:
+                    continue
+
+                try:
+                    mesh = pm.polyUnite(group_objs, centerPivot=True, ch=False)[0]
+                    # Rename to first object's name
+                    first_obj = group_objs[0]
+                    name = (
+                        first_obj.name()
+                        if hasattr(first_obj, "name")
+                        else str(first_obj).split("|")[-1]
+                    )
+                    mesh = pm.rename(mesh, name)
+                    combined_meshes.append(mesh)
+                except Exception as e:
+                    pm.warning(f"Failed to combine group {mat_key}: {e}")
+
+            if not combined_meshes:
+                pm.warning("No groups found with more than 1 object to combine.")
+                return None
+
+            return combined_meshes
+
+        else:
+            combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
+            combined_mesh = pm.rename(combined_mesh, objects[0].name())
+            return combined_mesh
+
+    @staticmethod
+    @CoreUtils.undoable
+    def group_objects(objects=None):
+        """Group the given objects (or selection), center the pivot, and rename the group.
+
+        Args:
+            objects (list, optional): Objects to group. Defaults to selection.
+
+        Returns:
+            pm.nt.Transform: The created group.
+        """
+        if objects is None:
+            objects = pm.selected()
+
+        objects = pm.ls(objects, objectsOnly=True)
+
+        if objects:
+            grp = pm.group(objects)
+            pm.xform(grp, centerPivots=True)
+            # Rename to first object's name
+            name = objects[0].name() if hasattr(objects[0], "name") else str(objects[0])
+            # Strip path if present
+            name = name.split("|")[-1]
+            pm.rename(grp, name)
+        else:  # If nothing selected, create empty group.
+            grp = pm.group(empty=True, name="null")
+
+        return grp
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):
@@ -101,6 +206,81 @@ class EditUtils(ptk.HelpMixin):
                 pm.warning(f"Failed to move vertices {vtx1} and {vtx2}: {e}")
 
         pm.polyMergeVertex(vertices, d=0.001)  # Merge the vertices
+
+    @staticmethod
+    @CoreUtils.undoable
+    def detach_components(
+        components=None,
+        duplicate: bool = True,
+        separate: bool = True,
+        offset: bool = False,
+        keep_faces_together: bool = True,
+    ) -> Optional[List]:
+        """Detach mesh components (vertices or faces) from their parent mesh.
+
+        For vertices: Splits the vertex, disconnecting faces that share it.
+        For faces: Extracts faces using polyChipOff, optionally duplicating and separating.
+        For other components: Falls back to Maya's DetachComponent command.
+
+        Parameters:
+            components: The components to detach. If None, uses current selection.
+            duplicate (bool): For faces, duplicate them leaving the original mesh unchanged.
+            separate (bool): For faces, separate the detached faces into individual objects.
+            offset (bool): For faces, offset/translate the extracted faces from their
+                original position. If False (default), faces maintain their original shape.
+            keep_faces_together (bool): If True (default), detached faces remain connected.
+                If False, each face is detached individually.
+
+        Returns:
+            Optional[List]: The resulting objects after separation, or the polyChipOff node
+                for faces, or None for vertices/other component types.
+
+        Example:
+            >>> # Detach selected faces as duplicates into separate objects
+            >>> EditUtils.detach_components(duplicate=True, separate=True)
+            >>> # Extract faces destructively without separating
+            >>> EditUtils.detach_components(pm.ls(sl=1), duplicate=False, separate=False)
+        """
+        if components is None:
+            components = pm.ls(sl=True)
+
+        if not components:
+            pm.warning("Nothing selected. Operation requires a component selection.")
+            return None
+
+        # Check component selection mode
+        vertex_mode = pm.selectType(q=True, vertex=True)
+        face_mode = pm.selectType(q=True, facet=True)
+
+        if vertex_mode:
+            pm.mel.polySplitVertex()
+            return None
+
+        elif face_mode:
+            # Get the parent objects before polyChipOff modifies the mesh
+            parent_objects = list(set(pm.ls(components, objectsOnly=True)))
+
+            extract = pm.polyChipOff(
+                components,
+                ch=True,
+                keepFacesTogether=keep_faces_together,
+                dup=duplicate,
+                off=offset,
+            )
+
+            if separate:
+                # polySeparate must be called on transform/mesh objects, not components
+                split_objects = pm.polySeparate(parent_objects)
+                # Select the last object (typically the extracted/duplicated piece)
+                if split_objects:
+                    pm.select(split_objects[-1])
+                return split_objects
+
+            return extract
+
+        else:
+            pm.mel.DetachComponent()
+            return None
 
     @staticmethod
     def get_all_faces_on_axis(obj, axis="x", pivot="center", use_object_axes=True):
@@ -708,25 +888,53 @@ class EditUtils(ptk.HelpMixin):
             verbose (bool): If True, prints detailed information about found duplicates.
 
         Returns:
-            set: Overlapping duplicate transform PyNodes.
+            set: Overlapping duplicate transform names (strings).
         """
+        import maya.cmds as cmds
         from collections import defaultdict
 
-        scene_objs = NodeUtils.is_mesh(objects, filter=True)
+        # Get mesh transforms efficiently
+        if objects is None:
+            # Get all mesh transforms
+            shapes = cmds.ls(type="mesh", noIntermediate=True)
+            # listRelatives can return None if no parents (unlikely for shapes)
+            scene_objs = list(
+                set(cmds.listRelatives(shapes, parent=True, fullPath=True) or [])
+            )
+        else:
+            # Filter provided objects
+            # Ensure we have full paths for robustness
+            # Handle PyNodes or strings
+            objects = [str(o) for o in objects]
+            objects = cmds.ls(objects, long=True)
+            scene_objs = []
+            for obj in objects:
+                shapes = cmds.listRelatives(
+                    obj, shapes=True, noIntermediate=True, fullPath=True
+                )
+                if shapes and cmds.nodeType(shapes[0]) == "mesh":
+                    scene_objs.append(obj)
 
         # Fingerprint by bounding box min/max (rounded) and topology
         obj_fingerprints = {}
         for obj in scene_objs:
-            bbox = obj.getBoundingBox(space="world")
-            bbox_min = tuple(round(x, 6) for x in bbox.min())
-            bbox_max = tuple(round(x, 6) for x in bbox.max())
-            topo = str(pm.polyEvaluate(obj))
+            bbox = cmds.xform(obj, query=True, ws=True, bb=True)
+            if not bbox:
+                continue
+
+            bbox_min = (round(bbox[0], 6), round(bbox[1], 6), round(bbox[2], 6))
+            bbox_max = (round(bbox[3], 6), round(bbox[4], 6), round(bbox[5], 6))
+
+            # polyEvaluate returns dict, we convert to string for hashing
+            topo = str(cmds.polyEvaluate(obj))
             obj_fingerprints[obj] = (bbox_min, bbox_max, topo)
 
         if objects is None:
-            selected_set = set(pm.ls(obj_fingerprints.keys(), sl=True))
+            selected_set = set(
+                cmds.ls(list(obj_fingerprints.keys()), sl=True, long=True)
+            )
         else:
-            selected_set = set(pm.ls(objects))
+            selected_set = set(cmds.ls(objects, long=True))
 
         fingerprint_groups = defaultdict(list)
         for obj, fingerprint in obj_fingerprints.items():
@@ -747,12 +955,12 @@ class EditUtils(ptk.HelpMixin):
                     duplicates.update(group[1:])
 
         if verbose:
-            for obj in sorted(duplicates, key=lambda x: x.name()):
+            for obj in sorted(duplicates):
                 print(f"# Found: overlapping duplicate object: {obj} #")
         if verbose or select:
             print(f"# {len(duplicates)} overlapping duplicate objects found. #")
         if select and duplicates:
-            pm.select(list(duplicates), r=True)
+            cmds.select(list(duplicates), r=True)
         return duplicates
 
     @staticmethod
@@ -1155,7 +1363,7 @@ class EditUtils(ptk.HelpMixin):
             if pm.objectType(obj, isType="joint"):
                 pm.removeJoint(obj)
             # For mesh objects, look for component selections
-            elif NodeUtils.is_mesh(obj):
+            elif isinstance(obj, pm.nt.Mesh) or NodeUtils.is_mesh(obj):
                 obj_long_name = obj.longName()  # Convert Mesh object to its long name
                 # Check for selected components of the object
                 selected_components = [
@@ -1170,6 +1378,8 @@ class EditUtils(ptk.HelpMixin):
                         pm.polyDelEdge(selected_components, cleanVertices=True)
                     elif maskVertex:
                         pm.polyDelVertex(selected_components)
+                    else:
+                        pm.delete(selected_components)
                 else:
                     pm.delete(obj)  # Delete entire object if no components selected
 

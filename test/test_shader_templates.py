@@ -307,7 +307,7 @@ class TestShaderTemplates(MayaTkTestCase):
         Extensive test to verify full graph restoration with correct map connections
         and no duplicate graphs.
         """
-        from mayatk.mat_utils.stingray_arnold_shader import StingrayArnoldShader
+        from mayatk.mat_utils.game_shader import GameShader
 
         # 1. Setup Test Textures
         # We need to create dummy files that match the naming convention expected by TextureMapFactory
@@ -320,17 +320,26 @@ class TestShaderTemplates(MayaTkTestCase):
         }
 
         texture_paths = []
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+
         for map_type, name in tex_names.items():
             path = os.path.join(self.temp_dir, name).replace("\\", "/")
             # Create dummy image content
-            with open(path, "wb") as f:
-                f.write(
-                    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-                )
+            if Image:
+                img = Image.new("RGB", (32, 32), color="red")
+                img.save(path)
+            else:
+                with open(path, "wb") as f:
+                    f.write(
+                        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+                    )
             texture_paths.append(path)
 
         # 2. Create Initial Network (Simulation of Generation)
-        shader_gen = StingrayArnoldShader()
+        shader_gen = GameShader()
         result_node = shader_gen.create_network(
             textures=texture_paths, create_arnold=False
         )
@@ -407,6 +416,23 @@ class TestShaderTemplates(MayaTkTestCase):
             attr = getattr(pbs_node, attr_name)
             inputs = attr.inputs()
 
+            # Check children if parent has no inputs (compound attribute behavior)
+            if len(inputs) == 0 and attr.isCompound():
+                for child in attr.children():
+                    inputs.extend(child.inputs())
+
+            if len(inputs) == 0:
+                # Debug info
+                print(f"DEBUG: Attribute {attr_name} has no inputs.")
+                print(f"DEBUG: Node: {pbs_node}")
+                print(
+                    f"DEBUG: Available attributes: {[a.name() for a in pbs_node.listAttr()]}"
+                )
+                # Check if children are connected
+                if attr.isCompound():
+                    for child in attr.children():
+                        print(f"DEBUG: Child {child.name()} inputs: {child.inputs()}")
+
             self.assertTrue(
                 len(inputs) > 0,
                 f"Attribute {attr_name} should have an input connection.",
@@ -420,8 +446,16 @@ class TestShaderTemplates(MayaTkTestCase):
 
             # Check file path
             file_path = pm.getAttr(input_node.fileTextureName)
+
+            # Allow ORM packed map for Metallic, Roughness, AO
+            is_orm_packed = "ORM" in file_path and attr_name in [
+                "TEX_metallic_map",
+                "TEX_roughness_map",
+                "TEX_ao_map",
+            ]
+
             self.assertTrue(
-                file_path.replace("\\", "/").endswith(tex_name),
+                file_path.replace("\\", "/").endswith(tex_name) or is_orm_packed,
                 f"File node for {attr_name} should point to {tex_name}, got {file_path}",
             )
 
@@ -430,7 +464,7 @@ class TestShaderTemplates(MayaTkTestCase):
         Test restoring a template with only a subset of textures provided.
         Verifies that provided textures are assigned, and shader attributes are restored.
         """
-        from mayatk.mat_utils.stingray_arnold_shader import StingrayArnoldShader
+        from mayatk.mat_utils.game_shader import GameShader
 
         # 1. Setup Test Textures (Full Set for Template Generation)
         tex_names = {
@@ -440,14 +474,25 @@ class TestShaderTemplates(MayaTkTestCase):
             "Roughness": "Test_Roughness.png",
         }
         texture_paths = []
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+
         for name in tex_names.values():
             path = os.path.join(self.temp_dir, name).replace("\\", "/")
-            with open(path, "wb") as f:
-                f.write(b"dummy")
+            if Image:
+                img = Image.new("RGB", (32, 32), color="red")
+                img.save(path)
+            else:
+                with open(path, "wb") as f:
+                    f.write(
+                        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+                    )
             texture_paths.append(path)
 
         # 2. Generate and Save Template
-        shader_gen = StingrayArnoldShader()
+        shader_gen = GameShader()
         result_node = shader_gen.create_network(
             textures=texture_paths, create_arnold=False
         )

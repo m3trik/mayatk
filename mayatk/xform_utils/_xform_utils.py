@@ -976,6 +976,23 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         pm.manipPivot(p=pos, o=rot, **kwargs)
 
     @classmethod
+    def get_pivot_options(cls):
+        """Returns a list of supported pivot options."""
+        return [
+            "object",
+            "world",
+            "center",
+            "manip",
+            "xmin",
+            "xmax",
+            "ymin",
+            "ymax",
+            "zmin",
+            "zmax",
+            "baked",
+        ]
+
+    @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):
         """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
 
@@ -1354,24 +1371,82 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         targets = objects[1:]
 
         for target in targets:
+            # 1. Transfer Translate Pivot (Position)
             if translate:
-                source_translate_pivot = pm.xform(
-                    source, q=True, ws=world_space, rp=True
-                )
-                pm.xform(target, ws=world_space, rp=source_translate_pivot)
+                rp = pm.xform(source, q=True, ws=world_space, rp=True)
+                pm.xform(target, ws=world_space, rp=rp)
+                if scale:
+                    sp = pm.xform(source, q=True, ws=world_space, sp=True)
+                    pm.xform(target, ws=world_space, sp=sp)
+            elif scale:  # Transfer Scale Pivot only
+                sp = pm.xform(source, q=True, ws=world_space, sp=True)
+                pm.xform(target, ws=world_space, sp=sp)
 
+            # 2. Transfer Rotate Pivot (Orientation)
             if rotate:
-                # Transfer the pivot orientation by copying the source's rotate pivot orientation
-                source_pivot_orientation = pm.xform(
-                    source, q=True, ws=world_space, roo=True
-                )
-                pm.xform(target, ws=world_space, roo=source_pivot_orientation)
+                if world_space:
+                    # Capture geometry state to preserve visual position
+                    children = target.getChildren(type="transform")
+                    if children:
+                        pm.parent(children, world=True)
 
-            if scale:
-                source_scale_pivot = pm.xform(source, q=True, ws=world_space, sp=True)
-                pm.xform(target, ws=world_space, sp=source_scale_pivot)
+                    shape_points = {}
+                    shapes = target.getShapes()
+                    for sh in shapes:
+                        try:
+                            # Capture world points
+                            shape_points[sh] = sh.getPoints(space="world")
+                        except Exception:
+                            pass
 
-            if bake:  # Bake pivot if required
+                    # Step A: Align Target Transform Rotation to Source
+                    # We utilize matchTransform to robustly align the frame (Rotate logic)
+                    # This rotates the object to align its axes with source
+                    try:
+                        pm.matchTransform(
+                            target, source, rot=True, pos=False, piv=False, scl=False
+                        )
+                    except Exception as e:
+                        pm.warning(f"matchTransform failed in transfer_pivot: {e}")
+
+                    # Step B: Handle `bake=False` (Move Rotate -> RotateAxis)
+                    # If we don't bake, we want to keep `rotate` attribute clean (e.g. 0,0,0)
+                    # and push the alignment into `rotateAxis`.
+                    if not bake:
+                        # Get current rotation matrix (Object Space)
+                        # This includes the rotation we just applied
+                        m = pm.dt.Matrix(pm.xform(target, q=True, matrix=True, os=True))
+                        # Invert matrix to account for RotateAxis inverse logic
+                        m_inv = m.inverse()
+                        tm = pm.dt.TransformationMatrix(m_inv)
+                        # Get Euler rotation in radians
+                        euler_rad = tm.getRotation()
+                        # Convert to degrees
+                        euler_deg = [pm.dt.degrees(x) for x in euler_rad]
+
+                        # Zero out rotate, Set RotateAxis
+                        pm.xform(target, ro=(0, 0, 0))
+                        pm.xform(target, ra=euler_deg)
+
+                    # Step C: Restore Geometry
+                    if children:
+                        pm.parent(children, target)
+                    for sh, pts in shape_points.items():
+                        try:
+                            sh.setPoints(pts, space="world")
+                        except Exception:
+                            pass
+
+                else:
+                    # Local space transfer
+                    source_ra = pm.xform(source, q=True, ra=True)
+                    pm.xform(target, ra=source_ra)
+
+            # 3. Bake (if requested)
+            if bake:
+                # If bake=True, `makeIdentity` will normalize the transforms.
+                # Since we restored geometry to World Positions, `makeIdentity`
+                # will simply set transforms to Identity and leave geometry where it is.
                 pm.makeIdentity(
                     target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
                 )

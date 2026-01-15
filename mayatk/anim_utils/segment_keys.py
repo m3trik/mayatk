@@ -330,11 +330,12 @@ class SegmentKeys(SegmentKeysInfo):
 
             # Apply time range filter if specified
             if range_start is not None or range_end is not None:
+                eps = 1e-3
                 keyframes = [
                     k
                     for k in keyframes
-                    if (range_start is None or k >= range_start)
-                    and (range_end is None or k <= range_end)
+                    if (range_start is None or k >= range_start - eps)
+                    and (range_end is None or k <= range_end + eps)
                 ]
                 if not keyframes:
                     continue
@@ -937,7 +938,11 @@ class SegmentKeys(SegmentKeysInfo):
             times = pm.keyframe(curve, query=True, timeChange=True)
             values = pm.keyframe(curve, query=True, valueChange=True)
 
-            if not times or len(times) < 2:
+            if not times:
+                continue
+
+            if len(times) == 1:
+                all_intervals.append((times[0], times[0]))
                 continue
 
             # Check if curve is visibility

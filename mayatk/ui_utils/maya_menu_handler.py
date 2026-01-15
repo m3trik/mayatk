@@ -5,12 +5,23 @@ import traceback
 import maya.utils
 import functools
 from typing import Optional
-from qtpy import QtWidgets
+from qtpy import QtWidgets, QtCore
 import pymel.core as pm
 import pythontk as ptk
+import uitk
+from uitk.widgets.mainWindow import MainWindow
 
 # From this package:
 from mayatk.ui_utils._ui_utils import UiUtils
+
+
+class PersistentMenu(QtWidgets.QMenu):
+    """A QMenu that ignores attempts to hide it (e.g. from interaction), suitable for embedding."""
+
+    def setVisible(self, visible):
+        if not visible:
+            return
+        super(PersistentMenu, self).setVisible(visible)
 
 
 class EmbeddedMenuWidget(QtWidgets.QWidget):
@@ -20,44 +31,135 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # Use a layout to support uitk's automatic header/footer injection
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Create a QWidgetAction to host the menu
-        menu_action = QtWidgets.QWidgetAction(self)
-        menu_action.setDefaultWidget(self.menu)
+        # Prepare the menu for embedding as a regular widget
+        self.menu.setParent(self)
+        # Using Qt.Widget + FramelessWindowHint helps it behave like a panel
+        self.menu.setWindowFlags(QtCore.Qt.Widget | QtCore.Qt.FramelessWindowHint)
 
-        # Create a toolbar to hold the menu action
-        toolbar = QtWidgets.QToolBar()
-        toolbar.addAction(menu_action)
-
-        layout.addWidget(toolbar)
-
-        # Apply stylesheet to slightly increase menu item height
-        self.menu.setStyleSheet(
+        # Apply stylesheet to ensure items look correct and fill space
+        # Apply to self (container) to avoid overriding global styles on the menu instance directly
+        self.setStyleSheet(
             """
             QMenu::item {
-                padding: 2px 18px 2px 18px;
+                padding: 1px 20px 1px 20px;
+                margin-left: 1px;
+                margin-right: 1px;
             }
             """
         )
 
-        # Add stretch to push content to top and allow proper expansion
+        # Allow menu to expand
+        # Use Ignored for horizontal to force it to fill width regardless of content size
+        self.menu.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding
+        )
+
+        # Do NOT add menu to layout. We will manage its geometry manually to ensure it fills space.
+        # layout.addWidget(self.menu)
+
+        # Add stretch to push footer (injected by MainWindow) to the bottom
         layout.addStretch(1)
 
-        # Set size policies to allow proper expansion within MainWindow
+        # Set size policies for this container
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
 
-        # Set minimum size to ensure menu is usable
-        self.setMinimumSize(200, 100)
+        # Ensure menu is visible (QMenu defaults to hidden)
+        self.menu.show()
+        # Disable tear-off to prevent redundant header/footer controls
+        self.menu.setTearOffEnabled(False)
 
-        # Enable stylesheet background painting (required for QWidget to paint backgrounds from QSS)
+        # Enable stylesheet background painting
         from qtpy.QtCore import Qt
 
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.menu.setAttribute(Qt.WA_StyledBackground, True)
+
+    def _get_layout_reserved_space(self):
+        """Calculate space reserved by layout items (headers/footers) excluding the menu.
+
+        Returns:
+            tuple: (reserved_top, reserved_bottom) heights in pixels
+        """
+        reserved_top = 0
+        reserved_bottom = 0
+        layout = self.layout()
+
+        if not layout:
+            return reserved_top, reserved_bottom
+
+        half_height = self.height() / 2
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if widget and widget.isVisible() and widget is not self.menu:
+                if item.geometry().y() > half_height:
+                    reserved_bottom += item.geometry().height()
+                else:
+                    reserved_top += item.geometry().height()
+
+        return reserved_top, reserved_bottom
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.menu:
+            reserved_top, reserved_bottom = self._get_layout_reserved_space()
+            self.menu.setGeometry(
+                0,
+                reserved_top,
+                self.width(),
+                self.height() - reserved_bottom - reserved_top,
+            )
+            self.menu.setMinimumWidth(self.width())
+
+    def minimumSizeHint(self):
+        """Allow horizontal contraction while preserving minimum usability."""
+        return QtCore.QSize(200, self.sizeHint().height())
+
+    def sizeHint(self):
+        """Calculate preferred size based on menu content plus layout overhead."""
+        if not self.menu:
+            return super().sizeHint()
+
+        self.menu.ensurePolished()
+        s_hint = self.menu.sizeHint()
+
+        if s_hint.isValid() and s_hint.height() > 50:
+            menu_height = s_hint.height()
+            menu_width = max(200, s_hint.width())
+        else:
+            # Fallback for menus that haven't been populated yet
+            action_count = len(self.menu.actions())
+            menu_height = max(100, (action_count * 26) + 10)
+            menu_width = 200
+
+        # Add overhead from headers/footers
+        reserved_top, reserved_bottom = self._get_layout_reserved_space()
+        overhead = reserved_top + reserved_bottom
+
+        layout = self.layout()
+        if layout:
+            margins = layout.contentsMargins()
+            overhead += margins.top() + margins.bottom()
+
+        return QtCore.QSize(menu_width, menu_height + overhead)
+
+    def fit_to_window(self):
+        """Resize the parent window to fit menu content."""
+        self.updateGeometry()
+        window = self.window()
+        if window:
+            if window.layout():
+                window.layout().activate()
+            # Use sizeHint for preferred size (fits content)
+            # minimumSizeHint stays small to allow user resizing
+            window.resize(window.sizeHint())
 
 
 class MayaMenuHandler(ptk.LoggingMixin):
@@ -296,7 +398,7 @@ class MayaMenuHandler(ptk.LoggingMixin):
         pm.refresh()
 
         # Create a placeholder menu UI
-        placeholder_menu = QtWidgets.QMenu(maya_menu_name, UiUtils.get_main_window())
+        placeholder_menu = PersistentMenu(maya_menu_name, UiUtils.get_main_window())
         placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
         placeholder_widget.setObjectName(menu_key)
         self.menus[menu_key] = placeholder_widget
@@ -309,6 +411,30 @@ class MayaMenuHandler(ptk.LoggingMixin):
         )
 
         return placeholder_widget
+
+    def display_menu(self, menu_key: str):
+        """Displays the specified Maya menu in a standalone window."""
+        widget = self.get_menu(menu_key)
+        if not widget:
+            return
+
+        window = MainWindow(
+            name=f"MayaMenu_{menu_key}",
+            switchboard_instance=None,
+            central_widget=widget,
+            add_footer=True,
+            restore_window_size=False,
+        )
+        window.setWindowFlags(
+            QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint
+        )
+        window.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+
+        # Apply standard border styling
+        window.setProperty("class", "translucentBgWithBorder")
+
+        window.show(pos="screen", app_exec=True)
+        return window
 
     def deferred_duplicate_menu(
         self,
@@ -362,7 +488,6 @@ class MayaMenuHandler(ptk.LoggingMixin):
                             f"Waiting for menu '{maya_menu_name}' to stabilize... "
                             f"Currently {current_action_count} actions."
                         )
-
                 else:
                     self.logger.debug(f"Menu '{maya_menu_name}' not found yet...")
 
@@ -380,6 +505,9 @@ class MayaMenuHandler(ptk.LoggingMixin):
                 self.logger.debug(
                     f"Populated menu '{menu_key}' with {previous_action_count} actions."
                 )
+
+                # Resize the hosting window to accommodate new items
+                QtCore.QTimer.singleShot(50, placeholder_widget.fit_to_window)
             else:
                 self.logger.warning(
                     f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
@@ -392,6 +520,4 @@ class MayaMenuHandler(ptk.LoggingMixin):
 # --------------------------------------------------------------------------------------------
 if __name__ == "__main__":
     handler = MayaMenuHandler()
-    menu = handler.get_menu("skin")
-    print(repr(menu))
-    menu.show(pos="screen", app_exec=True)
+    handler.display_menu("skin")

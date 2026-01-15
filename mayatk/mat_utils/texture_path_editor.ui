@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>800</width>
-    <height>400</height>
+    <height>250</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -26,7 +26,7 @@
    <property name="minimumSize">
     <size>
      <width>800</width>
-     <height>400</height>
+     <height>250</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout">
@@ -64,27 +64,7 @@
        </widget>
       </item>
       <item>
-       <widget class="TableWidget" name="tbl000">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>350</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <spacer name="verticalSpacer">
-        <property name="orientation">
-         <enum>Qt::Vertical</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>0</width>
-          <height>10</height>
-         </size>
-        </property>
-       </spacer>
+       <widget class="TableWidget" name="tbl000"/>
       </item>
      </layout>
     </item>

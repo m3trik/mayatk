@@ -246,33 +246,82 @@ class UvUtils(ptk.HelpMixin):
     def get_uv_shell_sets(objects=None, returned_type="shell"):
         """Get UV shells and their corresponding sets of faces.
 
+        Optimized to use the Maya API (OpenMaya) for performance and reliability,
+        avoiding selection changes.
+
         Parameters:
-            objects (obj/list): Polygon object(s) or Polygon face(s).
-            returned_type (str): The desired returned type. Valid values are: 'shell', 'id'. If None is given, the full dict will be returned.
+            objects (obj/list): Polygon object(s) or Polygon face(s). If None,
+                uses the current selection.
+            returned_type (str): The desired returned type. Valid values are:
+                'shell', 'id'.
 
         Returns:
             (list)(dict): Depending on the given returned_type arg.
-            Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')], 1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
+            Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')],
+                      1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
+        import maya.api.OpenMaya as om
+
+        if objects is None:
+            objects = pm.selected()
+
+        # Expand inputs to faces
         faces = Components.get_components(objects, "faces", flatten=True)
+        if not faces:
+            return [] if returned_type in ("shell", "id") else {}
+
+        # Group PyNodes faces by their shape node to batch API calls
+        mesh_faces_map = {}
+        for f in faces:
+            node = f.node()
+            shape = node.getShape() if isinstance(node, pm.nt.Transform) else node
+            if shape not in mesh_faces_map:
+                mesh_faces_map[shape] = []
+            mesh_faces_map[shape].append(f)
+
         shells = {}
+        shell_count = 0
 
-        for face in faces:
+        for shape, shape_faces in mesh_faces_map.items():
+            if not isinstance(shape, pm.nt.Mesh):
+                continue
+
             try:
-                # Attempt to get the UV shell ID, ensure it returns a non-empty list
-                shell_Id = pm.polyEvaluate(face, uvShellIds=True)
+                # Retrieve MFnMesh
+                sel = om.MSelectionList()
+                sel.add(shape.longName())
+                dag_path = sel.getDagPath(0)
+                mfn_mesh = om.MFnMesh(dag_path)
+                current_uv_set = mfn_mesh.currentUVSetName()
 
-                # Validate shell_Id
-                if not isinstance(shell_Id, list) or not shell_Id:
-                    pm.warning(f"Invalid UV shell ID for face: {face}")
-                    continue
+                # Get shell IDs for all UVs on the mesh
+                _, uv_shell_ids = mfn_mesh.getUvShellsIds(current_uv_set)
 
-                # Use the shell ID to group faces
-                shell_key = shell_Id[0]
-                shells.setdefault(shell_key, []).append(face)
+                # Store faces by local shell ID
+                local_shells = {}
 
-            except pm.MayaNodeError as e:
-                pm.warning(f"Error evaluating UV shell ID for face {face}: {e}")
+                for f in shape_faces:
+                    face_idx = f.index()
+                    try:
+                        # Get the UV index of the first vertex of the face.
+                        # We use the first valid UV map point index found.
+                        if mfn_mesh.polygonVertexCount(face_idx) > 0:
+                            uv_id = mfn_mesh.getPolygonUVid(face_idx, 0, current_uv_set)
+
+                            # Look up shell ID for this UV
+                            sid = uv_shell_ids[uv_id]
+                            local_shells.setdefault(sid, []).append(f)
+                    except Exception:
+                        # Case: Face has no UVs projected
+                        pass
+
+                # Add to main results
+                for sid in local_shells:
+                    shells[shell_count] = local_shells[sid]
+                    shell_count += 1
+
+            except Exception as e:
+                pm.warning(f"Error processing UV shells for {shape}: {e}")
                 continue
 
         if returned_type == "shell":

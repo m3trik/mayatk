@@ -86,8 +86,8 @@ The test infrastructure supports execution via Maya's command port:
 
 In Maya's Script Editor, run:
 ```python
-import mayatk
-mayatk.ensure_command_ports()
+import mayatk.env_utils.maya_connection as mc
+mc.open_command_ports(python=":7002")
 ```
 
 This opens the Python command port on port 7002 (default).

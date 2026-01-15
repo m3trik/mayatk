@@ -23,6 +23,14 @@ except ImportError as error:
 import mayatk as mtk
 
 
+def skipUnlessExtended(func):
+    """Decorator to skip tests unless MAYATK_EXTENDED_TESTS is set."""
+    return unittest.skipUnless(
+        os.environ.get("MAYATK_EXTENDED_TESTS") == "1",
+        "Extended test (skipped unless --extended flag is used)",
+    )(func)
+
+
 class MayaTkTestCase(unittest.TestCase):
     """Base class for all mayatk test cases."""
 

@@ -22,18 +22,22 @@ Directory Structure:
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
 import re
-import socket
 import sys
 import time
 import textwrap
 from pathlib import Path
 
-# Add current directory to path to find maya_connection
-sys.path.append(str(Path(__file__).parent))
+# Ensure mayatk is in path
+scripts_dir = r"O:\Cloud\Code\_scripts"
+if scripts_dir not in sys.path:
+    sys.path.insert(0, scripts_dir)
+
 try:
-    import maya_connection
+    from mayatk.env_utils import maya_connection
 except ImportError:
-    print("Warning: maya_connection module not found. Standalone mode may not work.")
+    print(
+        "Warning: mayatk.env_utils.maya_connection module not found. Standalone mode may not work."
+    )
 
 
 class MayaTestRunner:
@@ -45,7 +49,7 @@ class MayaTestRunner:
         self.test_dir = Path(__file__).parent
         self.results_file = self.test_dir / "test_results.txt"
         try:
-            self.connection = maya_connection.MayaConnection()
+            self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:
             self.connection = None
 
@@ -112,20 +116,21 @@ class MayaTestRunner:
         code = """
 import sys
 sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts')
+sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\test')
 
 print("\\\\n" + "="*70)
 print("QUICK TEST: test_core_utils (first class only)")
 print("="*70)
 
 try:
-    import mayatk.test.test_core_utils as test_mod
+    import test_core_utils as test_mod
     import unittest
     
     # Run first test class
     for attr_name in dir(test_mod):
         attr = getattr(test_mod, attr_name)
         if isinstance(attr, type) and issubclass(attr, unittest.TestCase):
-            if attr is not unittest.TestCase:
+            if attr is not unittest.TestCase and attr.__name__ != "MayaTkTestCase":
                 suite = unittest.makeSuite(attr)
                 runner = unittest.TextTestRunner(verbosity=2)
                 result = runner.run(suite)
@@ -151,7 +156,7 @@ except Exception as e:
             return True
         return False
 
-    def run_tests(self, modules=None, dry_run=False):
+    def run_tests(self, modules=None, dry_run=False, extended=False):
         """
         Run tests for specified modules.
 
@@ -159,6 +164,7 @@ except Exception as e:
             modules: List of module names (with or without test_ prefix).
                     None = run all default modules.
             dry_run: If True, show what would be executed without running tests.
+            extended: If True, run extended tests (sets MAYATK_EXTENDED_TESTS=1).
         """
         # Default test modules (core functionality)
         default_modules = [
@@ -189,6 +195,8 @@ except Exception as e:
         print(f"{'Would run' if dry_run else 'Running'} {len(test_modules)} modules:")
         for module in test_modules:
             print(f"  • {module}")
+        if extended:
+            print("  • Extended tests enabled")
         print("=" * 70)
 
         if dry_run:
@@ -211,6 +219,14 @@ except Exception as e:
             f"""
             import sys
             import os
+            
+            # Set extended tests flag
+            if {extended}:
+                os.environ['MAYATK_EXTENDED_TESTS'] = '1'
+            else:
+                if 'MAYATK_EXTENDED_TESTS' in os.environ:
+                    del os.environ['MAYATK_EXTENDED_TESTS']
+            
             sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test')
             # Add all package roots to sys.path
             package_roots = [
@@ -230,10 +246,32 @@ except Exception as e:
             # Use ModuleReloader to properly reload mayatk modules
             try:
                 from pythontk import ModuleReloader
-                reloader = ModuleReloader(include_submodules=True)
+                reloader = ModuleReloader(include_submodules=True)                
+                # Reload pythontk first to ensure core utilities are up to date
+                import pythontk
+                reloader.reload(pythontk)
+                print("[ModuleReloader] Reloaded pythontk")
                 import mayatk
                 reloaded = reloader.reload(mayatk)
                 print(f"[ModuleReloader] Reloaded {{len(reloaded)}} mayatk modules")
+                
+                # Force reload base_test by removing it from sys.modules
+                if 'base_test' in sys.modules:
+                    del sys.modules['base_test']
+                    print("[ModuleReloader] Removed base_test from sys.modules to force reload")
+                
+                # Debug: Check if base_test can be imported and has the attribute
+                try:
+                    import base_test
+                    print(f"[Debug] Imported base_test from: {{base_test.__file__}}")
+                    if hasattr(base_test, 'skipUnlessExtended'):
+                        print("[Debug] base_test has skipUnlessExtended")
+                    else:
+                        print("[Debug] base_test MISSING skipUnlessExtended")
+                        print(f"[Debug] dir(base_test): {{dir(base_test)}}")
+                except ImportError as e:
+                    print(f"[Debug] Could not import base_test: {{e}}")
+                    
             except Exception as e:
                 # Fallback to simple module clearing if reloader fails
                 modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
@@ -518,22 +556,40 @@ except Exception as e:
 
 def main():
     """Main entry point."""
-    runner = MayaTestRunner()
-
     # Parse command line arguments
     args = sys.argv[1:]
+
+    # Parse port first
+    port = 7002
+    if "--port" in args:
+        try:
+            p_idx = args.index("--port")
+            if p_idx + 1 < len(args):
+                port = int(args[p_idx + 1])
+                # Remove --port and value from args so they aren't treated as module names
+                args.pop(p_idx)
+                args.pop(p_idx)
+        except (ValueError, IndexError):
+            print("Invalid port specified")
+            return
+
+    runner = MayaTestRunner(port=port)
 
     # Check for flags
     dry_run = "--dry-run" in args or "-d" in args
     no_badge = "--no-badge" in args
+    extended = "--extended" in args or "-e" in args
+
     if dry_run:
         args = [arg for arg in args if arg not in ("--dry-run", "-d")]
     if no_badge:
         args = [arg for arg in args if arg != "--no-badge"]
+    if extended:
+        args = [arg for arg in args if arg not in ("--extended", "-e")]
 
     if not args:
         # No arguments - run default tests
-        success = runner.run_tests(dry_run=dry_run)
+        success = runner.run_tests(dry_run=dry_run, extended=extended)
     elif "--list" in args or "-l" in args:
         # List available tests
         runner.list_tests()
@@ -550,10 +606,10 @@ def main():
         # Run ALL tests (not just default)
         all_modules = runner.discover_tests()
         print(f"\nRunning ALL {len(all_modules)} test modules...")
-        success = runner.run_tests(all_modules, dry_run=dry_run)
+        success = runner.run_tests(all_modules, dry_run=dry_run, extended=extended)
     else:
         # Run specific modules
-        success = runner.run_tests(args, dry_run=dry_run)
+        success = runner.run_tests(args, dry_run=dry_run, extended=extended)
 
     # Update README badge with test results (unless disabled or dry run)
     if success and not dry_run and not no_badge:

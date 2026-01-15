@@ -1,51 +1,96 @@
 @ECHO off
+SETLOCAL EnableDelayedExpansion
 :: Maya Python Package Manager for Windows
-:: Requires: pip needs to already have been installed to mayapy.
+:: Manages Python packages for Maya's bundled Python interpreter (mayapy).
+CHCP 65001 >nul 2>&1
+MODE CON: COLS=80 LINES=35
 
 :intro
-color 07
-set ver=1.0.0
-powershell -Command "Write-Host 'Maya Python Package Manager v%ver%' -ForegroundColor Cyan"
-ECHO\
+cls
+color 0F
+set "ver=2.0.0"
+ECHO.
+powershell -Command "$h='╔══════════════════════════════════════════════════════════════════════════╗';$m='║                    MAYA PYTHON PACKAGE MANAGER                           ║';$v='║                           v%ver%                                          ║';$f='╚══════════════════════════════════════════════════════════════════════════╝';Write-Host $h -ForegroundColor DarkCyan;Write-Host $m -ForegroundColor Gray;Write-Host $v -ForegroundColor DarkGray;Write-Host $f -ForegroundColor DarkCyan"
+ECHO.
 
 :setVersion
-ECHO What is your Maya version? (ex. 2022)
-set /p maya_version=
-set mayapy="%ProgramFiles%\Autodesk\Maya%maya_version%\bin\mayapy.exe"
+:: Auto-detect Maya versions
+set "found_versions="
+set "latest_version="
+for %%Y in (2022 2023 2024 2025 2026) do (
+    if exist "%ProgramFiles%\Autodesk\Maya%%Y\bin\mayapy.exe" (
+        set "found_versions=!found_versions! %%Y"
+        set "latest_version=%%Y"
+    )
+)
+
+if defined found_versions (
+    powershell -Command "Write-Host '  [OK] Detected Maya installations:' -ForegroundColor DarkGreen -NoNewline; Write-Host '%found_versions%' -ForegroundColor DarkYellow"
+) else (
+    powershell -Command "Write-Host '  [!!] No Maya installations detected in default location' -ForegroundColor DarkRed"
+)
+
+ECHO.
+if defined latest_version (
+    powershell -Command "Write-Host '  Enter Maya version [%latest_version%]: ' -ForegroundColor Gray -NoNewline"
+    set "maya_version="
+    set /p "maya_version="
+    if not defined maya_version set "maya_version=%latest_version%"
+) else (
+    powershell -Command "Write-Host '  Enter Maya version: ' -ForegroundColor Gray -NoNewline"
+    set /p "maya_version="
+)
+set "mayapy=%ProgramFiles%\Autodesk\Maya%maya_version%\bin\mayapy.exe"
 goto validateMayapyPath
 
 :validateMayapyPath
-IF EXIST %mayapy% (
-    echo  Found Python interpreter at %mayapy%
+IF EXIST "%mayapy%" (
+    powershell -Command "Write-Host '  [OK] ' -ForegroundColor DarkGreen -NoNewline; Write-Host 'Maya %maya_version% Python interpreter ready' -ForegroundColor Gray"
+    :: Verify pip is available
+    "%mayapy%" -m pip --version >nul 2>&1
+    IF ERRORLEVEL 1 (
+        powershell -Command "Write-Host '  [..] Installing pip...' -ForegroundColor DarkYellow"
+        "%mayapy%" -m ensurepip --upgrade >nul 2>&1
+    )
+    timeout /t 1 >nul
     goto main
 ) ELSE (
-    ECHO The specified Maya Python path is not valid.
-    ECHO Please enter the full path to the mayapy executable.
-    ECHO Hint: Typically located in the Autodesk Maya install directory, under the 'bin' folder.
-    set /p mayapy="Enter full mayapy path: "
+    powershell -Command "Write-Host '  [!!] Maya %maya_version% not found' -ForegroundColor DarkRed"
+    ECHO.
+    powershell -Command "Write-Host '  Enter full path to mayapy.exe: ' -ForegroundColor Gray -NoNewline"
+    set /p "mayapy="
     goto validateMayapyPath
 )
 
 
 :main
-ECHO\
-ECHO What do you want to do?
-ECHO	1. Install package
-ECHO	2. Update package
-ECHO	3. Uninstall package
-ECHO	4. Get package info
-ECHO	5. List installed packages
-ECHO	6. Give Write Permission
-ECHO	7. Backup
-ECHO	8. Restore
-ECHO	9. Exit
+cls
+ECHO.
+powershell -Command "$t='  ┌─────────────────────────────────────────────────────────────────────────┐';$b='  └─────────────────────────────────────────────────────────────────────────┘';Write-Host $t -ForegroundColor DarkGray;Write-Host '  │  MAYA %maya_version% PACKAGE MANAGER                                            │' -ForegroundColor Gray;Write-Host $b -ForegroundColor DarkGray"
+ECHO.
+powershell -Command "Write-Host '     [1]  Install Package' -ForegroundColor Gray"
+powershell -Command "Write-Host '     [2]  Update Package' -ForegroundColor Gray"
+powershell -Command "Write-Host '     [3]  Uninstall Package' -ForegroundColor Gray"
+powershell -Command "Write-Host '     [4]  Show Package Info' -ForegroundColor Gray"
+powershell -Command "Write-Host '     [5]  List Installed Packages' -ForegroundColor Gray"
+powershell -Command "Write-Host '     [6]  Check Outdated Packages' -ForegroundColor Gray"
+ECHO.
+powershell -Command "Write-Host '     [7]  Backup to requirements.txt' -ForegroundColor DarkGray"
+powershell -Command "Write-Host '     [8]  Restore from requirements.txt' -ForegroundColor DarkGray"
+ECHO.
+powershell -Command "Write-Host '     [9]  Run as Administrator' -ForegroundColor DarkYellow"
+powershell -Command "Write-Host '     [0]  Exit' -ForegroundColor DarkRed"
+ECHO.
+powershell -Command "Write-Host '  ─────────────────────────────────────────────────────────────────────────' -ForegroundColor DarkGray"
+powershell -Command "Write-Host '  Select option: ' -ForegroundColor DarkCyan -NoNewline"
 
-CHOICE /C:123456789
+CHOICE /C:1234567890 /N
 
-IF ERRORLEVEL 9 goto end
+IF ERRORLEVEL 10 goto end
+IF ERRORLEVEL 9 goto admin
 IF ERRORLEVEL 8 goto restore
 IF ERRORLEVEL 7 goto backup
-IF ERRORLEVEL 6 goto admin
+IF ERRORLEVEL 6 goto outdated
 IF ERRORLEVEL 5 goto list
 IF ERRORLEVEL 4 goto info
 IF ERRORLEVEL 3 goto uninstall
@@ -54,83 +99,165 @@ IF ERRORLEVEL 1 goto install
 
 
 :install
-ECHO\
-ECHO What is the name of the package you want to INSTALL?
-set /p module=
-ECHO\
-%mayapy% -m pip install %module%
+cls
+call :header "INSTALL PACKAGE"
+ECHO.
+powershell -Command "Write-Host '  Package name (e.g., scipy or scipy==1.14.0): ' -ForegroundColor Gray -NoNewline"
+set /p "module="
+if "%module%"=="" goto main
+ECHO.
+powershell -Command "Write-Host '  [..] Installing %module%...' -ForegroundColor DarkYellow"
+ECHO.
+"%mayapy%" -m pip install %module%
+call :result
 goto main
 
 
 :uninstall
-ECHO\
-ECHO What is the name of the package you want to UNINSTALL?
-set /p module=
-ECHO\
-%mayapy% -m pip uninstall %module% -y
+cls
+call :header "UNINSTALL PACKAGE"
+ECHO.
+powershell -Command "Write-Host '  Package name to remove: ' -ForegroundColor Gray -NoNewline"
+set /p "module="
+if "%module%"=="" goto main
+ECHO.
+powershell -Command "Write-Host '  [..] Removing %module%...' -ForegroundColor DarkYellow"
+ECHO.
+"%mayapy%" -m pip uninstall %module% -y
+call :result
 goto main
 
 
 :list
-ECHO\
-%mayapy% -m pip list
+cls
+call :header "INSTALLED PACKAGES"
+ECHO.
+"%mayapy%" -m pip list --format=columns
+call :result
 goto main
 
 
 :update
-ECHO\
-ECHO Which package do you want to UPDATE?
-set /p module=
-ECHO\
-%mayapy% -m pip install %module% --upgrade
+cls
+call :header "UPDATE PACKAGE"
+ECHO.
+powershell -Command "Write-Host '  Package name (or ' -ForegroundColor Gray -NoNewline; Write-Host 'all' -ForegroundColor DarkYellow -NoNewline; Write-Host ' for everything): ' -ForegroundColor Gray -NoNewline"
+set /p "module="
+if "%module%"=="" goto main
+ECHO.
+if /I "%module%"=="all" (
+    powershell -Command "Write-Host '  [..] Updating all packages...' -ForegroundColor DarkYellow"
+    ECHO.
+    for /f "skip=2 tokens=1" %%p in ('"%mayapy%" -m pip list --outdated 2^>nul') do (
+        powershell -Command "Write-Host '      > Updating %%p' -ForegroundColor DarkGray"
+        "%mayapy%" -m pip install --upgrade %%p >nul 2>&1
+    )
+    powershell -Command "Write-Host '  [OK] All packages updated!' -ForegroundColor DarkGreen"
+) else (
+    powershell -Command "Write-Host '  [..] Updating %module%...' -ForegroundColor DarkYellow"
+    ECHO.
+    "%mayapy%" -m pip install %module% --upgrade
+)
+call :result
 goto main
 
 
 :info
-ECHO\
-ECHO Which specific package do you want info on?
-set /p module=
-ECHO\
-%mayapy% -m pip show %module%
+cls
+call :header "PACKAGE INFO"
+ECHO.
+powershell -Command "Write-Host '  Package name: ' -ForegroundColor Gray -NoNewline"
+set /p "module="
+if "%module%"=="" goto main
+ECHO.
+"%mayapy%" -m pip show %module%
+call :result
+goto main
+
+
+:outdated
+cls
+call :header "OUTDATED PACKAGES"
+ECHO.
+powershell -Command "Write-Host '  [..] Checking for updates...' -ForegroundColor DarkYellow"
+ECHO.
+"%mayapy%" -m pip list --outdated --format=columns
+call :result
 goto main
 
 
 :backup
-ECHO\
-ECHO This operation will create a requirements file, which lists all the Python packages and their versions that are currently installed in your system. This file can be used later to recreate the same environment, including the same versions of packages.
-ECHO\
-%mayapy% -m pip freeze > requirements.txt
-ECHO The backup file `requirements.txt` was saved in the location of this script. (%cd%)
+cls
+call :header "BACKUP PACKAGES"
+set "backup_file=maya%maya_version%_requirements.txt"
+ECHO.
+powershell -Command "Write-Host '  [..] Creating backup...' -ForegroundColor DarkYellow"
+"%mayapy%" -m pip freeze > "%backup_file%"
+ECHO.
+powershell -Command "Write-Host '  [OK] Saved: ' -ForegroundColor DarkGreen -NoNewline; Write-Host '%cd%\%backup_file%' -ForegroundColor Gray"
+call :result
 goto main
 
 
 :restore
-ECHO\
-IF NOT EXIST requirements.txt (
-    powershell -Command "Write-Host 'requirements.txt not found. Please ensure it exists in the current directory.' -ForegroundColor Red"
-    goto main
+cls
+call :header "RESTORE PACKAGES"
+set "backup_file=maya%maya_version%_requirements.txt"
+IF NOT EXIST "%backup_file%" (
+    IF EXIST "requirements.txt" (
+        set "backup_file=requirements.txt"
+    ) ELSE (
+        ECHO.
+        powershell -Command "Write-Host '  [!!] No requirements file found' -ForegroundColor DarkRed"
+        call :result
+        goto main
+    )
 )
-
-ECHO The following packages will be restored:
-ECHO -----------------------------------
-powershell -Command "Get-Content requirements.txt | Write-Host -ForegroundColor Green"
-ECHO -----------------------------------
-ECHO\
-ECHO Do you want to proceed with the restore operation? (Y/N)
-set /p user_choice=
-IF /I "%user_choice%"=="Y" (
-    %mayapy% -m pip install -r requirements.txt
+ECHO.
+powershell -Command "Write-Host '  Packages in %backup_file%:' -ForegroundColor DarkCyan"
+ECHO.
+powershell -Command "Get-Content '%backup_file%' | ForEach-Object { Write-Host \"     $_\" -ForegroundColor DarkGray }"
+ECHO.
+powershell -Command "Write-Host '  Proceed with restore? [Y/N]: ' -ForegroundColor DarkYellow -NoNewline"
+CHOICE /C:YN /N
+IF ERRORLEVEL 2 (
+    powershell -Command "Write-Host '  [--] Cancelled' -ForegroundColor DarkRed"
 ) ELSE (
-    ECHO Restore operation cancelled.
+    ECHO.
+    powershell -Command "Write-Host '  [..] Restoring packages...' -ForegroundColor DarkYellow"
+    ECHO.
+    "%mayapy%" -m pip install -r "%backup_file%"
+    ECHO.
+    powershell -Command "Write-Host '  [OK] Restore complete!' -ForegroundColor DarkGreen"
 )
+call :result
 goto main
 
 
 :admin
-fltmc >nul 2>nul || set _=^"set _ELEV=1^& cd /d """%cd%"""^& "%~f0" %* ^"&&((if "%_ELEV%"=="" ((powershell -nop -c start cmd -args '/d/x/s/v:off/r',$env:_ -verb runas >nul 2>nul) || (mshta vbscript:execute^("createobject(""shell.application"").shellexecute(""cmd"",""/d/x/s/v:off/r ""&createobject(""WScript.Shell"").Environment(""PROCESS"")(""_""),,""runas"",1)(window.close)"^) >nul 2>nul)))& exit /b)
-goto main
+powershell -Command "Write-Host '  [..] Requesting administrator privileges...' -ForegroundColor DarkYellow"
+powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+goto end
+
+
+:header
+powershell -Command "Write-Host '' ; Write-Host '  ══════════════════════════════════════════════════════════════════════════' -ForegroundColor DarkGray; Write-Host '   %~1' -ForegroundColor Gray; Write-Host '  ══════════════════════════════════════════════════════════════════════════' -ForegroundColor DarkGray"
+goto :eof
+
+
+:result
+ECHO.
+powershell -Command "Write-Host '  ─────────────────────────────────────────────────────────────────────────' -ForegroundColor DarkGray"
+powershell -Command "Write-Host '  Press any key to continue...' -ForegroundColor DarkGray"
+pause >nul
+goto :eof
 
 
 :end
-ECHO Exiting...
-rem cmd /k
+cls
+ECHO.
+powershell -Command "Write-Host '  Goodbye!' -ForegroundColor DarkCyan"
+ECHO.
+timeout /t 1 >nul
+ENDLOCAL
+exit /b 0
