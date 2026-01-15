@@ -15,6 +15,7 @@ from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
+from mayatk.edit_utils.naming._naming import Naming
 
 
 class EditUtils(ptk.HelpMixin):
@@ -76,15 +77,16 @@ class EditUtils(ptk.HelpMixin):
                 if len(group_objs) < 2:
                     continue
 
+                # Get name before combine destroys the object
+                first_obj = group_objs[0]
+                name = (
+                    first_obj.name()
+                    if hasattr(first_obj, "name")
+                    else str(first_obj).split("|")[-1]
+                )
+
                 try:
                     mesh = pm.polyUnite(group_objs, centerPivot=True, ch=False)[0]
-                    # Rename to first object's name
-                    first_obj = group_objs[0]
-                    name = (
-                        first_obj.name()
-                        if hasattr(first_obj, "name")
-                        else str(first_obj).split("|")[-1]
-                    )
                     mesh = pm.rename(mesh, name)
                     combined_meshes.append(mesh)
                 except Exception as e:
@@ -97,8 +99,14 @@ class EditUtils(ptk.HelpMixin):
             return combined_meshes
 
         else:
+            # Get name before combine destroys the object
+            name = (
+                objects[0].name()
+                if hasattr(objects[0], "name")
+                else str(objects[0]).split("|")[-1]
+            )
             combined_mesh = pm.polyUnite(objects, centerPivot=True, ch=False)[0]
-            combined_mesh = pm.rename(combined_mesh, objects[0].name())
+            combined_mesh = pm.rename(combined_mesh, name)
             return combined_mesh
 
     @staticmethod
@@ -129,6 +137,104 @@ class EditUtils(ptk.HelpMixin):
             grp = pm.group(empty=True, name="null")
 
         return grp
+
+    @staticmethod
+    @CoreUtils.undoable
+    def separate_objects(
+        objects=None,
+        by_material: bool = False,
+        center_pivots: bool = True,
+        rename: bool = False,
+    ) -> List:
+        """Separate meshes into individual objects.
+
+        Args:
+            objects (list, optional): Mesh transforms to process. Defaults to selection.
+            by_material (bool): If True, also separate by material assignments.
+            center_pivots (bool): If True, center pivots on resulting objects.
+            rename (bool): If True, rename resulting objects using original name and location suffix.
+
+        Returns:
+            list: List of separated transform nodes.
+        """
+        if objects is None:
+            objects = pm.ls(sl=True, objectsOnly=True)
+
+        if not objects:
+            pm.warning("Nothing selected. Operation requires an object selection.")
+            return []
+
+        separated_objects = []
+
+        for obj in pm.ls(objects, objectsOnly=True, transforms=True):
+            original_name = obj.name().split("|")[-1]
+            current_results = []
+            separated = False
+
+            # Strategy 1: Native Material Separation
+            if by_material:
+                try:
+                    # Note: mat=True in polySeparate splits disjoint shells AND materials
+                    sep = pm.polySeparate(obj, ch=False, mat=True)
+                    if sep:
+                        current_results = [pm.PyNode(s) for s in sep]
+                        separated = True
+                except Exception:
+                    pass
+
+                # Strategy 2: Manual Material Hull Separation (Fallback)
+                if not separated:
+                    mats = MatUtils.get_mats(obj, as_strings=True)
+                    if mats and len(mats) > 1:
+                        valid_operation = False
+                        # Optimization: We only need to detach N-1 materials
+                        for mat in mats[:-1]:
+                            try:
+                                faces = MatUtils.find_by_mat_id(mat, [obj], shell=False)
+                                if faces:
+                                    pm.polyChipOff(
+                                        faces, dup=False, kft=True, ch=True, off=0
+                                    )
+                                    valid_operation = True
+                            except Exception:
+                                pass
+
+                        if valid_operation:
+                            pm.delete(obj, ch=True)
+                            # Fall through to standard separate to split the now-detached shells
+
+            # Strategy 3: Standard Separation (Disjoint Shells)
+            if not separated:
+                try:
+                    sep = pm.polySeparate(obj, ch=False)
+                    if sep:
+                        current_results = [pm.PyNode(s) for s in sep]
+                        separated = True
+                except Exception:
+                    pass
+
+            # If no separation occurred, keep original
+            if not separated:
+                current_results = [obj]
+
+            # Post-Processing
+            if center_pivots:
+                for res in current_results:
+                    try:
+                        pm.xform(res, centerPivots=True)
+                    except Exception:
+                        pass
+
+            if rename:
+                try:
+                    Naming.rename(current_results, to=original_name)
+                    Naming.append_location_based_suffix(current_results)
+                except Exception as e:
+                    pm.warning(f"Rename failed for {original_name}: {e}")
+
+            separated_objects.extend(current_results)
+
+        return separated_objects
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):

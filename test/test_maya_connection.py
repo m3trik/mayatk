@@ -234,6 +234,89 @@ class TestMayaConnectionMocked(unittest.TestCase):
             self.assertTrue(conn.is_connected)
             mock_initialize.assert_called_with(name="python")
 
+    def test_connect_launch_flag(self):
+        """Test that launch=True triggers launch logic when connection fails."""
+        conn = MayaConnection()
+
+        with (
+            patch.object(MayaConnection, "_detect_mode") as mock_detect_mode,
+            patch.object(MayaConnection, "_connect_via_port") as mock_connect_port,
+            patch.object(MayaConnection, "_launch_maya_gui") as mock_launch_gui,
+        ):
+
+            # Scenario: Auto detect sees nothing (returns standalone as fallback)
+            mock_detect_mode.return_value = "standalone"
+
+            # Connect logic:
+            # 1. detect -> standalone
+            # 2. if launch=True and standalone -> mode forced to "port"
+            # 3. _connect_via_port calls:
+            #    a. First call fails (Maya not running)
+            #    b. Launch called
+            #    c. Second call succeeds
+            mock_connect_port.side_effect = [False, True]
+            mock_launch_gui.return_value = True
+
+            result = conn.connect(mode="auto", launch=True)
+
+            self.assertTrue(result)
+
+            # Verify launch was called
+            mock_launch_gui.assert_called_once()
+
+            # Verify connect called twice (fail -> launch -> succeed)
+            self.assertEqual(mock_connect_port.call_count, 2)
+
+    @patch("subprocess.check_output")
+    def test_get_pid_from_port_parses_netstat(self, mock_check_output):
+        """Test parsing netstat output for PID resolution."""
+        mock_check_output.return_value = (
+            "  TCP    0.0.0.0:7003   0.0.0.0:0   LISTENING   1234\n"
+            "  TCP    0.0.0.0:70031  0.0.0.0:0   LISTENING   9999\n"
+            "  TCP    127.0.0.1:80   0.0.0.0:0   LISTENING   5678\n"
+        )
+
+        pid = MayaConnection.get_pid_from_port(7003)
+        self.assertEqual(pid, 1234)
+
+    @patch("pythontk.AppLauncher.close_process")
+    @patch("mayatk.env_utils.maya_connection.MayaConnection.get_pid_from_port")
+    def test_close_instance_by_port(self, mock_get_pid, mock_close_process):
+        """Test closing a Maya instance by port."""
+        mock_get_pid.return_value = 4321
+        mock_close_process.return_value = True
+
+        result = MayaConnection.close_instance(port=7003)
+        self.assertTrue(result)
+        mock_get_pid.assert_called_with(7003)
+        mock_close_process.assert_called_with(4321)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_maya_implementation(self, MockAppLauncher):
+        """Test the implementation of launch_maya_gui uses AppLauncher."""
+        conn = MayaConnection()
+
+        # Mock AppLauncher behavior
+        MockAppLauncher.launch.return_value = MagicMock()
+        MockAppLauncher.wait_for_ready.return_value = True
+
+        # Patch socket to simulate connection success during wait loop
+        with patch("socket.socket") as MockSocket:
+            mock_socket_instance = MockSocket.return_value
+            mock_socket_instance.connect_ex.return_value = 0  # Success
+
+            # Test generic launch
+            conn._launch_maya_gui(port=7002)
+            # Verify executable name ('maya')
+            self.assertEqual(MockAppLauncher.launch.call_args[0][0], "maya")
+
+            # Test specific path launch
+            conn._launch_maya_gui(port=7002, app_path="/custom/path/to/maya.exe")
+            # Verify custom path was used
+            self.assertEqual(
+                MockAppLauncher.launch.call_args[0][0], "/custom/path/to/maya.exe"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -213,6 +213,8 @@ class UvDiagnostics:
             - bounds: (umin, vmin, umax, vmax) bounding box
             - in_bounds: True if UVs are within reasonable range (0-10 for UDIM support)
             - is_valid: True if this is usable UV data
+            - overlap_count: Number of overlapping UV faces (lower is better)
+            - area_outside: Area of UV bounding box outside 0-1 range (lower is better)
         """
         result = {
             "uv_count": 0,
@@ -220,6 +222,8 @@ class UvDiagnostics:
             "bounds": (0, 0, 0, 0),
             "in_bounds": False,
             "is_valid": False,
+            "overlap_count": 0,
+            "area_outside": 0.0,
         }
 
         try:
@@ -240,7 +244,33 @@ class UvDiagnostics:
                         result["in_bounds"] = (
                             umin >= -1 and umax <= 11 and vmin >= -1 and vmax <= 11
                         )
+
+                        # Calculate area outside 0-1 unit square
+                        total_width = umax - umin
+                        total_height = vmax - vmin
+                        total_area = total_width * total_height
+
+                        # Intersection with unit square [0,0] to [1,1]
+                        i_umin = max(umin, 0.0)
+                        i_umax = min(umax, 1.0)
+                        i_vmin = max(vmin, 0.0)
+                        i_vmax = min(vmax, 1.0)
+
+                        if i_umax > i_umin and i_vmax > i_vmin:
+                            intersection_area = (i_umax - i_umin) * (i_vmax - i_vmin)
+                        else:
+                            intersection_area = 0.0
+
+                        result["area_outside"] = max(0.0, total_area - intersection_area)
                 except:
+                    pass
+
+                # Get Overlap Count
+                try:
+                    overlaps = pm.polyUVOverlap(shape, oc=True)
+                    if overlaps:
+                        result["overlap_count"] = len(overlaps)
+                except Exception:
                     pass
 
                 # Get UV area
@@ -272,9 +302,10 @@ class UvDiagnostics:
 
         Quality criteria (in order of importance):
         1. Has valid UV data (non-empty, non-degenerate, within bounds)
-        2. UV coverage area (larger = better quality mapping)
-        3. UV count (more coordinates = more detailed mapping)
-        4. Name preference (standard names as tiebreaker only)
+        2. UV Overlap (fewer overlapping faces is better)
+        3. Area Outside 0-1 (UVs closer to unit square is better)
+        4. UV coverage area or UV count (user preference)
+        5. Name preference (standard names as tiebreaker only)
 
         Sets with '___delete___' prefix are EXCLUDED entirely - this is an
         explicit user directive indicating the set should be removed.
@@ -340,21 +371,30 @@ class UvDiagnostics:
             name, metrics, is_real = item
 
             # Primary: Valid UV data is mandatory for top tier
-            valid_bonus = 1000 if metrics["is_valid"] else 0
+            valid_bonus = 1000000 if metrics.get("is_valid") else 0
 
-            # Secondary: Coverage area or UV count
+            # Secondary: Overlap (Lower is better, so negate)
+            # Prefer 0 overlap significantly. Multiply by 1000 to outweigh area/count.
+            # Use 9999 as fallback penalty if overlap calculation failed.
+            overlap_score = -metrics.get("overlap_count", 9999) * 1000
+
+            # Tertiary: Area Outside 0-1 (Lower is better, so negate)
+            # Penalize UVs wandering far from 0-1.
+            outside_score = -metrics.get("area_outside", 9999) * 100
+
+            # Quaternary: Coverage Area or UV count (Higher is better)
             if prefer_largest_area:
-                coverage = metrics["area"]
+                coverage = metrics.get("area", 0)
             else:
-                coverage = metrics["uv_count"]
+                coverage = metrics.get("uv_count", 0)
 
-            # Tertiary: Standard name as tiebreaker only
+            # Quinary: Standard name as tiebreaker only
             if name in STANDARD_NAMES:
                 name_bonus = 10 - STANDARD_NAMES.index(name)  # 10-5
             else:
                 name_bonus = 0
 
-            return (valid_bonus, coverage, name_bonus, metrics["uv_count"])
+            return (valid_bonus, overlap_score, outside_score, coverage, name_bonus)
 
         best = max(candidates, key=quality_score)
         return best[0]

@@ -267,6 +267,13 @@ class SceneExporter(ptk.LoggingMixin):
         Returns:
             Optional[dict]: A dictionary of FBX settings and their current values if verification is performed, otherwise None.
         """
+        # Ensure FBX plugin is loaded
+        try:
+            EnvUtils.load_plugin("fbxmaya")
+        except ValueError as e:
+            self.logger.error(f"Failed to ensure fbxmaya plugin is loaded: {e}")
+            raise RuntimeError(f"Failed to ensure fbxmaya plugin is loaded: {e}") from e
+
         if preset_file:
             self.logger.debug(f"Loading FBX export preset: {preset_file}")
             preset_path_escaped = preset_file.replace("\\", "/")

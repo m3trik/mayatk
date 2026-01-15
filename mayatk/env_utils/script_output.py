@@ -49,6 +49,14 @@ class ScriptOutput(QtWidgets.QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setFontFamily("Courier New")
+        # Ensure Ctrl+C works reliably even when Maya intercepts shortcuts
+        self._copy_shortcut = QtGui.QShortcut(QtGui.QKeySequence.Copy, self)
+        self._copy_shortcut.setContext(QtCore.Qt.ApplicationShortcut)
+        self._copy_shortcut.activated.connect(self._handle_copy_shortcut)
+        # Install application-level event filter to capture Ctrl+C before Maya
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.installEventFilter(self)
         # Ensure the widget reliably gets/keeps focus and supports selection
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.setTextInteractionFlags(
@@ -68,9 +76,40 @@ class ScriptOutput(QtWidgets.QTextEdit):
         self.highlighter = ScriptHighlighter(self.document(), rules)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent):
-        """Let Qt handle all key events including copy"""
-        # Let parent handle all key events - Qt's built-in copy should work
+        """Ensure copy shortcut works reliably in the output widget."""
+        if event.matches(QtGui.QKeySequence.Copy):
+            self._handle_copy_shortcut()
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def event(self, event: QtCore.QEvent):
+        """Intercept shortcut override so Maya doesn't steal Ctrl+C."""
+        if event.type() == QtCore.QEvent.ShortcutOverride:
+            if isinstance(event, QtGui.QKeyEvent) and event.matches(
+                QtGui.QKeySequence.Copy
+            ):
+                if self.textCursor().hasSelection():
+                    event.accept()
+                    return True
+        return super().event(event)
+
+    def eventFilter(self, obj, event: QtCore.QEvent):
+        if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.ShortcutOverride):
+            if isinstance(event, QtGui.QKeyEvent) and event.matches(
+                QtGui.QKeySequence.Copy
+            ):
+                if self.textCursor().hasSelection():
+                    self._handle_copy_shortcut()
+                    event.accept()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _handle_copy_shortcut(self):
+        if self.textCursor().hasSelection():
+            cursor = self.textCursor()
+            text = cursor.selectedText().replace("\u2029", "\n")
+            QtWidgets.QApplication.clipboard().setText(text)
 
     def _clear_script_editor(self):
         """Clear both the widget and the actual Maya Script Editor output"""
