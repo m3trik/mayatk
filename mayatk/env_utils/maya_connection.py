@@ -8,10 +8,7 @@ Supports both interactive Maya sessions and batch testing.
 """
 import socket
 import sys
-import os
-import textwrap
 import base64
-import inspect
 from typing import Optional, Literal, List, Union, Callable
 
 # Initialize QApplication for standalone mode
@@ -89,7 +86,8 @@ class MayaConnection:
             try:  # open new port.
                 cmds.commandPort(name=port, sourceType=source_type)
             except RuntimeError:
-                print(f"Warning: Could not open {source_type} port {port}")
+                # Port likely in use by another instance. Valid behavior, suppress warning.
+                pass
 
     @staticmethod
     def reload_modules(
@@ -171,30 +169,251 @@ class MayaConnection:
         self.port: int = 7002
 
     def connect(
-        self, mode: ConnectionMode = "auto", port: int = 7002, host: str = "localhost"
+        self,
+        mode: ConnectionMode = "auto",
+        port: int = 7002,
+        host: str = "localhost",
+        launch: bool = False,
+        app_path: Optional[str] = None,
+        force_new_instance: bool = False,
+        launch_args: Optional[List[str]] = None,
     ) -> bool:
         """
         Connect to Maya using the specified mode.
 
         Parameters:
             mode: Connection mode - "port", "standalone", "interactive", or "auto"
-            port: Port number for command port connection (default: 7002)
+            port: Port number for command port connection (default: 7002).
+                  If force_new_instance is True, this acts as the starting port to scan from.
             host: Hostname for command port connection (default: "localhost")
+            launch: If True, attempts to launch Maya GUI with the command port open if connection fails.
+            app_path: Optional path to the Maya executable to use when launching.
+            force_new_instance: If True, finds an available port and launches a new Maya instance regardless of existing ones.
+            launch_args: Optional list of additional arguments to pass to Maya when launching (e.g. ['-noAutoloadPlugins']).
 
         Returns:
             bool: True if connection successful
         """
+        if force_new_instance:
+            port = self.get_available_port(start_port=port)
+            launch = True
+            # Build connection string for the log
+            print(
+                f"[MayaConnection] Force new instance requested. Selected available port: {port}"
+            )
+
         if mode == "auto":
-            mode = self._detect_mode()
+            detected_mode = self._detect_mode()
+            if detected_mode == "standalone" and launch:
+                # If we detected standalone (meaning no interactive or port found),
+                # and user wants to launch, we should switch to port mode to trigger the launch attempt
+                mode = "port"
+            else:
+                mode = detected_mode
 
         if mode == "port":
-            return self._connect_via_port(host, port)
+            connected = self._connect_via_port(host, port)
+            if not connected and launch:
+                print(
+                    f"[MayaConnection] Connection failed. Launching Maya on port {port}..."
+                )
+                if self._launch_maya_gui(port, app_path, extra_args=launch_args):
+                    return self._connect_via_port(host, port)
+            return connected
         elif mode == "standalone":
             return self._connect_standalone()
         elif mode == "interactive":
             return self._connect_interactive()
         else:
             raise ValueError(f"Invalid connection mode: {mode}")
+
+    def _launch_maya_gui(
+        self,
+        port: int,
+        app_path: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+    ) -> bool:
+        """Launch Maya GUI with command port enabled."""
+        from pythontk import AppLauncher
+        import time
+
+        # Command to open port on startup and configure UI
+        # 1. Open TCP port for external connection (check if not already open to avoid "Name in use" error)
+        # 2. Open unique named pipe (mayatk_PORT). Use catch to ignore OS-level pipe collisions (zombie pipes).
+        # 3. Update Window Title to identify this instance
+        # Note: Using braces in MEL statements to ensure valid syntax for nested ifs.
+        startup_cmds = [
+            f'if (!`commandPort -q -name ":{port}"`) commandPort -name ":{port}" -sourceType "python"',
+            f'if (!`commandPort -q -name "mayatk_{port}"`) {{ if (catch(`commandPort -name "mayatk_{port}" -sourceType "python"`)) {{ }} }}',
+            f'window -e -title "Maya [Port: {port}]" $gMainWindow',
+        ]
+        startup_cmd = ";".join(startup_cmds)
+
+        args = ["-command", startup_cmd]
+        if extra_args:
+            args.extend(extra_args)
+
+        if app_path:
+            print(
+                f"[MayaConnection] Launching specific Maya: {app_path} with args: {args}"
+            )
+            process = AppLauncher.launch(app_path, args=args, detached=True)
+        else:
+            print(f"[MayaConnection] Launching Maya with args: {args}")
+            process = AppLauncher.launch("maya", args=args, detached=True)
+
+            if not process:
+                # Try finding a specific version if 'maya' generic isn't found
+                # This is a basic fallback, could be expanded
+                print(
+                    "[MayaConnection] 'maya' not found in path. Checking for specific versions..."
+                )
+                for ver in ["2025", "2024", "2023", "2022"]:
+                    process = AppLauncher.launch(f"maya{ver}", args=args, detached=True)
+                    if process:
+                        break
+
+        if not process:
+            print("[MayaConnection] Failed to launch Maya executable.")
+            return False
+
+        print(
+            f"[MayaConnection] Maya launched (PID: {process.pid}). Waiting for Command Port {port} to open..."
+        )
+
+        def check_port_open(proc):
+            """Callback to check if command port is listening."""
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                # socket.connect_ex returns 0 on success
+                result = sock.connect_ex(("localhost", port))
+                sock.close()
+                return result == 0
+            except:
+                return False
+
+        # Wait for port to be actually listening
+        # Maya takes a while to load (UI + UserSetup), giving it 3 minutes
+        if AppLauncher.wait_for_ready(process, timeout=180, check_fn=check_port_open):
+            print("[MayaConnection] Maya Command Port is ready.")
+            return True
+
+        # If we got here, we timed out or process died
+        if process.poll() is not None:
+            print(
+                f"[MayaConnection] Maya process exited prematurely with code {process.returncode}."
+            )
+        else:
+            print("[MayaConnection] Timeout waiting for Maya Command Port.")
+
+        return False
+
+    @staticmethod
+    def get_pid_from_port(port: int) -> Optional[int]:
+        """
+        Find the process ID (PID) listening on the given TCP port.
+        Works on Windows using netstat.
+        """
+        import subprocess
+        import re
+
+        try:
+            # Run netstat -ano to get all connections and PIDs
+            output = subprocess.check_output(
+                ["netstat", "-ano"], universal_newlines=True
+            )
+            # Look for: TCP    0.0.0.0:PORT    ...    LISTENING    PID
+            # Use strict regex to avoid partial matches (e.g. 7002 matches 70021)
+            # Regex: TCP \s+ IP:PORT \s+ ... \s+ PID
+            pattern = re.compile(
+                r"TCP\s+(?:\d{1,3}\.){3}\d{1,3}:" + str(port) + r"\s+.*\s+(\d+)\s*$"
+            )
+
+            for line in output.splitlines():
+                if f":{port}" in line:
+                    match = pattern.search(line.strip())
+                    if match:
+                        return int(match.group(1))
+        except Exception as e:
+            print(f"[MayaConnection] Failed to resolve PID from port {port}: {e}")
+
+        return None
+
+    @staticmethod
+    def close_instance(port: Optional[int] = None, pid: Optional[int] = None) -> bool:
+        """
+        Close a Maya instance identified by Port or PID.
+
+        Args:
+            port: The command port number.
+            pid: The process ID.
+        """
+        from pythontk import AppLauncher
+
+        if port and not pid:
+            pid = MayaConnection.get_pid_from_port(port)
+            if not pid:
+                print(f"[MayaConnection] No process found listening on port {port}.")
+                # Fallback: Try to find by Window Title if locally launched
+                for proc_pid in AppLauncher.get_running_processes("maya"):
+                    titles = AppLauncher.get_window_titles(proc_pid)
+                    if any(f"Port: {port}" in t for t in titles):
+                        print(
+                            f"[MayaConnection] Found PID {proc_pid} via Window Title."
+                        )
+                        pid = proc_pid
+                        break
+
+        if pid:
+            print(f"[MayaConnection] Closing Maya instance (PID: {pid})...")
+            return AppLauncher.close_process(pid)
+
+        return False
+
+    @staticmethod
+    def get_available_port(start_port: int = 7002, max_check: int = 100) -> int:
+        """
+        Find an available port starting from start_port.
+        Checks both the TCP port and the potential named pipe 'mayatk_{port}'.
+        Useful when you want to launch a new Maya instance without conflicting with existing ones.
+        """
+        import sys
+        import os
+
+        for port in range(start_port, start_port + max_check):
+            # 1. Check TCP Port
+            is_tcp_free = False
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                # If we successfully connect (0), the port is taken.
+                # If we fail (non-zero), the port is likely free.
+                if s.connect_ex(("localhost", port)) != 0:
+                    is_tcp_free = True
+                s.close()
+            except:
+                pass
+
+            if not is_tcp_free:
+                continue
+
+            # 2. Check Named Pipe (Windows)
+            # Maya creates named pipes as \\.\pipe\name on Windows
+            # NOTE: os.path.exists on pipes is unreliable for Maya command ports (often returns False even if used).
+            # We rely primarily on TCP check. Detection of 'mayatk_{port}' is kept as best-effort.
+            pipe_name = f"mayatk_{port}"
+            is_pipe_free = True
+            if sys.platform == "win32":
+                if os.path.exists(f"\\\\.\\pipe\\{pipe_name}"):
+                    is_pipe_free = False
+
+            # If both are free (or pipe matching failed to find it), return this port
+            if is_pipe_free:
+                return port
+
+        raise RuntimeError(
+            f"No available ports found in range {start_port}-{start_port + max_check}"
+        )
 
     def _detect_mode(self) -> ConnectionMode:
         """Auto-detect the best connection mode."""
@@ -396,7 +615,7 @@ if cmds.control("cmdScrollFieldReporter1", exists=True):
         return self.execute("_mayatk_temp_result", wait_for_response=True)
 
     def execute_and_capture_editor_output(
-        self, code: str, timeout: int = 30
+        self, code: str, timeout: int = 30, mirror_to_script_output: bool = False
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Execute code and capture the Script Editor output generated by the execution.
@@ -440,6 +659,22 @@ if cmds.control("cmdScrollFieldReporter1", exists=True):
 """
         self.execute(get_new_code, wait_for_response=True)
         new_output = self.execute("_mayatk_new_editor_output", wait_for_response=True)
+
+        if mirror_to_script_output and new_output:
+            try:
+                from mayatk.env_utils.script_output import ScriptConsole
+                from qtpy import QtGui
+
+                if not ScriptConsole._instance:
+                    ScriptConsole.show_console()
+
+                output_widget = ScriptConsole._instance.output
+                cursor = output_widget.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.End)
+                cursor.insertText(new_output)
+                output_widget.setTextCursor(cursor)
+            except Exception:
+                pass
 
         return result, new_output
 

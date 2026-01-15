@@ -254,6 +254,71 @@ class TestEditUtils(MayaTkTestCase):
         self.assertTrue(pm.objExists(curve))
         self.assertEqual(pm.nodeType(curve.getShape()), "nurbsCurve")
 
+    def test_separate_objects(self):
+        """Test separate_objects method."""
+        # Setup materials
+        mat1 = mtk.MatUtils.create_mat("lambert", name="mat1")
+        mat2 = mtk.MatUtils.create_mat("lambert", name="mat2")
+
+        # Scenario 1: Standard Separate (Disjoint Shells)
+        # ---------------------------------------------
+        c1 = pm.polyCube()[0]
+        c2 = pm.polyCube()[0]
+        pm.move(c2, 5, 0, 0)
+        combined = pm.polyUnite(c1, c2, ch=False)[0]
+
+        # separate_objects default (by_material=False) should work like polySeparate
+        res = EditUtils.separate_objects([combined], by_material=False)
+        self.assertEqual(len(res), 2)
+        pm.delete(res)
+
+        # Scenario 2: Separate by Material (Disjoint Shells)
+        # ---------------------------------------------
+        c3 = pm.polyCube()[0]
+        c4 = pm.polyCube()[0]
+        pm.move(c4, 5, 0, 0)
+        mtk.MatUtils.assign_mat(c3, mat1)
+        mtk.MatUtils.assign_mat(c4, mat2)
+        combined2 = pm.polyUnite(c3, c4, ch=False)[0]
+
+        res2 = EditUtils.separate_objects([combined2], by_material=True)
+        self.assertEqual(len(res2), 2)
+        pm.delete(res2)
+
+        # Scenario 3: Separate by Material (Single Shell)
+        # ---------------------------------------------
+        c5 = pm.polyCube(sx=2)[0]
+        mtk.MatUtils.assign_mat(c5, mat1)
+        pm.select(c5.f[0:3])
+        mtk.MatUtils.assign_mat(pm.selected(), mat2)
+
+        # Without by_material, should remain 1 object
+        res3a = EditUtils.separate_objects([c5], by_material=False)
+        self.assertEqual(len(res3a), 1)
+        # (It returns the object itself if no separation happened)
+
+        # With by_material, should split
+        res3b = EditUtils.separate_objects(res3a, by_material=True)
+        self.assertEqual(len(res3b), 2)
+        pm.delete(res3b)
+
+        # Scenario 4: Rename Check
+        # ---------------------------------------------
+        c6 = pm.polyCube(n="MyBox")[0]
+        c7 = pm.polyCube()[0]  # Shell 2
+        pm.move(c7, 10, 0, 0)
+        combined3 = pm.polyUnite(c6, c7, n="MyComp", ch=False)[0]
+
+        # Rename=True
+        # Expect MyComp_01, MyComp_02 (or location based suffix)
+        res4 = EditUtils.separate_objects([combined3], rename=True)
+        self.assertEqual(len(res4), 2)
+
+        names = [r.name().split("|")[-1] for r in res4]
+        # Verify names start with "MyComp"
+        self.assertTrue(all(n.startswith("MyComp") for n in names))
+        pm.delete(res4)
+
 
 if __name__ == "__main__":
     unittest.main()
