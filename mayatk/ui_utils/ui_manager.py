@@ -4,7 +4,6 @@ import sys, os
 import importlib
 from typing import Optional, Callable, Any, TYPE_CHECKING
 import pythontk as ptk
-from tentacle import ui
 from uitk import Switchboard
 
 if TYPE_CHECKING:
@@ -266,7 +265,7 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
         ui.set_flags(FramelessWindowHint=True)
         ui.style.set(theme="dark", style_class="translucentBgWithBorder")
         ui.edit_tags(add="mayatk|maya_menu")
-        # ui.lock_style = True  # Prevent style changes
+        ui.lock_style = True  # Prevent style changes
 
         return ui
 
@@ -274,9 +273,9 @@ class UiManager(ptk.SingletonMixin, ptk.LoggingMixin):
 # --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from mayatk.core_utils._core_utils import CoreUtils
+    from mayatk.ui_utils._ui_utils import UiUtils
 
-    CoreUtils.clear_scrollfield_reporters()
+    UiUtils.clear_scrollfield_reporters()
 
     ui = UiManager.instance().get("scene_exporter", reload=True)
     ui.header.config_buttons("hide")

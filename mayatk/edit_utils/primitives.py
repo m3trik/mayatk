@@ -137,6 +137,20 @@ class Primitives:
             defaults.update(kw)
             return pm.polyTorus(**defaults)
 
+        def create_poly_helix(**kw):
+            defaults = {
+                "axis": axis,
+                "coils": 3,
+                "height": 5,
+                "width": 5,
+                "radius": 5,
+                "subdivisionsAxis": 8,
+                "subdivisionsCoil": 50,
+                "subdivisionsCaps": 0,
+            }
+            defaults.update(kw)
+            return pm.polyHelix(**defaults)
+
         def create_poly_pipe(**kw):
             defaults = {
                 "axis": axis,
@@ -296,7 +310,9 @@ class Primitives:
                 "cone": create_poly_cone,
                 "pyramid": create_poly_pyramid,
                 "torus": create_poly_torus,
+                "helix": create_poly_helix,
                 "pipe": create_poly_pipe,
+                "tube": create_poly_pipe,
                 "geosphere": create_geosphere,
                 "platonic solids": create_platonic_solids,
             },
@@ -338,7 +354,13 @@ class Primitives:
     @staticmethod
     @CoreUtils.undoable
     def create_circle(
-        axis="y", numPoints=5, radius=5, center=[0, 0, 0], mode=0, name="pCircle"
+        axis="y",
+        numPoints=12,
+        radius=5,
+        center=[0, 0, 0],
+        mode=0,
+        name="pCircle",
+        history=False,
     ):
         """Create a circular polygon plane.
 
@@ -348,41 +370,73 @@ class Primitives:
             radius=int
             center=[float3 list] - point location of circle center
             mode(int): 0 -no subdivisions, 1 -subdivide tris, 2 -subdivide quads
+            history(bool): If True, creates a circle with construction history (Planar Trim).
 
         Returns:
-            (list) [transform node, history node] ex. [nt.Transform('polySurface1'), nt.PolyCreateFace('polyCreateFace1')]
-
-        Example: create_circle(axis='x', numPoints=20, radius=8, mode='tri')
+            (list) [transform node, history node]
         """
+        ax = (0, 1, 0)
+        if axis == "x":
+            ax = (1, 0, 0)
+        elif axis == "z":
+            ax = (0, 0, 1)
+
+        if history:
+            # Create Linear NURBS circle to drive the polygon
+            # Degree 1 ensures straight edges between points (polygonal shape)
+            curve_trans, curve_shape = pm.circle(
+                center=(0, 0, 0),
+                normal=ax,
+                radius=radius,
+                sections=numPoints,
+                degree=1,
+                name=str(name) + "_crv",
+            )
+
+            # Create planar polygon surface from the curve
+            # This creates a single-sided mesh with history
+            mesh_nodes = pm.planarSrf(
+                curve_trans, polygon=1, name=name, pixelError=1
+            )  # [transform, historyNode]
+            mesh_trans = mesh_nodes[0]
+
+            # Hide the construction curve
+            pm.hide(curve_trans)
+
+            # Match intended position
+            if center != [0, 0, 0]:
+                pm.move(mesh_trans, center)
+                pm.move(curve_trans, center)
+
+            return mesh_nodes
+
+        # Default Behavior (No History, Manual Vertex Calc)
         degree = 360 / float(numPoints)
-        radian = math.radians(degree)  # or math.pi*degree/180 (pi * degrees / 180)
+        radian = math.radians(degree)
 
         vertexPoints = []
         for _ in range(numPoints):
-            # print("deg:", degree,"\n", "cos:",math.cos(radian),"\n", "sin:",math.sin(radian),"\n", "rad:",radian)
             if axis == "x":  # x axis
                 y = center[2] + (math.cos(radian) * radius)
                 z = center[1] + (math.sin(radian) * radius)
                 vertexPoints.append([0, y, z])
-            if axis == "y":  # y axis
+            elif axis == "y":  # y axis
                 x = center[2] + (math.cos(radian) * radius)
                 z = center[0] + (math.sin(radian) * radius)
                 vertexPoints.append([x, 0, z])
             else:  # z axis
                 x = center[0] + (math.cos(radian) * radius)
                 y = center[1] + (math.sin(radian) * radius)
-                vertexPoints.append([x, y, 0])  # not working.
+                vertexPoints.append([x, y, 0])
 
-            # increment by original radian value that was converted from degrees
             radian = radian + math.radians(degree)
-            # print(x,y,"\n")
 
         node = pm.ls(pm.polyCreateFacet(point=vertexPoints, name=name))
-        # returns: ['Object name', 'node name']. pymel 'ls' converts those to objects.
         pm.polyNormal(node, normalMode=4)  # 4=reverse and propagate
+
         if mode == 1:
             pm.polySubdivideFacet(divisions=1, mode=1)
-        if mode == 2:
+        elif mode == 2:
             pm.polySubdivideFacet(divisions=1, mode=0)
 
         return node

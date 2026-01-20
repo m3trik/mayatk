@@ -334,6 +334,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             setChecked=True,
             setToolTip="Strip any trailing integers. ie. '123' of 'cube123'",
         )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Strip Trailing Underscores",
+            setObjectName="tb003_chk003",
+            setChecked=True,
+            setToolTip="Strip any trailing underscores after stripping integers (e.g. 'cube_01_' -> 'cube').",
+        )
 
     def tb003(self, widget):
         """Suffix By Type"""
@@ -349,6 +356,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "light_suffix": widget.option_box.menu.tb003_txt006.text(),
             "display_layer_suffix": widget.option_box.menu.tb003_txt007.text(),
             "strip_trailing_ints": widget.option_box.menu.tb003_chk002.isChecked(),
+            "strip_trailing_underscores": widget.option_box.menu.tb003_chk003.isChecked(),
         }
         self.suffix_by_type(objects, **kwargs)
 

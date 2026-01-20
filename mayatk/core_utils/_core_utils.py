@@ -16,6 +16,8 @@ import pythontk as ptk
 
 
 class _CoreUtilsInternal(object):
+    """Internal utilities for Maya CoreUtils."""
+
     @staticmethod
     def _prepare_reparent(
         nodes: List[object],

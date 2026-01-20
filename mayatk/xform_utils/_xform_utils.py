@@ -46,16 +46,9 @@ class XformUtilsInternals:
         freeze_r = not axes_to_freeze.isdisjoint({"rx", "ry", "rz"})
         freeze_s = not axes_to_freeze.isdisjoint({"sx", "sy", "sz"})
 
-        try:
-            pm.makeIdentity(
-                obj, apply=True, t=freeze_t, r=freeze_r, s=freeze_s, pn=True
-            )
-        except RuntimeError:
-            pm.warning(
-                f"XformUtils.freeze_transforms: Skipping '{obj}' due to makeIdentity error."
-            )
-            return False
-
+        # Note: We let RuntimeError bubble up so freeze_transforms can handle
+        # connection/locking strategies.
+        pm.makeIdentity(obj, apply=True, t=freeze_t, r=freeze_r, s=freeze_s, pn=True)
         return True
 
 
