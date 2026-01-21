@@ -41,6 +41,10 @@ class EnvUtils(ptk.HelpMixin):
 
         available_keys = {
             "install_path": lambda: os.environ.get("MAYA_LOCATION"),
+            "presets_path": lambda: os.path.normpath(
+                pm.internalVar(userPresetsDir=True)
+            ),
+            "user_app_path": lambda: os.path.normpath(pm.internalVar(userAppDir=True)),
             "version": lambda: pm.about(version=True),
             "renderer": lambda: pm.getAttr("defaultRenderGlobals.currentRenderer"),
             "workspace": lambda: pm.workspace(q=True, rd=True),
@@ -66,7 +70,7 @@ class EnvUtils(ptk.HelpMixin):
             "api_version": lambda: pm.about(api=True),
             "host_name": lambda: pm.about(hostName=True),
             "batch_mode": lambda: pm.about(batch=True),
-            "build_dir": lambda: pm.about(buildDirectory=True),
+            "build_path": lambda: pm.about(buildDirectory=True),
             "build_version": lambda: pm.about(buildVersion=True),
             "build_varient": lambda: pm.about(buildVariant=True),
             "api_version": lambda: pm.about(apiVersion=True),

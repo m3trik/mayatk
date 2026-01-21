@@ -94,6 +94,11 @@ class SceneExporter(ptk.LoggingMixin):
         start_time = time.time()  # Track export duration
         self.logger.info("Starting export process ...")
 
+        # Validate export directory is provided
+        if not export_dir:
+            self.logger.error("Export directory not set.")
+            return False
+
         # Set export configuration
         self.export_dir = os.path.abspath(os.path.expandvars(export_dir))
 
@@ -372,11 +377,23 @@ class SceneExporterSlots(SceneExporter):
             self.logger.error("Workspace directory not found.")
         return workspace_path
 
+    def _get_preset_dir(self) -> Optional[str]:
+        """Get the preset directory from settings, defaulting to Maya's preset directory."""
+        preset_dir = self.ui.settings.value("preset_dir")
+        if not preset_dir:
+            try:
+                preset_dir = EnvUtils.get_env_info("user_app_path")
+                if preset_dir:
+                    self.ui.settings.setValue("preset_dir", preset_dir)
+            except (KeyError, ValueError):
+                pass
+        return preset_dir
+
     @property
     def presets(self) -> Dict[str, Optional[str]]:
         """Return available presets, using cached values if the preset directory has not changed."""
         # Retrieve the preset directory using settings
-        preset_dir = self.ui.settings.value("preset_dir")
+        preset_dir = self._get_preset_dir()
         last_checked_dir = getattr(self, "_preset_dir_last_checked", None)
 
         # Only refresh the cached presets if the preset directory changes
@@ -385,19 +402,22 @@ class SceneExporterSlots(SceneExporter):
             setattr(self, "_preset_dir_last_checked", preset_dir)
 
             if not preset_dir or not os.path.exists(preset_dir):
-                self.logger.error(
+                self.logger.warning(
                     f"Preset directory not set or does not exist: {preset_dir}"
                 )
             else:
                 try:
-                    presets = {
-                        "None": None,
-                        **{
-                            os.path.splitext(f)[0]: os.path.join(preset_dir, f)
-                            for f in os.listdir(preset_dir)
-                            if f.endswith(".fbxexportpreset")
-                        },
-                    }
+                    files = ptk.FileUtils.get_dir_contents(
+                        preset_dir,
+                        content="filepath",
+                        recursive=True,
+                        inc_files=["*.fbxexportpreset"],
+                    )
+                    presets = {"None": None}
+                    for f in files:
+                        name = os.path.splitext(os.path.basename(f))[0]
+                        presets[name] = f
+
                     setattr(self, "_cached_presets", presets)
                 except Exception as e:
                     self.logger.error(f"Error accessing preset directory: {e}")
@@ -430,12 +450,46 @@ class SceneExporterSlots(SceneExporter):
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
-            widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Set the preset directory.",
-                setText="Set Preset Directory",
-                setObjectName="b005",
+
+            # Determine initial state
+            current_dir = self.ui.settings.value("preset_dir")
+            try:
+                default_dir = EnvUtils.get_env_info("user_app_path")
+            except Exception:
+                default_dir = None
+
+            is_default = False
+
+            # Add CheckBox to toggle default directory usage
+            self.chk_default_presets = widget.option_box.menu.add(
+                "QCheckBox",
+                setText="Use Default Directory",
+                setToolTip=f"Use the standard Maya user presets directory:\n{default_dir}",
+                setChecked=is_default,
             )
+
+            # Add Set Button
+            self.btn_set_presets = widget.option_box.menu.add(
+                "QPushButton",
+                setToolTip="Choose a custom preset directory.",
+                setText="Set Custom Directory",
+                setObjectName="b005",
+                setEnabled=not is_default,
+            )
+
+            # Connect toggle logic
+            def on_default_toggled(checked):
+                self.btn_set_presets.setEnabled(not checked)
+                if checked:
+                    if default_dir:
+                        self.ui.settings.setValue("preset_dir", default_dir)
+                        self.logger.info(
+                            f"Reverted to default preset directory: {default_dir}"
+                        )
+                        widget.init_slot()  # Refresh presets
+
+            self.chk_default_presets.stateChanged.connect(on_default_toggled)
+
             widget.option_box.menu.add(
                 "QPushButton",
                 setToolTip="Open the preset directory.",
@@ -467,6 +521,20 @@ class SceneExporterSlots(SceneExporter):
 
         # Refresh the preset data
         widget.add(self.presets, clear=True)
+
+        # Warn if no presets or directory issues
+        if hasattr(self.ui, "txt003"):
+            preset_dir = self._get_preset_dir()
+            if not preset_dir or not os.path.exists(preset_dir):
+                self.ui.txt003.setHtml(
+                    "<span style='color:orange'>Warning: Preset directory not set or does not exist.<br>"
+                    "Please set a valid directory using the option box (gear icon) to the right.</span>"
+                )
+            elif len(self.presets) <= 1:  # Only "None"
+                self.ui.txt003.setHtml(
+                    "<span style='color:orange'>Warning: No presets found in the current directory.<br>"
+                    "Please add .fbxexportpreset files using the preset options, or set a custom directory.</span>"
+                )
 
         # Restore previous selection if it still exists
         if current_data and current_data in self.presets.values():
@@ -706,7 +774,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b003(self) -> None:
         """Add Preset."""
-        preset_dir = self.ui.settings.value("preset_dir")
+        preset_dir = self._get_preset_dir()
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -724,7 +792,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b004(self) -> None:
         """Remove Preset."""
-        preset_dir = self.ui.settings.value("preset_dir")
+        preset_dir = self._get_preset_dir()
         if not preset_dir:
             self.logger.error("Preset directory not set. Please set it first.")
             return
@@ -744,7 +812,7 @@ class SceneExporterSlots(SceneExporter):
             title="Select a directory containing export presets:"
         )
         if preset_dir:
-            self.ui.store_settings("preset_dir", preset_dir)
+            self.ui.settings.setValue("preset_dir", preset_dir)
             self.ui.cmb000.init_slot()
             self.logger.info(f"Preset directory set to: {preset_dir}")
 
@@ -756,7 +824,7 @@ class SceneExporterSlots(SceneExporter):
 
     def b007(self) -> None:
         """Open Preset Directory."""
-        preset_dir = self.ui.settings.value("preset_dir")
+        preset_dir = self._get_preset_dir()
         if preset_dir and os.path.exists(preset_dir):
             os.startfile(preset_dir)
         else:
@@ -773,11 +841,17 @@ class SceneExporterSlots(SceneExporter):
         pm.mel.refresh()
         pm.mel.FBXUICallBack(-1, "updateUIWithProperties")
 
-        if not pm.window("gameExporterWindow", exists=True):
-            try:
-                pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
-            except Exception as e:
-                self.logger.error(f"Failed to open the FBX export preset editor: {e}")
+        def _launch_editor():
+            if not pm.window("gameExporterWindow", exists=True):
+                try:
+                    pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to open the FBX export preset editor: {e}"
+                    )
+
+        # Defer launch to ensure initialization completes
+        self.sb.defer_with_timer(_launch_editor, ms=200)
 
     def get_recent_output_dirs(self) -> List[str]:
         """Utility method to load recent output directories from QSettings"""
