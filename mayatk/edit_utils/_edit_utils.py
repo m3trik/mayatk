@@ -173,19 +173,19 @@ class EditUtils(ptk.HelpMixin):
 
             # Strategy 1: Native Material Separation
             if by_material:
-                try:
-                    # Note: mat=True in polySeparate splits disjoint shells AND materials
-                    sep = pm.polySeparate(obj, ch=False, mat=True)
-                    if sep:
-                        current_results = [pm.PyNode(s) for s in sep]
-                        separated = True
-                except Exception:
-                    pass
+                mats = MatUtils.get_mats(obj, as_strings=True)
+                if mats and len(mats) > 1:
+                    try:
+                        # Note: mat=True in polySeparate splits disjoint shells AND materials
+                        sep = pm.polySeparate(obj, ch=False, mat=True)
+                        if sep:
+                            current_results = [pm.PyNode(s) for s in sep]
+                            separated = True
+                    except Exception:
+                        pass
 
-                # Strategy 2: Manual Material Hull Separation (Fallback)
-                if not separated:
-                    mats = MatUtils.get_mats(obj, as_strings=True)
-                    if mats and len(mats) > 1:
+                    # Strategy 2: Manual Material Hull Separation (Fallback)
+                    if not separated:
                         valid_operation = False
                         # Optimization: We only need to detach N-1 materials
                         for mat in mats[:-1]:
@@ -204,7 +204,8 @@ class EditUtils(ptk.HelpMixin):
                             # Fall through to standard separate to split the now-detached shells
 
             # Strategy 3: Standard Separation (Disjoint Shells)
-            if not separated:
+            # Only run when not explicitly separating by material.
+            if not by_material and not separated:
                 try:
                     sep = pm.polySeparate(obj, ch=False)
                     if sep:
@@ -225,7 +226,7 @@ class EditUtils(ptk.HelpMixin):
                     except Exception:
                         pass
 
-            if rename:
+            if rename and len(current_results) > 1:
                 try:
                     Naming.rename(current_results, to=original_name)
                     Naming.append_location_based_suffix(current_results)
@@ -1427,16 +1428,23 @@ class EditUtils(ptk.HelpMixin):
 
         full_set = []
         for obj in pm.ls(selection=True, objectsOnly=True):
-            shape = NodeUtils.get_shape_node(obj)
-            if not shape or shape.type() != "mesh":
+            shapes = NodeUtils.get_shape_node(obj)
+            if not shapes:
                 continue
 
-            if issubclass(component_type, pm.MeshVertex):
-                full_set.extend(shape.verts)
-            elif issubclass(component_type, pm.MeshEdge):
-                full_set.extend(shape.edges)
-            elif issubclass(component_type, pm.MeshFace):
-                full_set.extend(shape.faces)
+            if not isinstance(shapes, list):
+                shapes = [shapes]
+
+            for shape in shapes:
+                if shape.type() != "mesh":
+                    continue
+
+                if issubclass(component_type, pm.MeshVertex):
+                    full_set.extend(shape.verts)
+                elif issubclass(component_type, pm.MeshEdge):
+                    full_set.extend(shape.edges)
+                elif issubclass(component_type, pm.MeshFace):
+                    full_set.extend(shape.faces)
 
         inverted = [x for x in full_set if str(x) not in selected_strs]
 

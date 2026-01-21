@@ -315,6 +315,7 @@ class Naming(ptk.HelpMixin):
         custom_suffixes: Optional[Dict[str, str]] = None,
         strip: Union[str, List[str]] = None,
         strip_trailing_ints: bool = False,
+        strip_trailing_underscores: bool = True,
     ) -> List[str]:
         """Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
 
@@ -331,6 +332,7 @@ class Naming(ptk.HelpMixin):
             custom_suffixes (dict): Mapping of Maya node type to suffix.
             strip (str or list): Extra suffix(es) to strip from the end of the name before applying the new suffix.
             strip_trailing_ints (bool): If True, remove all trailing integers after stripping suffixes.
+            strip_trailing_underscores (bool): If True, remove trailing underscores after stripping.
 
         Returns:
             List[str]: List of new names assigned.
@@ -382,6 +384,9 @@ class Naming(ptk.HelpMixin):
                     strip_trailing_ints=True,
                     strip_trailing_alpha=False,
                 )
+
+            if strip_trailing_underscores:
+                base_name = re.sub(r"_+$", "", base_name)
 
             # Only add target suffix if not already present
             if target_suffix and not base_name.endswith(target_suffix):

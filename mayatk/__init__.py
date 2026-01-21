@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.9.69"
+__version__ = "0.9.70"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -75,7 +75,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",
-    "ui_utils.ui_manager": "UiManager",
+    "ui_utils.mayatk_ui_manager": "UiManager",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     # NURBS utils

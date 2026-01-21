@@ -809,7 +809,7 @@ class MaterialUpdaterSlots(MaterialUpdater):
 
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.ui_manager import UiManager
+    from mayatk.ui_utils.mayatk_ui_manager import UiManager
 
     ui = UiManager.instance().get("material_updater", reload=True)
     ui.show(pos="screen", app_exec=True)

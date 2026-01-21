@@ -532,7 +532,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.ui_manager import UiManager
+    from mayatk.ui_utils.mayatk_ui_manager import UiManager
 
     ui = UiManager.instance().get("workspace_map", reload=True)
     ui.show(pos="screen", app_exec=True)
