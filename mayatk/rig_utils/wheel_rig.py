@@ -311,7 +311,7 @@ class WheelRigSlots:
 
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.ui_manager import UiManager
+    from mayatk.ui_utils.mayatk_ui_manager import UiManager
 
     ui = UiManager.instance().get("wheel_rig", reload=True)
     ui.header.config_buttons("hide")
