@@ -145,10 +145,12 @@ class WorkspaceManager(ptk.HelpMixin):
 
         for _, ws_path in workspaces:
             if os.path.isdir(ws_path):
+                # Always search recursively within the workspace (including scenes/ subdirectory)
+                # The recursive_search setting only controls workspace discovery
                 scenes = EnvUtils.get_workspace_scenes(
                     root_dir=ws_path,
                     full_path=True,
-                    recursive=self.recursive_search,
+                    recursive=True,
                     omit_autosave=True,
                 )
                 self._workspace_files[ws_path] = scenes

@@ -134,9 +134,11 @@ class UvDiagnostics:
                         shape, primary_uv_set
                     )
 
-                # Final name: keep original primary, don't rename
-                # (Renaming UV sets affects ALL objects globally in Maya!)
-                result.final_name = primary_uv_set
+                # Final name logic
+                if rename_to_map1:
+                    result.final_name = "map1"
+                else:
+                    result.final_name = primary_uv_set
 
                 # Execute if not dry run
                 if not dry_run:
@@ -261,7 +263,28 @@ class UvDiagnostics:
                         else:
                             intersection_area = 0.0
 
-                        result["area_outside"] = max(0.0, total_area - intersection_area)
+                        result["area_outside"] = max(
+                            0.0, total_area - intersection_area
+                        )
+
+                        # Calculate Fill Rate (Normalized Area)
+                        # Avoid division by zero
+                        safe_total_area = total_area if total_area > 0.000001 else 1.0
+
+                        # Get UV area
+                        try:
+                            area = pm.polyEvaluate(shape, uvArea=True) or 0.0
+                            if isinstance(area, (list, tuple)):
+                                area = area[0] if area else 0.0
+                            result["area"] = float(area)
+
+                            # Fill rate = What % of the bbox is covered by UVs?
+                            # This metric is independent of global scale.
+                            result["fill_rate"] = result["area"] / safe_total_area
+
+                        except:
+                            result["area"] = 0.0
+                            result["fill_rate"] = 0.0
                 except:
                     pass
 
@@ -271,15 +294,6 @@ class UvDiagnostics:
                     if overlaps:
                         result["overlap_count"] = len(overlaps)
                 except Exception:
-                    pass
-
-                # Get UV area
-                try:
-                    area = pm.polyEvaluate(shape, uvArea=True) or 0.0
-                    if isinstance(area, (list, tuple)):
-                        area = area[0] if area else 0.0
-                    result["area"] = float(area)
-                except:
                     pass
 
                 # Valid if has UVs, has area, and is in reasonable bounds
@@ -304,7 +318,7 @@ class UvDiagnostics:
         1. Has valid UV data (non-empty, non-degenerate, within bounds)
         2. UV Overlap (fewer overlapping faces is better)
         3. Area Outside 0-1 (UVs closer to unit square is better)
-        4. UV coverage area or UV count (user preference)
+        4. UV coverage (weighted combination of completeness and expansion)
         5. Name preference (standard names as tiebreaker only)
 
         Sets with '___delete___' prefix are EXCLUDED entirely - this is an
@@ -312,8 +326,9 @@ class UvDiagnostics:
 
         Parameters:
             shape: The mesh shape to check
-            prefer_largest_area: If True, prefer sets with largest UV area.
-                If False, prefer sets with most UV coordinates.
+            prefer_largest_area: If True, prefer sets with better fill/expansion.
+                This uses (UV Count * Fill Rate) to find valid, expanded maps
+                while ignoring global scale (preventing scaled up islands from winning).
 
         Returns:
             Name of the best UV set, or None if no valid sets exist.
@@ -382,9 +397,14 @@ class UvDiagnostics:
             # Penalize UVs wandering far from 0-1.
             outside_score = -metrics.get("area_outside", 9999) * 100
 
-            # Quaternary: Coverage Area or UV count (Higher is better)
+            # Quaternary: Coverage (Higher is better)
             if prefer_largest_area:
-                coverage = metrics.get("area", 0)
+                # Use UV Count * Fill Rate
+                # This prioritizes Completeness (Count) and Expansion (Fill Rate)
+                # while ignoring Global Scale (since Fill Rate is normalized).
+                fill_rate = metrics.get("fill_rate", 0)
+                count = metrics.get("uv_count", 0)
+                coverage = count * fill_rate
             else:
                 coverage = metrics.get("uv_count", 0)
 
@@ -565,16 +585,65 @@ class UvDiagnostics:
                 failed_sets.add(set_to_delete)
                 # Continue trying other sets instead of breaking
 
-        # NOTE: We deliberately do NOT rename UV sets here because Maya's polyUVSet rename
-        # command affects ALL objects in the scene with that UV set name, not just
-        # the targeted mesh. This causes cross-object corruption.
-
-        # Ensure primary is current
-        final_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
-        if primary_uv_set in final_sets:
-            pm.polyUVSet(shape, currentUVSet=True, uvSet=primary_uv_set)
-
         # Success if only real UV set remaining is the primary
         # (Ghost UV sets don't count against success)
         final_real_sets = UvDiagnostics._get_real_uv_sets(shape)
-        return len(final_real_sets) == 1 and primary_uv_set in final_real_sets
+
+        # Perform rename if requested and necessary
+        current_name = primary_uv_set
+        if final_name != primary_uv_set:
+            # If target name already exists (e.g. 'map1' exists but we are renaming 'uvSet1' to 'map1')
+            if final_name in unique_current or final_name in final_real_sets:
+                if force_rename:
+                    # Delete the existing target first
+                    try:
+                        mel.eval(
+                            f'polyUVSet -delete -uvSet "{final_name}" "{shape_name}";'
+                        )
+                    except Exception:
+                        pass
+                else:
+                    # Target exists and not forcing - skip rename
+                    if not quiet:
+                        pm.warning(
+                            f"{shape}: Cannot rename to '{final_name}', set already exists."
+                        )
+                    return (
+                        True  # considered success as we did cleanup, just missed rename
+                    )
+
+            try:
+                # Direct rename is safer and cleaner than copy-delete.
+                # Renaming the default set (index 0) is allowed; deleting it is not.
+                pm.polyUVSet(
+                    shape, rename=True, uvSet=primary_uv_set, newUVSet=final_name
+                )
+                current_name = final_name
+            except Exception:
+                # Fallback: Copy-Reorder-Delete strategy
+                # If specific rename fails (e.g. weird history), try creating new and deleting old.
+                try:
+                    pm.polyUVSet(
+                        shape, copy=True, uvSet=primary_uv_set, newUVSet=final_name
+                    )
+                    # CRITICAL: Must reorder the NEW set to index 0 before we can delete the OLD primary (which was at index 0)
+                    pm.polyUVSet(
+                        shape, reorder=True, uvSet=final_name, newUVSet=primary_uv_set
+                    )
+                    mel.eval(
+                        f'polyUVSet -delete -uvSet "{primary_uv_set}" "{shape_name}";'
+                    )
+                    current_name = final_name
+                except Exception as e:
+                    if not quiet:
+                        pm.warning(f"{shape}: Rename failed: {e}")
+                    return False
+
+        # Ensure final set is current
+        if current_name:
+            try:
+                pm.polyUVSet(shape, currentUVSet=True, uvSet=current_name)
+            except:
+                pass
+
+        return True

@@ -488,7 +488,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         log_messages = []
 
-        if target_framerate:
+        if target_framerate and str(target_framerate).lower() != "none":
             current_time_unit = pm.currentUnit(query=True, time=True)
             if current_time_unit != target_framerate:
                 log_messages.append(
@@ -559,10 +559,23 @@ class _TaskChecksMixin(_TaskDataMixin):
     def check_hidden_geometry(self) -> tuple:
         """Check if any geometry objects are hidden."""
         hidden_objects = []
+        # Define what we consider "geometry"
+        geometry_types = {"mesh", "nurbsSurface", "subdiv"}
+
         for obj in self.objects:
             # Check if geometry (has shapes)
-            shapes = cmds.listRelatives(obj, shapes=True)
+            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True)
             if not shapes:
+                continue
+
+            # Check if any shape is actually geometry
+            is_geometry = False
+            for shape in shapes:
+                if cmds.nodeType(shape) in geometry_types:
+                    is_geometry = True
+                    break
+
+            if not is_geometry:
                 continue
 
             # Check visibility

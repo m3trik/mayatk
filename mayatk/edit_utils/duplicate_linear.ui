@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>213</width>
-    <height>326</height>
+    <width>200</width>
+    <height>379</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -96,163 +96,8 @@
          <property name="verticalSpacing">
           <number>1</number>
          </property>
-         <item row="1" column="0" colspan="6">
-          <layout class="QHBoxLayout" name="horizontalLayout">
-           <property name="spacing">
-            <number>0</number>
-           </property>
-           <item>
-            <widget class="QCheckBox" name="chk000">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>Start the duplicate preview using any selected mesh objects.</string>
-             </property>
-             <property name="text">
-              <string>Preview</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QSpinBox" name="s009">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Duplicate: Total number of duplicated objects.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-             </property>
-             <property name="buttonSymbols">
-              <enum>QAbstractSpinBox::NoButtons</enum>
-             </property>
-             <property name="minimum">
-              <number>1</number>
-             </property>
-             <property name="maximum">
-              <number>999</number>
-             </property>
-             <property name="value">
-              <number>1</number>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </item>
-         <item row="13" column="0" colspan="6">
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Select the pivot point for duplication transformations.</string>
-           </property>
-           <property name="maxVisibleItems">
-            <number>40</number>
-           </property>
-           <property name="maxCount">
-            <number>500</number>
-           </property>
-           <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContents</enum>
-           </property>
-           <property name="frame">
-            <bool>true</bool>
-           </property>
-           <item>
-            <property name="text">
-             <string>Pivot:  Object</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Pivot:  World</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Pivot:  Bounding Box (center)</string>
-            </property>
-           </item>
-          </widget>
-         </item>
-         <item row="4" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s011">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias. Higher values result in a stronger bias effect,&lt;/p&gt;&lt;p&gt;while lower values result in a weaker bias effect. A value of 1 results in no bias effect.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Weight Curve:	</string>
-           </property>
-           <property name="decimals">
-            <number>2</number>
-           </property>
-           <property name="minimum">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>100.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>10.000000000000000</double>
-           </property>
-          </widget>
-         </item>
          <item row="10" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s005">
+          <widget class="DoubleSpinBox" name="s004">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -266,13 +111,13 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: rotate Z amount</string>
+            <string>Duplicate: rotate Y amount</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Rotate Z:	</string>
+            <string>Rotate Y:	</string>
            </property>
            <property name="decimals">
             <number>5</number>
@@ -291,247 +136,7 @@
            </property>
           </widget>
          </item>
-         <item row="3" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s010">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the progression of transformations across the duplicates. &lt;/p&gt;&lt;p&gt;A value of 0.5 results in a linear progression. &lt;/p&gt;&lt;p&gt;Values less than 0.5 make transformations faster at the start and &lt;/p&gt;&lt;p&gt;slower at the end, while values greater than 0.5 do the opposite.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Weight Bias:	</string>
-           </property>
-           <property name="decimals">
-            <number>2</number>
-           </property>
-           <property name="minimum">
-            <double>0.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>0.010000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.500000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="8" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s003">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: rotate X amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Rotate X:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="6" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s001">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform Y amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Translate Y:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="5" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform X amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Translate X:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="12" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s007">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: scale Y amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Scale Y:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>0.100000000000000</double>
-           </property>
-           <property name="value">
-            <double>1.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="7" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s002">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform Z amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Translate Z:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="15" column="0" colspan="6">
+         <item row="17" column="0" colspan="6">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -578,47 +183,7 @@
            </item>
           </layout>
          </item>
-         <item row="9" column="0" colspan="6">
-          <widget class="DoubleSpinBox" name="s004">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>20</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: rotate Y amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Rotate Y:	</string>
-           </property>
-           <property name="decimals">
-            <number>5</number>
-           </property>
-           <property name="minimum">
-            <double>-999999999.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>999999999.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="13" column="0" colspan="6">
+         <item row="14" column="0" colspan="6">
           <widget class="DoubleSpinBox" name="s008">
            <property name="minimumSize">
             <size>
@@ -658,7 +223,7 @@
            </property>
           </widget>
          </item>
-         <item row="11" column="0" colspan="6">
+         <item row="12" column="0" colspan="6">
           <widget class="DoubleSpinBox" name="s006">
            <property name="minimumSize">
             <size>
@@ -698,7 +263,310 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="0" colspan="6">
+         <item row="5" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s011">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias. Higher values result in a stronger bias effect,&lt;/p&gt;&lt;p&gt;while lower values result in a weaker bias effect. A value of 1 results in no bias effect.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Weight Curve:	</string>
+           </property>
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>100.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>10.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="11" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s005">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: rotate Z amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Rotate Z:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s010">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the progression of transformations across the duplicates. &lt;/p&gt;&lt;p&gt;A value of 0.5 results in a linear progression. &lt;/p&gt;&lt;p&gt;Values less than 0.5 make transformations faster at the start and &lt;/p&gt;&lt;p&gt;slower at the end, while values greater than 0.5 do the opposite.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Weight Bias:	</string>
+           </property>
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>0.010000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.500000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0" colspan="6">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <property name="spacing">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QCheckBox" name="chk000">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Start the duplicate preview using any selected mesh objects.</string>
+             </property>
+             <property name="text">
+              <string>Preview</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>18</width>
+               <height>18</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="chk001">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>30</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Create instances instead of copies.</string>
+             </property>
+             <property name="text">
+              <string>Inst</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>18</width>
+               <height>18</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="s009">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Duplicate: Total number of duplicated objects.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             </property>
+             <property name="buttonSymbols">
+              <enum>QAbstractSpinBox::NoButtons</enum>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>999</number>
+             </property>
+             <property name="value">
+              <number>1</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="8" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s002">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: transform Z amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Translate Z:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="13" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s007">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: scale Y amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Scale Y:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0" colspan="6">
           <widget class="ComboBox" name="cmb001">
            <property name="minimumSize">
             <size>
@@ -729,59 +597,196 @@
            </property>
            <item>
             <property name="text">
-             <string>Calculation:  Weighted (Default)</string>
+             <string>Interpolation:</string>
             </property>
            </item>
+          </widget>
+         </item>
+         <item row="9" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s003">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: rotate X amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Rotate X:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: transform X amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Translate X:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0" colspan="6">
+          <widget class="DoubleSpinBox" name="s001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: transform Y amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Translate Y:	</string>
+           </property>
+           <property name="decimals">
+            <number>5</number>
+           </property>
+           <property name="minimum">
+            <double>-999999999.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>999999999.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0" colspan="6">
+          <widget class="ComboBox" name="cmb002">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Select the calculation method for transformation progression across duplicates.</string>
+           </property>
+           <property name="maxVisibleItems">
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
+           </property>
+           <property name="sizeAdjustPolicy">
+            <enum>QComboBox::AdjustToContents</enum>
+           </property>
+           <property name="frame">
+            <bool>true</bool>
+           </property>
            <item>
             <property name="text">
-             <string>Calculation:  Linear</string>
+             <string>Pivot:</string>
             </property>
            </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Exponential</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Logarithmic</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Sine</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Ease In</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Ease Out</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Ease In-Out</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Smooth Step</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Bounce</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Calculation:  Elastic</string>
-            </property>
-           </item>
+          </widget>
+         </item>
+         <item row="15" column="0" colspan="6">
+          <widget class="QPushButton" name="b001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>Reset to Defaults</string>
+           </property>
+           <property name="iconSize">
+            <size>
+             <width>18</width>
+             <height>18</height>
+            </size>
+           </property>
+           <property name="checkable">
+            <bool>false</bool>
+           </property>
+           <property name="checked">
+            <bool>false</bool>
+           </property>
           </widget>
          </item>
         </layout>

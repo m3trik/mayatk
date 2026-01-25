@@ -4,15 +4,20 @@
 #     import pymel.core as pm
 # except ImportError as error:
 #     print(__file__, error)
+import pythontk as ptk
+
 # from this package:
 from mayatk.core_utils.preview import Preview
 from mayatk.edit_utils._edit_utils import EditUtils
 
 
-class MirrorSlots:
-    def __init__(self, switchboard):
+class MirrorSlots(ptk.LoggingMixin):
+    def __init__(self, switchboard, log_level="INFO"):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.mirror
+
+        self.logger.setLevel(log_level)
+        self.logger.set_log_prefix("[Mirror] ")
 
         self.preview = Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box

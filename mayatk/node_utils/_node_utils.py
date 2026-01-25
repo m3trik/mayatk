@@ -1030,18 +1030,37 @@ class NodeUtils(ptk.HelpMixin):
 
         Parameters:
             objects (str/obj/list): The objects to un-instance. If 'all' is given all instanced objects in the scene will be uninstanced.
+
+        Returns:
+            list: The list of objects (uninstanced originals or new copies).
         """
         if objects == "all":
             objects = cls.get_instances()
 
+        results = []
         for obj in pm.ls(objects):
-            children = pm.listRelatives(obj, fullPath=1, children=1)
-            parents = pm.listRelatives(children[0], fullPath=1, allParents=1)
+            # Check if this object is actually an instance parent
+            # i.e. its shape has multiple parents.
+            shapes = pm.listRelatives(obj, shapes=True, fullPath=True)
+            if not shapes:
+                # No shape, probably just a transform. Can't be instance of geometry.
+                results.append(obj)
+                continue
+
+            shape = shapes[0]
+            parents = pm.listRelatives(shape, allParents=True, fullPath=True)
 
             if len(parents) > 1:
-                duplicatedObject = pm.duplicate(obj)
+                # Capture name before deletion
+                obj_name = obj.name()
+                duplicatedObject = pm.duplicate(obj)[0]
                 pm.delete(obj)
-                pm.rename(duplicatedObject[0], obj)
+                new_obj = pm.rename(duplicatedObject, obj_name)
+                results.append(new_obj)
+            else:
+                results.append(obj)
+
+        return results
 
     @staticmethod
     def filter_duplicate_instances(nodes) -> List["pm.PyNode"]:

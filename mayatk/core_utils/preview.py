@@ -82,9 +82,10 @@ class Preview:
         self.operation_instance = operation_instance
         self.operation_instance.operated_objects = self.operated_objects
         self.preview_checkbox = preview_checkbox
+        self.preview_checkbox.exclude_from_reset = True  # Exclude from reset_all()
         self.create_button = create_button
         self.finalize_func = finalize_func
-        self.preview_checkbox.clicked.connect(self.toggle)
+        self.preview_checkbox.toggled.connect(self.toggle)
         self.create_button.clicked.connect(self.finalize_changes)
 
         # Safely get window reference
@@ -103,6 +104,7 @@ class Preview:
             self.logger.warning(f"Could not create scriptJob: {e}")
             self.script_job = None
         self.is_refreshing = False
+        self.expected_undo_events = 0
 
     def __del__(self):
         """Ensure the scriptJob is killed when the instance is deleted."""
@@ -118,11 +120,40 @@ class Preview:
 
     def disable_on_external_undo(self):
         """Disables the preview functionality on external undo operations only."""
+        if self.expected_undo_events > 0:
+            self.logger.debug(
+                f"Ignoring expected undo event. Remaining: {self.expected_undo_events - 1}"
+            )
+            self.expected_undo_events -= 1
+            return
+
         if (
             not self.internal_undo_triggered
             and not self.is_refreshing
             and self.preview_checkbox.isChecked()
         ):
+            try:
+                # Fallback check: If we somehow missed the counter but stack looks like we are active
+                undo_name = pm.undoInfo(q=True, undoName=True) or ""
+                # If we are active (Refresh cycle), stack top is our chunk.
+                if "PreviewChunk" in undo_name:
+                    self.logger.debug(
+                        "Undo event ignored: 'PreviewChunk' found on active stack (late event safety)."
+                    )
+                    return
+
+                # Check redo name just to be safe about double-undo logic?
+                # If we manually undid, Redo has 'PreviewChunk'.
+                redo_name = pm.undoInfo(q=True, redoName=True) or ""
+                if "PreviewChunk" in redo_name:
+                    self.logger.debug(
+                        "External undo targeted PreviewChunk. Preventing double-undo."
+                    )
+                    self.needs_undo = False
+
+            except Exception as e:
+                self.logger.warning(f"Could not query undo stack: {e}")
+
             self.disable()
         self.internal_undo_triggered = False  # Reset flag after checking
 
@@ -164,8 +195,10 @@ class Preview:
     def enable(self):
         """Enables the preview and sets up the initial state."""
         self.prevState = pm.undoInfo(q=True, state=True)
+        # Avoid toggling state=False as it clears the undo queue in some versions of Maya
         pm.undoInfo(state=True)
-        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        # We do NOT open a chunk here anymore. We use atomic chunks per refresh.
+        # This allows us to inspect the undo stack depth/names correctly.
 
         try:
             selected_items = pm.selected()
@@ -175,11 +208,15 @@ class Preview:
 
                 self.needs_undo = False  # Set to False when enabling for the first time
 
-                self.preview_checkbox.blockSignals(True)
-                self.preview_checkbox.setChecked(True)
-                self.preview_checkbox.blockSignals(False)
+                try:
+                    self.preview_checkbox.blockSignals(True)
+                    self.preview_checkbox.setChecked(True)
+                    self.preview_checkbox.blockSignals(False)
 
-                self.create_button.setEnabled(True)
+                    self.create_button.setEnabled(True)
+                except RuntimeError:
+                    pass
+
                 self.refresh()
                 # operation_performed is now determined by the success of refresh()
                 self.operation_performed = self.needs_undo
@@ -194,14 +231,12 @@ class Preview:
     def disable(self):
         """Disables the preview and reverts to the initial state."""
         try:
-            self.undo_if_needed()
+            # We don't reopen chunk in disable, so pass reopen_chunk=False
+            self.undo_if_needed(reopen_chunk=False)
         except Exception as e:
             self.logger.warning(f"Error during undo in disable: {e}")
 
-        try:
-            pm.undoInfo(closeChunk=True)
-        except Exception as e:
-            self.logger.warning(f"Error closing undo chunk: {e}")
+        # No chunk to close anymore since enable() doesn't open one.
 
         if self.prevState is not None:
             try:
@@ -210,21 +245,35 @@ class Preview:
                 self.logger.warning(f"Error restoring undo state: {e}")
 
         self.operated_objects.clear()
-        self.preview_checkbox.setChecked(False)
-        self.create_button.setEnabled(False)
+        try:
+            self.preview_checkbox.setChecked(False)
+            self.create_button.setEnabled(False)
+        except RuntimeError:
+            pass
 
-    def undo_if_needed(self):
-        """Executes undo operation if required."""
+    def undo_if_needed(self, reopen_chunk=True):
+        """Executes undo operation if required.
+
+        Parameters:
+            reopen_chunk (bool): Deprecated in Atomic Chunk logic, but kept for signature.
+        """
         if self.needs_undo:
             self.logger.debug("Performing undo as operation was previously successful")
+
+            # Increment the expected event counter because pm.undo will trigger the scriptJob
+            self.expected_undo_events += 1
+
             self.internal_undo_triggered = True
-            pm.undoInfo(closeChunk=True)
+            # We don't close chunk here because we are using atomic chunks (closed in refresh).
             try:
                 pm.undo()
             except RuntimeError as e:
+                # If undo fails, we won't get an event, so revert counter
+                self.expected_undo_events -= 1
                 self.logger.warning(f"Undo operation failed: {e}")
             finally:
-                pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+                # We don't reopen chunk here. refresh() handles opening its own chunk.
+                self.internal_undo_triggered = False
 
             self.needs_undo = False
         else:
@@ -234,8 +283,19 @@ class Preview:
 
     def refresh(self, *args):
         """Refreshes the preview to reflect any changes."""
-        if not self.preview_checkbox.isChecked():
-            return
+        try:
+            if not self.preview_checkbox.isChecked():
+                return
+        except RuntimeError:
+            return  # Widget deleted, stop refreshing
+
+        # Hook: Allow operation instance to prepare (e.g., snapshot tool state) before undo occurs
+        if hasattr(self.operation_instance, "prepare_operation"):
+            try:
+                self.operation_instance.prepare_operation()
+            except Exception as e:
+                self.logger.warning(f"Error in prepare_operation: {e}")
+
         self.is_refreshing = True
         self.undo_if_needed()
         pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
@@ -252,6 +312,19 @@ class Preview:
             self.logger.exception(f"Exception during operation: {e}")
         finally:
             pm.undoInfo(closeChunk=True)
+            if operation_successful:
+                # Maya discards empty chunks. If the operation resulted in no undoable commands,
+                # the top of the stack will NOT be "PreviewChunk".
+                # In that case, we must not flag "needs_undo", otherwise the next undo will
+                # inadvertently undo the user's PREVIOUS action.
+                top_undo_name = pm.undoInfo(q=True, undoName=True) or ""
+                if top_undo_name != "PreviewChunk":
+                    self.logger.info(
+                        f"Operation produced no undoable changes (Top Undo: '{top_undo_name}'). "
+                        "Marking as safe (no undo needed)."
+                    )
+                    operation_successful = False
+
         # Only set needs_undo to True if the operation completed successfully
         self.needs_undo = operation_successful
         self.is_refreshing = False

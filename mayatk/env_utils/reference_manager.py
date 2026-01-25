@@ -1030,6 +1030,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     @block_table_selection_method
     def update_table(self, file_names, file_list):
         t = self.ui.tbl000
+        t.setUpdatesEnabled(False)  # optimization: prevent repaints during update
         sorting_enabled = t.isSortingEnabled()
         t.setSortingEnabled(False)
         try:
@@ -1067,6 +1068,24 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 self._format_table_item(item, file_path)
 
+                # Add option box for open file
+                try:
+
+                    def _open_factory(path):
+                        # Factory needed to capture loop variable 'path'
+                        return lambda: self.open_scene(path)
+
+                    # Ensure fresh state by clearing existing options
+                    # set_action(replace=True) handles cleanup automatically
+                    t.cell_option_box(row, 0).set_action(
+                        callback=_open_factory(file_path),
+                        icon="open_external",
+                        tooltip="Open Scene",
+                    )
+                except Exception as e:
+                    # Log error but don't crash
+                    self.logger.warning(f"Failed to add option box to table: {e}")
+
                 # Column 1: Notes (Metadata)
                 item_notes = t.item(row, 1)
                 if not item_notes:
@@ -1093,6 +1112,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             t.apply_formatting()
         finally:
             t.setSortingEnabled(sorting_enabled)
+            t.setUpdatesEnabled(True)  # Restore updates
 
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.

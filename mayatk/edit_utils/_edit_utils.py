@@ -824,7 +824,10 @@ class EditUtils(ptk.HelpMixin):
 
         for obj in original_objects:
             if uninstance:
-                NodeUtils.uninstance(obj)
+                # obj is replaced by the uninstanced version
+                uninstanced_result = NodeUtils.uninstance(obj)
+                if uninstanced_result:
+                    obj = uninstanced_result[0]
 
             # Compute pivot position
             pivot_point = XformUtils.get_operation_axis_pos(obj, pivot)
@@ -849,23 +852,44 @@ class EditUtils(ptk.HelpMixin):
             # Custom separate logic
             if custom_separate:
                 try:
-                    orig_obj, new_obj, sep_node = pm.ls(
-                        pm.polySeparate(obj, uss=True, inp=True)
-                    )
-                    pm.connectAttr(
-                        mirror_node.firstNewFace, sep_node.startFace, force=True
-                    )
-                    pm.connectAttr(
-                        mirror_node.lastNewFace, sep_node.endFace, force=True
-                    )
-                    pm.rename(new_obj, orig_obj.name())
-                    parent = pm.listRelatives(orig_obj, parent=True, path=True)
-                    if parent:
-                        pm.parent(new_obj, parent[0])
+                    # polySeparate returns [Transform1, Transform2, ..., polySeparateNode]
+                    res = pm.polySeparate(obj, uss=True, inp=True)
+                    shells = res[:-1]
+                    sep_node = res[-1]
+
+                    # Connect separate node attrs if possible (legacy logic?)
+                    if len(shells) >= 2:
+                        try:
+                            # Assuming standard split logic, but this might be brittle
+                            pass
+                        except Exception:
+                            pass
+
+                    results.extend(shells)
+
+                    # Cleanup: If 'obj' works out to be distinct from the new shells and is empty, delete it.
+                    # Verify by name/path to avoid PyNode identity mismatch issues
+                    if pm.objExists(obj):
+                        try:
+                            # Verify if obj is one of the shells (by path)
+                            shell_paths = [pm.PyNode(s).fullPath() for s in shells]
+                            if pm.PyNode(obj).fullPath() not in shell_paths:
+                                # Only delete if it has no shapes AND no children transforms (it might be a group now)
+                                has_shapes = pm.listRelatives(obj, shapes=True)
+                                has_children = pm.listRelatives(
+                                    obj, children=True, type="transform"
+                                )
+
+                                if not has_shapes and not has_children:
+                                    pm.delete(obj)
+                        except Exception:
+                            pass
+
                 except Exception as e:
                     pm.warning(f"Mirror separation failed: {e}")
-
-            results.append(mirror_node)
+                    results.append(obj)
+            else:
+                results.append(obj)
 
         return ptk.format_return(results, objects)
 

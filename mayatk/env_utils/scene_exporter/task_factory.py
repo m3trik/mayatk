@@ -182,11 +182,19 @@ class TaskFactory:
         for index, (check_name, result) in enumerate(check_results.items(), start=1):
             progress = f"[{index}/{len(checks_only)}]"
 
-            success = result[0] if isinstance(result, tuple) else result
+            success = self._is_success(result)
+            messages = self._get_log_messages(result)
 
             if not success:
                 failed_checks.append(check_name)
                 all_checks_passed = False
+            elif messages:
+                self.logger.log_box(
+                    f"CHECK INFO: {check_name}", messages, level="WARNING"
+                )
+                self.logger.warning(
+                    f"{progress} Check passed (see info above): {check_name}"
+                )
             else:
                 self.logger.success(f"{progress} Check passed: {check_name}")
 

@@ -165,6 +165,7 @@ class RigUtils(ptk.HelpMixin):
         obj_suffix: str = "_GEO",
         strip_digits: bool = False,
         strip_trailing_underscores: bool = True,
+        strip_suffix: bool = True,
     ) -> None:
         """Rig object under a zeroed locator aligned to its d manip pivot.
 
@@ -182,11 +183,12 @@ class RigUtils(ptk.HelpMixin):
             obj_suffix (str): Naming suffix for the renamed object. Default "_GEO".
             strip_digits (bool): Whether to strip trailing digits before suffixing.
             strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
+            strip_suffix (bool): Whether to strip the defined suffixes (grp/loc/obj) from the name before adding new ones.
         """
         import re
 
         def format_name_with_suffix(base_name: str, suffix: str) -> str:
-            strip_tuple = (grp_suffix, loc_suffix, obj_suffix)
+            strip_tuple = (grp_suffix, loc_suffix, obj_suffix) if strip_suffix else ()
             clean_name = ptk.format_suffix(
                 base_name,
                 suffix="",

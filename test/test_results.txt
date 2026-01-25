@@ -3,13 +3,49 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_xform_utils: PASS
-  Tests: 22, Failures: 0, Errors: 0, Skipped: 0
+test_uv_cleanup_actions: FAIL
+  Tests: 7, Failures: 3, Errors: 1, Skipped: 0
+
+  FAILURE: test_delete_secondary_sets (test_uv_cleanup_actions.TestUvCleanupActions.test_delete_secondary_sets)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_uv_cleanup_actions.py", line 162, in test_delete_secondary_sets
+    self.assertEqual(len(all_sets), 1)
+AssertionError: 2 != 1
+
+
+  FAILURE: test_prefer_expanded_vs_collapsed (test_uv_cleanup_actions.TestUvCleanupActions.test_prefer_expanded_vs_collapsed)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_uv_cleanup_actions.py", line 77, in test_prefer_expanded_vs_collapsed
+    self.assertIn("good_set", all_sets)
+AssertionError: 'good_set' not found in ['map1']
+
+
+  FAILURE: test_remove_empty_sets (test_uv_cleanup_actions.TestUvCleanupActions.test_remove_empty_sets)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_uv_cleanup_actions.py", line 184, in test_remove_empty_sets
+    self.assertIn("populated_secondary", all_sets) # Kept
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'populated_secondary' not found in ['map1']
+
+
+  ERROR: test_reorder_to_index_0 (test_uv_cleanup_actions.TestUvCleanupActions.test_reorder_to_index_0)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_uv_cleanup_actions.py", line 96, in test_reorder_to_index_0
+    pm.polyMapDel(self.shape + ".map[*]")
+  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\core\modeling.py", line 742, in polyMapDel
+    res = cmds.polyMapDel(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\internal\pmcmds.py", line 217, in polyMapDel_wrapped
+    res = new_cmd(*new_args, **new_kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Current selection doesn't match required selection type.
+
+
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_xform_utils: PASS (22 tests, 0 failures, 0 errors)
+  test_uv_cleanup_actions: FAIL (7 tests, 3 failures, 1 errors)
 ======================================================================
-Total: 22 tests, 0 failures, 0 errors, 0 skipped
+Total: 7 tests, 3 failures, 1 errors, 0 skipped
 ======================================================================

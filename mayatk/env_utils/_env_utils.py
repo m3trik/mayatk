@@ -434,6 +434,10 @@ class EnvUtils(ptk.HelpMixin):
 
         # Walk through the root directory
         for dirpath, dirnames, filenames in os.walk(root_dir):
+            # If recursive is False, stop os.walk from going deeper
+            if not recursive:
+                dirnames[:] = []
+
             # Check if workspace.mel exists in the directory
             if "workspace.mel" not in filenames:
                 continue
@@ -446,17 +450,11 @@ class EnvUtils(ptk.HelpMixin):
 
                 # Only check for Maya scene files in the 'scenes' folder
                 if scenes_path.is_dir():
-                    # Search for scene files based on recursive setting
-                    if recursive:
-                        # Use rglob for recursive search for scene files
-                        scene_files = list(scenes_path.rglob("*.ma")) + list(
-                            scenes_path.rglob("*.mb")
-                        )
-                    else:
-                        # Use glob for non-recursive search (direct files only)
-                        scene_files = list(scenes_path.glob("*.ma")) + list(
-                            scenes_path.glob("*.mb")
-                        )
+                    # Always use recursive search for validation to ensure we catch files in subfolders
+                    # regardless of whether we are searching for workspaces recursively
+                    scene_files = list(scenes_path.rglob("*.ma")) + list(
+                        scenes_path.rglob("*.mb")
+                    )
 
                     # If Maya scene files are found, it's a valid workspace
                     if scene_files:

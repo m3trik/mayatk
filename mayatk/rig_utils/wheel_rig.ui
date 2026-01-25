@@ -119,7 +119,7 @@
           </widget>
          </item>
          <item>
-          <widget class="DoubleSpinBox" name="s000">
+          <widget class="LineEdit" name="s000">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -135,17 +135,11 @@
            <property name="toolTip">
             <string>Give the height of the wheel (used to calculate rotation, etc)</string>
            </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
+           <property name="placeholderText">
+            <string>Wheel Height</string>
            </property>
-           <property name="prefix">
-            <string>Wheel Height:  </string>
-           </property>
-           <property name="maximum">
-            <double>99999.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>1.000000000000000</double>
+           <property name="text">
+            <string>1.0</string>
            </property>
           </widget>
          </item>

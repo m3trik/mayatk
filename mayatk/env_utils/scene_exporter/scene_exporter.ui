@@ -104,6 +104,18 @@
          </property>
          <item>
           <widget class="LineEdit" name="txt000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
            <property name="toolTip">
             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the directory where the FBX will be exported.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
@@ -114,6 +126,18 @@
          </item>
          <item>
           <widget class="LineEdit" name="txt001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
            <property name="toolTip">
             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify a name for the output file.  &lt;/p&gt;&lt;p&gt;When no name is given; the scene name will be used.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
@@ -145,6 +169,18 @@
             </property>
             <item>
              <widget class="ComboBox" name="cmb000">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>16777215</width>
+                <height>20</height>
+               </size>
+              </property>
               <property name="toolTip">
                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
@@ -165,6 +201,18 @@
            </property>
            <item>
             <widget class="WidgetComboBox" name="cmb001">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>20</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
              <property name="toolTip">
               <string>Specify tasks to run before export.</string>
              </property>
@@ -184,6 +232,12 @@
            <property name="minimumSize">
             <size>
              <width>0</width>
+             <height>38</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
              <height>38</height>
             </size>
            </property>

@@ -29,6 +29,23 @@ class QtWidgets:
         def __init__(self, args):
             pass
 
+    class QLabel:
+        def __init__(self, text="", parent=None):
+            self._text = text
+            self._properties = {}
+
+        def setText(self, t):
+            self._text = t
+
+        def text(self):
+            return self._text
+
+        def setProperty(self, key, val):
+            self._properties[key] = val
+
+        def property(self, key):
+            return self._properties.get(key)
+
     class QTableWidgetItem:
         def __init__(self, text=""):
             self._text = text
@@ -60,6 +77,7 @@ class QtWidgets:
         def __init__(self):
             self._rows = []
             self._sorting = False
+            self._cell_widgets = {}
 
         def setRowCount(self, count):
             current = len(self._rows)
@@ -67,19 +85,27 @@ class QtWidgets:
                 self._rows = self._rows[:count]
             else:
                 for _ in range(count - current):
-                    self._rows.append([None, None])  # 2 columns
+                    self._rows.append([None, None, None])  # 3 columns now
 
         def rowCount(self):
             return len(self._rows)
 
         def item(self, row, col):
-            if 0 <= row < len(self._rows):
+            if 0 <= row < len(self._rows) and col < len(self._rows[row]):
                 return self._rows[row][col]
             return None
 
         def setItem(self, row, col, item):
             if 0 <= row < len(self._rows):
+                while len(self._rows[row]) <= col:
+                    self._rows[row].append(None)
                 self._rows[row][col] = item
+
+        def setCellWidget(self, row, col, widget):
+            self._cell_widgets[(row, col)] = widget
+
+        def cellWidget(self, row, col):
+            return self._cell_widgets.get((row, col))
 
         def isSortingEnabled(self):
             return self._sorting
@@ -91,13 +117,14 @@ class QtWidgets:
             pass
 
         def insertRow(self, row):
-            self._rows.insert(row, [None, None])
+            self._rows.insert(row, [None, None, None])
 
         def removeRow(self, row):
             self._rows.pop(row)
 
         def clearContents(self):
             self._rows = []
+            self._cell_widgets = {}
 
         def blockSignals(self, block):
             return False

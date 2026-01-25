@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 from typing import List, Tuple, Dict, Union, Optional, Set, Any
 
 try:
@@ -48,7 +49,29 @@ class XformUtilsInternals:
 
         # Note: We let RuntimeError bubble up so freeze_transforms can handle
         # connection/locking strategies.
-        pm.makeIdentity(obj, apply=True, t=freeze_t, r=freeze_r, s=freeze_s, pn=True)
+        try:
+            # Try with preserveNormals=True (standard for meshes)
+            pm.makeIdentity(
+                obj,
+                apply=True,
+                t=freeze_t,
+                r=freeze_r,
+                s=freeze_s,
+                pn=True,
+                normal=False,
+            )
+        except RuntimeError:
+            # Fallback for non-polygonal objects or when preserveNormals fails
+            # (e.g. malformed geometry, locked normals, or tool limitations)
+            pm.makeIdentity(
+                obj,
+                apply=True,
+                t=freeze_t,
+                r=freeze_r,
+                s=freeze_s,
+                pn=False,
+                normal=False,
+            )
         return True
 
 
@@ -985,6 +1008,163 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             "baked",
         ]
 
+    _manip_cache = {}
+
+    @classmethod
+    def clear_manip_cache(cls):
+        """Clears the cached manipulator pivot data."""
+        cls._manip_cache.clear()
+
+    @classmethod
+    def snapshot_manip_pivot(cls, node):
+        """Snapshots the current manipulator pivot state for the given node into the cache.
+
+        If the manipulator pivot matches the rotate pivot (default), the cache is cleared for this node.
+        This allows capturing the 'live' state before operations like Undo destroy it.
+        """
+        try:
+            # We rely on existing selection if possible, assuming node is selected if we are snapshooting it
+            # But better be safe
+            current_selection = pm.selected()
+            if node not in current_selection:
+                return  # Can't snapshot manip pivot of unselected object reliably
+
+            manip_pivot_pos = pm.manipPivot(q=True, p=True)[0]
+            manip_pivot_rot = pm.manipPivot(q=True, o=True)[0]
+
+            # Normalize potential nested lists
+            if (
+                isinstance(manip_pivot_rot, (list, tuple))
+                and len(manip_pivot_rot) == 1
+                and isinstance(manip_pivot_rot[0], (list, tuple))
+            ):
+                manip_pivot_rot = manip_pivot_rot[0]
+
+            rp_pos = pm.xform(node, q=True, ws=True, rp=True)
+
+            def is_diff(v1, v2):
+                if not v1 or not v2:
+                    return False
+                if isinstance(v1[0], (list, tuple)):
+                    v1 = v1[0]
+                return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
+
+            if is_diff(manip_pivot_pos, rp_pos):
+                # Custom pivot detected
+                cls._manip_cache[node] = (manip_pivot_rot, manip_pivot_pos)
+            else:
+                # Pivot is default, clear cache to respect this reset
+                if node in cls._manip_cache:
+                    del cls._manip_cache[node]
+
+        except Exception:
+            pass
+
+    @classmethod
+    def get_operation_axis_matrix(cls, node, pivot: str) -> om.MMatrix:
+        """Determines the pivot matrix (orientation + position) for transformations.
+
+        Parameters:
+            node (PyNode): The object to query.
+            pivot (str): "object", "manip", "world", "center", etc.
+
+        Returns:
+            om.MMatrix: The 4x4 transfomation matrix.
+        """
+        # 1. Get Position (Translation)
+        pos = cls.get_operation_axis_pos(node, pivot)
+        # Construct translation matrix manually as MMatrix constructor is flat list or identity
+        mat_pos_list = [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            pos[0],
+            pos[1],
+            pos[2],
+            1.0,
+        ]
+        mat_pos = om.MMatrix(mat_pos_list)
+
+        # 2. Get Rotation (Orientation)
+        mat_rot = om.MMatrix.kIdentity
+
+        if pivot == "object":
+            # Use object's world rotation
+            # Note: pm.xform returns flat list for matrix
+            m_obj_arr = pm.xform(node, query=True, worldSpace=True, matrix=True)
+            m_obj = om.MMatrix(m_obj_arr)
+            tm_obj = om.MTransformationMatrix(m_obj)
+            mat_rot = tm_obj.rotation().asMatrix()
+
+        elif pivot == "manip":
+            # Use manipulator's orientation
+            current_selection = pm.selected()
+
+            # Minimize selection changes to preserve manipulator context
+            needs_selection_change = node not in current_selection
+
+            if needs_selection_change:
+                pm.select(node, replace=True)
+            try:
+                # Query orientation in degrees
+                manip_rot_queries = pm.manipPivot(query=True, o=True)
+                manip_rot_deg = manip_rot_queries[0]
+                # Defensive check for list nesting (some maya versions return nested lists)
+                if (
+                    isinstance(manip_rot_deg, (list, tuple))
+                    and len(manip_rot_deg) == 1
+                    and isinstance(manip_rot_deg[0], (list, tuple))
+                ):
+                    manip_rot_deg = manip_rot_deg[0]
+
+                # --- Persistence Logic ---
+                # Check if this "read" matches the object's physical rotate pivot?
+                # If so, we might have lost the custom pivot context (e.g. after Undo).
+                # If we have a cached value for this node, use it.
+
+                # Get current world-space Rotation Pivot for comparison
+                rp_pos = pm.xform(node, q=True, ws=True, rp=True)
+                manip_pos = pm.manipPivot(q=True, p=True)[0]
+
+                def is_diff(v1, v2):
+                    return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
+
+                # If Manip Pivot != RP, we assume it's a specialized custom pivot -> Cache it.
+                if is_diff(manip_pos, rp_pos):
+                    cls._manip_cache[node] = (manip_rot_deg, manip_pos)
+                elif node in cls._manip_cache:
+                    # It looks reset, but we have a cache. Use the cache.
+                    # We only use the cached ROTATION here.
+                    cached_vals = cls._manip_cache[node]
+                    if cached_vals and len(cached_vals) == 2:
+                        manip_rot_deg = cached_vals[0]
+
+                # Convert rotation (degrees) to Matrix
+                euler = om.MEulerRotation(
+                    math.radians(manip_rot_deg[0]),
+                    math.radians(manip_rot_deg[1]),
+                    math.radians(manip_rot_deg[2]),
+                    om.MEulerRotation.kXYZ,
+                )
+                mat_rot = euler.asMatrix()
+            except Exception:
+                pass
+            finally:
+                if needs_selection_change:
+                    pm.select(current_selection, replace=True)
+
+        # 3. Combine: M_pivot = R_pivot * T_pivot (Rotate then Translate = Frame at T with Basis R)
+        return mat_rot * mat_pos
+
     @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):
         """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
@@ -1020,31 +1200,89 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         if pivot == "manip":
             # Ensure object is selected for consistent manipulator pivot query
             current_selection = pm.selected()
-            pm.select(node, replace=True)
+
+            needs_selection_change = node not in current_selection
+
+            # Note: We rely on the EXISTING selection state for the manipulator if possible.
+            # Changing selection resets the tool context, which usually wipes custom pivot changes.
+
+            if needs_selection_change:
+                pm.select(node, replace=True)
 
             try:
                 # Query the current manipulator pivot position
                 manip_pivot_result = pm.manipPivot(q=True, p=True)
 
-                # Normalize result to flat [x,y,z] format
-                if (
-                    isinstance(manip_pivot_result, (list, tuple))
-                    and len(manip_pivot_result) > 0
-                    and isinstance(manip_pivot_result[0], (list, tuple))
-                ):
-                    manip_pivot_ws = list(manip_pivot_result[0][:3])
-                else:
-                    manip_pivot_ws = list(manip_pivot_result[:3])
+                # --- Persistence Logic for Position ---
+                rp_pos = pm.xform(node, q=True, ws=True, rp=True)
 
-                # Ensure we have exactly 3 coordinates
-                if len(manip_pivot_ws) < 3:
-                    raise ValueError(
-                        f"Invalid manipulator pivot result: {manip_pivot_result}"
+                def is_diff(v1, v2):
+                    if not v1 or not v2:
+                        return False
+                    # v1 is list of lists [[x,y,z]] sometimes?
+                    if isinstance(v1[0], (list, tuple)):
+                        v1 = v1[0]
+                    return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
+
+                current_pos_val = manip_pivot_result[0] if manip_pivot_result else None
+
+                if current_pos_val and is_diff(current_pos_val, rp_pos):
+                    # Cache logic is primarily handled in get_operation_axis_matrix (which calls this)
+                    # But this might be called independently.
+                    # We only READ from cache here if needed.
+                    # But wait, get_operation_axis_matrix calls get_operation_axis_pos FIRST.
+                    # So the cache might not be populated yet if this is the first call!
+                    # So we should populate cache here too?
+
+                    # Or rely on get_operation_axis_matrix to manage caching.
+                    # If we rely on get_operation_axis_matrix, then this method returns the "raw" value (which might be default).
+                    # And get_operation_axis_matrix will overwrite the translation part using the cache logic?
+                    # get_operation_axis_matrix logic:
+                    #   1. pos = get_operation_axis_pos()
+                    #   2. ... logic ... if cached: updates cache.
+
+                    # But 'pos' from step 1 is used to build the Matrix.
+                    # If pos is "lost" here, the matrix will have wrong translation.
+
+                    # So we MUST use cache here too.
+                    pass
+
+                # Check cache availability
+                if node in cls._manip_cache:
+                    cached_rot, cached_pos = cls._manip_cache[node]
+                    # If current is "Default/Reset", use cache.
+                    if current_pos_val and not is_diff(current_pos_val, rp_pos):
+                        manip_pivot_result = [cached_pos]  # Override return value
+
+                # Normalize to [x,y,z]
+                manip_pivot_ws = [0.0, 0.0, 0.0]
+                if manip_pivot_result:
+                    temp = (
+                        manip_pivot_result[0]
+                        if isinstance(manip_pivot_result, (list, tuple))
+                        else manip_pivot_result
                     )
+                    if isinstance(temp, (list, tuple)) and len(temp) == 3:
+                        manip_pivot_ws = temp
+                    elif (
+                        isinstance(manip_pivot_result, (list, tuple))
+                        and len(manip_pivot_result) == 3
+                    ):
+                        manip_pivot_ws = manip_pivot_result
+
+            except Exception as e:
+                print(
+                    f"DEBUG: Exception in get_operation_axis_pos: {e}, Node: {node}, Pivot: {pivot}"
+                )
+                import traceback
+
+                traceback.print_exc()
+                manip_pivot_ws = [0.0, 0.0, 0.0]
 
             finally:
-                # Restore original selection
-                pm.select(current_selection, replace=True)
+                # Restore original selection if it was changed
+                if needs_selection_change:
+                    pm.select(current_selection, replace=True)
 
             return (
                 float(manip_pivot_ws[axis_index])

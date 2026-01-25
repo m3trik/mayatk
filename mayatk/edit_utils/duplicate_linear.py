@@ -1,6 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
 try:
+    from qtpy import QtWidgets
+except ImportError:
+    pass
+try:
     import pymel.core as pm
     import maya.api.OpenMaya as om
 except ImportError as error:
@@ -26,69 +30,22 @@ class DuplicateLinear:
         weight_curve=4,
         pivot="object",
         calculation_mode="weighted",
+        instance=True,
     ):
-        weight_factor = (
-            2 * (weight_bias - 0.5) if weight_bias >= 0.5 else 2 * (0.5 - weight_bias)
-        )
-
         originals_to_copies = {}
 
         for node in objects:
             copies = []
-            sel_list = om.MSelectionList()
-            sel_list.add(str(node))
-            mobj = sel_list.getDependNode(0)
-            fn_transform = om.MFnTransform(mobj)
-            original_matrix = fn_transform.transformation()
 
-            # Get the pivot point for transformations
-            pivot_pos = XformUtils.get_operation_axis_pos(node, pivot)
-
-            # Matrices for Pivot
-            # T(-P)
-            mat_to_origin_list = [
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                -pivot_pos[0],
-                -pivot_pos[1],
-                -pivot_pos[2],
-                1.0,
-            ]
-            mat_to_origin = om.MMatrix(mat_to_origin_list)
-
-            # T(P)
-            mat_from_origin_list = [
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                pivot_pos[0],
-                pivot_pos[1],
-                pivot_pos[2],
-                1.0,
-            ]
-            mat_from_origin = om.MMatrix(mat_from_origin_list)
+            # Get the pivot matrix (Orientation + Position) using the centralized utility
+            mat_pivot = XformUtils.get_operation_axis_matrix(node, pivot)
+            mat_pivot_inv = mat_pivot.inverse()
 
             for i in range(num_copies):
-                dup = pm.instance(node)[0]
+                if instance:
+                    dup = pm.instance(node)[0]
+                else:
+                    dup = pm.duplicate(node, rr=True)[0]
 
                 # After applying transformations, add the duplicate to the isolation set
                 DisplayUtils.add_to_isolation_set(dup)
@@ -124,12 +81,20 @@ class DuplicateLinear:
                 )
                 mat_rot = euler.asMatrix()
 
-                # M_rot = T(-P) * R * T(P)
-                mat_orbit = mat_to_origin * mat_rot * mat_from_origin
+                # M_rot = M_piv_inv * R * M_piv
+                # This orbits the object around the pivot frame (Pos + Ori)
+                mat_orbit = mat_pivot_inv * mat_rot * mat_pivot
 
                 m_rotated = m_scaled * mat_orbit
 
-                # 3. Apply Translation (World Space)
+                # 3. Apply Translation (World Space, but respecting Pivot Orientation)
+                # To support translating along the Pivot's axis (e.g. Manipulator Axis), we must rotate the translation vector.
+                vec_trans_local = om.MVector(
+                    translation_vector[0], translation_vector[1], translation_vector[2]
+                )
+                # Transforming MVector by MMatrix rotates/scales it but ignores translation (w=0)
+                vec_trans_rotated = vec_trans_local * mat_pivot
+
                 mat_trans_list = [
                     1.0,
                     0.0,
@@ -143,9 +108,9 @@ class DuplicateLinear:
                     0.0,
                     1.0,
                     0.0,
-                    translation_vector[0],
-                    translation_vector[1],
-                    translation_vector[2],
+                    vec_trans_rotated.x,
+                    vec_trans_rotated.y,
+                    vec_trans_rotated.z,
                     1.0,
                 ]
                 mat_trans = om.MMatrix(mat_trans_list)
@@ -166,12 +131,32 @@ class DuplicateLinearSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_linear
 
+        # Ensure preview cleanup triggers when resetting defaults
+        self.ui.chk000.block_signals_on_restore = False
+
         # Populate pivot combobox
-        self.ui.cmb000.clear()
+        self.ui.cmb002.clear()
         self.pivot_options = XformUtils.get_pivot_options()
-        self.ui.cmb000.addItems(
-            [p.replace("_", " ").title() for p in self.pivot_options]
-        )
+        self.ui.cmb002.add(self.pivot_options, prefix="Pivot:")
+
+        # Populate calculation mode combobox
+        self.ui.cmb001.clear()
+        self.interpolation_modes = [
+            ("Linear", "linear"),
+            ("Ease In", "ease_in"),
+            ("Ease Out", "ease_out"),
+            ("Ease In-Out", "ease_in_out"),
+            ("Exponential", "exponential"),
+            ("Smooth Step", "smooth_step"),
+            ("Weighted", "weighted"),
+        ]
+        self.ui.cmb001.add(self.interpolation_modes, prefix="Interpolation:")
+
+        # Set default calculation mode to "Weighted" to match tool defaults
+        self.ui.cmb001.setAsCurrent("weighted")
+
+        # Set default state for instance checkbox
+        self.ui.chk001.setChecked(True)
 
         self.preview = Preview(
             self,
@@ -188,7 +173,7 @@ class DuplicateLinearSlots:
         # Connect pivot combobox to preview refresh
         self.sb.connect_multi(
             self.ui,
-            "cmb000",
+            "cmb002",
             "currentIndexChanged",
             self.preview.refresh,
         )
@@ -199,48 +184,54 @@ class DuplicateLinearSlots:
             "currentIndexChanged",
             self.preview.refresh,
         )
-        # Connect valueChanged signals to toggle_weight_ui using connect_multi
+        # Connect calculation mode combobox to toggle_weight_ui logic
         self.sb.connect_multi(
             self.ui,
-            "s003-8",
-            "valueChanged",
+            "cmb001",
+            "currentIndexChanged",
             self.toggle_weight_ui,
         )
+
+        # Connect instance checkbox to preview refresh
+        self.sb.connect_multi(
+            self.ui,
+            "chk001",
+            "stateChanged",
+            self.preview.refresh,
+        )
+
         # Initialize the UI state
         self.toggle_weight_ui()
 
-    def _resolve_pivot(self, pivot_index: int) -> str:
-        """Resolve pivot string from UI dropdown index."""
-        if 0 <= pivot_index < len(self.pivot_options):
-            return self.pivot_options[pivot_index]
-        return "object"
-
-    @staticmethod
-    def _resolve_calculation_mode(mode_index: int) -> str:
-        """Resolve calculation mode string from UI dropdown index."""
-        mode_mapping = {
-            0: "linear",  # Linear - even spacing
-            1: "ease_in",  # Ease In - accelerating spacing
-            2: "ease_out",  # Ease Out - decelerating spacing
-            3: "ease_in_out",  # Ease In-Out - S-curve spacing
-            4: "exponential",  # Exponential - rapid acceleration
-            5: "smooth_step",  # Smooth Step - alternative S-curve
-            6: "weighted",  # Weighted - original with bias control
-        }
-        return mode_mapping.get(mode_index, "linear")
-
     def toggle_weight_ui(self):
-        """Disable weight UI components if rotate values are zero and scale values are one."""
-        is_rotate_zero = all(
-            self.ui.__dict__[f"s00{i}"].value() == 0 for i in range(3, 6)
-        )
-        is_scale_one = all(
-            self.ui.__dict__[f"s00{i}"].value() == 1 for i in range(6, 9)
-        )
+        """Disable weight UI components if the current calculation mode doesn't use them."""
+        # Modes that don't typically use bias/curve parameters
+        # Based on pythontk.math_utils.progression.ProgressionCurves
+        mode = self.ui.cmb001.currentData()
 
-        should_disable = is_rotate_zero and is_scale_one
-        self.ui.s010.setDisabled(should_disable)
-        self.ui.s011.setDisabled(should_disable)
+        # 'linear' uses neither
+        # 'exponential' uses weight_curve
+        # 'logarithmic' uses weight_curve
+        # 'sine' uses weight_curve
+        # 'ease_in' uses weight_curve (power)
+        # 'ease_out' uses weight_curve
+        # 'ease_in_out' uses weight_curve
+        # 'smooth_step' uses neither (it's fixed hermite 3x^2 - 2x^3)
+        # 'bounce' uses weight_curve (bounciness?)
+        # 'elastic' uses weight_curve (period/amplitude?)
+        # 'weighted' uses BOTH weight_bias and weight_curve
+
+        # Define which modes need what
+        # (This is a simplified assumption based on typical usage)
+        uses_curve = mode not in ["linear", "smooth_step"]
+        uses_bias = mode in ["weighted"]
+
+        self.ui.s010.setEnabled(uses_bias)  # Weight Bias
+        self.ui.s011.setEnabled(uses_curve)  # Weight Curve
+
+    def b001(self):
+        """Reset to Defaults: Resets all UI widgets to their default values."""
+        self.ui.restore_defaults()
 
     def perform_operation(self, objects):
         """Perform the linear duplication operation."""
@@ -264,12 +255,13 @@ class DuplicateLinearSlots:
         weight_curve = self.ui.s011.value()
 
         # Get pivot from dropdown
-        pivot_index = self.ui.cmb000.currentIndex()
-        pivot = self._resolve_pivot(pivot_index)
+        pivot = self.ui.cmb002.currentData()
 
         # Get calculation mode from dropdown
-        mode_index = self.ui.cmb001.currentIndex()
-        calculation_mode = self._resolve_calculation_mode(mode_index)
+        calculation_mode = self.ui.cmb001.currentData()
+
+        # Get instance mode from checkbox
+        instance = self.ui.chk001.isChecked()
 
         self.copies = DuplicateLinear.duplicate_linear(
             objects,
@@ -281,6 +273,7 @@ class DuplicateLinearSlots:
             weight_curve,
             pivot,
             calculation_mode,
+            instance,
         )
 
 
