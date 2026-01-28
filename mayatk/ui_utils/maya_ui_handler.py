@@ -25,7 +25,7 @@ class MayaUiHandler(UiHandler):
 
     def __init__(
         self,
-        switchboard: Optional[Switchboard] = None,
+        switchboard: Switchboard,
         log_level: str = "WARNING",
         **kwargs,
     ) -> None:
@@ -33,9 +33,9 @@ class MayaUiHandler(UiHandler):
         self.root_dir = os.path.dirname(sys.modules["mayatk"].__file__)
 
         super().__init__(
+            switchboard=switchboard,
             ui_root=self.root_dir,
             slot_root=self.root_dir,
-            switchboard=switchboard,
             discover_slots=True,
             recursive=True,
             log_level=log_level,
