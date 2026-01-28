@@ -74,8 +74,8 @@ DEFAULT_INCLUDE = {
     "mat_utils.texture_path_editor": "TexturePathEditor",
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
-    "ui_utils.maya_menu_handler": "MayaMenuHandler",
-    "ui_utils.maya_window_manager": "MayaWindowManager",
+    "ui_utils.maya_native_menus": "MayaNativeMenus",
+    "ui_utils.maya_ui_handler": "MayaUiHandler",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     # NURBS utils

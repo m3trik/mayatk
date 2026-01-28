@@ -162,7 +162,7 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
             window.resize(window.sizeHint())
 
 
-class MayaMenuHandler(ptk.LoggingMixin):
+class MayaNativeMenus(ptk.LoggingMixin):
     """Handles Maya's menu retrieval and embedding into UI components."""
 
     MENU_MAPPING = {
