@@ -2,21 +2,9 @@
 # coding=utf-8
 import sys, os
 from typing import Optional, TYPE_CHECKING
-import pythontk as ptk
 from uitk import Switchboard
-
-try:
-    from uitk.controllers.ui_manager import UiManager as BaseUiManager
-except ImportError:
-
-    class BaseUiManager:
-        pass
-
-
-try:
-    import mayatk
-except ImportError:
-    pass
+from uitk.managers.window_manager import WindowManager
+import mayatk
 
 try:
     from mayatk.ui_utils import maya_menu_handler
@@ -28,10 +16,10 @@ if TYPE_CHECKING:
     from qtpy import QtWidgets
 
 
-class UiManager(BaseUiManager):
+class MayaWindowManager(WindowManager):
     """Manages and tracks Switchboard UI instances for Maya.
 
-    This class is a thin layer over the generic uitk UiManager,
+    This class is a thin layer over the generic uitk WindowManager,
     adding Maya-specific menu handling and styling.
     """
 
@@ -41,7 +29,7 @@ class UiManager(BaseUiManager):
         log_level: str = "WARNING",
         **kwargs,
     ) -> None:
-        """Initialize Maya UiManager."""
+        """Initialize Maya WindowManager."""
         # Calculate root dynamically
         self.root_dir = os.path.dirname(sys.modules["mayatk"].__file__)
 
@@ -122,15 +110,3 @@ class UiManager(BaseUiManager):
         ui.edit_tags(add="maya_menu")
 
         return ui
-
-
-# --------------------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils._ui_utils import UiUtils
-
-    UiUtils.clear_scrollfield_reporters()
-
-    ui = UiManager.instance().get("scene_exporter", reload=True)
-    ui.header.config_buttons("hide")
-    ui.show(pos="screen", app_exec=True)

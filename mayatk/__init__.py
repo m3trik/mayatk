@@ -75,7 +75,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
     "ui_utils.maya_menu_handler": "MayaMenuHandler",
-    "ui_utils.mayatk_ui_manager": "UiManager",
+    "ui_utils.maya_window_manager": "MayaWindowManager",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     # NURBS utils
