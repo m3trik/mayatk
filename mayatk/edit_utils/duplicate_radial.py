@@ -330,6 +330,10 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         )
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
+    def b001(self):
+        """Reset to Defaults: Resets all UI widgets to their default values."""
+        self.ui.state.reset_all()
+
     def perform_operation(self, objects):
         """Perform the radial duplication operation."""
         kwargs = {

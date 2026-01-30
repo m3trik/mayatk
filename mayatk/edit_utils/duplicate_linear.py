@@ -231,7 +231,7 @@ class DuplicateLinearSlots:
 
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
-        self.ui.restore_defaults()
+        self.ui.state.reset_all()
 
     def perform_operation(self, objects):
         """Perform the linear duplication operation."""

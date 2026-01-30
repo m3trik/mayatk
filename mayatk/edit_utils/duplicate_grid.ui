@@ -96,45 +96,38 @@
          <property name="verticalSpacing">
           <number>1</number>
          </property>
-         <item row="1" column="0" colspan="2">
-          <layout class="QHBoxLayout" name="horizontalLayout">
-           <property name="spacing">
-            <number>0</number>
+         <item row="7" column="0" colspan="2">
+          <widget class="QSpinBox" name="s002">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>20</height>
+            </size>
            </property>
-           <item>
-            <widget class="QCheckBox" name="chk000">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>20</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>Start the duplicate preview using any selected mesh objects.</string>
-             </property>
-             <property name="text">
-              <string>Preview</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Duplicate: transform Z amount</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Dimentions Z:	</string>
+           </property>
+           <property name="minimum">
+            <number>-100</number>
+           </property>
+           <property name="maximum">
+            <number>100</number>
+           </property>
+          </widget>
          </item>
-         <item row="8" column="0" colspan="2">
+         <item row="9" column="0" colspan="2">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -212,34 +205,37 @@
            </property>
           </widget>
          </item>
-         <item row="7" column="0" colspan="2">
-          <widget class="QSpinBox" name="s002">
+         <item row="3" column="1">
+          <widget class="QCheckBox" name="chk002">
            <property name="minimumSize">
             <size>
-             <width>0</width>
+             <width>36</width>
              <height>20</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>16777215</width>
+             <width>999</width>
              <height>20</height>
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: transform Z amount</string>
+            <string>Duplicate: rotate axis X</string>
            </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
+           <property name="text">
+            <string>Group</string>
            </property>
-           <property name="prefix">
-            <string>Dimentions Z:	</string>
+           <property name="iconSize">
+            <size>
+             <width>18</width>
+             <height>18</height>
+            </size>
            </property>
-           <property name="minimum">
-            <number>-100</number>
+           <property name="checkable">
+            <bool>true</bool>
            </property>
-           <property name="maximum">
-            <number>100</number>
+           <property name="checked">
+            <bool>true</bool>
            </property>
           </widget>
          </item>
@@ -348,25 +344,60 @@
            </property>
           </widget>
          </item>
-         <item row="3" column="1">
-          <widget class="QCheckBox" name="chk002">
+         <item row="1" column="0" colspan="2">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <property name="spacing">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QCheckBox" name="chk000">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>20</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Start the duplicate preview using any selected mesh objects.</string>
+             </property>
+             <property name="text">
+              <string>Preview</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>18</width>
+               <height>18</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="8" column="0" colspan="2">
+          <widget class="QPushButton" name="b001">
            <property name="minimumSize">
             <size>
-             <width>36</width>
+             <width>0</width>
              <height>20</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
-           <property name="toolTip">
-            <string>Duplicate: rotate axis X</string>
-           </property>
            <property name="text">
-            <string>Group</string>
+            <string>Reset to Defaults</string>
            </property>
            <property name="iconSize">
             <size>
@@ -375,10 +406,10 @@
             </size>
            </property>
            <property name="checkable">
-            <bool>true</bool>
+            <bool>false</bool>
            </property>
            <property name="checked">
-            <bool>true</bool>
+            <bool>false</bool>
            </property>
           </widget>
          </item>

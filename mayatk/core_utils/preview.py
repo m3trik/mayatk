@@ -266,12 +266,18 @@ class Preview:
             self.internal_undo_triggered = True
             # We don't close chunk here because we are using atomic chunks (closed in refresh).
             try:
+                # Suppress script editor echo unless in debug mode
+                if self.logger.level > logging.DEBUG:
+                    pm.scriptEditorInfo(suppressResults=True, suppressErrors=True)
                 pm.undo()
             except RuntimeError as e:
                 # If undo fails, we won't get an event, so revert counter
                 self.expected_undo_events -= 1
                 self.logger.warning(f"Undo operation failed: {e}")
             finally:
+                # Restore script editor output
+                if self.logger.level > logging.DEBUG:
+                    pm.scriptEditorInfo(suppressResults=False, suppressErrors=False)
                 # We don't reopen chunk here. refresh() handles opening its own chunk.
                 self.internal_undo_triggered = False
 
