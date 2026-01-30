@@ -62,7 +62,7 @@ except Exception as e:
     print(f"[Fallback] Cleared {len(modules_to_clear)} cached mayatk modules")
 
 # Setup results file
-output_file = r'o:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
+output_file = r'O:/Cloud/Code/_scripts/mayatk/test/test_results.txt'
 with open(output_file, 'w', encoding='utf-8') as f:
     f.write("="*70 + "\n")
     f.write("MAYATK TEST RESULTS\n")
@@ -72,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_uv_cleanup_actions']
+test_modules = ['test_preview']
 total_tests = 0
 total_failures = 0
 total_errors = 0

@@ -1,0 +1,40 @@
+============================================================
+PREVIEW CLASS - MAYA OPERATION TEST
+============================================================
+[Setup] Created cube, selected edges: 1 items
+[Setup] Selection type: <class 'pymel.core.general.MeshEdge'>
+[Init] Creating Preview instance...
+[Init] ScriptJobs: [306]
+
+--- TEST 1: Enable preview ---
+[Before] checkbox.isChecked()=False
+[Before] Selection: [MeshEdge('test_cubeShape.e[0:2]')]
+[BevelOp] Beveling 3 edges with width=0.1
+[After enable] checkbox.isChecked()=True
+[After enable] needs_undo=True
+[After enable] selection_job=307
+[After enable] Selection: []
+[OK] Checkbox stayed checked after enable!
+
+--- TEST 2: Change slider value ---
+[Before] slider.value()=10
+[Before] Selection: []
+[BevelOp] Beveling 3 edges with width=0.2
+[After] slider.value()=20
+[After slider change] checkbox.isChecked()=True
+[After slider change] needs_undo=True
+[After slider change] Selection: []
+[OK] Checkbox stayed checked after slider change!
+
+--- TEST 3: Another slider change ---
+[BevelOp] Beveling 3 edges with width=0.3
+[After 2nd slider change] checkbox.isChecked()=True
+[After 2nd slider change] Selection: []
+[OK] Checkbox stayed checked after 2nd slider change!
+
+--- TEST 4: Manually disable preview ---
+[After disable] checkbox.isChecked()=False
+
+============================================================
+TEST COMPLETE
+============================================================

@@ -3,36 +3,24 @@
 > **System Prompt Override**:
 > You are an expert Maya Technical Artist and Python Developer.
 > Your primary goal is **stability**, **performance**, and **native integration** with Maya 2025+.
-> This document is the Single Source of Truth (SSoT) for `mayatk` and `pythontk` workflows.
-> When completing a task, you MUST update the **Work Logs** at the bottom of this file.
+>
+> **Global Standards**: For general workflow, testing, and coding standards, refer to the [Main Copilot Instructions](../../.github/copilot-instructions.md).
+>
+> **Work Logs**: When completing a task, you MUST update the **Work Logs** at the bottom of this file.
 
 ---
 
 ## 1. Meta-Instructions
 
-- **Living Document**: This file (`mayatk/.github/copilot-instructions.md`) is the SSoT for Maya workflows.
+- **Living Document**: This file (`mayatk/.github/copilot-instructions.md`) is the SSoT for Maya specific workflows.
 - **Future Proofing**: Maintain backward compatibility with Maya 2024 where possible, but prioritize 2025 features.
-
----
-
-## 2. Global Standards
-
-### Coding Style
-- **Python**: PEP 8 compliance. 
-- **Type Hints**: Essential for PyMEL/OpenMaya interoperability.
-- **Naming**: `snake_case` for functions/variables. `PascalCase` for classes.
+- **Style**: Use Type Hints essential for PyMEL/OpenMaya interoperability.
 - **Imports**: 
   - `import maya.cmds as cmds`
   - `import pymel.core as pm` (Use sparingly in performance-critical loops)
   - `import maya.api.OpenMaya as om` (API 2.0 preferred over 1.0)
 
-### Single Sources of Truth (SSoT)
-- **Python Dependencies**: `pyproject.toml` (Legacy `requirements.txt` is forbidden).
-- **Package Versioning**: `mayatk/__init__.py` (`__version__` string).
-
----
-
-## 3. Architecture & Infrastructure
+## 2. Architecture & Infrastructure
 
 ### Project Structure
 - **Source**: `mayatk/` (Maya-specific), `pythontk/` (Core utils, separate repo/folder but linked).
@@ -41,6 +29,9 @@
   - `mayatk/test/temp_tests/` (Scratchpad - Gitignored usually).
 
 ### Test Infrastructure
+
+> **Testing Workflow**: Follow the **Issue-Driven TDD** workflow defined in the main [copilot-instructions.md](../../.github/copilot-instructions.md#testing-workflow-issue-driven-tdd).
+
 - **Base Classes**: `test/base_test.py` (`MayaTkTestCase` for full cleanup, `QuickTestCase` for speed).
 - **Runner**: `test/run_tests.py` (CLI entry point).
 - **Connection**: `test/maya_connection.py` handles Port, Standalone, and Interactive modes.
