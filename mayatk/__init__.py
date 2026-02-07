@@ -34,6 +34,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
+    "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.instancing.auto_instancer": "AutoInstancer",

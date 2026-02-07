@@ -438,131 +438,6 @@ class RigUtils(ptk.HelpMixin):
                 except Exception:
                     pass
 
-    @classmethod
-    @CoreUtils.undoable
-    def setup_telescope_rig(
-        cls,
-        base_locator: Union[str, List[str]],
-        end_locator: Union[str, List[str]],
-        segments: List[str],
-        collapsed_distance: float = 1.0,
-    ):
-        """Sets up constraints and driven keys to make a series of segments telescope between two locators.
-
-        Parameters:
-            base_locator (str/object/list): The base locator.
-            end_locator (str/object/list): The end locator.
-            segments (List[str]): Ordered list of segment names. Must contain at least two segments.
-            collapsed_distance (float): The distance at which the segments are in the collapsed state.
-
-        Raises:
-            ValueError: If less than two segments are provided.
-        """
-        base_locators = pm.ls(base_locator, flatten=True)
-        if not base_locators:
-            raise ValueError("At least one valid base locator must be provided.")
-        base_locator = base_locators[0]
-
-        end_locators = pm.ls(end_locator, flatten=True)
-        if not end_locators:
-            raise ValueError("At least one valid end locator must be provided.")
-        end_locator = end_locators[0]
-
-        segments = pm.ls(segments, flatten=True)
-        if len(segments) < 2:
-            raise ValueError("At least two segments must be provided.")
-
-        def create_distance_node():
-            distance_node = pm.shadingNode(
-                "distanceBetween", asUtility=True, name="strut_distance"
-            )
-            pm.connectAttr(base_locator.translate, distance_node.point1)
-            pm.connectAttr(end_locator.translate, distance_node.point2)
-            return distance_node
-
-        def create_and_constrain_midpoint_locator(start_locator, end_locator, index):
-            midpoint_locator_name = f"segment_locator_{index}"
-            midpoint_locator = pm.spaceLocator(name=midpoint_locator_name)
-            midpoint_pos = (
-                pm.datatypes.Vector(start_locator.getTranslation(space="world"))
-                + pm.datatypes.Vector(end_locator.getTranslation(space="world"))
-            ) / 2
-            midpoint_locator.setTranslation(midpoint_pos, space="world")
-            pm.pointConstraint(start_locator, end_locator, midpoint_locator)
-            pm.aimConstraint(
-                end_locator,
-                midpoint_locator,
-                aimVector=(0, 1, 0),
-                upVector=(0, 1, 0),
-                worldUpType="scene",
-            )
-            return midpoint_locator
-
-        def constrain_segments():
-            pm.parentConstraint(base_locator, segments[0], mo=True)
-            pm.parentConstraint(end_locator, segments[-1], mo=True)
-            if len(segments) > 2:
-                for i, segment in enumerate(segments[1:-1], start=1):
-                    midpoint_locator = create_and_constrain_midpoint_locator(
-                        segments[i - 1], segments[i + 1], i
-                    )
-                    pm.parent(segment, midpoint_locator)
-                    pm.aimConstraint(
-                        end_locator,
-                        segment,
-                        aimVector=(0, 1, 0),
-                        upVector=(0, 1, 0),
-                        worldUpType="scene",
-                    )
-
-        def set_driven_keys(distance_node, initial_distance):
-            for segment in segments[1:-1]:
-                pm.setDrivenKeyframe(
-                    segment + ".scaleY",
-                    currentDriver=distance_node.distance,
-                    driverValue=initial_distance,
-                    value=1,
-                )
-                pm.setDrivenKeyframe(
-                    segment + ".scaleY",
-                    currentDriver=distance_node.distance,
-                    driverValue=collapsed_distance,
-                    value=collapsed_distance / initial_distance,
-                )
-
-        def lock_segment_attributes():
-            for segment in segments:
-                pm.setAttr(segment + ".translateX", lock=True)
-                pm.setAttr(segment + ".translateZ", lock=True)
-                pm.setAttr(segment + ".rotateX", lock=True)
-                pm.setAttr(segment + ".rotateZ", lock=True)
-                pm.setAttr(segment + ".scaleX", lock=True)
-                pm.setAttr(segment + ".scaleZ", lock=True)
-
-        def constrain_locators():
-            pm.aimConstraint(
-                end_locator,
-                base_locator,
-                aimVector=(0, 1, 0),
-                upVector=(0, 1, 0),
-                worldUpType="scene",
-            )
-            pm.aimConstraint(
-                base_locator,
-                end_locator,
-                aimVector=(0, -1, 0),
-                upVector=(0, 1, 0),
-                worldUpType="scene",
-            )
-
-        distance_node = create_distance_node()
-        constrain_locators()
-        constrain_segments()
-
-        initial_distance = pm.getAttr(distance_node.distance)
-        set_driven_keys(distance_node, initial_distance)
-        lock_segment_attributes()
-
     @staticmethod
     @CoreUtils.undoable
     def create_switch_attr(
@@ -761,6 +636,194 @@ class RigUtils(ptk.HelpMixin):
             result[f"condition_node_{i}"] = cond_node
 
         return result
+
+    @staticmethod
+    @CoreUtils.undoable
+    def create_ik_handle(
+        start_joint: "pm.nt.Joint",
+        end_joint: "pm.nt.Joint",
+        solver: str = "ikRPsolver",
+        name: str = "ikHandle",
+        parent: Optional["pm.nt.Transform"] = None,
+        **kwargs,
+    ) -> "pm.nt.IkHandle":
+        """Create an IK handle.
+
+        Parameters:
+            start_joint (pm.nt.Joint): Start joint of the IK chain.
+            end_joint (pm.nt.Joint): End joint of the IK chain.
+            solver (str): IK solver type (e.g., "ikRPsolver", "ikSCsolver", "ikSplineSolver").
+            name (str): Name of the IK handle.
+            parent (pm.nt.Transform): Optional parent for the IK handle.
+            **kwargs: Additional arguments passed to pm.ikHandle.
+
+        Returns:
+            pm.nt.IkHandle: The created IK handle.
+        """
+        result = pm.ikHandle(
+            startJoint=start_joint,
+            endEffector=end_joint,
+            solver=solver,
+            name=name,
+            **kwargs,
+        )
+        ik_handle = result[0]
+
+        if parent:
+            ik_handle.setParent(parent)
+
+        return ik_handle
+
+    @staticmethod
+    @CoreUtils.undoable
+    def create_pole_vector(
+        ik_handle: "pm.nt.IkHandle",
+        mid_joint: "pm.nt.Joint",
+        distance: float = 5.0,
+        name: str = "poleVector_LOC",
+        parent: Optional["pm.nt.Transform"] = None,
+    ) -> "pm.nt.Transform":
+        """Create a pole vector locator based on the mid joint's position.
+
+        Parameters:
+            ik_handle (pm.nt.IkHandle): The IK handle to constrain.
+            mid_joint (pm.nt.Joint): The joint to calculate the PV position from.
+            distance (float): Offset distance along the pole vector vector.
+            name (str): Name of the PV locator.
+            parent (pm.nt.Transform): Optional parent for the PV locator.
+
+        Returns:
+            pm.nt.Transform: The pole vector locator.
+        """
+        # Calculate PV position using simple vector math (assuming planar chain)
+        # Note: Ideally uses true plane calculation, but this is a reasonable approximation for simple chains.
+        # A more robust PV finder would get the projection of mid_joint onto the start-end vector.
+        start_joint = pm.ikHandle(ik_handle, q=True, startJoint=True)
+        end_joint = pm.ikHandle(ik_handle, q=True, endEffector=True)
+        # ikHandle returns generic object, ensure PyNode
+        start_joint = pm.PyNode(start_joint)
+        end_joint = pm.PyNode(end_joint)
+
+        start_pos = start_joint.getTranslation(space="world")
+        mid_pos = mid_joint.getTranslation(space="world")
+        end_pos = end_joint.getTranslation(space="world")
+
+        # Vector from start to end
+        v_start_end = end_pos - start_pos
+        # Vector from start to mid
+        v_start_mid = mid_pos - start_pos
+
+        # Project mid onto start-end vector
+        t = v_start_mid.dot(v_start_end) / v_start_end.dot(v_start_end)
+        projected_pos = start_pos + v_start_end * t
+
+        # Vector from projection to mid (orthogonal to chain axis)
+        v_pv = mid_pos - projected_pos
+        if v_pv.length() < 0.001:
+            # Straight chain fallback: use local Z or Y
+            # Try Y
+            v_pv = pm.datatypes.Vector(0, 1, 0)
+
+        v_pv.normalize()
+
+        pv_pos = mid_pos + v_pv * distance
+
+        pole_vector = RigUtils.create_locator(
+            name=name, position=pv_pos, scale=1.0, parent=parent
+        )
+
+        pm.poleVectorConstraint(pole_vector, ik_handle)
+
+        # Lock generic unused attrs
+        RigUtils.set_attr_lock_state(pole_vector, rotate=True, scale=True)
+
+        return pole_vector
+
+    @staticmethod
+    def get_ik_handles_for_joint(joint: str) -> List[str]:
+        """Find IK handles that control a given joint.
+
+        IK-driven joints don't have direct connections from the ikHandle to
+        their rotate channels - the solver computes rotations internally.
+        This method detects IK influence by checking if the joint is between
+        an ikHandle's start and end joints.
+
+        Parameters:
+            joint: The joint name to check.
+
+        Returns:
+            List of ikHandle names affecting this joint, or empty list.
+
+        Example:
+            >>> handles = RigUtils.get_ik_handles_for_joint("arm_elbow_jnt")
+            >>> print(handles)  # ['arm_ikHandle']
+        """
+        import maya.cmds as cmds
+
+        if cmds.nodeType(joint) != "joint":
+            return []
+
+        ik_handles = cmds.ls(type="ikHandle") or []
+        affecting_handles = []
+
+        for handle in ik_handles:
+            # Get the effector and trace to end joint
+            effector = cmds.listConnections(
+                f"{handle}.endEffector", source=True, destination=False
+            )
+            if not effector:
+                continue
+
+            # Get the end joint from the effector
+            end_joint = cmds.listConnections(
+                f"{effector[0]}.translateX", source=True, destination=False
+            )
+            if not end_joint:
+                continue
+
+            # Get start joint from handle
+            start_joint = cmds.listConnections(
+                f"{handle}.startJoint", source=True, destination=False
+            )
+            if not start_joint:
+                continue
+
+            # Check if our joint is in the chain between start and end
+            if RigUtils.joint_in_ik_chain(joint, start_joint[0], end_joint[0]):
+                affecting_handles.append(handle)
+
+        return affecting_handles
+
+    @staticmethod
+    def joint_in_ik_chain(joint: str, start_joint: str, end_joint: str) -> bool:
+        """Check if a joint is part of an IK chain between start and end.
+
+        Traverses the joint hierarchy from end_joint up to start_joint,
+        checking if the given joint is encountered.
+
+        Parameters:
+            joint: The joint to check.
+            start_joint: The root joint of the IK chain.
+            end_joint: The end joint of the IK chain.
+
+        Returns:
+            True if joint is in the chain (inclusive of start and end).
+
+        Example:
+            >>> RigUtils.joint_in_ik_chain("elbow_jnt", "shoulder_jnt", "wrist_jnt")
+            True
+        """
+        import maya.cmds as cmds
+
+        current = end_joint
+        while current:
+            if current == joint:
+                return True
+            if current == start_joint:
+                return False
+            parent = cmds.listRelatives(current, parent=True, type="joint")
+            current = parent[0] if parent else None
+        return False
 
     @staticmethod
     def get_joint_chain_from_root(

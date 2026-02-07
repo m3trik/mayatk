@@ -10,8 +10,10 @@ try:
     import maya.api.OpenMaya as om2
 except ImportError as error:
     print(__file__, error)
-
 import pythontk as ptk
+
+# From this package:
+from mayatk import CoreUtils
 
 
 class ShadowRig(ptk.LoggingMixin):
@@ -21,6 +23,13 @@ class ShadowRig(ptk.LoggingMixin):
     PNG texture. The plane transforms (position, rotation, scale) are driven
     by an expression that can be baked to keyframes for FBX export.
 
+    Modes:
+        - "orbit": Plane rotates around the target to face away from light.
+                   Simple and intuitive; shadow always points away from source.
+        - "stretch": Plane stays axis-aligned; uses scale + compensatory
+                     translation to warp shadow. Better for baking but
+                     silhouette may appear mirrored at extreme angles.
+
     Workflow for Unity:
     1. Create shadow with ShadowRig.create()
     2. Bake simulation: Edit > Keys > Bake Simulation
@@ -28,8 +37,17 @@ class ShadowRig(ptk.LoggingMixin):
     4. In Unity: Use Unlit/Transparent shader
     """
 
-    def __init__(self, target=None, light=None, ground_height=0.0):
-        self.target = pm.PyNode(target) if target else None
+    MODES = ("orbit", "stretch")
+
+    def __init__(self, targets=None, light=None, ground_height=0.0, mode="stretch"):
+        # Accept single target or list of targets
+        if targets is None:
+            self.targets = []
+        elif isinstance(targets, (list, tuple)):
+            self.targets = [pm.PyNode(t) for t in targets]
+        else:
+            self.targets = [pm.PyNode(targets)]
+
         self.light = pm.PyNode(light) if light else None
         self.shadow_plane = None
         self.contact_locator = None
@@ -37,40 +55,42 @@ class ShadowRig(ptk.LoggingMixin):
         self.shader = None
         self.opacity_mult = None
         self.texture_path = None
+        self.mode = mode if mode in self.MODES else "stretch"
+
+        # For naming, use first target or "combined"
+        self._name_base = str(self.targets[0]) if len(self.targets) == 1 else "combined"
 
     def create_contact_locator(self):
-        """Create a locator at the lowest point of the object to act as the shadow anchor."""
-        bbox = pm.exactWorldBoundingBox(self.target)
+        """Create a locator at the lowest point of the combined objects to act as the shadow anchor."""
+        bbox = pm.exactWorldBoundingBox(self.targets)
         # BBox is [xmin, ymin, zmin, xmax, ymax, zmax]
         center_x = (bbox[0] + bbox[3]) / 2.0
         min_y = bbox[1]
         center_z = (bbox[2] + bbox[5]) / 2.0
 
-        self.contact_locator = pm.spaceLocator(name=f"{self.target}_contact_loc")
+        self.contact_locator = pm.spaceLocator(name=f"{self._name_base}_contact_loc")
         self.contact_locator.translate.set(center_x, min_y, center_z)
         self.contact_locator.localScale.set(0.2, 0.2, 0.2)
 
-        # Parent to target so it moves/animates with it
-        pm.parent(self.contact_locator, self.target)
+        # Parent to first target so it moves/animates with it
+        pm.parent(self.contact_locator, self.targets[0])
 
         return self.contact_locator
 
-    def get_or_create_shadow_source(self, position=(5, 10, 5), force_new=False):
+    def get_or_create_shadow_source(
+        self, position=(5, 10, 5), source_name="shadow_source"
+    ):
         """Get existing shadow source or create a new one.
 
         Args:
             position: Initial position if creating new.
-            force_new: If True, creates a unique source for this target.
-                       If False, reuses 'shadow_source' if it exists.
+            source_name: Name for the shadow source locator.
         """
-        source_name = "shadow_source"
-
-        if not force_new and pm.objExists(source_name):
+        if pm.objExists(source_name):
             self.light = pm.PyNode(source_name)
             print(f"Using existing shadow source: {self.light}")
         else:
-            name = f"{self.target}_shadow_source" if force_new else source_name
-            self.light = pm.spaceLocator(name=name)
+            self.light = pm.spaceLocator(name=source_name)
             self.light.translate.set(position)
             self.light.localScale.set(1, 1, 1)
 
@@ -83,17 +103,17 @@ class ShadowRig(ptk.LoggingMixin):
 
     def create_shadow_plane(self):
         """Create a simple quad for the shadow with pivot at near edge."""
-        if not self.target:
-            raise ValueError("Target object required")
+        if not self.targets:
+            raise ValueError("Target object(s) required")
 
-        # Get object footprint size
-        bbox = pm.exactWorldBoundingBox(self.target)
-        width = (bbox[3] - bbox[0]) * 1.5
-        depth = (bbox[5] - bbox[2]) * 1.5
-        self.plane_size = max(width, depth, 2.0)
+        # Get combined footprint size from all targets
+        bbox = pm.exactWorldBoundingBox(self.targets)
+        width = (bbox[3] - bbox[0]) * 1.1
+        depth = (bbox[5] - bbox[2]) * 1.1
+        self.plane_size = max(width, depth, 1.0)
 
         self.shadow_plane = pm.polyPlane(
-            name=f"{self.target}_shadow",
+            name=f"{self._name_base}_shadow",
             width=self.plane_size,
             height=self.plane_size,
             sx=1,
@@ -134,25 +154,26 @@ class ShadowRig(ptk.LoggingMixin):
                 dv=0.0,
                 k=True,
             )
+        # Store base plane size for expression calculations
+        if not pm.attributeQuery("basePlaneSize", node=self.shadow_plane, exists=True):
+            pm.addAttr(
+                self.shadow_plane,
+                ln="basePlaneSize",
+                at="float",
+                dv=self.plane_size,
+                k=False,
+            )
+        self.shadow_plane.basePlaneSize.set(self.plane_size)
 
-        # Move pivot to the near edge (negative Z edge in local space)
-        pm.xform(
-            self.shadow_plane, pivots=[0, 0, -self.plane_size / 2], objectSpace=True
-        )
-
-        # Bake the pivot offset into the vertices
-        pm.select(self.shadow_plane.vtx[:])
-        pm.move(0, 0, self.plane_size / 2, relative=True, objectSpace=True)
-        pm.select(clear=True)
-
-        # Reset pivot to origin
+        # Keep plane centered - pivot at center, vertices centered around origin
+        # The expression handles positioning based on light direction
         pm.xform(self.shadow_plane, pivots=[0, 0, 0], objectSpace=True)
 
-        # Position at target
-        target_pos = self.target.getTranslation(space="world")
-        self.shadow_plane.translate.set(
-            target_pos[0], self.ground_height + 0.01, target_pos[2]
-        )
+        # Position at combined targets center
+        bbox = pm.exactWorldBoundingBox(self.targets)
+        center_x = (bbox[0] + bbox[3]) / 2.0
+        center_z = (bbox[2] + bbox[5]) / 2.0
+        self.shadow_plane.translate.set(center_x, self.ground_height + 0.01, center_z)
 
         return self.shadow_plane
 
@@ -169,11 +190,11 @@ class ShadowRig(ptk.LoggingMixin):
         output_dir = os.path.join(workspace, "sourceimages")
         os.makedirs(output_dir, exist_ok=True)
 
-        texture_name = f"{self.target}_shadow.png"
+        texture_name = f"{self._name_base}_shadow.png"
         self.texture_path = os.path.join(output_dir, texture_name)
 
-        # Get mesh bounds
-        bbox = pm.exactWorldBoundingBox(self.target)
+        # Get combined mesh bounds from all targets
+        bbox = pm.exactWorldBoundingBox(self.targets)
 
         # Auto-detect best axis if requested
         if axis == "auto":
@@ -213,24 +234,33 @@ class ShadowRig(ptk.LoggingMixin):
             pv = int((1.0 - ((v - v_center) / extent + 0.5)) * size)
             return [np.clip(pu, 0, size - 1), np.clip(pv, 0, size - 1)]
 
-        # Get all mesh shapes using Maya API for speed
-        if recursive:
-            shapes = (
-                pm.listRelatives(self.target, shapes=True, ad=True, type="mesh") or []
-            )
-        else:
-            shapes = pm.listRelatives(self.target, shapes=True, type="mesh") or []
+        # Gather all mesh shapes from all targets
+        shapes = []
+        for target in self.targets:
+            if recursive:
+                target_shapes = (
+                    pm.listRelatives(target, shapes=True, ad=True, type="mesh") or []
+                )
+            else:
+                target_shapes = pm.listRelatives(target, shapes=True, type="mesh") or []
 
-        if not shapes:
-            shape = self.target.getShape() if hasattr(self.target, "getShape") else None
-            if shape:
-                shapes = [shape]
+            if not target_shapes:
+                shape = target.getShape() if hasattr(target, "getShape") else None
+                if shape:
+                    target_shapes = [shape]
+
+            shapes.extend(target_shapes)
 
         for shape in shapes:
             try:
+                # Use full path to ensure uniqueness
+                shape_path = (
+                    shape.fullPath() if hasattr(shape, "fullPath") else str(shape)
+                )
+
                 # Get the dag path for the shape
                 sel_list = om2.MSelectionList()
-                sel_list.add(str(shape))
+                sel_list.add(shape_path)
                 dag_path = sel_list.getDagPath(0)
 
                 # Get MFnMesh for fast triangle access
@@ -274,21 +304,23 @@ class ShadowRig(ptk.LoggingMixin):
         mask = cv2.GaussianBlur(mask, (3, 3), 0)
 
         # ---------------------------------------------------------
-        # ANCHORING STEP: Shift silhouette to bottom edge of texture
+        # ANCHORING STEP: DISABLED (Keep texture centered for non-rotating rig)
         # ---------------------------------------------------------
+        # rows_with_content = np.where(mask.max(axis=1) > 0)[0]
+        # if len(rows_with_content) > 0:
+        #     current_bottom = rows_with_content[-1]
+        #     shift_down = (size - 1) - current_bottom
+        #
+        #     if shift_down > 0:
+        #         shifted_mask = np.zeros_like(mask)
+        #         source_slice = mask[0 : current_bottom + 1]
+        #         shifted_mask[shift_down:size] = source_slice
+        #         mask = shifted_mask
+        #
+        #         rows_with_content = np.where(mask.max(axis=1) > 0)[0]
+
+        # Recalculate content rows for gradient
         rows_with_content = np.where(mask.max(axis=1) > 0)[0]
-
-        if len(rows_with_content) > 0:
-            current_bottom = rows_with_content[-1]
-            shift_down = (size - 1) - current_bottom
-
-            if shift_down > 0:
-                shifted_mask = np.zeros_like(mask)
-                source_slice = mask[0 : current_bottom + 1]
-                shifted_mask[shift_down:size] = source_slice
-                mask = shifted_mask
-
-                rows_with_content = np.where(mask.max(axis=1) > 0)[0]
 
         h, w = mask.shape
 
@@ -323,7 +355,9 @@ class ShadowRig(ptk.LoggingMixin):
             combined = np.ones((h, w), dtype=np.float32)
 
         alpha = (mask.astype(np.float32) / 255.0 * combined * 255).astype(np.uint8)
-        alpha = np.flipud(alpha)
+        alpha = np.flipud(
+            alpha
+        )  # Re-enabled flip, as Texture coordinate Y=0 is usually Bottom
 
         result = np.zeros((h, w, 4), dtype=np.uint8)
         result[:, :, 3] = alpha
@@ -419,36 +453,98 @@ class ShadowRig(ptk.LoggingMixin):
         return self.texture_path
 
     def create_material(self):
-        """Create material with the silhouette texture."""
+        """Create material with the silhouette texture.
+
+        Uses Stingray PBS shader for best Unity compatibility.
+        Material properties:
+        - Base color: Black (shadow color)
+        - Opacity: From texture alpha
+        - Metallic: 0
+        - Roughness: 1 (no reflections)
+        - Use Opacity Map: Enabled for transparency
+        """
         if not self.texture_path:
             raise ValueError("Texture not created yet")
 
-        self.shader = pm.shadingNode(
-            "standardSurface", asShader=True, name=f"{self.shadow_plane}_mat"
-        )
-        self.shader.baseColor.set(0, 0, 0)
+        # Try Stingray PBS first (best Unity compatibility)
+        # Falls back to standardSurface if Stingray not available
+        try:
+            self.shader = pm.shadingNode(
+                "StingrayPBS", asShader=True, name=f"{self.shadow_plane}_mat"
+            )
 
-        file_node = pm.shadingNode(
-            "file", asTexture=True, name=f"{self.shadow_plane}_tex"
-        )
-        file_node.fileTextureName.set(self.texture_path)
+            # Set up for transparent shadow
+            self.shader.base_color.set(0, 0, 0)  # Black shadow
+            self.shader.metallic.set(0)  # No metallic
+            self.shader.roughness.set(1)  # Full roughness (no reflections)
 
-        place2d = pm.shadingNode(
-            "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
-        )
-        place2d.outUV >> file_node.uv
-        place2d.outUvFilterSize >> file_node.uvFilterSize
+            # Enable opacity
+            self.shader.use_opacity_map.set(True)
 
-        # Create opacity multiplier controlled by expression
-        self.opacity_mult = pm.shadingNode(
-            "multiplyDivide", asUtility=True, name=f"{self.shadow_plane}_opacity_mult"
-        )
-        file_node.outAlpha >> self.opacity_mult.input1X
-        file_node.outAlpha >> self.opacity_mult.input1Y
-        file_node.outAlpha >> self.opacity_mult.input1Z
+            # Create file node for texture
+            file_node = pm.shadingNode(
+                "file", asTexture=True, name=f"{self.shadow_plane}_tex"
+            )
+            file_node.fileTextureName.set(self.texture_path)
 
-        # Connect to shader opacity
-        self.opacity_mult.output >> self.shader.opacity
+            place2d = pm.shadingNode(
+                "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
+            )
+            place2d.outUV >> file_node.uv
+            place2d.outUvFilterSize >> file_node.uvFilterSize
+
+            # Connect alpha to opacity
+            file_node.outAlpha >> self.shader.opacity_map
+
+            # Create opacity multiplier for expression control
+            self.opacity_mult = pm.shadingNode(
+                "multiplyDivide",
+                asUtility=True,
+                name=f"{self.shadow_plane}_opacity_mult",
+            )
+            file_node.outAlpha >> self.opacity_mult.input1X
+            self.opacity_mult.input2X.set(1.0)  # Will be driven by expression
+
+            # Note: Stingray PBS opacity_map doesn't go through multiply easily,
+            # so we use the overall opacity attribute for expression control
+            # This is simplified - for full control, use a layered shader
+
+            print(f"Created Stingray PBS material (Unity-compatible)")
+
+        except Exception as e:
+            print(f"Stingray PBS not available ({e}), using standardSurface")
+
+            self.shader = pm.shadingNode(
+                "standardSurface", asShader=True, name=f"{self.shadow_plane}_mat"
+            )
+            self.shader.baseColor.set(0, 0, 0)
+            self.shader.specular.set(0)  # No specular
+            self.shader.metalness.set(0)  # No metallic
+            self.shader.specularRoughness.set(1)  # Full roughness
+
+            file_node = pm.shadingNode(
+                "file", asTexture=True, name=f"{self.shadow_plane}_tex"
+            )
+            file_node.fileTextureName.set(self.texture_path)
+
+            place2d = pm.shadingNode(
+                "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
+            )
+            place2d.outUV >> file_node.uv
+            place2d.outUvFilterSize >> file_node.uvFilterSize
+
+            # Create opacity multiplier controlled by expression
+            self.opacity_mult = pm.shadingNode(
+                "multiplyDivide",
+                asUtility=True,
+                name=f"{self.shadow_plane}_opacity_mult",
+            )
+            file_node.outAlpha >> self.opacity_mult.input1X
+            file_node.outAlpha >> self.opacity_mult.input1Y
+            file_node.outAlpha >> self.opacity_mult.input1Z
+
+            # Connect to shader opacity
+            self.opacity_mult.output >> self.shader.opacity
 
         sg = pm.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{self.shader}_SG"
@@ -459,21 +555,36 @@ class ShadowRig(ptk.LoggingMixin):
         return self.shader
 
     def setup_expression(self):
-        """Create expression to warp shadow based on light position."""
+        """Create expression to warp shadow based on light position.
+
+        Dispatches to mode-specific expression builder.
+        """
+        if self.mode == "orbit":
+            self._expr_orbit()
+        else:
+            self._expr_stretch()
+
+    def _expr_orbit(self):
+        """Orbit mode: plane rotates around target to face away from light.
+
+        The shadow plane pivots around the contact point, always pointing
+        away from the light source. Scale stretches based on light angle.
+        """
         expr_name = f"{self.shadow_plane}_expr"
 
-        dm_name = f"{self.target}_contact_dm"
+        dm_name = f"{self._name_base}_contact_dm"
         if pm.objExists(dm_name):
             pm.delete(dm_name)
         dm_node = pm.createNode("decomposeMatrix", name=dm_name)
 
-        source = self.contact_locator if self.contact_locator else self.target
+        source = self.contact_locator if self.contact_locator else self.targets[0]
         source.worldMatrix[0] >> dm_node.inputMatrix
 
         expr_code = f"""
 // ----------------------------------------------------------------------
-// Shadow Projection Logic
+// Shadow Projection Logic (Orbit Mode - Rotating Plane)
 // ----------------------------------------------------------------------
+
 // 1. Get World Positions
 float $Lx = {self.light}.translateX;
 float $Ly = {self.light}.translateY;
@@ -482,78 +593,160 @@ float $Lz = {self.light}.translateZ;
 float $Cx = {dm_node}.outputTranslateX;
 float $Cy = {dm_node}.outputTranslateY;
 float $Cz = {dm_node}.outputTranslateZ;
-
 float $Gy = {self.ground_height};
 
-// 2. Project Contact Point to Ground
-// Calculate intersection 't' where line L->C hits planar height G
-// P = L + t * (C - L)
-float $denom = $Cy - $Ly;
-if (abs($denom) < 0.001) $denom = -0.001; // Safety check (light shouldn't be inside ground)
+// 2. Calculate Direction from Light to Contact
+float $dx = $Cx - $Lx;
+float $dz = $Cz - $Lz;
+float $dist2D = sqrt($dx * $dx + $dz * $dz);
+float $relHeight = max(0.1, $Ly - $Gy);
 
-// t = (Ground - LightY) / (ContactY - LightY)
-float $t = ($Gy - $Ly) / $denom;
+// 3. Calculate Rotation (plane faces away from light)
+float $angle = atan2($dx, $dz);
+float $angleDeg = rad_to_deg($angle);
 
-// Projected Point P (Shadow Origin)
-float $Px = $Lx + $t * ($Cx - $Lx);
-float $Pz = $Lz + $t * ($Cz - $Lz);
+// 4. Calculate Scale (stretch based on light angle)
+float $ratio = $dist2D / $relHeight;
+float $limit = 4.0;
+float $sz = 1.0 + clamp(0, $limit, $ratio);
 
-// 3. Calculate Direction & Rotation
-// Direction from Light to Contact (Ground Projected)
-float $dx = $Px - $Lx;
-float $dz = $Pz - $Lz;
-float $angle = atan2d($dx, $dz);
+// Apply manual scale influence
+float $si = {self.shadow_plane}.scaleInfluence;
+float $baseScale = 1.0;
+if ($si > 0) {{
+    float $hDiff = $Ly - $Cy;
+    if ($hDiff > 0.1)
+        $baseScale = 1.0 + (($Ly / $hDiff) - 1.0) * $si;
+}}
+$baseScale = clamp(0.5, 3.0, $baseScale);
+$sz = $sz * $baseScale;
 
-// 4. Calculate Stretch
-// Simple geometric stretch approximation based on angle of incidence
-// Light Height relative to Contact Height
-float $relLightHeight = max(0.1, $Ly - $Cy); 
-// Horizontal distance from Light to Contact
-float $hDist = sqrt( ($Cx-$Lx)*($Cx-$Lx) + ($Cz-$Lz)*($Cz-$Lz) );
+// 5. Calculate Position (pivot at contact, extend away from light)
+float $size = {self.shadow_plane}.basePlaneSize;
+float $radius = $size * 0.5;
 
-// Stretch Factor: 1.0 = 45 degrees
-float $stretch = 1.0 + ($hDist / $relLightHeight);
-$stretch = clamp(0.5, 8.0, $stretch);
+// Offset along the direction away from light
+float $offsetDist = $radius * ($sz - 1.0);
+float $normX = ($dist2D > 0.001) ? ($dx / $dist2D) : 0;
+float $normZ = ($dist2D > 0.001) ? ($dz / $dist2D) : 1;
 
+float $tx = $Cx + $normX * $offsetDist;
+float $tz = $Cz + $normZ * $offsetDist;
 
-// ----------------------------------------------------------------------
-// Apply Transforms
-// ----------------------------------------------------------------------
+// 6. Apply Transforms
+{self.shadow_plane}.translateX = $tx;
+{self.shadow_plane}.translateZ = $tz;
+{self.shadow_plane}.translateY = $Gy + 0.005;
+{self.shadow_plane}.rotateY = $angleDeg;
+{self.shadow_plane}.scaleX = 1.0;
+{self.shadow_plane}.scaleZ = $sz;
 
-// Position: Shadow pivot sits at the projected contact point on the ground
-{self.shadow_plane}.translateX = $Px;
-{self.shadow_plane}.translateZ = $Pz;
-{self.shadow_plane}.translateY = $Gy + 0.005; // Bias to prevent z-fighting
-
-// Rotation: Point away from light
-{self.shadow_plane}.rotateY = $angle;
-
-// Scale: Apply perspective scale ($t) combined with directional stretch
-// Clamp $t to avoid infinite scaling when object approaches light
-float $rawScale = clamp(0.01, 20.0, $t);
-float $scaleInfluence = {self.shadow_plane}.scaleInfluence;
-
-// Blend between 1.0 (Directional) and $rawScale (Perspective)
-float $scale = 1.0 + ($rawScale - 1.0) * $scaleInfluence;
-
-{self.shadow_plane}.scaleX = $scale;
-{self.shadow_plane}.scaleZ = $scale * $stretch;
-
-
-// ----------------------------------------------------------------------
-// Opacity Falloff
-// ----------------------------------------------------------------------
+// 7. Opacity Falloff
 float $intensity = {self.shadow_plane}.shadowIntensity;
 float $power = {self.shadow_plane}.falloffPower;
 
-// 1. Distance Falloff: Fade out as shadow scales up (object moves away)
-float $distOpacity = $intensity / max(0.001, pow($rawScale, $power));
+float $distOpacity = $intensity / max(0.001, pow($sz, $power));
 
-// 2. Height Fade: Fade out if object goes above light source
-// If ContactY ($Cy) approaches LightY ($Ly), opacity should drop to zero
 float $heightDiff = $Ly - $Cy;
-// Fade out over the last 1.0 unit before hitting light height
-float $heightFade = clamp(0.0, 1.0, $heightDiff); 
+float $heightFade = clamp(0.0, 1.0, $heightDiff);
+
+float $opacity = $distOpacity * $heightFade;
+$opacity = clamp(0.0, 1.0, $opacity);
+
+{self.opacity_mult}.input2X = $opacity;
+{self.opacity_mult}.input2Y = $opacity;
+{self.opacity_mult}.input2Z = $opacity;
+"""
+        if pm.objExists(expr_name):
+            pm.delete(expr_name)
+
+        pm.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
+
+    def _expr_stretch(self):
+        """Stretch mode: plane stays axis-aligned, uses scale + translation.
+
+        The shadow plane never rotates; instead it scales along X and Z
+        independently, with compensatory translation to anchor the "heel"
+        (the edge facing the light) at the contact point.
+        """
+        expr_name = f"{self.shadow_plane}_expr"
+
+        dm_name = f"{self._name_base}_contact_dm"
+        if pm.objExists(dm_name):
+            pm.delete(dm_name)
+        dm_node = pm.createNode("decomposeMatrix", name=dm_name)
+
+        source = self.contact_locator if self.contact_locator else self.targets[0]
+        source.worldMatrix[0] >> dm_node.inputMatrix
+
+        expr_code = f"""
+// ----------------------------------------------------------------------
+// Shadow Projection Logic (Stretch Mode - Axis-Aligned, Compensatory Translation)
+// ----------------------------------------------------------------------
+
+// 1. Get World Positions
+float $Lx = {self.light}.translateX;
+float $Ly = {self.light}.translateY;
+float $Lz = {self.light}.translateZ;
+
+float $Cx = {dm_node}.outputTranslateX;
+float $Cy = {dm_node}.outputTranslateY;
+float $Cz = {dm_node}.outputTranslateZ;
+float $Gy = {self.ground_height};
+
+// 2. Calculate Directions and Ratios
+float $dx = $Cx - $Lx;
+float $dz = $Cz - $Lz;
+float $relHeight = max(0.1, $Ly - $Gy);
+
+float $rx = abs($dx) / $relHeight;
+float $rz = abs($dz) / $relHeight;
+
+// 3. Calculate Scales
+float $limit = 4.0;
+float $sx = 1.0 + clamp(0, $limit, $rx);
+float $sz = 1.0 + clamp(0, $limit, $rz);
+
+// Apply manual scale influence
+float $si = {self.shadow_plane}.scaleInfluence;
+float $baseScale = 1.0;
+if ($si > 0) {{
+    float $hDiff = $Ly - $Cy;
+    if ($hDiff > 0.1)
+        $baseScale = 1.0 + (($Ly / $hDiff) - 1.0) * $si;
+}}
+$baseScale = clamp(0.5, 3.0, $baseScale);
+
+$sx = $sx * $baseScale;
+$sz = $sz * $baseScale;
+
+// 4. Compensatory Translation (Virtual Pivot Logic)
+float $size = {self.shadow_plane}.basePlaneSize;
+float $radius = $size * 0.5;
+
+float $px = ($dx > 0) ? -$radius : $radius;
+float $pz = ($dz > 0) ? -$radius : $radius;
+
+float $tx = $px * (1.0 - $sx);
+float $tz = $pz * (1.0 - $sz);
+
+// 5. Apply Transforms
+{self.shadow_plane}.translateX = $Cx + $tx;
+{self.shadow_plane}.translateZ = $Cz + $tz;
+{self.shadow_plane}.translateY = $Gy + 0.005;
+{self.shadow_plane}.rotateY = 0;
+{self.shadow_plane}.scaleX = $sx;
+{self.shadow_plane}.scaleZ = $sz;
+
+// 6. Opacity Falloff
+float $intensity = {self.shadow_plane}.shadowIntensity;
+float $power = {self.shadow_plane}.falloffPower;
+float $maxStretch = max($sx, $sz);
+
+float $distOpacity = $intensity / max(0.001, pow($maxStretch, $power));
+
+float $heightDiff = $Ly - $Cy;
+float $heightFade = clamp(0.0, 1.0, $heightDiff);
 
 float $opacity = $distOpacity * $heightFade;
 $opacity = clamp(0.0, 1.0, $opacity);
@@ -570,17 +763,19 @@ $opacity = clamp(0.0, 1.0, $opacity);
     @classmethod
     def create(
         cls,
-        target,
+        targets,
         light_pos=(5, 10, 5),
         texture_res=512,
         axis="auto",
-        new_source=False,
+        source_name="shadow_source",
         recursive=True,
+        mode="stretch",
     ):
         """Create a projected shadow for Unity export.
 
         Args:
-            target: Object to cast shadow from
+            targets: Object(s) to cast shadow from. Can be a single object
+                     or a list of objects for a combined shadow.
             light_pos: Initial position for light locator
             texture_res: Resolution of silhouette texture
             axis: Silhouette projection axis:
@@ -588,15 +783,18 @@ $opacity = clamp(0.0, 1.0, $opacity);
                   'z' = front/back view
                   'x' = side view
                   'y' = top-down view
-            new_source: If True, creates a unique shadow source for this rig.
-                        If False, reuses the global 'shadow_source'.
+            source_name: Name for the shadow source locator. Use different
+                         names to create separate sources.
             recursive: If True, include descendant meshes in shadow.
+            mode: Rig behavior mode:
+                  'orbit' = plane rotates around target to face away from light
+                  'stretch' = plane stays axis-aligned, scales + translates (default)
 
         Returns:
             ShadowRig instance
         """
-        shadow = cls(target=target)
-        shadow.get_or_create_shadow_source(position=light_pos, force_new=new_source)
+        shadow = cls(targets=targets, mode=mode)
+        shadow.get_or_create_shadow_source(position=light_pos, source_name=source_name)
         shadow.create_contact_locator()
         shadow.create_shadow_plane()
         shadow.create_silhouette_texture(
@@ -605,15 +803,13 @@ $opacity = clamp(0.0, 1.0, $opacity);
         shadow.create_material()
         shadow.setup_expression()
 
-        grp = pm.group(empty=True, name=f"{target}_shadow_grp")
+        grp = pm.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
         pm.parent(shadow.shadow_plane, grp)
+        # contact_locator stays on first target
 
-        # Only parent the source if it's unique to this rig
-        if new_source:
-            pm.parent(shadow.light, grp)
-        # contact_locator stays on target
-
-        print(f"\nCreated shadow for {target}")
+        target_names = ", ".join(str(t) for t in shadow.targets)
+        print(f"\nCreated shadow for: {target_names}")
+        print(f"  Mode: {shadow.mode}")
         print(f"  Source: {shadow.light}")
         print(f"  Shadow: {shadow.shadow_plane}")
         print(f"  Texture: {shadow.texture_path}")
@@ -635,17 +831,26 @@ class ShadowRigSlots:
 
         # Connect UI elements
         self.ui.b000.clicked.connect(self.create_shadow)
+        self.ui.b001.clicked.connect(self.b001)
 
+    def b001(self):
+        """Reset to Defaults: Resets all UI widgets to their default values."""
+        self.ui.state.reset_all()
+
+    @CoreUtils.undoable
     def create_shadow(self):
-        """Create projected shadow for selected object."""
+        """Create projected shadow for selected objects."""
         sel = pm.selected()
         if not sel:
-            self.sb.message_box("Please select a target object.")
+            self.sb.message_box("Please select target object(s).")
             return
 
-        target = sel[0]
-        resolution = self.ui.s000.value()
-        new_source = self.ui.chk_new_source.isChecked()
+        # Pass all selected objects for a combined shadow
+        targets = list(sel)
+        # Resolution combobox: extract numeric value from text like "Resolution: 512"
+        res_text = self.ui.s000.currentText()
+        resolution = int(res_text.replace("Resolution: ", ""))
+        source_name = self.ui.txt_source.text().strip() or "shadow_source"
         recursive = self.ui.chk_combine.isChecked()
 
         # Axis combobox: 0=Auto, 1=X, 2=Y, 3=Z
@@ -653,15 +858,27 @@ class ShadowRigSlots:
         axis_map = {0: "auto", 1: "x", 2: "y", 3: "z"}
         axis = axis_map.get(axis_idx, "auto")
 
+        # Mode combobox: 0=Stretch, 1=Orbit
+        mode_idx = self.ui.cmb_mode.currentIndex()
+        mode_map = {0: "stretch", 1: "orbit"}
+        mode = mode_map.get(mode_idx, "stretch")
+
         try:
             ShadowRig.create(
-                target,
+                targets,
                 texture_res=resolution,
                 axis=axis,
-                new_source=new_source,
+                source_name=source_name,
                 recursive=recursive,
+                mode=mode,
             )
-            self.sb.message_box(f"Created shadow for {target}")
+            count = len(targets)
+            msg = (
+                f"Created shadow for {count} object(s)"
+                if count > 1
+                else f"Created shadow for {targets[0]}"
+            )
+            self.sb.message_box(msg)
         except Exception as e:
             self.sb.message_box(f"Error creating shadow: {e}")
             import traceback
@@ -672,6 +889,6 @@ class ShadowRigSlots:
 if __name__ == "__main__":
     sel = pm.selected()
     if not sel:
-        print("Select an object first.")
+        print("Select object(s) first.")
     else:
-        ShadowRig.create(sel[0])
+        ShadowRig.create(sel)

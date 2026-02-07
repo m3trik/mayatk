@@ -1062,6 +1062,159 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             return sorted_times
 
     @staticmethod
+    def get_driver_animation_range(
+        node: str,
+        driver_type: str = "auto",
+    ) -> List[float]:
+        """Get keyframe times from a driver node's animation or its targets.
+
+        Traces through different driver types (constraints, driven keys,
+        expressions, IK, motion paths) to find the animation range of
+        the ultimate source.
+
+        Parameters:
+            node: The driver node to query.
+            driver_type: The type of driver. Options:
+                - "auto": Auto-detect the node type
+                - "constraint": Query constraint target animation
+                - "driven_key": Query the driver of the SDK
+                - "expression": Query expression input animation
+                - "ik": Query IK handle/pole vector animation
+                - "motion_path": Query uValue animation
+
+        Returns:
+            List of keyframe times from the driver's animation.
+            Empty list if no animation found.
+
+        Example:
+            >>> times = AnimUtils.get_driver_animation_range("pCube1_parentConstraint1")
+            >>> print(min(times), max(times))  # 1.0 100.0
+        """
+        import maya.cmds as cmds
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        times: List[float] = []
+
+        # Auto-detect driver type
+        if driver_type == "auto":
+            if NodeUtils.is_constraint(node):
+                driver_type = "constraint"
+            elif NodeUtils.is_expression(node):
+                driver_type = "expression"
+            elif cmds.nodeType(node).startswith("animCurve"):
+                if NodeUtils.is_driven_key_curve(node):
+                    driver_type = "driven_key"
+                else:
+                    driver_type = "keyframe"
+            elif cmds.nodeType(node) == "ikHandle":
+                driver_type = "ik"
+            elif NodeUtils.is_ik_effector(node):
+                driver_type = "ik"
+            elif cmds.nodeType(node) == "motionPath":
+                driver_type = "motion_path"
+            else:
+                driver_type = "unknown"
+
+        if driver_type == "constraint":
+            targets = NodeUtils.get_constraint_targets(node)
+            for target in targets:
+                curves = (
+                    cmds.listConnections(
+                        target, type="animCurve", source=True, destination=False
+                    )
+                    or []
+                )
+                for curve in curves:
+                    key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                    if key_times:
+                        times.extend(key_times)
+
+        elif driver_type == "driven_key":
+            input_conn = (
+                cmds.listConnections(
+                    f"{node}.input", source=True, destination=False, plugs=True
+                )
+                or []
+            )
+            for inp in input_conn:
+                driver_obj = inp.split(".")[0]
+                curves = (
+                    cmds.listConnections(
+                        driver_obj, type="animCurve", source=True, destination=False
+                    )
+                    or []
+                )
+                for curve in curves:
+                    key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                    if key_times:
+                        times.extend(key_times)
+
+        elif driver_type == "expression":
+            inputs = cmds.listConnections(node, source=True, destination=False) or []
+            for related in inputs:
+                curves = (
+                    cmds.listConnections(
+                        related, type="animCurve", source=True, destination=False
+                    )
+                    or []
+                )
+                for curve in curves:
+                    key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                    if key_times:
+                        times.extend(key_times)
+
+        elif driver_type == "ik":
+            handles = cmds.listConnections(node, type="ikHandle", source=True) or []
+            if cmds.nodeType(node) == "ikHandle":
+                handles = [node]
+            for handle in handles:
+                curves = (
+                    cmds.listConnections(
+                        handle, type="animCurve", source=True, destination=False
+                    )
+                    or []
+                )
+                for curve in curves:
+                    key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                    if key_times:
+                        times.extend(key_times)
+                # Check pole vector constraint targets
+                pv_constraint = cmds.listConnections(
+                    f"{handle}.poleVectorX", source=True, destination=False
+                )
+                if pv_constraint:
+                    for pv in pv_constraint:
+                        pv_curves = (
+                            cmds.listConnections(
+                                pv, type="animCurve", source=True, destination=False
+                            )
+                            or []
+                        )
+                        for curve in pv_curves:
+                            key_times = cmds.keyframe(
+                                curve, query=True, timeChange=True
+                            )
+                            if key_times:
+                                times.extend(key_times)
+
+        elif driver_type == "motion_path":
+            u_curves = (
+                cmds.listConnections(f"{node}.uValue", type="animCurve", source=True)
+                or []
+            )
+            for curve in u_curves:
+                key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                if key_times:
+                    times.extend(key_times)
+
+        elif driver_type == "keyframe":
+            key_times = cmds.keyframe(node, query=True, timeChange=True)
+            if key_times:
+                times.extend(key_times)
+
+        return times
+
+    @staticmethod
     def get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]:
         """Get tangent information (in and out angles and weights) for a given attribute at a specific time.
 
@@ -3827,6 +3980,217 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             "actual_offset": actual_offset,
             "earliest_key": earliest_key,
         }
+
+    @staticmethod
+    def create_animation_layer(
+        name: str = "AnimLayer",
+        override: bool = True,
+        additive: bool = False,
+        attributes: Optional[List[str]] = None,
+        objects: Optional[List[str]] = None,
+        weight: float = 1.0,
+        mute: bool = False,
+        solo: bool = False,
+        lock: bool = False,
+        preferred: bool = True,
+        parent: Optional[str] = None,
+        unique_name: bool = True,
+        timestamp_suffix: bool = False,
+        color: Optional[Tuple[float, float, float]] = None,
+    ) -> str:
+        """Create an animation layer with flexible configuration options.
+
+        Creates a new animation layer and optionally adds attributes/objects to it.
+        Handles unique naming, hierarchy, and layer properties.
+
+        Parameters:
+            name: Base name for the layer. Will be made unique if unique_name=True.
+            override: If True, creates an override layer (replaces base animation).
+                If False, creates an additive layer (adds to base animation).
+            additive: Explicit additive mode. If True, sets override=False.
+            attributes: List of attribute paths (e.g., ["pCube1.tx", "pCube1.ry"])
+                to add to the layer. These attributes will be animatable on this layer.
+            objects: List of objects to add all keyable attributes from.
+                Shorthand for adding all keyable attrs of each object.
+            weight: Layer weight (0.0 to 1.0). Default is 1.0 (full influence).
+            mute: If True, mute the layer (disable its effect).
+            solo: If True, solo the layer (only this layer affects playback).
+            lock: If True, lock the layer (prevent editing).
+            preferred: If True, set as the preferred/selected layer for editing.
+            parent: Name of parent layer. If None, uses the root (BaseAnimation).
+            unique_name: If True, ensures layer name is unique by appending
+                a counter if necessary (e.g., "MyLayer", "MyLayer_1", "MyLayer_2").
+            timestamp_suffix: If True, appends timestamp to name for uniqueness
+                (e.g., "MyLayer_20260203_143052"). Overrides unique_name counter.
+            color: Optional RGB tuple (0-1 range) for layer display color in editor.
+
+        Returns:
+            The actual name of the created layer (may differ from input if
+            unique_name=True and name collision occurred).
+
+        Raises:
+            RuntimeError: If layer creation fails.
+
+        Example:
+            >>> # Simple override layer
+            >>> layer = AnimUtils.create_animation_layer("BakeLayer", override=True)
+
+            >>> # Additive layer with specific attributes
+            >>> layer = AnimUtils.create_animation_layer(
+            ...     "Offset",
+            ...     additive=True,
+            ...     attributes=["pCube1.translateY", "pCube1.rotateZ"],
+            ...     weight=0.5,
+            ... )
+
+            >>> # Layer for multiple objects
+            >>> layer = AnimUtils.create_animation_layer(
+            ...     "CharacterLayer",
+            ...     objects=["joint1", "joint2", "joint3"],
+            ...     timestamp_suffix=True,
+            ... )
+
+            >>> # Muted layer for comparison
+            >>> layer = AnimUtils.create_animation_layer(
+            ...     "Alternate", mute=True, preferred=False
+            ... )
+        """
+        import maya.cmds as cmds
+        import time as time_module
+
+        # Handle additive shorthand
+        if additive:
+            override = False
+
+        # Build unique layer name
+        layer_name = name
+        if timestamp_suffix:
+            timestamp = time_module.strftime("%Y%m%d_%H%M%S")
+            layer_name = f"{name}_{timestamp}"
+
+        if unique_name:
+            base_name = layer_name
+            counter = 1
+            while cmds.objExists(layer_name):
+                layer_name = f"{base_name}_{counter}"
+                counter += 1
+
+        # Create the layer
+        layer = cmds.animLayer(layer_name, override=override)
+
+        # Set layer properties
+        if weight != 1.0:
+            cmds.animLayer(layer, edit=True, weight=weight)
+
+        if mute:
+            cmds.animLayer(layer, edit=True, mute=True)
+
+        if solo:
+            cmds.animLayer(layer, edit=True, solo=True)
+
+        if lock:
+            cmds.animLayer(layer, edit=True, lock=True)
+
+        if preferred:
+            cmds.animLayer(layer, edit=True, preferred=True)
+
+        if parent:
+            cmds.animLayer(layer, edit=True, parent=parent)
+
+        if color:
+            try:
+                cmds.animLayer(layer, edit=True, override=override)
+                # Note: animLayer doesn't directly support color, but we can
+                # set it via the node's attribute if it exists
+                if cmds.attributeQuery("ghostColor", node=layer, exists=True):
+                    cmds.setAttr(f"{layer}.ghostColor", *color, type="float3")
+            except RuntimeError:
+                pass  # Color setting may not be supported
+
+        # Add attributes from objects (all keyable attributes)
+        if objects:
+            for obj in objects:
+                if not cmds.objExists(obj):
+                    continue
+                keyable_attrs = cmds.listAttr(obj, keyable=True) or []
+                for attr in keyable_attrs:
+                    attr_path = f"{obj}.{attr}"
+                    try:
+                        cmds.animLayer(layer, edit=True, attribute=attr_path)
+                    except RuntimeError:
+                        pass  # Attribute may not be animatable
+
+        # Add explicit attributes
+        if attributes:
+            for attr_path in attributes:
+                try:
+                    cmds.animLayer(layer, edit=True, attribute=attr_path)
+                except RuntimeError:
+                    pass  # Attribute may not exist or not be animatable
+
+        return layer
+
+    @staticmethod
+    def get_animation_layers(
+        include_base: bool = False,
+        muted_only: bool = False,
+        active_only: bool = False,
+    ) -> List[str]:
+        """Get all animation layers in the scene.
+
+        Parameters:
+            include_base: If True, includes the BaseAnimation layer.
+            muted_only: If True, returns only muted layers.
+            active_only: If True, returns only non-muted layers.
+
+        Returns:
+            List of animation layer names.
+        """
+        import maya.cmds as cmds
+
+        layers = cmds.ls(type="animLayer") or []
+
+        if not include_base:
+            layers = [l for l in layers if l != "BaseAnimation"]
+
+        if muted_only:
+            layers = [l for l in layers if cmds.animLayer(l, query=True, mute=True)]
+        elif active_only:
+            layers = [l for l in layers if not cmds.animLayer(l, query=True, mute=True)]
+
+        return layers
+
+    @staticmethod
+    def delete_animation_layer(
+        layer: str,
+        merge_to_base: bool = False,
+    ) -> bool:
+        """Delete an animation layer.
+
+        Parameters:
+            layer: Name of the layer to delete.
+            merge_to_base: If True, merges the layer's animation to the base
+                layer before deleting. If False, animation is discarded.
+
+        Returns:
+            True if layer was deleted successfully, False otherwise.
+        """
+        import maya.cmds as cmds
+
+        if not cmds.objExists(layer):
+            return False
+
+        try:
+            if merge_to_base:
+                cmds.bakeResults(
+                    cmds.animLayer(layer, query=True, affectedLayers=True) or [],
+                    destinationLayer="BaseAnimation",
+                    removeBakedAttributeFromLayer=True,
+                )
+            cmds.delete(layer)
+            return True
+        except RuntimeError:
+            return False
 
 
 # -----------------------------------------------------------------------------

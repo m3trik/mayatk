@@ -15,6 +15,10 @@ from mayatk.core_utils._core_utils import CoreUtils
 class NodeUtils(ptk.HelpMixin):
     """ """
 
+    # -------------------------------------------------------------------------
+    # Type Classification
+    # -------------------------------------------------------------------------
+
     @classmethod
     def get_type(cls, objects: Union[str, Any, List[Any]]) -> Union[str, List[str]]:
         """Get the object type as a string.
@@ -43,6 +47,31 @@ class NodeUtils(ptk.HelpMixin):
             print(obj.name(), typ)
 
         return ptk.format_return(types, objects)
+
+    @staticmethod
+    def get_inherited_types(node: str) -> List[str]:
+        """Get the inheritance hierarchy for a node type.
+
+        Uses cmds.nodeType with inherited=True to return all parent types
+        in the node's inheritance chain.
+
+        Parameters:
+            node: The node name to query.
+
+        Returns:
+            List of inherited type names (lowercase), or empty list if query fails.
+
+        Example:
+            >>> NodeUtils.get_inherited_types("parentConstraint1")
+            ['constraint', 'transform', 'dagnode', 'entity', ...]
+        """
+        import maya.cmds as cmds
+
+        try:
+            inherited = cmds.nodeType(node, inherited=True) or []
+            return [t.lower() for t in inherited]
+        except Exception:
+            return []
 
     @staticmethod
     def is_mesh(objects, filter: bool = False):
@@ -137,6 +166,402 @@ class NodeUtils(ptk.HelpMixin):
         if filter:
             return [obj for obj, is_geom in zip(objs, result) if is_geom]
         return ptk.format_return(result, objects)
+
+    @staticmethod
+    def is_constraint(objects, filter: bool = False):
+        """Determine if each object inherits from Maya's constraint base type.
+
+        Uses Maya's node inheritance hierarchy to detect all constraint types
+        (parentConstraint, pointConstraint, orientConstraint, etc.) dynamically.
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are constraints.
+
+        Returns:
+            (bool/list) Boolean(s) indicating constraint status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                inherited = cmds.nodeType(obj, inherited=True) or []
+                is_const = "constraint" in [t.lower() for t in inherited]
+            except Exception:
+                is_const = False
+            result.append(is_const)
+        if filter:
+            return [obj for obj, is_c in zip(objs, result) if is_c]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_expression(objects, filter: bool = False):
+        """Determine if each object is a Maya expression node.
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are expressions.
+
+        Returns:
+            (bool/list) Boolean(s) indicating expression status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                is_expr = cmds.nodeType(obj) == "expression"
+            except Exception:
+                is_expr = False
+            result.append(is_expr)
+        if filter:
+            return [obj for obj, is_e in zip(objs, result) if is_e]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_ik_effector(objects, filter: bool = False):
+        """Determine if each object is an IK effector node.
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the objects that are IK effectors.
+
+        Returns:
+            (bool/list) Boolean(s) indicating IK effector status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                is_ik = cmds.nodeType(obj) == "ikEffector"
+            except Exception:
+                is_ik = False
+            result.append(is_ik)
+        if filter:
+            return [obj for obj, is_i in zip(objs, result) if is_i]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_driven_key_curve(objects, filter: bool = False):
+        """Determine if each animCurve is a driven key (has input connection).
+
+        Driven keys have an input connection to their .input attribute,
+        while time-based animation curves have no input connection.
+
+        Parameters:
+            objects (str/list): The animCurve node(s) to query.
+            filter (bool): If True, return only driven key curves.
+
+        Returns:
+            (bool/list) Boolean(s) indicating driven key status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                input_conn = cmds.listConnections(
+                    f"{obj}.input", source=True, destination=False
+                )
+                is_driven = bool(input_conn)
+            except Exception:
+                is_driven = False
+            result.append(is_driven)
+        if filter:
+            return [obj for obj, is_d in zip(objs, result) if is_d]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_muted(objects, filter: bool = False):
+        """Determine if each node is muted/disabled via nodeState attribute.
+
+        Checks the nodeState attribute where 0=Normal, 1=PassThrough, 2=Blocking.
+        Returns True if nodeState is not 0 (Normal).
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the muted objects.
+
+        Returns:
+            (bool/list) Boolean(s) indicating muted status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                if cmds.attributeQuery("nodeState", node=obj, exists=True):
+                    state = cmds.getAttr(f"{obj}.nodeState")
+                    is_muted = state != 0
+                else:
+                    is_muted = False
+            except Exception:
+                is_muted = False
+            result.append(is_muted)
+        if filter:
+            return [obj for obj, is_m in zip(objs, result) if is_m]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_motion_path(objects, filter: bool = False):
+        """Determine if each object is a motionPath node.
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the motion path objects.
+
+        Returns:
+            (bool/list) Boolean(s) indicating motion path status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                is_mp = cmds.nodeType(obj) == "motionPath"
+            except Exception:
+                is_mp = False
+            result.append(is_mp)
+        if filter:
+            return [obj for obj, is_m in zip(objs, result) if is_m]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def is_ik_handle(objects, filter: bool = False):
+        """Determine if each object is an ikHandle node.
+
+        Parameters:
+            objects (str/list): The object(s) to query.
+            filter (bool): If True, return only the IK handle objects.
+
+        Returns:
+            (bool/list) Boolean(s) indicating IK handle status, or filtered list.
+        """
+        import maya.cmds as cmds
+
+        objs = (
+            cmds.ls(objects, flatten=True) if not isinstance(objects, list) else objects
+        )
+        single = not isinstance(objects, (list, tuple))
+        result = []
+        for obj in objs:
+            try:
+                is_ikh = cmds.nodeType(obj) == "ikHandle"
+            except Exception:
+                is_ikh = False
+            result.append(is_ikh)
+        if filter:
+            return [obj for obj, is_i in zip(objs, result) if is_i]
+        return result[0] if single and len(result) == 1 else result
+
+    @staticmethod
+    def get_constraint_targets(constraint: str) -> list:
+        """Get the target objects for a constraint node.
+
+        Works with all constraint types (parentConstraint, pointConstraint,
+        orientConstraint, scaleConstraint, aimConstraint, etc.).
+
+        Parameters:
+            constraint: The constraint node name.
+
+        Returns:
+            List of target transform names. Empty list if no targets found.
+
+        Example:
+            >>> NodeUtils.get_constraint_targets("pCube1_parentConstraint1")
+            ['pSphere1', 'pCylinder1']
+        """
+        import maya.cmds as cmds
+
+        targets = []
+        try:
+            # Most constraints have a targetList via .target attribute
+            target_list = cmds.listConnections(
+                f"{constraint}.target", source=True, destination=False
+            )
+            if target_list:
+                targets.extend(target_list)
+        except Exception:
+            pass
+
+        # Also check for direct transform connections
+        try:
+            direct = (
+                cmds.listConnections(
+                    constraint, source=True, destination=False, type="transform"
+                )
+                or []
+            )
+            targets.extend(direct)
+        except Exception:
+            pass
+
+        return list(set(targets))
+
+    @classmethod
+    def trace_upstream_connection(
+        cls,
+        plug: str,
+        passthrough_types: set = None,
+        visited: set = None,
+    ) -> tuple:
+        """Trace upstream through passthrough nodes to find the true driver.
+
+        Recursively traces through intermediate utility nodes (pairBlend,
+        unitConversion, multiplyDivide, etc.) to find the actual source node
+        driving an attribute.
+
+        Parameters:
+            plug: The destination plug to trace from (e.g., "pCube1.translateX").
+            passthrough_types: Set of node types to trace through. If None,
+                uses a default set of common utility node types.
+            visited: Internal set for cycle detection. Do not pass externally.
+
+        Returns:
+            Tuple of (source_node, source_type) where source_type is one of:
+            - "constraint": A constraint node
+            - "expression": An expression node
+            - "driven_key": An animCurve with input connection (SDK)
+            - "keyframe": An animCurve driven by time
+            - "ik": An ikHandle or ikEffector
+            - "motion_path": A motionPath node
+            - Or the raw nodeType string for unrecognized types
+            Returns (None, None) if no upstream connection found.
+
+        Example:
+            >>> source, source_type = NodeUtils.trace_upstream_connection("pCube1.tx")
+            >>> print(source_type)  # 'constraint'
+        """
+        import maya.cmds as cmds
+
+        if passthrough_types is None:
+            passthrough_types = {
+                # Blend nodes
+                "pairBlend",
+                "blendWeighted",
+                "blendColors",
+                "blendTwoAttr",
+                # Unit/type conversion
+                "unitConversion",
+                "unitToTimeConversion",
+                "timeToUnitConversion",
+                # Math utility nodes
+                "reverse",
+                "multiplyDivide",
+                "plusMinusAverage",
+                "addDoubleLinear",
+                "multDoubleLinear",
+                # Conditional/remapping
+                "condition",
+                "remapValue",
+                "clamp",
+                "setRange",
+                # Animation layer blend nodes
+                "animBlendNodeAdditive",
+                "animBlendNodeAdditiveDA",
+                "animBlendNodeAdditiveRotation",
+                "animBlendNodeAdditiveScale",
+                "animBlendNodeAdditiveDL",
+                "animBlendNodeBase",
+            }
+
+        if visited is None:
+            visited = set()
+
+        if plug in visited:
+            return None, None
+        visited.add(plug)
+
+        sources = cmds.listConnections(plug, source=True, destination=False) or []
+        if not sources:
+            return None, None
+
+        source = sources[0]
+        node_type = cmds.nodeType(source)
+
+        # Trace through intermediate nodes
+        if node_type in passthrough_types:
+            input_plugs = (
+                cmds.listConnections(source, source=True, destination=False, plugs=True)
+                or []
+            )
+            for inp in input_plugs:
+                inp_node = inp.split(".")[0]
+                if inp_node in visited:
+                    continue
+
+                inp_type = cmds.nodeType(inp_node)
+
+                # Check if this source is a recognizable driver type
+                if cls.is_constraint(inp_node):
+                    return inp_node, "constraint"
+                if cls.is_expression(inp_node):
+                    return inp_node, "expression"
+                if inp_type.startswith("animCurve"):
+                    if cls.is_driven_key_curve(inp_node):
+                        return inp_node, "driven_key"
+                    return inp_node, "keyframe"
+                if cls.is_ik_effector(inp_node):
+                    return inp_node, "ik"
+                if inp_type == "motionPath":
+                    return inp_node, "motion_path"
+                if inp_type == "ikHandle":
+                    return inp_node, "ik"
+
+                # Recurse for passthrough or other node types
+                result = cls.trace_upstream_connection(inp, passthrough_types, visited)
+                if result[0]:
+                    return result
+
+            return None, None
+
+        # Classify the direct driver type
+        if cls.is_constraint(source):
+            return source, "constraint"
+        if cls.is_expression(source):
+            return source, "expression"
+        if node_type.startswith("animCurve"):
+            if cls.is_driven_key_curve(source):
+                return source, "driven_key"
+            return source, "keyframe"
+        if cls.is_ik_effector(source):
+            return source, "ik"
+        if node_type == "motionPath":
+            return source, "motion_path"
+        if node_type == "ikHandle":
+            return source, "ik"
+
+        return source, node_type
+
+    # -------------------------------------------------------------------------
+    # Hierarchy
+    # -------------------------------------------------------------------------
 
     @classmethod
     def get_groups(cls, empty=False):

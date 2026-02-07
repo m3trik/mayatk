@@ -747,6 +747,103 @@ class EnvUtils(ptk.HelpMixin):
         autosave_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
         return bool(autosave_regex.match(filename))
 
+    @staticmethod
+    def save_scene_backup(
+        backup_path: Optional[Union[str, bool]] = True,
+        suffix: str = "_backup",
+        file_type: str = "mayaAscii",
+        force: bool = True,
+        preserve_scene_name: bool = True,
+    ) -> Optional[str]:
+        """Save a backup copy of the current scene.
+
+        Creates a backup of the current scene without changing the active scene.
+        Useful before destructive operations like baking or cleanup.
+
+        Parameters:
+            backup_path: Where to save the backup:
+                - True: Save to scene directory with auto-generated name using suffix
+                - False/None: Skip backup, return None
+                - str: Custom absolute path for the backup file
+            suffix: Suffix to append to scene name when backup_path=True.
+                Default is "_backup" (e.g., "myScene_backup.ma").
+            file_type: Maya file type ("mayaAscii" or "mayaBinary").
+            force: Overwrite existing backup file without prompting.
+            preserve_scene_name: If True, restores the original scene name after
+                saving the backup (recommended). If False, the scene remains
+                "renamed" to the backup path.
+
+        Returns:
+            Absolute path to the saved backup file, or None if:
+                - backup_path is False/None
+                - Scene has never been saved
+                - Save operation failed
+
+        Raises:
+            No exceptions raised; failures are reported via cmds.warning().
+
+        Example:
+            >>> # Auto-generate backup path
+            >>> path = EnvUtils.save_scene_backup()
+            >>> print(path)  # "/projects/myScene_backup.ma"
+
+            >>> # Custom suffix
+            >>> path = EnvUtils.save_scene_backup(suffix="_prebake")
+            >>> print(path)  # "/projects/myScene_prebake.ma"
+
+            >>> # Custom path
+            >>> path = EnvUtils.save_scene_backup("/backups/archive.ma")
+
+            >>> # Skip backup
+            >>> path = EnvUtils.save_scene_backup(False)  # Returns None
+        """
+        import maya.cmds as cmds
+
+        if not backup_path:
+            return None
+
+        scene_path = cmds.file(query=True, sceneName=True)
+        if not scene_path:
+            cmds.warning(
+                "EnvUtils.save_scene_backup: Cannot save backup - "
+                "scene has not been saved yet."
+            )
+            return None
+
+        # Determine backup path
+        if isinstance(backup_path, str):
+            final_path = backup_path
+            # Ensure parent directory exists
+            backup_dir = os.path.dirname(final_path)
+            if backup_dir and not os.path.exists(backup_dir):
+                os.makedirs(backup_dir, exist_ok=True)
+        else:
+            # backup_path is True - auto-generate path
+            scene_dir = os.path.dirname(scene_path)
+            scene_name = os.path.splitext(os.path.basename(scene_path))[0]
+            ext = ".ma" if file_type == "mayaAscii" else ".mb"
+            final_path = os.path.join(scene_dir, f"{scene_name}{suffix}{ext}")
+
+        try:
+            # Temporarily rename scene to backup path, save, then restore
+            cmds.file(rename=final_path)
+            cmds.file(save=True, type=file_type, force=force)
+
+            if preserve_scene_name:
+                cmds.file(rename=scene_path)
+
+            return final_path
+
+        except Exception as e:
+            cmds.warning(f"EnvUtils.save_scene_backup: Failed to save backup: {e}")
+            # Attempt to restore original scene name on failure
+            if preserve_scene_name:
+                try:
+                    cmds.file(rename=scene_path)
+                except Exception:
+                    pass
+            return None
+
 
 # -----------------------------------------------------------------------------
 

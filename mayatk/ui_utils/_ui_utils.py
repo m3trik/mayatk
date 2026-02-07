@@ -11,13 +11,41 @@ except ImportError as error:
 class UiUtils:
     @staticmethod
     def get_main_window():
-        """Get the main Maya window as a QMainWindow instance."""
+        """Get the main Maya window as a QMainWindow instance.
+
+        Robust implementation supporting PySide2 (Maya < 2024) and PySide6 (Maya >= 2024).
+        """
         from qtpy import QtWidgets
-        from shiboken6 import wrapInstance
         import maya.OpenMayaUI as omui
 
-        main_window_ptr = omui.MQtUtil.mainWindow()
-        return wrapInstance(int(main_window_ptr), QtWidgets.QMainWindow)
+        ptr = omui.MQtUtil.mainWindow()
+        if not ptr:
+            return None
+
+        # Try shiboken6 first (newer Maya)
+        try:
+            from shiboken6 import wrapInstance
+
+            return wrapInstance(int(ptr), QtWidgets.QMainWindow)
+        except ImportError:
+            pass
+
+        # Try shiboken2 next (older Maya)
+        try:
+            from shiboken2 import wrapInstance
+
+            return wrapInstance(int(ptr), QtWidgets.QMainWindow)
+        except ImportError:
+            pass
+
+        # Fallback to PySide2 logic if shiboken import fails but PySide2 is present
+        try:
+            import PySide2.QtWidgets
+            import PySide2.QtGui
+
+            return wrapInstance(long(ptr), PySide2.QtWidgets.QWidget)
+        except:
+            return None
 
     @staticmethod
     def get_menu_name(qt_object_name: str) -> Optional[str]:

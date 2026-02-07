@@ -117,6 +117,33 @@ class EmbeddedMenuWidget(QtWidgets.QWidget):
                 self.height() - reserved_bottom - reserved_top,
             )
             self.menu.setMinimumWidth(self.width())
+            # Ensure menu stays behind header/footer after geometry changes
+            self.menu.lower()
+            # Also explicitly raise header if present
+            self._raise_header_footer()
+
+    def _raise_header_footer(self):
+        """Explicitly raise header and footer above the menu in z-order."""
+        layout = self.layout()
+        if not layout:
+            return
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if widget and widget is not self.menu:
+                widget.raise_()
+
+    def showEvent(self, event):
+        """Ensure menu z-order is correct when shown.
+
+        The header is attached AFTER init_ui() completes, so the menu's z-order
+        (established by self.menu.show()) puts it above the header. We fix this
+        by lowering the menu and raising layout widgets (header/footer) on show.
+        """
+        super().showEvent(event)
+        if self.menu:
+            self.menu.lower()
+            self._raise_header_footer()
 
     def minimumSizeHint(self):
         """Allow horizontal contraction while preserving minimum usability."""
@@ -394,7 +421,10 @@ class MayaNativeMenus(ptk.LoggingMixin):
             f"Switching menu mode to '{target_menu_set}' (original: {orig_menu_set})"
         )
         pm.setMenuMode(target_menu_set)
-        pm.mel.eval(init_command)
+        try:
+            pm.mel.eval(init_command)
+        except Exception as e:
+            self.logger.warning(f"Menu init command for '{menu_key}' raised: {e}")
         pm.refresh()
 
         # Create a placeholder menu UI
@@ -505,6 +535,10 @@ class MayaNativeMenus(ptk.LoggingMixin):
                 self.logger.debug(
                     f"Populated menu '{menu_key}' with {previous_action_count} actions."
                 )
+
+                # Ensure menu z-order is correct after population
+                placeholder_widget.menu.lower()
+                placeholder_widget._raise_header_footer()
 
                 # Resize the hosting window to accommodate new items
                 QtCore.QTimer.singleShot(50, placeholder_widget.fit_to_window)

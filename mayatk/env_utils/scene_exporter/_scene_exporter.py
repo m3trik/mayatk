@@ -202,6 +202,24 @@ class SceneExporter(ptk.LoggingMixin):
 
     def generate_export_path(self) -> str:
         """Generate the full export file path."""
+        # Handle wildcard matching for output_name to overwrite existing files
+        if self.output_name and any(char in self.output_name for char in "*?"):
+            import glob
+
+            pattern = self.output_name
+            if not pattern.lower().endswith((".fbx", ".FBX")):
+                pattern += ".fbx"
+
+            search_path = os.path.join(self.export_dir, pattern)
+            matches = glob.glob(search_path)
+
+            if matches:
+                matches.sort()
+                self.logger.info(
+                    f"Wildcard '{self.output_name}' matched {len(matches)} files. Overwriting: {matches[-1]}"
+                )
+                return matches[-1]
+
         scene_path = pm.sceneName() or "untitled"
         scene_name = os.path.splitext(os.path.basename(scene_path))[0]
         export_name = self.output_name or scene_name

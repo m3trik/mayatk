@@ -462,6 +462,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         cls.register_preset("secondary", cls._build_secondary)
         cls.register_preset("box", cls._build_box)
         cls.register_preset("ball", cls._build_ball)
+        cls.register_preset("sphere", cls._build_ball)
 
         # Standalone text
         cls.register_preset("text", cls._build_text)

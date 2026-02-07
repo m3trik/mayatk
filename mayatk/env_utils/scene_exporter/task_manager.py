@@ -161,6 +161,60 @@ class _TaskActionsMixin(_TaskDataMixin):
         else:
             self.logger.info("No environment file nodes found.")
 
+    def smart_bake(self):
+        """Pre-bake constrained and driven channels before export.
+
+        Uses SmartBake to detect objects with constraints, driven keys,
+        expressions, IK, motion paths, and blend shapes, then bakes only
+        those specific channels to an override animation layer. Time range
+        is auto-detected from driver animation. Original constraints remain
+        connected on base layer but are overridden by baked keyframes.
+        Optimizes keys after baking to remove redundant keys.
+        FBX export will flatten layers when FBXExportBakeComplexAnimation=True.
+        """
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        self.logger.info("Analyzing scene for bake requirements...")
+        baker = SmartBake(
+            objects=self.objects,
+            sample_by=1,
+            preserve_outside_keys=True,
+            optimize_keys=True,  # Remove redundant keys after baking
+            use_override_layer=True,  # Non-destructive: bake to override layer
+            mute_drivers=True,  # Disable drivers for playback performance
+        )
+
+        analysis = baker.analyze()
+        if not any(a.requires_bake for a in analysis.values()):
+            self.logger.info(
+                "No constrained/driven objects found. Skipping smart bake."
+            )
+            return
+
+        # Log what will be baked
+        bake_count = sum(1 for a in analysis.values() if a.requires_bake)
+        self.logger.info(f"Found {bake_count} objects requiring bake.")
+
+        result = baker.bake(analysis)
+
+        # Build detailed log message
+        log_parts = [
+            f"Smart bake completed: {result.baked_count} objects baked",
+            f"range {result.time_range[0]}-{result.time_range[1]}",
+        ]
+        if result.override_layer:
+            log_parts.append(f"layer '{result.override_layer}'")
+        if result.muted_drivers:
+            log_parts.append(f"{len(result.muted_drivers)} drivers muted")
+        if result.optimized:
+            log_parts.append(f"{len(result.optimized)} objects optimized")
+
+        self.logger.info(", ".join(log_parts) + ".")
+
+        # Invalidate keyframe cache since we added new keys
+        if hasattr(self, "_key_times"):
+            delattr(self, "_key_times")
+
     def optimize_keys(self):
         """Optimize baked animation keys."""
         if not self._has_keyframes:
@@ -835,11 +889,17 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "Separator",
                 "title": "Animation",
             },
+            "smart_bake": {
+                "widget_type": "QCheckBox",
+                "setText": "Smart Bake",
+                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.\nOptimizes baked keys by removing redundant/static keyframes.",
+                "setChecked": True,
+            },
             "tie_all_keyframes": {
                 "widget_type": "QCheckBox",
                 "setText": "Tie All Keyframes",
                 "setToolTip": "Tie all keyframes on the specified objects.",
-                "setChecked": False,
+                "setChecked": True,
             },
             "snap_keys_to_frame": {
                 "widget_type": "QCheckBox",
@@ -851,12 +911,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QCheckBox",
                 "setText": "Delete Visibility Keys",
                 "setToolTip": "Delete visibility keys from the exported objects.",
-                "setChecked": True,
-            },
-            "optimize_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Optimize Keys",
-                "setToolTip": "Optimize animation keys by removing redundant keys.",
                 "setChecked": True,
             },
             "set_bake_animation_range": {

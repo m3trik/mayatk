@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>194</width>
-    <height>135</height>
+    <height>186</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -31,8 +31,14 @@
      <number>1</number>
     </property>
     <item>
-     <widget class="Header" name="header" native="true">
-      <property name="text" stdset="0">
+     <widget class="Header" name="header">
+      <property name="font">
+       <font>
+        <weight>75</weight>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
        <string>SHADOW RIG</string>
       </property>
      </widget>
@@ -59,33 +65,74 @@
         <number>2</number>
        </property>
        <item>
+        <widget class="QComboBox" name="cmb_mode">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Rig behavior mode. Stretch: plane scales/translates without rotation. Orbit: plane rotates to face away from light.</string>
+         </property>
+         <item>
+          <property name="text">
+           <string>Mode: Stretch</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Mode: Orbit</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
         <widget class="QCheckBox" name="chk_combine">
+         <property name="toolTip">
+          <string>If checked, creates a single shadow for the selected object and all its descendants.</string>
+         </property>
          <property name="text">
           <string>Include Children</string>
          </property>
          <property name="checked">
           <bool>true</bool>
          </property>
-         <property name="toolTip">
-          <string>If checked, creates a single shadow for the selected object and all its descendants.</string>
-         </property>
         </widget>
        </item>
        <item>
-        <widget class="QCheckBox" name="chk_new_source">
+        <widget class="QLineEdit" name="txt_source">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Name for the shadow source locator. Use different names to create separate sources.</string>
+         </property>
          <property name="text">
-          <string>New Source</string>
+          <string>shadow_source</string>
          </property>
-         <property name="checked">
-          <bool>false</bool>
-         </property>
-         <property name="toolTip">
-          <string>Create a new shadow source instead of reusing the default one.</string>
+         <property name="placeholderText">
+          <string>Source Name</string>
          </property>
         </widget>
        </item>
        <item>
-        <widget class="QSpinBox" name="s000">
+        <widget class="QComboBox" name="s000">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -101,21 +148,44 @@
          <property name="toolTip">
           <string>Resolution of the generated silhouette texture.</string>
          </property>
-         <property name="buttonSymbols">
-          <enum>QAbstractSpinBox::NoButtons</enum>
+         <property name="currentIndex">
+          <number>0</number>
          </property>
-         <property name="prefix">
-          <string>Resolution:	</string>
-         </property>
-         <property name="minimum">
-          <number>64</number>
-         </property>
-         <property name="maximum">
-          <number>4096</number>
-         </property>
-         <property name="value">
-          <number>512</number>
-         </property>
+         <item>
+          <property name="text">
+           <string>Resolution: 512</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 128</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 256</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 1024</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 2048</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 4096</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Resolution: 8096</string>
+          </property>
+         </item>
         </widget>
        </item>
        <item>
@@ -158,6 +228,37 @@
         </widget>
        </item>
        <item>
+        <widget class="QPushButton" name="b001">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Reset to Defaults</string>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>18</width>
+           <height>18</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>false</bool>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QPushButton" name="b000">
          <property name="minimumSize">
           <size>
@@ -192,8 +293,8 @@
  <customwidgets>
   <customwidget>
    <class>Header</class>
-   <extends>QWidget</extends>
-   <header>header.h</header>
+   <extends>QLabel</extends>
+   <header>uitk.widgets.header.Header.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

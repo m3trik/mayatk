@@ -95,6 +95,33 @@ class TestSceneExporter(MayaTkTestCase):
         path = self.exporter.generate_export_path()
         self.assertRegex(path, r"CustomName_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.fbx")
 
+    def test_generate_export_path_wildcard(self):
+        """Test export path generation with wildcard.
+
+        Verify that using wildcards in output_name finds existing files to overwrite.
+        """
+        self.exporter.export_dir = self.temp_dir
+        self.exporter.timestamp = False
+        self.exporter.name_regex = None
+
+        # Create dummy file
+        existing_file = os.path.join(self.temp_dir, "existing_file_v001.fbx")
+        with open(existing_file, "w") as f:
+            f.write("dummy")
+
+        self.exporter.output_name = "existing_file_*"
+        path = self.exporter.generate_export_path()
+
+        self.assertEqual(os.path.normpath(path), os.path.normpath(existing_file))
+
+        # Test finding latest
+        latest_file = os.path.join(self.temp_dir, "existing_file_v002.fbx")
+        with open(latest_file, "w") as f:
+            f.write("dummy")
+
+        path = self.exporter.generate_export_path()
+        self.assertEqual(os.path.normpath(path), os.path.normpath(latest_file))
+
     def test_format_export_name_regex(self):
         """Test regex name formatting."""
         self.exporter.name_regex = "test_->prod_"
