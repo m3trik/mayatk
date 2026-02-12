@@ -165,6 +165,69 @@ class MatUtilsInternals(ptk.HelpMixin):
         return filenames
 
     @staticmethod
+    def get_texture_file_node(material, attr_name, _depth=0):
+        """Locate the file texture node feeding a material attribute.
+
+        Traverses through common utility nodes (``bump2d``, ``aiNormalMap``,
+        ``colorCorrect``, ``gammaCorrect``, ``remapHsv``, ``clamp``, etc.)
+        to find the upstream ``file`` node.
+
+        Parameters:
+            material (str): Material (or utility) node name.
+            attr_name (str): Attribute name on *material*.
+
+        Returns:
+            str or None: The file-node name, or *None* if not found.
+        """
+        from maya import cmds
+
+        if _depth > 10 or not material or not attr_name:
+            return None
+
+        full_attr = f"{material}.{attr_name}"
+        if not cmds.objExists(full_attr):
+            return None
+
+        # Direct file connection
+        files = cmds.listConnections(full_attr, source=True, destination=False, type="file")
+        if files:
+            return files[0]
+
+        # Traverse through utility nodes
+        sources = cmds.listConnections(full_attr, source=True, destination=False)
+        if not sources:
+            return None
+
+        node = sources[0]
+        ntype = cmds.nodeType(node)
+
+        # Map node types to the input attribute(s) to follow
+        _FOLLOW = {
+            "bump2d":       ["bumpValue"],
+            "aiNormalMap":  ["input"],
+            "projection":   ["image"],
+            "stencil":      ["image"],
+            "gammaCorrect": ["value"],
+            "luminance":    ["value"],
+            "reverse":      ["input"],
+            "clamp":        ["input"],
+            "colorCorrect": ["color", "inColor", "input"],
+            "aiColorCorrect": ["input"],
+            "remapHsv":     ["color", "inColor"],
+            "remapColor":   ["color", "inColor"],
+            "remapValue":   ["inputValue", "color"],
+        }
+
+        candidates = _FOLLOW.get(ntype, ["input", "color", "inColor"])
+        for inp in candidates:
+            if cmds.objExists(f"{node}.{inp}"):
+                result = MatUtilsInternals.get_texture_file_node(node, inp, _depth + 1)
+                if result:
+                    return result
+
+        return None
+
+    @staticmethod
     def _create_standard_shader(name=None, color=None, return_type="type"):
         """Create or get the preferred shader type, with optional node creation.
 
@@ -287,13 +350,20 @@ class MatUtils(MatUtilsInternals):
         return None
 
     @staticmethod
-    def get_mats(objs=None, as_strings=False) -> List[Union[str, "pm.PyNode"]]:
+    def get_mats(
+        objs=None,
+        as_strings=False,
+        mat_type=None,
+    ) -> List[Union[str, "pm.PyNode"]]:
         """Returns the set of materials assigned to a given list of objects or components.
 
         Parameters:
             objs (list): The objects or components to retrieve the material from.
                         If None, current selection will be used.
             as_strings (bool): If True, returns list of strings instead of PyNodes.
+            mat_type (str, optional): Maya node type to filter by
+                (e.g. ``"StingrayPBS"``, ``"lambert"``, ``"aiStandardSurface"``).
+                If None, all material types are returned.
         Returns:
             list: Materials assigned to the objects or components (duplicates removed).
         """
@@ -408,6 +478,9 @@ class MatUtils(MatUtilsInternals):
                                 or []
                             )
                             mats.update(connections)
+
+        if mat_type:
+            mats = {m for m in mats if m and cmds.nodeType(m) == mat_type}
 
         if as_strings:
             return list(mats)

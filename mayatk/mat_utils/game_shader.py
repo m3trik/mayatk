@@ -32,6 +32,7 @@ class GameShader(ptk.LoggingMixin):
         name: str = "",
         prefix: str = "",
         config: Union[str, Dict[str, Any]] = None,
+        progress_callback: Callable = None,
         **kwargs,
     ) -> Union[Optional[object], List[Optional[object]]]:
         """Create a PBR shader network with textures.
@@ -40,6 +41,7 @@ class GameShader(ptk.LoggingMixin):
             textures: List of texture file paths
             name: Shader name (auto-generated from texture if empty)
             config: Configuration preset name (str) or dictionary.
+            progress_callback: Optional callback(percent, message) for progress updates.
             **kwargs: Configuration overrides (e.g. shader_type, normal_type, etc.)
 
         Returns:
@@ -92,20 +94,60 @@ class GameShader(ptk.LoggingMixin):
         ]
         self.log_table(config_info, headers=["Option", "Value"], title="Configuration")
 
+        # Check for large input size
+        try:
+            total_size_bytes = sum(
+                os.path.getsize(t) for t in textures if os.path.exists(t)
+            )
+            total_size_mb = total_size_bytes / (1024 * 1024)
+
+            # Warn if over 300MB
+            if total_size_mb > 300:
+                warn_msg = f"Large input detected ({total_size_mb:.1f} MB). Processing may take some time..."
+                self.logger.warning(warn_msg)
+                if progress_callback:
+                    progress_callback(0, warn_msg)
+                    # Force a UI update immediately so the user sees the warning before the heavy lift starts
+                    from qtpy import QtWidgets
+
+                    QtWidgets.QApplication.instance().processEvents()
+        except Exception as e:
+            self.logger.debug(f"Could not calculate input size: {e}")
+
+        def factory_progress(curr, total, msg):
+            """Bridge callback to map Factory progress (0-50%) to UI."""
+            if progress_callback:
+                # Map 0-50 range
+                try:
+                    pct = int((curr / total) * 50)
+                    progress_callback(pct, f"Preparing Maps: {msg}")
+                except Exception:
+                    pass
+
         prepared_data = ptk.MapFactory.prepare_maps(
             textures,
             logger=self.logger,
             group_by_set=(not bool(name)),
+            max_workers=4,
+            progress_callback=factory_progress,
             **cfg,
         )
 
         if isinstance(prepared_data, dict):
             # Batch mode
-            self.logger.info(f"Batch processing {len(prepared_data)} texture sets...")
+            total = len(prepared_data)
+            self.logger.info(f"Batch processing {total} texture sets...")
             results = []
             created_shaders = []
 
+            i = 0
             for set_name, set_textures in prepared_data.items():
+                i += 1
+                if progress_callback:
+                    # Map 50-100 range
+                    pct = 50 + int((i / total) * 50)
+                    progress_callback(pct, f"Building Network: {set_name}")
+
                 self.logger.log_divider()
                 self.logger.info(f"Set: {set_name}", preset="header")
                 node = self._create_single_network(
@@ -127,8 +169,15 @@ class GameShader(ptk.LoggingMixin):
                 created_shaders,
                 headers=["Set Name", "Node Name", "Status"],
             )
+
+            if progress_callback:
+                progress_callback(100, "Completed")
+
             return results
         else:
+            if progress_callback:
+                progress_callback(75, "Building Network...")
+
             # Single mode
             self.logger.log_divider()
             node = self._create_single_network(
@@ -144,6 +193,9 @@ class GameShader(ptk.LoggingMixin):
                 self.logger.success(f"Successfully created shader: {node_name}")
             else:
                 self.logger.error("Failed to create shader.")
+
+            if progress_callback:
+                progress_callback(100, "Completed")
 
             return node
 
@@ -172,6 +224,9 @@ class GameShader(ptk.LoggingMixin):
         # Log creation start with fancy formatting
         self.logger.info(f"Creating Shader: {name}", "INFO", "header")
 
+        # Pre-compute map type for each texture to avoid redundant lookups
+        type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
+
         # Prioritize packed maps to avoid conflicts
         # If ORM exists, remove MSAO and Metallic_Smoothness
         # If MSAO exists, remove Metallic_Smoothness
@@ -183,15 +238,12 @@ class GameShader(ptk.LoggingMixin):
             textures = [
                 t
                 for t in textures
-                if ptk.MapFactory.resolve_map_type(t)
-                not in ["MSAO", "Metallic_Smoothness"]
+                if type_cache.get(t) not in ["MSAO", "Metallic_Smoothness"]
             ]
         elif msao_maps:
             # Remove Metallic_Smoothness
             textures = [
-                t
-                for t in textures
-                if ptk.MapFactory.resolve_map_type(t) not in ["Metallic_Smoothness"]
+                t for t in textures if type_cache.get(t) not in ["Metallic_Smoothness"]
             ]
 
         # Create the base shader based on shader_type
@@ -222,7 +274,8 @@ class GameShader(ptk.LoggingMixin):
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             progress += 1
             texture_name = ptk.format_path(texture, "file")
-            texture_type = ptk.MapFactory.resolve_map_type(
+            # Use pre-computed type cache; fall back to resolve for converted paths
+            texture_type = type_cache.get(texture) or ptk.MapFactory.resolve_map_type(
                 texture,
             )
 
@@ -1541,6 +1594,9 @@ class GameShaderSlots(GameShader):
             # Get template configuration using combo box text
             template_name = self.ui.cmb002.currentText()
 
+            def progress_adapter(p, m):
+                self.callback(m, progress=p)
+
             self.last_created_shader = self.create_network(
                 self.image_files,
                 self.mat_name,
@@ -1551,6 +1607,7 @@ class GameShaderSlots(GameShader):
                 create_arnold=create_arnold,
                 cleanup_base_color=False,  # Can be exposed in UI later if needed
                 output_extension=self.output_extension,
+                progress_callback=progress_adapter,
             )
 
             self.callback(self.msg_completed)
@@ -1565,16 +1622,21 @@ class GameShaderSlots(GameShader):
                     Can be given as an int or a tuple as: (progress, total_len)
         """
         if clear:
-            self.ui.txt003.clear()
+            if hasattr(self.ui, "txt003"):
+                self.ui.txt003.clear()
 
         if isinstance(progress, (list, tuple, set)):
             p, length = progress
-            progress = (p / length) * 100
+            if length > 0:
+                progress = (p / length) * 100
+            else:
+                progress = 0
 
         self.ui.txt001.append(string)
 
         if progress is not None:
-            # self.ui.progressBar.setValue(progress)
+            if hasattr(self.ui, "progressBar"):
+                self.ui.progressBar.setValue(int(progress))
             self.sb.QtWidgets.QApplication.instance().processEvents()
 
 

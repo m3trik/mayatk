@@ -204,8 +204,8 @@ class EditUtils(ptk.HelpMixin):
                             # Fall through to standard separate to split the now-detached shells
 
             # Strategy 3: Standard Separation (Disjoint Shells)
-            # Only run when not explicitly separating by material.
-            if not by_material and not separated:
+            # Run if no separation has occurred yet (e.g. standard mode, or material separation fallback)
+            if not separated:
                 try:
                     sep = pm.polySeparate(obj, ch=False)
                     if sep:
@@ -772,7 +772,7 @@ class EditUtils(ptk.HelpMixin):
         cls,
         objects,
         axis: str = "x",
-        pivot: Union[str, tuple] = "object",  # Fix: Use Union[str, tuple]
+        pivot: Union[str, tuple] = "object",
         mergeMode: int = -1,
         uninstance: bool = False,
         use_object_axes: bool = True,
@@ -792,14 +792,15 @@ class EditUtils(ptk.HelpMixin):
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
             uninstance (bool): If True, uninstances the object before mirroring.
-            use_object_axes (bool): If True, uses object's local axes (consumed by caller, ignored here but accepted to prevent kwargs error).
+            use_object_axes (bool): If True, computes the mirror pivot in object-local
+                space (relevant when the object is rotated and pivot is "object", "manip", or "baked").
             kwargs: Additional arguments for polyMirrorFace.
 
         Returns:
             (obj or list) The mirrored object's transform node or list of transform nodes.
         """
         kwargs["ch"] = True  # Ensure construction history
-        kwargs["worldSpace"] = True  # Always force world space to avoid inconsistencies
+        kwargs["worldSpace"] = True  # Always force world space
 
         axis_mapping = {
             "x": (0, 0),  # Mirror across X-axis, positive direction
@@ -822,71 +823,65 @@ class EditUtils(ptk.HelpMixin):
         original_objects = pm.ls(objects, type="transform", flatten=True)
         results = []
 
+        # Determine whether to compute pivot in object space
+        use_object_space = (
+            use_object_axes
+            and isinstance(pivot, str)
+            and pivot
+            in {
+                "object",
+                "manip",
+                "baked",
+            }
+        )
+
         for obj in original_objects:
             if uninstance:
-                # obj is replaced by the uninstanced version
                 uninstanced_result = NodeUtils.uninstance(obj)
                 if uninstanced_result:
                     obj = uninstanced_result[0]
 
             # Compute pivot position
-            pivot_point = XformUtils.get_operation_axis_pos(obj, pivot)
-
-            # Adjust pivot when mirroring in negative space
-            if axis_direction == 1:  # Mirroring in negative direction
-                center = XformUtils.get_bounding_box(obj, "center")
-                pivot_point[axis_val] = 2 * center[axis_val] - pivot_point[axis_val]
+            if use_object_space:
+                # Compute pivot in object-local space, then transform to world
+                obj_matrix = pm.PyNode(obj).getMatrix(worldSpace=True)
+                if pivot == "object":
+                    local_pivot = [0.0, 0.0, 0.0]
+                elif pivot == "manip":
+                    world_manip = XformUtils.get_operation_axis_pos(obj, "manip")
+                    lp = pm.dt.Point(world_manip) * obj_matrix.inverse()
+                    local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
+                else:  # "baked"
+                    world_pt = XformUtils.get_operation_axis_pos(obj, pivot)
+                    lp = pm.dt.Point(world_pt) * obj_matrix.inverse()
+                    local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
+                # Transform local pivot back to world space for polyMirrorFace
+                world_pivot = list(pm.dt.Point(local_pivot) * obj_matrix)
+                pivot_point = world_pivot[:3]
+            else:
+                pivot_point = list(XformUtils.get_operation_axis_pos(obj, pivot))
 
             kwargs["pivot"] = tuple(pivot_point)
 
             # Handle custom separate mode
             custom_separate = mergeMode == -1
-            kwargs["mergeMode"] = (
-                0 if custom_separate else mergeMode
-            )  # Use 0 for built-in separate if custom mode is requested
+            # mergeMode 0 = "do not merge" in polyMirrorFace, keeps halves separable
+            kwargs["mergeMode"] = 0 if custom_separate else mergeMode
 
             # Execute polyMirrorFace
             mirror_nodes = pm.polyMirrorFace(obj, **kwargs)
             mirror_node = pm.PyNode(mirror_nodes[0])
 
-            # Custom separate logic
+            # Custom separate: use separate_mirrored_mesh for proper separation
             if custom_separate:
-                try:
-                    # polySeparate returns [Transform1, Transform2, ..., polySeparateNode]
-                    res = pm.polySeparate(obj, uss=True, inp=True)
-                    shells = res[:-1]
-                    sep_node = res[-1]
-
-                    # Connect separate node attrs if possible (legacy logic?)
-                    if len(shells) >= 2:
-                        try:
-                            # Assuming standard split logic, but this might be brittle
-                            pass
-                        except Exception:
-                            pass
-
-                    results.extend(shells)
-
-                    # Cleanup: If 'obj' works out to be distinct from the new shells and is empty, delete it.
-                    # Verify by name/path to avoid PyNode identity mismatch issues
+                new_obj = cls.separate_mirrored_mesh(mirror_node)
+                if new_obj is not None:
+                    results.append(new_obj)
+                    # Also keep the original half
                     if pm.objExists(obj):
-                        try:
-                            # Verify if obj is one of the shells (by path)
-                            shell_paths = [pm.PyNode(s).fullPath() for s in shells]
-                            if pm.PyNode(obj).fullPath() not in shell_paths:
-                                # Only delete if it has no shapes AND no children transforms (it might be a group now)
-                                has_shapes = pm.listRelatives(obj, shapes=True)
-                                has_children = pm.listRelatives(
-                                    obj, children=True, type="transform"
-                                )
-
-                                if not has_shapes and not has_children:
-                                    pm.delete(obj)
-                        except Exception:
-                            pass
-
-                except Exception as e:
-                    pm.warning(f"Mirror separation failed: {e}")
+                        results.append(obj)
+                else:
+                    # Separation failed, return the combined object
                     results.append(obj)
             else:
                 results.append(obj)
@@ -994,7 +989,6 @@ class EditUtils(ptk.HelpMixin):
             except Exception as e:
                 pm.warning(f"Failed to rename {new_obj} to {orig_obj.nodeName()}: {e}")
 
-            print(f"new_obj: {new_obj}, orig_obj: {orig_obj}")
             return new_obj
 
         except Exception as e:

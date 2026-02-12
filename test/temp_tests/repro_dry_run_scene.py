@@ -10,7 +10,7 @@ import maya.standalone
 maya.standalone.initialize(name="python")
 
 import pymel.core as pm
-from mayatk.mat_utils.material_updater import MaterialUpdater
+from mayatk.mat_utils.mat_updater import MatUpdater
 
 
 def run_test():
@@ -25,9 +25,9 @@ def run_test():
 
     print("Scene opened successfully.")
 
-    updater = MaterialUpdater()
+    updater = MatUpdater()
 
-    print("\nRunning MaterialUpdater (Dry Run)...")
+    print("\nRunning MatUpdater (Dry Run)...")
     # We want to see what it would do.
     # Let's assume we want to convert to Unity HDRP or just optimize?
     # The user asked to "test the dry run", implying checking the output logs.

@@ -8,7 +8,7 @@ import pythontk as ptk
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 
-class MaterialTransfer(ptk.LoggingMixin):
+class MatTransfer(ptk.LoggingMixin):
     """ """
 
     def __init__(self, log_level="WARNING"):

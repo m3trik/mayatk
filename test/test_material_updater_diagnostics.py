@@ -11,17 +11,17 @@ from unittest.mock import MagicMock, patch
 import pymel.core as pm
 
 from base_test import MayaTkTestCase
-from mayatk.mat_utils.material_updater import MaterialUpdater
+from mayatk.mat_utils.mat_updater import MatUpdater
 
 
-class TestMaterialUpdaterDiagnostics(MayaTkTestCase):
-    """Tests for MaterialUpdater diagnostic logging."""
+class TestMatUpdaterDiagnostics(MayaTkTestCase):
+    """Tests for MatUpdater diagnostic logging."""
 
     def setUp(self):
         super().setUp()
-        self.updater = MaterialUpdater()
+        self.updater = MatUpdater()
 
-    @patch("mayatk.mat_utils.material_updater.MaterialUpdater.logger")
+    @patch("mayatk.mat_utils.mat_updater.MatUpdater.logger")
     def test_no_file_nodes_warning(self, mock_logger):
         """Test warning when a material has no file nodes connected."""
         # Create a material with no connections

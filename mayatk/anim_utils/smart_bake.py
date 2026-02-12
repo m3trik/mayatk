@@ -606,43 +606,62 @@ class SmartBake:
 
         start, end = time_range
 
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         # Bake each object with its specific channels
+        # Group by channels to use batched bake
+        import collections
+
+        grouped_by_channels = collections.defaultdict(
+            list
+        )  # tuple(channels) -> list[objects]
+
         for obj, data in to_bake.items():
             channels = data.all_driven_channels
             if not channels:
                 result.skipped.append(obj)
                 continue
 
+            # SmartBake logic: explicit channel lists derived from analysis
+            key = tuple(sorted(channels))
+            grouped_by_channels[key].append(obj)
+
+        for channels, objects in grouped_by_channels.items():
             try:
-                # Build bakeResults arguments
-                bake_kwargs = {
-                    "time": (start, end),
-                    "sampleBy": self.sample_by,
-                    "simulation": False,
-                    "preserveOutsideKeys": self.preserve_outside_keys,
-                    "sparseAnimCurveBake": False,
-                    "minimizeRotation": True,
-                    "controlPoints": False,
-                    "shape": False,
-                    "disableImplicitControl": True,
-                }
-
+                dest_layer = None
                 if self.use_override_layer and override_layer:
-                    # Bake to the override layer - constraints stay on base
-                    bake_kwargs["destinationLayer"] = override_layer
-                    bake_kwargs["removeBakedAttributeFromLayer"] = False
-                    bake_kwargs["bakeOnOverrideLayer"] = False
+                    dest_layer = override_layer
+
+                # Using the unified bake command
+                baked = AnimUtils.bake(
+                    objects,
+                    attributes=list(channels),
+                    time_range=(start, end),
+                    sample_by=self.sample_by,
+                    preserve_outside_keys=self.preserve_outside_keys,
+                    simulation=False,
+                    destination_layer=dest_layer,
+                    remove_baked_attr_from_layer=False,
+                    bake_on_override_layer=False,
+                    sparse_anim_curve_bake=False,
+                    minimize_rotation=True,
+                    disable_implicit_control=True,
+                    control_points=False,
+                    shape=False,
+                    only_keyed=False,  # SmartBake analysis already determined driven channels
+                )
+
+                if baked:
+                    for obj in objects:
+                        result.baked[obj] = list(channels)
                 else:
-                    # Standard bake to base layer
-                    bake_kwargs["removeBakedAttributeFromLayer"] = False
-                    bake_kwargs["bakeOnOverrideLayer"] = False
+                    for obj in objects:
+                        result.skipped.append(obj)
 
-                cmds.bakeResults(obj, attribute=channels, **bake_kwargs)
-                result.baked[obj] = channels
-
-            except RuntimeError as e:
-                result.skipped.append(obj)
-                cmds.warning(f"SmartBake: Failed to bake {obj}: {e}")
+            except Exception as e:
+                for obj in objects:
+                    result.skipped.append(obj)
+                cmds.warning(f"SmartBake: Failed to batch bake {channels}: {e}")
 
         # Handle driver node cleanup after all baking is complete
         if result.baked:

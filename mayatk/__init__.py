@@ -69,10 +69,14 @@ DEFAULT_INCLUDE = {
     "env_utils.reference_manager": "ReferenceManager",
     "env_utils.script_output": "ScriptOutput",
     "env_utils.hierarchy_manager": "HierarchyManager",
+    "env_utils.fbx_utils": "FbxUtils",
     # Material utils
     "mat_utils.game_shader": "GameShader",
-    "mat_utils.material_updater": "MaterialUpdater",
+    "mat_utils.material_fade._material_fade": "MaterialFade",
+    "mat_utils.mat_updater": "MatUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
+    "mat_utils.mat_manifest": "MatManifest",
+    "mat_utils.marmoset_exporter": "MarmosetExporter",
     "mat_utils.shader_templates": "ShaderTemplates",
     # UI utils
     "ui_utils.maya_native_menus": "MayaNativeMenus",

@@ -523,6 +523,184 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
        - Then query/modify the curves: pm.keyframe(curve, query=True, timeChange=True)
     """
 
+    @classmethod
+    def bake(
+        cls,
+        objects: Union[str, List[Union[str, "pm.PyNode"]]],
+        attributes: Optional[Union[str, List[str]]] = None,
+        time_range: Optional[Tuple[float, float]] = None,
+        sample_by: float = 1.0,
+        preserve_outside_keys: bool = True,
+        simulation: bool = False,
+        destination_layer: Optional[str] = None,
+        remove_baked_attr_from_layer: bool = False,
+        bake_on_override_layer: bool = False,
+        minimize_rotation: bool = True,
+        sparse_anim_curve_bake: bool = False,
+        disable_implicit_control: bool = True,
+        control_points: bool = False,
+        shape: bool = False,
+        only_keyed: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Bake animation on specified objects and attributes with smart grouping.
+
+        Handles filtering valid attributes per object and grouping them for
+        efficient batch execution.
+
+        Parameters:
+            objects: Object(s) to bake.
+            attributes: Attribute name(s) to bake. If None, bakes all keyable.
+            time_range: (start, end) tuple. If None, uses current playback range.
+            sample_by: Step size for baking keys.
+            preserve_outside_keys: Keep keys outside the bake range.
+            simulation: Perform simulation bake.
+            destination_layer: Target animation layer name.
+            remove_baked_attr_from_layer: Remove attributes from source layer.
+            bake_on_override_layer: Bake onto the override layer.
+            minimize_rotation: Ensure rotation continuity (Euler filter).
+            sparse_anim_curve_bake: Use sparse baking.
+            disable_implicit_control: Disable implicit control during bake.
+            control_points: Bake control points.
+            shape: Bake shapes.
+            only_keyed: Only bake attributes that already have animation curves.
+
+        Returns:
+            List of baked objects/curves (result of pm.bakeResults).
+        """
+        import collections
+
+        # 1. Normalize objects
+        if not objects:
+            return []
+
+        if isinstance(objects, (str, pm.PyNode)):
+            objects = [objects]
+
+        valid_objects = []
+        for o in objects:
+            if pm.objExists(o):
+                valid_objects.append(
+                    pm.PyNode(o) if not isinstance(o, pm.PyNode) else o
+                )
+
+        if not valid_objects:
+            return []
+
+        # 2. Normalize attributes
+        req_attrs = None
+        if attributes:
+            if isinstance(attributes, str):
+                req_attrs = [attributes]
+            else:
+                req_attrs = attributes
+
+        # 3. Group objects by bakeable attributes to batch efficiently
+        # Map: tuple(sorted_attr_names) -> list[objects]
+        groups = collections.defaultdict(list)
+
+        for obj in valid_objects:
+            attrs_to_bake = []
+
+            # If specific attributes requested
+            if req_attrs:
+                for attr_name in req_attrs:
+                    if not obj.hasAttr(attr_name):
+                        continue
+
+                    if only_keyed:
+                        if not pm.listConnections(
+                            obj.attr(attr_name), type="animCurve"
+                        ):
+                            continue
+
+                    attrs_to_bake.append(attr_name)
+
+                # If no requested attributes found valid, skip object
+                if not attrs_to_bake:
+                    continue
+
+                key = tuple(sorted(attrs_to_bake))
+                groups[key].append(obj)
+
+            # If no attributes requested (bake all)
+            else:
+                # If only_keyed demanded for 'all' mode, we rely on bakeResults behavior?
+                # bakeResults without -at flag bakes all keyable.
+                # If we want to strictly enforce 'only_keyed', we have to find them manually.
+                # For now, assuming standard behavior for None attributes unless explicitly requested.
+                groups[None].append(obj)
+
+        # 4. Execute Batches
+        results = []
+
+        # Build common kwargs
+        kwargs = {
+            "sampleBy": sample_by,
+            "preserveOutsideKeys": preserve_outside_keys,
+            "simulation": simulation,
+            "minimizeRotation": minimize_rotation,
+            "sparseAnimCurveBake": sparse_anim_curve_bake,
+            "disableImplicitControl": disable_implicit_control,
+            "controlPoints": control_points,
+            "shape": shape,
+        }
+        if time_range:
+            kwargs["time"] = time_range
+        if destination_layer:
+            kwargs["destinationLayer"] = destination_layer
+            kwargs["removeBakedAttributeFromLayer"] = remove_baked_attr_from_layer
+            kwargs["bakeOnOverrideLayer"] = bake_on_override_layer
+
+        for attr_tuple, objs_in_group in groups.items():
+            run_kwargs = kwargs.copy()
+            if attr_tuple is not None:
+                run_kwargs["attribute"] = list(attr_tuple)
+
+            try:
+                res = pm.bakeResults(objs_in_group, **run_kwargs)
+                if res:
+                    results.extend(res)
+            except Exception as e:
+                pm.warning(f"AnimUtils.bake batch failed: {e}")
+
+        return results
+
+    @classmethod
+    def bake_objects(
+        cls,
+        objects: List[Union[str, "pm.PyNode"]],
+        attributes: Optional[List[str]] = None,
+        time_range: Optional[Tuple[float, float]] = None,
+        sample_by: float = 1.0,
+        preserve_outside_keys: bool = True,
+        simulation: bool = False,
+        destination_layer: Optional[str] = None,
+        remove_baked_attr_from_layer: bool = False,
+        bake_on_override_layer: bool = False,
+        minimize_rotation: bool = True,
+        sparse_anim_curve_bake: bool = False,
+        disable_implicit_control: bool = True,
+        control_points: bool = False,
+        shape: bool = False,
+    ) -> List["pm.PyNode"]:
+        """Legacy alias for bake()."""
+        return cls.bake(
+            objects,
+            attributes=attributes,
+            time_range=time_range,
+            sample_by=sample_by,
+            preserve_outside_keys=preserve_outside_keys,
+            simulation=simulation,
+            destination_layer=destination_layer,
+            remove_baked_attr_from_layer=remove_baked_attr_from_layer,
+            bake_on_override_layer=bake_on_override_layer,
+            minimize_rotation=minimize_rotation,
+            sparse_anim_curve_bake=sparse_anim_curve_bake,
+            disable_implicit_control=disable_implicit_control,
+            control_points=control_points,
+            shape=shape,
+        )
+
     @staticmethod
     def objects_to_curves(
         objects: Union["pm.PyNode", str, List[Union["pm.PyNode", str]]],

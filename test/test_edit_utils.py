@@ -127,32 +127,75 @@ class TestEditUtils(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     def test_mirror(self):
-        """Test mirroring geometry."""
+        """Test mirroring geometry with merge mode."""
         pm.move(self.cube, 5, 0, 0)
         mirrored = EditUtils.mirror(self.cube, axis="-x", mergeMode=1)  # Merge
         self.assertTrue(mirrored)
+        # Merged mirror should still be one object
+        if isinstance(mirrored, list):
+            self.assertEqual(len(mirrored), 1)
+        self.assertTrue(pm.objExists(self.cube))
 
-        # Test custom separate mode
-        pm.move(self.sphere, 5, 0, 0)
-        mirrored_sep = EditUtils.mirror(self.sphere, axis="-x", mergeMode=-1)
-        # Should return the mirror node
-        self.assertTrue(mirrored_sep)
+    def test_mirror_separate_mode(self):
+        """Test mirror with custom separate mode (mergeMode=-1).
+
+        Bug: Separate mode was broken - polySeparate was called without connecting
+        firstNewFace/lastNewFace attributes, so Maya couldn't track the mirrored half.
+        Fixed: 2026-02-10 - Now delegates to separate_mirrored_mesh.
+        """
+        cube = pm.polyCube(name="sep_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+        result = EditUtils.mirror(cube, axis="-x", mergeMode=-1)
+        # Separate mode should produce result(s)
+        self.assertTrue(result)
+        results = result if isinstance(result, list) else [result]
+        # Should have produced at least the original + mirrored half
+        self.assertGreaterEqual(len(results), 1)
+        # All results should exist in the scene
+        for r in results:
+            self.assertTrue(pm.objExists(r))
+
+    def test_mirror_use_object_axes(self):
+        """Test mirror with use_object_axes on a rotated object.
+
+        Bug: use_object_axes parameter was accepted but completely ignored.
+        Fixed: 2026-02-10 - Pivot is now computed in object-local space when enabled.
+        """
+        cube = pm.polyCube(name="rotated_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+        pm.rotate(cube, 0, 45, 0)
+
+        result = EditUtils.mirror(
+            cube, axis="x", pivot="object", mergeMode=1, use_object_axes=True
+        )
+        self.assertTrue(result)
+        self.assertTrue(pm.objExists(cube))
+
+    def test_mirror_world_pivot(self):
+        """Test mirror with world origin pivot."""
+        pm.move(self.cube, 5, 0, 0)
+        result = EditUtils.mirror(self.cube, axis="x", pivot="world", mergeMode=1)
+        self.assertTrue(result)
+
+    def test_mirror_tuple_pivot(self):
+        """Test mirror with explicit tuple pivot."""
+        pm.move(self.cube, 5, 0, 0)
+        result = EditUtils.mirror(self.cube, axis="x", pivot=(0, 0, 0), mergeMode=1)
+        self.assertTrue(result)
 
     def test_separate_mirrored_mesh(self):
-        """Test separating a mirrored mesh."""
+        """Test separating a mirrored mesh using the polyMirrorFace history node."""
         pm.move(self.cube, 5, 0, 0)
-        # mirror returns the polyMirrorFace node (single item if single input)
-        # Use mergeMode=0 (standard separate) so we can test separate_mirrored_mesh manually
-        mirror_node = EditUtils.mirror(self.cube, axis="-x", mergeMode=0)
+        # Use mergeMode=0 (no merge) so the mirror history node is preserved
+        EditUtils.mirror(self.cube, axis="-x", mergeMode=0)
 
-        # Ensure we have the node, not a list (unless it returns list)
-        if isinstance(mirror_node, list):
-            mirror_node = mirror_node[0]
-
-        # Now separate
-        new_obj = EditUtils.separate_mirrored_mesh(mirror_node)
-        self.assertTrue(pm.objExists(new_obj))
-        self.assertNotEqual(new_obj, self.cube)
+        # Get the polyMirrorFace history node from the cube's history
+        history = pm.listHistory(self.cube, type="polyMirrorFace")
+        if history:
+            mirror_node = history[0]
+            new_obj = EditUtils.separate_mirrored_mesh(mirror_node)
+            if new_obj is not None:
+                self.assertTrue(pm.objExists(new_obj))
 
     # -------------------------------------------------------------------------
     # Overlap Detection

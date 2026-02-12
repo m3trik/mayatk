@@ -195,6 +195,31 @@ class DisplayUtils(ptk.HelpMixin):
         else:
             pass  # print("Isolation mode is not active in the current view panel.")
 
+    @staticmethod
+    def reset_viewport(max_res=4096):
+        """Resets Viewport 2.0 to fix graphical glitches (e.g. green scrambled textures).
+
+        This flushes the GPU memory and restarts the OGS renderer.
+        It also sets the Max Texture Resolution to prevent clamping.
+        """
+        import maya.cmds as cmds
+
+        try:
+            # Prevent texture clamping which causes the "green" look
+            if cmds.objExists("hardwareRenderingGlobals"):
+                # Check if we should force a high limit
+                cmds.setAttr("hardwareRenderingGlobals.textureMaxResolution", max_res)
+
+            print("Resetting Viewport 2.0...")
+            # Reset the scheduler
+            cmds.ogs(reset=True)
+            # Force refresh
+            cmds.refresh(force=True)
+            print("Viewport reset complete.")
+
+        except Exception as e:
+            print(f"Failed to reset viewport: {e}")
+
 
 # -----------------------------------------------------------------------------
 

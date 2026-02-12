@@ -15,11 +15,11 @@ import pymel.core as pm
 import pythontk as ptk
 
 from base_test import MayaTkTestCase
-from mayatk.mat_utils.material_updater import MaterialUpdater
+from mayatk.mat_utils.mat_updater import MatUpdater
 
 
-class TestMaterialUpdater(MayaTkTestCase):
-    """Tests for MaterialUpdater class."""
+class TestMatUpdater(MayaTkTestCase):
+    """Tests for MatUpdater class."""
 
     def setUp(self):
         super().setUp()
@@ -45,7 +45,7 @@ class TestMaterialUpdater(MayaTkTestCase):
         if hasattr(self.mat, "baseColor"):
             pm.connectAttr(self.file_node.outColor, self.mat.baseColor)
 
-        self.updater = MaterialUpdater()
+        self.updater = MatUpdater()
 
     def tearDown(self):
         super().tearDown()
@@ -392,9 +392,7 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
             self.textures["Roughness"],
         ]
 
-        with patch(
-            "pythontk.MapFactory.prepare_maps", return_value=processed_files
-        ):
+        with patch("pythontk.MapFactory.prepare_maps", return_value=processed_files):
             updater.update_materials(materials=[self.mat], config="Unity HDRP")
 
             # Check Metallic (R of MSAO)

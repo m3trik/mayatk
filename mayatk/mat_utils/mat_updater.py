@@ -18,7 +18,7 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-class MaterialUpdater(ptk.LoggingMixin):
+class MatUpdater(ptk.LoggingMixin):
     """Updates existing materials with processed textures."""
 
     @classmethod
@@ -583,13 +583,13 @@ class MaterialUpdater(ptk.LoggingMixin):
         return inventory
 
 
-class MaterialUpdaterSlots(MaterialUpdater):
+class MatUpdaterSlots(MatUpdater):
     msg_intro = "Update existing materials with processed textures."
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
     def __init__(self, switchboard):
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.material_updater
+        self.ui = self.sb.loaded_ui.mat_updater
 
         # Setup logging
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
