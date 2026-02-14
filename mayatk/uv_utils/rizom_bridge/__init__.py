@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 
-from mayatk.edit_utils.rizom_bridge._rizom_bridge import *
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import *
 
 # --------------------------------------------------------------------------------------------
 

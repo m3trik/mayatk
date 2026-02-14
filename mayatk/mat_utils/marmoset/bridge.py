@@ -13,6 +13,7 @@ except ImportError:
 
 import pythontk as ptk
 from pythontk.core_utils.app_launcher import AppLauncher
+from pythontk.str_utils._str_utils import StrUtils
 
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.mat_utils.mat_manifest import MatManifest
@@ -34,15 +35,14 @@ _DEFAULT_FBX_OPTIONS: Dict[str, Any] = {
 
 # Template lives next to this module
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
-_TEMPLATE_PATH = os.path.join(_TEMPLATE_DIR, "marmoset_import.py")
 
 
-class MarmosetExporter(ptk.LoggingMixin):
+class MarmosetBridge(ptk.LoggingMixin):
     """Export Maya selection to Marmoset Toolbag with automatic material setup.
 
     Usage::
 
-        MarmosetExporter().send(
+        MarmosetBridge().send(
             objects=cmds.ls(sl=True),
             toolbag_exe=r"C:/Program Files/Marmoset/Toolbag 4/toolbag.exe",
         )
@@ -57,6 +57,7 @@ class MarmosetExporter(ptk.LoggingMixin):
         fbx_options: Optional[Dict[str, Any]] = None,
         preset_file: Optional[str] = None,
         headless: bool = False,
+        template: str = "import",
     ) -> Optional[str]:
         """Export objects and launch Toolbag.
 
@@ -71,6 +72,8 @@ class MarmosetExporter(ptk.LoggingMixin):
             fbx_options: Additional FBX MEL overrides merged on top of defaults.
             preset_file: Optional FBX export preset path.
             headless: If True, Toolbag will save the scene and quit automatically.
+            template: Name of the template to use (e.g. "import", "bake").
+                      Defaults to "import".
 
         Returns:
             The path to the generated Toolbag script, or *None* on failure.
@@ -119,11 +122,14 @@ class MarmosetExporter(ptk.LoggingMixin):
         self.logger.info(f"Manifest written: {manifest_path}")
 
         # -- Generate Toolbag script ----------------------------------------
-        if not os.path.isfile(_TEMPLATE_PATH):
-            self.logger.error(f"Template missing: {_TEMPLATE_PATH}")
+        template_file = f"{template}.py"
+        template_path = os.path.join(_TEMPLATE_DIR, template_file)
+
+        if not os.path.isfile(template_path):
+            self.logger.error(f"Template missing: {template_path}")
             return None
 
-        with open(_TEMPLATE_PATH, "r", encoding="utf-8") as fh:
+        with open(template_path, "r", encoding="utf-8") as fh:
             script = fh.read()
 
         # Determine automation variables
@@ -131,16 +137,19 @@ class MarmosetExporter(ptk.LoggingMixin):
         should_quit = False
 
         if headless:
-            # When headless, automatically save next to the FBX and quit.
-            # Example: "my_scene.tbscene"
             tb_scene_path = os.path.splitext(fbx_path)[0] + ".tbscene"
             save_path = tb_scene_path.replace("\\", "/")
             should_quit = True
 
-        script = script.replace("__FBX_PATH__", fbx_path.replace("\\", "/"))
-        script = script.replace("__MANIFEST_PATH__", manifest_path.replace("\\", "/"))
-        script = script.replace("__SAVE_PATH__", save_path)
-        script = script.replace("__SHOULD_QUIT__", str(should_quit))
+        script = StrUtils.replace_delimited(
+            script,
+            {
+                "FBX_PATH": fbx_path.replace("\\", "/"),
+                "MANIFEST_PATH": manifest_path.replace("\\", "/"),
+                "SAVE_PATH": save_path,
+                "SHOULD_QUIT": should_quit,
+            },
+        )
 
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(script)

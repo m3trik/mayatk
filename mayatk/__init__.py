@@ -35,6 +35,8 @@ DEFAULT_INCLUDE = {
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
+    # Attribute utils
+    "node_utils.attribute_utils": ["AttributeManager"],
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.instancing.auto_instancer": "AutoInstancer",
@@ -72,12 +74,14 @@ DEFAULT_INCLUDE = {
     "env_utils.fbx_utils": "FbxUtils",
     # Material utils
     "mat_utils.game_shader": "GameShader",
-    "mat_utils.material_fade._material_fade": "MaterialFade",
+    "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.mat_updater": "MatUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
-    "mat_utils.mat_manifest": "MatManifest",
-    "mat_utils.marmoset_exporter": "MarmosetExporter",
     "mat_utils.shader_templates": "ShaderTemplates",
+    "mat_utils.mat_manifest": "MatManifest",
+    "mat_utils.mat_snapshot": "MatSnapshot",
+    # Marmoset Bridge
+    "mat_utils.marmoset.bridge": "MarmosetBridge",
     # UI utils
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",

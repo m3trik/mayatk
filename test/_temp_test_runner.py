@@ -72,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_-t', 'test_marmoset_bridge']
+test_modules = ['test_render_opacity_export']
 total_tests = 0
 total_failures = 0
 total_errors = 0

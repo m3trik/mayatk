@@ -30,7 +30,7 @@ import json
 
 # Now import the modules under test
 from mayatk.mat_utils.mat_manifest import MatManifest
-from mayatk.mat_utils.marmoset_exporter import MarmosetExporter
+from mayatk.mat_utils.marmoset.bridge import MarmosetBridge
 
 # We might need to mock _mat_utils imports if they fail
 from mayatk.mat_utils._mat_utils import MatUtils
@@ -87,7 +87,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                 ) as mock_paths:
 
                     # Run Build
-                    manifest = ManifestBuilder.build([mock_obj])
+                    manifest = MatManifest.build([mock_obj])
 
                     # print(f"DEBUG: Manifest result: {manifest}")
 
@@ -106,17 +106,17 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         """Test that MarmosetExporter calls FbxUtils correctly."""
         # Patch FbxUtils
         with unittest.mock.patch(
-            "mayatk.mat_utils.marmoset_exporter.FbxUtils"
+            "mayatk.mat_utils.marmoset.bridge.FbxUtils"
         ) as mock_fbx:
             # Patch ManifestBuilder
             with unittest.mock.patch(
-                "mayatk.mat_utils.marmoset_exporter.ManifestBuilder"
+                "mayatk.mat_utils.marmoset.bridge.MatManifest"
             ) as mock_builder:
                 mock_builder.build.return_value = {"materials": {}}
 
                 # Mock AppLauncher
                 with unittest.mock.patch(
-                    "mayatk.mat_utils.marmoset_exporter.AppLauncher"
+                    "mayatk.mat_utils.marmoset.bridge.AppLauncher"
                 ) as mock_launcher:
                     # Mock output dir creation (pass through) and open
                     # We DON'T patch makedirs, let it happen in temp.
@@ -125,7 +125,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                     with unittest.mock.patch(
                         "builtins.open", unittest.mock.mock_open()
                     ) as mock_file:
-                        exporter = MarmosetExporter()
+                        exporter = MarmosetBridge()
                         # Override resolve logic to avoid cmds listing
                         # exporter._resolve_objects = MagicMock(return_value=["pCube1"])
 
@@ -153,7 +153,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             # Force unknown type
             mock_cmds.nodeType.return_value = "unknownShader_type_xyz"
 
-            manifest = ManifestBuilder.build([mock_obj])
+            manifest = MatManifest.build([mock_obj])
 
             self.assertIn("materials", manifest)
             # Should NOT be in materials if unknown type

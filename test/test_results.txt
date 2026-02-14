@@ -3,30 +3,13 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_-t: LOAD ERROR
-  [Errno 2] No such file or directory: 'O:/Cloud/Code/_scripts/mayatk/test/test_-t.py'
-
-test_marmoset_bridge: FAIL
-  Tests: 3, Failures: 0, Errors: 1, Skipped: 0
-
-  ERROR: test_manifest_util_nodes (test_marmoset_bridge.TestMarmosetBridge.test_manifest_util_nodes)
-  Traceback (most recent call last):
-  File "O:/Cloud/Code/_scripts/mayatk/test/test_marmoset_bridge.py", line 101, in test_manifest_util_nodes
-    pm.connectAttr(f"{cc_file}.outColor", f"{cc}.inColor")
-  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\core\general.py", line 314, in connectAttr
-    cmds.connectAttr(source, destination, **kwargs)
-  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\internal\pmcmds.py", line 217, in connectAttr_wrapped
-    res = new_cmd(*new_args, **new_kwargs)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: The destination attribute 'ccNode.inColor' cannot be found.
-
-
+test_render_opacity_export: PASS
+  Tests: 2, Failures: 0, Errors: 0, Skipped: 0
 
 ======================================================================
 SUMMARY
 ======================================================================
-  test_-t: LOAD ERROR - [Errno 2] No such file or directory: 'O:/Cloud/Cod
-  test_marmoset_bridge: FAIL (3 tests, 0 failures, 1 errors)
+  test_render_opacity_export: PASS (2 tests, 0 failures, 0 errors)
 ======================================================================
-Total: 3 tests, 0 failures, 1 errors, 0 skipped
+Total: 2 tests, 0 failures, 0 errors, 0 skipped
 ======================================================================

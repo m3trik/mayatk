@@ -364,10 +364,8 @@ class RizomUVBridge:
         # Execute RizomUV via AppLauncher
         exe = self.rizom_path
         if not exe:
-            print(
-                "Debug: Error - RizomUV executable not found. "
-                "Pass rizom_path= or add RizomUV to your PATH."
-            )
+            print("Debug: Error - RizomUV executable not found. "
+                  "Pass rizom_path= or add RizomUV to your PATH.")
             return
 
         try:
@@ -516,14 +514,11 @@ class RizomUVBridge:
         is_fbx = Path(self.export_path).suffix.lower() == ".fbx"
 
         wrapper = (_TEMPLATE_DIR / "wrapper.lua").read_text(encoding="utf-8")
-        full_script = StrUtils.replace_delimited(
-            wrapper,
-            {
-                "EXPORT_PATH": export_path_normalized,
-                "FBX_FLAG": ", FBX=true" if is_fbx else "",
-                "USER_SCRIPT": user_script,
-            },
-        )
+        full_script = StrUtils.replace_delimited(wrapper, {
+            "EXPORT_PATH": export_path_normalized,
+            "FBX_FLAG": ", FBX=true" if is_fbx else "",
+            "USER_SCRIPT": user_script,
+        })
 
         print(f"Debug: Constructed full script:\n{full_script}")
         return full_script
