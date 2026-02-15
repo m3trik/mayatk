@@ -119,23 +119,21 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     @staticmethod
     @contextlib.contextmanager
     def temporarily_unlock_attributes(objects, attributes=None):
-        """
-        Context manager to temporarily unlock attributes on objects and restore their state afterwards.
+        """Context manager to temporarily unlock attributes on objects and restore their state afterwards.
+
+        .. deprecated:: Use ``AttributeManager.temporarily_unlock`` instead.
 
         Parameters:
             objects (str/obj/list): The object(s) to unlock attributes on.
             attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
                              If None, unlocks all standard transform attributes.
         """
-        from mayatk.rig_utils._rig_utils import RigUtils
+        from mayatk.node_utils.attribute_manager._attribute_manager import (
+            AttributeManager,
+        )
 
-        # Get current lock state and unlock
-        lock_state = RigUtils.get_attr_lock_state(objects, unlock=True)
-
-        try:
-            yield
-        finally:
-            RigUtils.set_attr_lock_state(objects, lock_state=lock_state)
+        with AttributeManager.temporarily_unlock(objects, attributes) as ctx:
+            yield ctx
 
     def selected(func: Callable) -> Callable:
         """A decorator to pass the current selection to the first parameter if None is given."""
@@ -497,108 +495,6 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                 mapping[source_child.name()] = best_match.name()
 
         return mapping
-
-    @staticmethod
-    def filter_attributes(
-        attributes: List[str],
-        exclude: Union[str, List[str], None] = None,
-        include: Union[str, List[str], None] = None,
-        case_sensitive: bool = False,
-    ) -> List[str]:
-        """Filter attribute names based on inclusion and/or exclusion patterns.
-
-        This is a general-purpose utility for filtering attribute lists that can be used
-        throughout the toolkit. Supports both exact matching and pattern matching.
-
-        Parameters:
-            attributes (list): List of attribute names to filter.
-            exclude (str/list, optional): Attribute name(s) or pattern(s) to exclude.
-                Can be exact names or patterns with wildcards (* and ?).
-                E.g., 'visibility', ['visibility', 'translate*'], or ['*X', '*Y'].
-            include (str/list, optional): Attribute name(s) or pattern(s) to include.
-                If specified, only attributes matching these patterns will be kept.
-                Can be exact names or patterns with wildcards (* and ?).
-            case_sensitive (bool): Whether to use case-sensitive matching. Default is False.
-
-        Returns:
-            list: Filtered list of attribute names.
-
-        Example:
-            >>> attrs = ['translateX', 'translateY', 'translateZ', 'rotateX', 'visibility']
-
-            # Exclude specific attributes
-            >>> filter_attributes(attrs, exclude='visibility')
-            ['translateX', 'translateY', 'translateZ', 'rotateX']
-
-            # Exclude using patterns
-            >>> filter_attributes(attrs, exclude='translate*')
-            ['rotateX', 'visibility']
-
-            # Include only specific patterns
-            >>> filter_attributes(attrs, include='translate*')
-            ['translateX', 'translateY', 'translateZ']
-
-            # Combine include and exclude
-            >>> filter_attributes(attrs, include='translate*', exclude='*Z')
-            ['translateX', 'translateY']
-
-            # Multiple patterns
-            >>> filter_attributes(attrs, exclude=['visibility', '*Z'])
-            ['translateX', 'translateY', 'rotateX']
-        """
-        import fnmatch
-
-        if not attributes:
-            return []
-
-        # Normalize exclude parameter to a list
-        if exclude is None:
-            exclude_patterns = []
-        elif isinstance(exclude, str):
-            exclude_patterns = [exclude]
-        else:
-            exclude_patterns = list(exclude)
-
-        # Normalize include parameter to a list
-        if include is None:
-            include_patterns = []
-        elif isinstance(include, str):
-            include_patterns = [include]
-        else:
-            include_patterns = list(include)
-
-        # Helper function for pattern matching
-        def matches_pattern(attr_name: str, pattern: str) -> bool:
-            """Check if attribute name matches the pattern."""
-            if not case_sensitive:
-                attr_name = attr_name.lower()
-                pattern = pattern.lower()
-
-            # Use fnmatch for wildcard support
-            if "*" in pattern or "?" in pattern:
-                return fnmatch.fnmatch(attr_name, pattern)
-            else:
-                # Exact match
-                return attr_name == pattern
-
-        # Filter attributes
-        filtered = []
-        for attr in attributes:
-            # Check include patterns first (if specified)
-            if include_patterns:
-                if not any(
-                    matches_pattern(attr, pattern) for pattern in include_patterns
-                ):
-                    continue
-
-            # Check exclude patterns
-            if exclude_patterns:
-                if any(matches_pattern(attr, pattern) for pattern in exclude_patterns):
-                    continue
-
-            filtered.append(attr)
-
-        return filtered
 
     @staticmethod
     def get_mel_globals(keyword=None, ignore_case=True):

@@ -1,0 +1,11 @@
+description: Audio event attributes for Unity export
+attributes:
+  - long_name: audioEventName
+    type: string
+    keyable: true
+  - long_name: audioEventVolume
+    type: float
+    keyable: true
+    min: 0.0
+    max: 1.0
+    default: 1.0

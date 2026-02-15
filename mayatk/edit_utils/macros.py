@@ -15,6 +15,7 @@ from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.ui_utils._ui_utils import UiUtils
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 
 
 class MacroManager(ptk.HelpMixin):
@@ -1125,7 +1126,7 @@ class AnimationMacros:
     def m_set_selected_keys(objects) -> None:
         """Set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = UiUtils.get_selected_channels()
+            attrs = AttributeManager.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)
@@ -1136,7 +1137,7 @@ class AnimationMacros:
     def m_unset_selected_keys(objects) -> None:
         """Un-set keys for any attributes (channels) that are selected in the channel box."""
         for obj in objects:
-            attrs = UiUtils.get_selected_channels()
+            attrs = AttributeManager.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
                 pm.setKeyframe(attr_)

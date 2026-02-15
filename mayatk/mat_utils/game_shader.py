@@ -15,6 +15,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -402,7 +403,7 @@ class GameShader(ptk.LoggingMixin):
         )
 
         # Connect Arnold nodes to the shading engine
-        NodeUtils.connect_multi_attr(
+        AttributeManager.connect_multi(
             (ai_node.outColor, shading_engine.aiSurfaceShader),
             (aiMult_node.outColor, ai_node.baseColor),
             (bump_node.outNormal, ai_node.normalCamera),

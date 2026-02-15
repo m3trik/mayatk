@@ -13,6 +13,7 @@ Tests for RigUtils class functionality including:
 """
 import unittest
 import pymel.core as pm
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 
 # Handle lazy loading of RigUtils
 try:
@@ -150,24 +151,24 @@ class TestRigUtils(MayaTkTestCase):
         self.assertEqual(self.cube.getParent(), grp)
 
     def test_attr_lock_state(self):
-        """Test get_attr_lock_state and set_attr_lock_state."""
+        """Test get_lock_state and set_lock_state via AttributeManager."""
         # Setup
         pm.setAttr(self.cube.tx, lock=True)
         pm.setAttr(self.cube.ry, lock=True)
 
         # Test Get
-        state = RigUtils.get_attr_lock_state([self.cube])
+        state = AttributeManager.get_lock_state([self.cube])
         cube_state = state[self.cube.name()]
         self.assertTrue(cube_state["tx"])
         self.assertTrue(cube_state["ry"])
         self.assertFalse(cube_state["tz"])
 
         # Test Unlock via Get
-        RigUtils.get_attr_lock_state([self.cube], unlock=True)
+        AttributeManager.get_lock_state([self.cube], unlock=True)
         self.assertFalse(pm.getAttr(self.cube.tx, lock=True))
 
         # Test Set Bulk
-        RigUtils.set_attr_lock_state(self.cube, translate=True)
+        AttributeManager.set_lock_state(self.cube, translate=True)
         self.assertTrue(pm.getAttr(self.cube.tx, lock=True))
         self.assertTrue(pm.getAttr(self.cube.ty, lock=True))
         self.assertTrue(pm.getAttr(self.cube.tz, lock=True))
@@ -195,15 +196,15 @@ class TestRigUtils(MayaTkTestCase):
         # Verify driven keys (scaleY should be connected to animCurve)
         self.assertTrue(pm.listConnections(seg2.scaleY, type="animCurve"))
 
-    def test_create_switch_attr(self):
-        """Test create_switch_attr method."""
+    def test_create_switch(self):
+        """Test create_switch method via AttributeManager."""
         # Test 1: Bool
-        attr = RigUtils.create_switch_attr(self.cube, "mySwitch")
+        attr = AttributeManager.create_switch(self.cube, "mySwitch")
         self.assertTrue(self.cube.hasAttr("mySwitch"))
         self.assertEqual(attr.type(), "bool")
 
         # Test 2: Weighted
-        attr2 = RigUtils.create_switch_attr(self.cube, "myWeight", weighted=True)
+        attr2 = AttributeManager.create_switch(self.cube, "myWeight", weighted=True)
         self.assertEqual(attr2.type(), "double")
 
     def test_connect_switch_to_constraint(self):

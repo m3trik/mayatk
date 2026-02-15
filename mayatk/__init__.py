@@ -36,7 +36,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
     # Attribute utils
-    "node_utils.attribute_utils": ["AttributeManager"],
+    "node_utils.attribute_manager._attribute_manager": ["AttributeManager"],
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.instancing.auto_instancer": "AutoInstancer",

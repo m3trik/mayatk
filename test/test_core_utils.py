@@ -14,6 +14,7 @@ import unittest
 import pymel.core as pm
 import mayatk as mtk
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 
 from base_test import MayaTkTestCase
 
@@ -217,21 +218,21 @@ class TestCoreUtils(MayaTkTestCase):
         self.assertTrue(self.cyl.translateX.isLocked())
 
     def test_filter_attributes(self):
-        """Test filtering attributes."""
+        """Test filtering attributes via AttributeManager."""
         attrs = ["translateX", "translateY", "translateZ", "rotateX", "visibility"]
 
         # Exclude specific
-        filtered = CoreUtils.filter_attributes(attrs, exclude="visibility")
+        filtered = AttributeManager.filter(attrs, exclude="visibility")
         self.assertEqual(
             filtered, ["translateX", "translateY", "translateZ", "rotateX"]
         )
 
         # Include pattern
-        filtered = CoreUtils.filter_attributes(attrs, include="translate*")
+        filtered = AttributeManager.filter(attrs, include="translate*")
         self.assertEqual(filtered, ["translateX", "translateY", "translateZ"])
 
         # Exclude pattern
-        filtered = CoreUtils.filter_attributes(attrs, exclude="*Z")
+        filtered = AttributeManager.filter(attrs, exclude="*Z")
         self.assertEqual(
             filtered, ["translateX", "translateY", "rotateX", "visibility"]
         )

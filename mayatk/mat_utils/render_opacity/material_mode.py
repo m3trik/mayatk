@@ -271,10 +271,6 @@ class OpacityMaterialMode(ptk.LoggingMixin):
                     )
 
     @classmethod
-    def bake(cls, objects, frame_range, sample_by, optimize):
-        pass
-
-    @classmethod
     def remove(cls, objects):
         """Remove material-mode artifacts from *objects*.
 

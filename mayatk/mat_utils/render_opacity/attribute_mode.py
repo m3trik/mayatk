@@ -8,7 +8,7 @@ try:
 except ImportError:
     pass
 
-from mayatk.node_utils.attribute_utils import AttributeManager
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 
 
 class OpacityAttributeMode(ptk.LoggingMixin):
@@ -24,27 +24,12 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     ATTR_NAME = "opacity"
     """Custom attribute name used in ``"attribute"`` mode."""
 
-    # Define attribute template
-    FADE_TEMPLATE = None  # Initialized lazily or in setup to allow import access
-
     @classmethod
     def create(cls, objects) -> Dict[str, Dict]:
         """Add 'opacity' attribute on each transform (no keyframes)."""
-
-        # Define template if not already
-        template = AttributeManager.Template(
-            long_name=cls.ATTR_NAME,
-            attribute_type="float",
-            keyable=True,
-            min_value=0.0,
-            max_value=1.0,
-            default_value=1.0,
-        )
-
         results = {}
 
-        # Use generic manager
-        AttributeManager.create_attributes(objects, template)
+        AttributeManager.apply_preset("opacity", objects)
 
         for obj in pm.ls(objects):
             # Drive Visibility from Opacity

@@ -1038,6 +1038,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             # This handles removal (truncation) and addition (extension) automatically
             t.setRowCount(len(file_names))
 
+            current_scene = (
+                os.path.normcase(os.path.normpath(pm.sceneName()))
+                if pm.sceneName()
+                else ""
+            )
+
             for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
                 if not item:
@@ -1068,32 +1074,19 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 self._format_table_item(item, file_path)
 
-                # Add option box for open file
-                try:
+                # Set the action column state (highlight if this is the current scene)
+                norm_fp = os.path.normcase(os.path.normpath(file_path))
+                is_current = norm_fp == current_scene
+                t.actions.set(row, 1, "current" if is_current else "default")
 
-                    def _open_factory(path):
-                        # Factory needed to capture loop variable 'path'
-                        return lambda: self.open_scene(path)
-
-                    # Ensure fresh state by clearing existing options
-                    # set_action(replace=True) handles cleanup automatically
-                    t.cell_option_box(row, 0).set_action(
-                        callback=_open_factory(file_path),
-                        icon="open_external",
-                        tooltip="Open Scene",
-                    )
-                except Exception as e:
-                    # Log error but don't crash
-                    self.logger.warning(f"Failed to add option box to table: {e}")
-
-                # Column 1: Notes (Metadata)
-                item_notes = t.item(row, 1)
+                # Column 2: Notes (Metadata)
+                item_notes = t.item(row, 2)
                 if not item_notes:
                     item_notes = self.sb.QtWidgets.QTableWidgetItem()
                     item_notes.setFlags(
                         item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
                     )
-                    t.setItem(row, 1, item_notes)
+                    t.setItem(row, 2, item_notes)
 
                 # Store file path in notes item too for easy access during edit
                 item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
@@ -1648,8 +1641,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:
-            widget.setColumnCount(2)
-            widget.setHorizontalHeaderLabels(["FILES:", "NOTES:"])
+            widget.setColumnCount(3)
+            widget.setHorizontalHeaderLabels(["FILES:", "", "NOTES:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -1657,8 +1650,27 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setSortingEnabled(True)
             widget.verticalHeader().setVisible(False)
 
-            # Make the Notes column (index 1) non-selecting so clicking it doesn't trigger reference logic
-            widget.set_column_selectable(1, False)
+            # Action column (index 1) — "Open" icon
+            widget.actions.add(
+                1,
+                states={
+                    "default": {
+                        "icon": "open_external",
+                        "color": "#555555",
+                        "tooltip": "Open Scene",
+                        "action": self._open_scene_at_row,
+                    },
+                    "current": {
+                        "icon": "open_external",
+                        "color": "#e8c44a",
+                        "tooltip": "Current Scene",
+                        "action": self._open_scene_at_row,
+                    },
+                },
+            )
+
+            # Make the Notes column (index 2) non-selecting so clicking it doesn't trigger reference logic
+            widget.set_column_selectable(2, False)
             widget.setAlternatingRowColors(False)
             widget.setWordWrap(False)
             widget.set_stretch_column(0)
@@ -1732,7 +1744,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             table = self.ui.tbl000
             table.editItem(item)
 
-        elif item and item.column() == 1:  # Notes column
+        elif item and item.column() == 2:  # Notes column
             self.logger.debug(f"Starting edit for notes: {item.text()}")
             table = self.ui.tbl000
             table.editItem(item)
@@ -1757,7 +1769,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # Update the stored display name
             item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
 
-        elif item.column() == 1:  # Notes column
+        elif item.column() == 2:  # Notes column
             file_path = item.data(self.sb.QtCore.Qt.UserRole)
             if not file_path:
                 return
@@ -1808,6 +1820,16 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     selected_namespaces.extend(path_to_namespaces[norm_path])
 
         return selected_namespaces
+
+    def _open_scene_at_row(self, row, col):
+        """Open the scene file associated with the given table row."""
+        t = self.ui.tbl000
+        item = t.item(row, 0)
+        if not item:
+            return
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if file_path:
+            self.controller.open_scene(file_path)
 
     def btn_open_scene(self):
         """Open the selected scene file."""

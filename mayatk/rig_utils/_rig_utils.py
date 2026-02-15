@@ -11,6 +11,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
@@ -259,7 +260,7 @@ class RigUtils(ptk.HelpMixin):
             if parent:
                 XformUtils.freeze_transforms(grp, scale=True)
 
-            cls.set_attr_lock_state(
+            AttributeManager.set_lock_state(
                 obj,
                 translate=lock_translate,
                 rotate=lock_rotation,
@@ -285,7 +286,9 @@ class RigUtils(ptk.HelpMixin):
                     continue
 
                 # Unlock attributes
-                cls.set_attr_lock_state(obj, translate=False, rotate=False, scale=False)
+                AttributeManager.set_lock_state(
+                    obj, translate=False, rotate=False, scale=False
+                )
 
                 # Get the parent and grandparent
                 parent = NodeUtils.get_parent(obj)
@@ -317,170 +320,6 @@ class RigUtils(ptk.HelpMixin):
                 pm.warning(f"Object '{obj}' is not a locator.")
 
         return objects
-
-    @staticmethod
-    def get_attr_lock_state(objects, unlock: bool = False) -> dict:
-        """Returns lock state for standard transform attributes and optionally unlocks them.
-
-        Parameters:
-            objects (list): Maya transform nodes
-            unlock (bool): If True, unlocks the attributes after storing their state.
-
-        Returns:
-            Dict[str, Dict[str, bool]]: {
-                "myObject": {
-                    "translate": True,
-                    "rotate": False,
-                    "scale": None,
-                    "tx": True, "ty": True, ...
-                }
-            }
-        """
-        objects = pm.ls(objects, transforms=True, long=True)
-        attr_groups = {
-            "translate": ("tx", "ty", "tz"),
-            "rotate": ("rx", "ry", "rz"),
-            "scale": ("sx", "sy", "sz"),
-        }
-
-        result = {}
-
-        for obj in objects:
-            try:
-                if NodeUtils.is_locator(obj):
-                    obj = pm.listRelatives(obj, children=1, type="transform")[0]
-            except IndexError:
-                continue
-
-            obj_state = {}
-
-            for group, attrs in attr_groups.items():
-                group_vals = []
-                for attr in attrs:
-                    try:
-                        full_attr = f"{obj}.{attr}"
-                        locked = pm.getAttr(full_attr, lock=True)
-                        obj_state[attr] = locked
-                        group_vals.append(locked)
-                        if unlock and locked:
-                            pm.setAttr(full_attr, lock=False)
-                    except Exception:
-                        obj_state[attr] = None
-                        group_vals.append(None)
-                # Set unified group state
-                if all(v is True for v in group_vals):
-                    obj_state[group] = True
-                elif all(v is False for v in group_vals):
-                    obj_state[group] = False
-                else:
-                    obj_state[group] = None
-
-            result[obj.name()] = obj_state
-
-        return result
-
-    @classmethod
-    @CoreUtils.undoable
-    def set_attr_lock_state(
-        cls,
-        objects,
-        lock_state: Optional[Dict[str, Dict[str, bool]]] = None,
-        translate: Optional[bool] = None,
-        rotate: Optional[bool] = None,
-        scale: Optional[bool] = None,
-        **kwargs,
-    ) -> None:
-        """
-        Restore lock state using saved per-axis info, or lock/unlock in bulk.
-        """
-        objects = pm.ls(objects, transforms=True, long=True)
-
-        for obj in objects:
-            try:
-                if NodeUtils.is_locator(obj):
-                    obj = pm.listRelatives(obj, children=1, type="transform")[0]
-            except (IndexError, TypeError):
-                continue
-
-            # Restore per-attribute lock state
-            if lock_state and obj.name() in lock_state:
-                state = lock_state[obj.name()]
-                for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
-                    lock_val = state.get(attr)
-                    if lock_val is not None:
-                        try:
-                            pm.setAttr(f"{obj}.{attr}", lock=lock_val)
-                        except Exception:
-                            pass
-                continue  # skip bulk lock logic if restoring from lock_state
-
-            # Bulk translate/rotate/scale lock
-            attr_map = {
-                ("tx", "ty", "tz"): translate,
-                ("rx", "ry", "rz"): rotate,
-                ("sx", "sy", "sz"): scale,
-            }
-            for attrs, state in attr_map.items():
-                if state is None:
-                    continue
-                for attr in attrs:
-                    try:
-                        pm.setAttr(f"{obj}.{attr}", lock=state)
-                    except Exception:
-                        pass
-
-            # Individual attribute locks from kwargs
-            for attr, state in kwargs.items():
-                if state is None:
-                    continue
-                try:
-                    pm.setAttr(f"{obj}.{attr}", lock=state)
-                except Exception:
-                    pass
-
-    @staticmethod
-    @CoreUtils.undoable
-    def create_switch_attr(
-        node: "pm.PyNode",
-        attr_name: str,
-        weighted: bool = False,
-        min_value: float = 0.0,
-        max_value: float = 1.0,
-    ) -> "pm.Attribute":
-        """Create a bool or float (weighted) attribute on the node if it doesn't exist.
-
-        Parameters:
-            node (pm.PyNode): Node to add the attribute to.
-            attr_name (str): Attribute name.
-            weighted (bool): If True, create float (0–1), else bool.
-            min_value (float): Min value for weighted attr.
-            max_value (float): Max value for weighted attr.
-
-        Returns:
-            pm.Attribute: The created or existing attribute.
-        """
-        if node.hasAttr(attr_name):
-            return node.attr(attr_name)
-
-        if weighted:
-            pm.addAttr(
-                node,
-                ln=attr_name,
-                at="double",
-                min=min_value,
-                max=max_value,
-                k=True,
-                dv=0,
-            )
-        else:
-            pm.addAttr(
-                node,
-                ln=attr_name,
-                at="bool",
-                k=True,
-                dv=0,
-            )
-        return node.attr(attr_name)
 
     @classmethod
     @CoreUtils.undoable
@@ -735,7 +574,7 @@ class RigUtils(ptk.HelpMixin):
         pm.poleVectorConstraint(pole_vector, ik_handle)
 
         # Lock generic unused attrs
-        RigUtils.set_attr_lock_state(pole_vector, rotate=True, scale=True)
+        AttributeManager.set_lock_state(pole_vector, rotate=True, scale=True)
 
         return pole_vector
 
@@ -973,7 +812,7 @@ class RigUtils(ptk.HelpMixin):
 
                 # Preserve inheritsTransform and unlock transform attrs
                 original_inherits = transform.inheritsTransform.get()
-                lock_state = cls.get_attr_lock_state(transform, unlock=True)
+                lock_state = AttributeManager.get_lock_state(transform, unlock=True)
 
                 # Cache influences and bindPreMatrix
                 influences = pm.skinCluster(skin_cluster, query=True, influence=True)
@@ -1035,7 +874,9 @@ class RigUtils(ptk.HelpMixin):
                 transform.inheritsTransform.showInChannelBox(True)
 
                 # Restore transform lock state
-                cls.set_attr_lock_state(transform, **lock_state[transform.name()])
+                AttributeManager.set_lock_state(
+                    transform, **lock_state[transform.name()]
+                )
 
                 print(f"✔ Rebound: {transform_name}")
 
