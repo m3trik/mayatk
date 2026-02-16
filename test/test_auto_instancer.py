@@ -574,6 +574,7 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
             verbose=True, check_hierarchy=True, is_static=False
         )
 
+    @skipUnlessExtended
     def test_complex_scene_integration(self):
         """
         Build a complex scene with mixed conditions and verify instancing behavior.
@@ -745,6 +746,7 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
 
 
 class TestRealWorldScenarios(MayaTkTestCase):
+    @skipUnlessExtended
     def test_deep_hierarchy_many_duplicates(self):
         """Test instancing of many duplicates in a deep hierarchy (C130H scenario)."""
         # Replicate structure: group -> STATIC1 -> C130H -> L1_Atlas_B_grp -> polySurface123 -> ...
@@ -897,6 +899,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         transform.setTranslation([x, y, z])
         transform.setRotation([rx, ry, rz])
 
+    @skipUnlessExtended
     def test_canisters_random_rotation(self):
         """Test 10 canisters with random rotations combined into one mesh."""
         num_canisters = 10
@@ -1043,6 +1046,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         # We expect significant reduction from 35.
         self.assertLess(unique_shapes, 25, "Should have consolidated mixed geometry")
 
+    @skipUnlessExtended
     def test_clutter_rejection(self):
         """Test that random clutter doesn't break assembly detection."""
         # 3 Canisters
@@ -1080,6 +1084,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
             len(canister_assemblies), 3, "Should have recovered canister assemblies"
         )
 
+    @skipUnlessExtended
     def test_touching_assemblies(self):
         """Test assemblies that are touching or overlapping."""
         # Create a stack of canisters

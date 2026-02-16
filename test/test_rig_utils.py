@@ -19,6 +19,7 @@ from mayatk.node_utils.attributes._attributes import Attributes
 try:
     import mayatk as mtk
     from mayatk.rig_utils._rig_utils import RigUtils
+    from mayatk.rig_utils.telescope_rig import TelescopeRig
 except ImportError:
     import sys
     import os
@@ -26,6 +27,7 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import mayatk as mtk
     from mayatk.rig_utils._rig_utils import RigUtils
+    from mayatk.rig_utils.telescope_rig import TelescopeRig
 
 from base_test import MayaTkTestCase
 
@@ -185,7 +187,8 @@ class TestRigUtils(MayaTkTestCase):
         seg3 = pm.polyCube(n="seg3")[0]
 
         # Test
-        RigUtils.setup_telescope_rig(base, end, [seg1, seg2, seg3])
+        rig = TelescopeRig()
+        rig.setup_telescope_rig(base, end, [seg1, seg2, seg3])
 
         # Verify distance node created
         self.assertTrue(pm.objExists("strut_distance"))

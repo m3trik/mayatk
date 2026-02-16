@@ -901,6 +901,7 @@ class AttributeManagerSlots:
 
     def header_init(self, widget):
         """Populate the header menu with global actions."""
+        widget.configure_menu(add_defaults_button=False)
         widget.menu.setTitle("Actions:")
 
         # --- Create Attribute ---

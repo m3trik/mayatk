@@ -47,7 +47,12 @@ class MayaTestRunner:
         self.host = host
         self.port = port
         self.test_dir = Path(__file__).parent
-        self.results_file = self.test_dir / "test_results.txt"
+
+        # FIX: Save results and temp files in temp_tests directory to avoid pollution
+        self.temp_test_dir = self.test_dir / "temp_tests"
+        self.temp_test_dir.mkdir(exist_ok=True)
+
+        self.results_file = self.temp_test_dir / "test_results.txt"
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:
@@ -167,6 +172,8 @@ except Exception as e:
             extended: If True, run extended tests (sets MAYATK_EXTENDED_TESTS=1).
         """
         # Default test modules (core functionality)
+        # NOTE: test_calculator runs via regular pytest (no Maya needed)
+        # NOTE: test_keyframe_grouper does not exist yet
         default_modules = [
             "test_core_utils",
             "test_components",
@@ -178,7 +185,6 @@ except Exception as e:
             "test_env_utils",
             "test_scale_keys",
             "test_stagger_keys",
-            "test_keyframe_grouper",
         ]
 
         if modules is None:
@@ -390,7 +396,7 @@ except Exception as e:
         )
 
         # Write test code to a temporary file to avoid command port size limits
-        temp_runner_path = self.test_dir / "_temp_test_runner.py"
+        temp_runner_path = self.temp_test_dir / "_temp_test_runner.py"
         try:
             with open(temp_runner_path, "w", encoding="utf-8") as f:
                 f.write(test_code)
@@ -399,7 +405,7 @@ except Exception as e:
             return False
 
         # Generate execution code (small payload)
-        runner_dir = str(self.test_dir).replace("\\", "/")
+        runner_dir = str(self.temp_test_dir).replace("\\", "/")
         output_file_path = str(self.results_file).replace("\\", "/")
 
         exec_code = f"""
@@ -412,10 +418,18 @@ if runner_dir not in sys.path:
 
 # AGGRESSIVE MODULE CLEARING - clear all mayatk modules BEFORE running tests
 # This ensures fresh imports from the test files
+# BUT preserve maya_connection to keep the Maya standalone session and QApplication alive
+# Also preserve PySide/qtpy related modules to prevent losing QApplication reference
 mods_to_clear = [k for k in list(sys.modules.keys()) 
-                 if 'mayatk' in k.lower() or '_temp_test_runner' in k]
+                 if ('mayatk' in k.lower() or '_temp_test_runner' in k)
+                 and 'maya_connection' not in k
+                 and 'qt' not in k.lower()
+                 and 'pyside' not in k.lower()]
 for mod in mods_to_clear:
-    del sys.modules[mod]
+    try:
+        del sys.modules[mod]
+    except KeyError:
+        pass
 print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
 
 # Force reload/execution of the temp runner
@@ -437,7 +451,7 @@ except Exception as e:
             print("TESTS ARE RUNNING IN MAYA")
             print("=" * 70)
             print("\n1. Check Maya's Script Editor for real-time output")
-            print(f"2. Results will be saved to: {self.results_file.name}")
+            print(f"2. Results will be saved to: {self.results_file}")
 
             # Estimate time based on module count
             estimated_seconds = len(test_modules) * 10
@@ -449,9 +463,9 @@ except Exception as e:
                 print(f"3. Estimated time: ~{seconds}s")
 
             print("\nTo view results after completion:")
-            print(f"  Get-Content {self.results_file.name}")
+            print(f"  Get-Content {self.results_file}")
             print("\nTo monitor progress:")
-            print(f"  Get-Content {self.results_file.name} -Wait")
+            print(f"  Get-Content {self.results_file} -Wait")
             print("=" * 70)
 
             # Store estimated time for badge update waiting

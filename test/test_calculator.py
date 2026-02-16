@@ -3,18 +3,8 @@ from unittest.mock import MagicMock, patch
 import sys
 import os
 
-# Ensure QApplication exists for QtWidgets
-try:
-    from qtpy import QtWidgets
+# QApplication hack removed - using mocks instead
 
-    # Keep reference to app to prevent GC
-    _app = QtWidgets.QApplication.instance()
-    if not _app:
-        _app = QtWidgets.QApplication([])
-except ImportError:
-    pass
-except Exception:
-    pass
 
 # Add package root to path if needed
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -24,6 +14,11 @@ from mayatk.ui_utils import calculator
 
 class TestCalculator(unittest.TestCase):
     def setUp(self):
+        # Patch QtWidgets in the calculator module to avoid need for QApplication
+        patcher = patch("mayatk.ui_utils.calculator.QtWidgets")
+        self.mock_qt = patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.mock_sb = MagicMock()
         self.mock_ui = MagicMock()
         self.mock_sb.loaded_ui.calculator = self.mock_ui
