@@ -36,7 +36,7 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="Header" name="header">
+       <widget class="Header" name="header" native="true">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -49,8 +49,8 @@
           <bold>true</bold>
          </font>
         </property>
-        <property name="text">
-         <string>REFERENCE MANAGER</string>
+        <property name="text" stdset="0">
+         <string>REFERENCE MGR</string>
         </property>
        </widget>
       </item>
@@ -146,8 +146,13 @@
  <customwidgets>
   <customwidget>
    <class>Header</class>
-   <extends>QLabel</extends>
-   <header>uitk.widgets.header.Header.h</header>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
+  </customwidget>
+  <customwidget>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.table_widget</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
@@ -158,11 +163,6 @@
    <class>LineEdit</class>
    <extends>QLineEdit</extends>
    <header>widgets.lineedit.h</header>
-  </customwidget>
-  <customwidget>
-   <class>TableWidget</class>
-   <extends>QTableWidget</extends>
-   <header>uitk.widgets.tableWidget.TableWidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

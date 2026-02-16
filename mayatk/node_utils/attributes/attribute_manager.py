@@ -901,7 +901,6 @@ class AttributeManagerSlots:
 
     def header_init(self, widget):
         """Populate the header menu with global actions."""
-        widget.configure_menu(add_defaults_button=False)
         widget.menu.setTitle("Actions:")
 
         # --- Create Attribute ---
@@ -990,9 +989,12 @@ class AttributeManagerSlots:
 
     def show_create_menu(self, *args):
         """Show the *Create Attribute* popup."""
-        from uitk import Menu
-
-        menu = Menu(parent=self.ui, position="cursor")
+        menu = self.sb.registered_widgets.Menu(
+            parent=self.ui,
+            position="cursor",
+            add_defaults_button=False,
+            fixed_item_height=20,
+        )
         menu.setTitle("Create Attribute")
 
         # -- Identity -------------------------------------------------------
@@ -1065,7 +1067,13 @@ class AttributeManagerSlots:
             setObjectName="chk_keyable",
             row=9,
         )
-        btn = menu.add("QPushButton", setText="Create", row=10)
+        btn = menu.add(
+            "QPushButton",
+            setText="Create",
+            setMinimumHeight=28,
+            setMaximumHeight=28,
+            row=10,
+        )
 
         # -- Reactive show/hide ---------------------------------------------
         _numeric_widgets = [
