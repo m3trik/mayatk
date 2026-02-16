@@ -235,17 +235,17 @@ class SmartBake:
     ) -> Tuple[Optional[str], Optional[str]]:
         """Trace upstream through passthrough nodes to find the true driver.
 
-        Delegates to AttributeManager.trace_upstream() for the actual
+        Delegates to Attributes.trace_upstream() for the actual
         tracing logic.
 
         Returns:
             Tuple of (driver_node, driver_type) or (None, None) if not found.
         """
-        from mayatk.node_utils.attribute_manager._attribute_manager import (
-            AttributeManager,
+        from mayatk.node_utils.attributes._attributes import (
+            Attributes,
         )
 
-        return AttributeManager.trace_upstream(
+        return Attributes.trace_upstream(
             plug, passthrough_types=self.PASSTHROUGH_TYPES, visited=visited
         )
 

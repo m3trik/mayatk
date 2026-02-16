@@ -121,18 +121,18 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     def temporarily_unlock_attributes(objects, attributes=None):
         """Context manager to temporarily unlock attributes on objects and restore their state afterwards.
 
-        .. deprecated:: Use ``AttributeManager.temporarily_unlock`` instead.
+        .. deprecated:: Use ``Attributes.temporarily_unlock`` instead.
 
         Parameters:
             objects (str/obj/list): The object(s) to unlock attributes on.
             attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
                              If None, unlocks all standard transform attributes.
         """
-        from mayatk.node_utils.attribute_manager._attribute_manager import (
-            AttributeManager,
+        from mayatk.node_utils.attributes._attributes import (
+            Attributes,
         )
 
-        with AttributeManager.temporarily_unlock(objects, attributes) as ctx:
+        with Attributes.temporarily_unlock(objects, attributes) as ctx:
             yield ctx
 
     def selected(func: Callable) -> Callable:

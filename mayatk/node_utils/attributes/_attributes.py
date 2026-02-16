@@ -2,7 +2,7 @@
 # coding=utf-8
 """Consolidated attribute utilities for Maya.
 
-Provides ``AttributeManager`` — a single authoritative class for creating,
+Provides ``Attributes`` — a single authoritative class for creating,
 querying, setting, connecting, locking, and filtering Maya node attributes.
 Includes a YAML-based preset system for templated attribute bundles.
 """
@@ -61,7 +61,7 @@ class Preset(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-class AttributeManager(ptk.HelpMixin):
+class Attributes(ptk.HelpMixin):
     """Consolidated utility for managing Maya node attributes.
 
     Covers creation, querying, setting, connecting, locking/unlocking,
@@ -147,6 +147,12 @@ class AttributeManager(ptk.HelpMixin):
         Raises:
             KeyError: If *name* is not found in ``PRESETS``.
         """
+        if name not in cls.PRESETS:
+            available = ", ".join(sorted(cls.PRESETS)) or "(none)"
+            raise KeyError(
+                f"Preset '{name}' not found. Available: {available}. "
+                f"Ensure templates/{name}.yaml exists."
+            )
         preset = cls.PRESETS[name]
         added: List[str] = []
         for template in preset.templates:
@@ -164,6 +170,12 @@ class AttributeManager(ptk.HelpMixin):
         Raises:
             KeyError: If *name* is not found in ``PRESETS``.
         """
+        if name not in cls.PRESETS:
+            available = ", ".join(sorted(cls.PRESETS)) or "(none)"
+            raise KeyError(
+                f"Preset '{name}' not found. Available: {available}. "
+                f"Ensure templates/{name}.yaml exists."
+            )
         preset = cls.PRESETS[name]
         for template in preset.templates:
             attr_name = template.long_name
@@ -350,11 +362,9 @@ class AttributeManager(ptk.HelpMixin):
         Returns:
             list[str]: e.g. ``['tx', 'ry', 'sz']``
         """
-        channel_box = pm.mel.eval(
-            "global string $gChannelBoxName; $temp=$gChannelBoxName;"
-        )
-        attrs = pm.channelBox(channel_box, q=True, sma=True)
-        return attrs if attrs is not None else []
+        from mayatk.env_utils.channel_box import ChannelBox
+
+        return ChannelBox.get_selected_attrs(sections="main")
 
     @staticmethod
     def get_channel_box_values(
@@ -844,6 +854,161 @@ class AttributeManager(ptk.HelpMixin):
             cls.set_lock_state(objects, lock_state=lock_state)
 
     # ======================================================================
+    # Channel-box operations
+    # ======================================================================
+
+    _clipboard: Dict[str, Any] = {}
+    """Class-level clipboard for :meth:`copy_values` / :meth:`paste_values`."""
+
+    @classmethod
+    def copy_values(
+        cls, objects, attributes: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Copy attribute values from the first object into the class clipboard.
+
+        Parameters:
+            objects: Source object(s).  Values are read from the *first*.
+            attributes: Attribute names to copy.  If ``None``, uses the
+                current channel-box selection via :meth:`get_selected_channels`.
+
+        Returns:
+            dict: ``{attr_name: value}`` that was stored.
+        """
+        nodes = pm.ls(objects)
+        if not nodes:
+            return {}
+        obj = nodes[0]
+
+        if attributes is None:
+            attributes = cls.get_selected_channels()
+        if not attributes:
+            return {}
+
+        values: Dict[str, Any] = {}
+        for attr in attributes:
+            try:
+                values[attr] = pm.getAttr(f"{obj}.{attr}")
+            except Exception:
+                pass
+
+        cls._clipboard = values
+        return values
+
+    @classmethod
+    def paste_values(cls, objects, values: Optional[Dict[str, Any]] = None) -> None:
+        """Paste attribute values onto *objects*.
+
+        Parameters:
+            objects: Target object(s).
+            values: ``{attr: value}`` mapping.  If ``None``, the class
+                clipboard from the last :meth:`copy_values` call is used.
+        """
+        if values is None:
+            values = cls._clipboard
+        if not values:
+            return
+
+        for obj in pm.ls(objects):
+            for attr, value in values.items():
+                try:
+                    if not pm.getAttr(f"{obj}.{attr}", lock=True):
+                        pm.setAttr(f"{obj}.{attr}", value)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def reset_to_default(objects, attributes: List[str]) -> None:
+        """Reset attributes to their default values.
+
+        Parameters:
+            objects: Target object(s).
+            attributes: Attribute names to reset.
+        """
+        for node in pm.ls(objects):
+            for attr_name in attributes:
+                try:
+                    defaults = pm.attributeQuery(attr_name, node=node, listDefault=True)
+                    if defaults:
+                        pm.setAttr(f"{node}.{attr_name}", defaults[0])
+                except Exception:
+                    pass
+
+    @staticmethod
+    def mute(objects, attributes: Optional[List[str]] = None) -> None:
+        """Mute channels to suppress animation evaluation.
+
+        Parameters:
+            objects: Target object(s).
+            attributes: Attribute names.  If ``None``, uses the
+                current channel-box selection.
+        """
+        for obj in pm.ls(objects):
+            attrs = attributes or Attributes.get_selected_channels()
+            for attr in attrs:
+                try:
+                    pm.mute(f"{obj}.{attr}")
+                except Exception:
+                    pass
+
+    @staticmethod
+    def unmute(objects, attributes: Optional[List[str]] = None) -> None:
+        """Unmute previously muted channels.
+
+        Parameters:
+            objects: Target object(s).
+            attributes: Attribute names.  If ``None``, uses the
+                current channel-box selection.
+        """
+        for obj in pm.ls(objects):
+            attrs = attributes or Attributes.get_selected_channels()
+            for attr in attrs:
+                try:
+                    pm.mute(f"{obj}.{attr}", disable=True, force=True)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def set_channel_box_visibility(
+        objects, attributes: List[str], visible: bool = True
+    ) -> None:
+        """Show or hide attributes in the channel box.
+
+        Hidden attributes become non-keyable and are removed from the
+        channel-box display.
+
+        Parameters:
+            objects: Target object(s).
+            attributes: Attribute names.
+            visible (bool): ``True`` to show (keyable), ``False`` to hide.
+        """
+        for obj in pm.ls(objects):
+            for attr in attributes:
+                try:
+                    if visible:
+                        pm.setAttr(f"{obj}.{attr}", keyable=True)
+                    else:
+                        pm.setAttr(f"{obj}.{attr}", keyable=False, channelBox=False)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def lock_and_hide(objects, attributes: List[str]) -> None:
+        """Lock attributes and hide them from the channel box.
+
+        Parameters:
+            objects: Target object(s).
+            attributes: Attribute names.
+        """
+        for obj in pm.ls(objects):
+            for attr in attributes:
+                try:
+                    pm.setAttr(
+                        f"{obj}.{attr}", lock=True, keyable=False, channelBox=False
+                    )
+                except Exception:
+                    pass
+
+    # ======================================================================
     # Filter
     # ======================================================================
 
@@ -869,9 +1034,9 @@ class AttributeManager(ptk.HelpMixin):
 
         Example:
             >>> attrs = ['translateX', 'translateY', 'rotateX', 'visibility']
-            >>> AttributeManager.filter(attrs, exclude='visibility')
+            >>> Attributes.filter(attrs, exclude='visibility')
             ['translateX', 'translateY', 'rotateX']
-            >>> AttributeManager.filter(attrs, include='translate*')
+            >>> Attributes.filter(attrs, include='translate*')
             ['translateX', 'translateY']
         """
         if not attributes:
@@ -912,4 +1077,4 @@ class AttributeManager(ptk.HelpMixin):
 
 
 # --- Auto-load YAML templates at import time ---
-AttributeManager.PRESETS = AttributeManager._load_templates()
+Attributes.PRESETS = Attributes._load_templates()

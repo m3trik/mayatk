@@ -1,0 +1,1 @@
+python("import sys; sys.path.append('O:/Cloud/Code/_scripts/mayatk'); sys.path.append('O:/Cloud/Code/_scripts/mayatk/test/temp_tests'); import check_channel_box_selection as t; t.test_channel_box_selection()");

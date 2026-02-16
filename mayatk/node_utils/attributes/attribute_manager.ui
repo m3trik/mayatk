@@ -12,35 +12,77 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="spacing">
+     <number>1</number>
+    </property>
+    <property name="leftMargin">
+     <number>6</number>
+    </property>
+    <property name="topMargin">
+     <number>6</number>
+    </property>
+    <property name="rightMargin">
+     <number>6</number>
+    </property>
+    <property name="bottomMargin">
+     <number>6</number>
+    </property>
     <item>
-     <widget class="Header" name="header">
-       <property name="minimumSize">
+     <widget class="Header" name="header" native="true">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>25</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>25</height>
+       </size>
+      </property>
+      <property name="font">
+       <font>
+        <weight>75</weight>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text" stdset="0">
+       <string>ATTRIBUTE MANAGER</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="filterLayout">
+      <property name="spacing">
+       <number>1</number>
+      </property>
+      <property name="leftMargin">
+       <number>1</number>
+      </property>
+      <property name="topMargin">
+       <number>1</number>
+      </property>
+      <property name="rightMargin">
+       <number>1</number>
+      </property>
+      <property name="bottomMargin">
+       <number>1</number>
+      </property>
+      <item>
+       <widget class="QComboBox" name="cmb000">
+        <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>25</height>
+          <height>20</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
           <width>16777215</width>
-          <height>25</height>
+          <height>20</height>
          </size>
         </property>
-        <property name="font">
-         <font>
-          <weight>75</weight>
-          <bold>true</bold>
-         </font>
-        </property>
-        <property name="text">
-         <string>ATTRIBUTE MANAGER</string>
-        </property>
-      </widget>
-    </item>
-    <item>
-     <layout class="QHBoxLayout" name="filterLayout">
-      <item>
-       <widget class="QComboBox" name="cmb000">
         <property name="toolTip">
          <string>Filter Attributes</string>
         </property>
@@ -48,17 +90,23 @@
       </item>
       <item>
        <widget class="QCheckBox" name="chk000">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
         <property name="maximumSize">
          <size>
           <width>55</width>
-          <height>16777215</height>
+          <height>20</height>
          </size>
-        </property>
-        <property name="text">
-         <string>Invert</string>
         </property>
         <property name="toolTip">
          <string>Invert the active filter to show the opposite set of attributes</string>
+        </property>
+        <property name="text">
+         <string>Invert</string>
         </property>
        </widget>
       </item>
@@ -100,7 +148,7 @@
      </widget>
     </item>
     <item>
-     <widget class="Footer" name="footer">
+     <widget class="Footer" name="footer" native="true">
       <property name="minimumSize">
        <size>
         <width>0</width>

@@ -460,6 +460,67 @@ class MayaConnection:
             print(f"[ERROR] Could not connect to Maya command port: {e}")
             return False
 
+    def _port_alive(self) -> bool:
+        """Return True if the current command port is reachable."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            sock.connect((self.host, int(self.port)))
+            sock.close()
+            return True
+        except Exception:
+            return False
+
+    def ensure_connection(
+        self,
+        launch: bool = True,
+        app_path: Optional[str] = None,
+        launch_args: Optional[List[str]] = None,
+    ) -> bool:
+        """Verify the port is reachable; relaunch Maya if it is not.
+
+        Parameters:
+            launch: Attempt to launch a new Maya instance if the port
+                is down.  Default ``True``.
+            app_path: Optional path to Maya executable.
+            launch_args: Extra CLI args forwarded to Maya.
+
+        Returns:
+            bool: ``True`` if connection is alive after the call.
+        """
+        if self.mode != "port":
+            return self.is_connected
+
+        if self._port_alive():
+            return True
+
+        # Port is down — mark disconnected
+        self.is_connected = False
+        print(f"[MayaConnection] Port {self.port} unreachable.")
+
+        if not launch:
+            return False
+
+        # Kill stale Maya process if one exists so we get a clean launch
+        import subprocess
+
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "maya.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            import time
+
+            time.sleep(2)
+        except Exception:
+            pass
+
+        print(f"[MayaConnection] Relaunching Maya on port {self.port}...")
+        if self._launch_maya_gui(self.port, app_path, extra_args=launch_args):
+            return self._connect_via_port(self.host, self.port)
+        return False
+
     def _connect_standalone(self) -> bool:
         """Initialize Maya in standalone mode."""
         try:
@@ -536,9 +597,11 @@ class MayaConnection:
                 # We wait for response to ensure execution is complete before retrieving output
                 self._execute_via_port(wrapped_code, timeout, wait_for_response=True)
 
-                # Step 2: Retrieve the output
+                # Step 2: Retrieve the output (from __main__ namespace)
                 result = self._execute_via_port(
-                    "_mayatk_last_captured_output", timeout, wait_for_response=True
+                    "__import__('__main__')._mayatk_last_captured_output",
+                    timeout,
+                    wait_for_response=True,
                 )
             else:
                 result = self._execute_via_port(
@@ -738,9 +801,9 @@ finally:
     sys.stdout = _mayatk_original_stdout
     sys.stderr = _mayatk_original_stderr
 
-# Store the result in a global variable to be retrieved by a subsequent command
-global _mayatk_last_captured_output
-_mayatk_last_captured_output = "".join(_mayatk_output_buffer)
+# Store in __main__ so the value persists across command-port connections
+import __main__ as _mayatk_main_mod
+_mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 """
 
     def _execute_via_port(
@@ -764,13 +827,12 @@ _mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                         if not chunk:
                             break
                         response_bytes += chunk
+                        # Maya's command port terminates each response with \x00
+                        if b"\x00" in chunk:
+                            break
                     except socket.timeout:
                         break
-                # Maya's command port returns the result of the last expression.
-                # Our wrapped code ends with `_capturer.getvalue()`, so that's what we get.
-                # However, the raw response might contain null bytes or other artifacts.
                 response = response_bytes.decode("utf-8").strip()
-                # Remove null bytes if any
                 response = response.replace("\x00", "")
 
             client.close()

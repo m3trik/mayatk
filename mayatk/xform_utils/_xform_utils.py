@@ -20,7 +20,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class XformUtilsInternals:
@@ -469,7 +469,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         }
 
         if from_channel_box:
-            selected_channels = set(AttributeManager.get_selected_channels() or [])
+            selected_channels = set(Attributes.get_selected_channels() or [])
             for ch in selected_channels:
                 # Handle long names like 'pCube1.translateX'
                 if "." in ch:
@@ -587,7 +587,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                     )
                     nodes_to_unlock.extend(descendants)
 
-            with AttributeManager.temporarily_unlock(nodes_to_unlock):
+            with Attributes.temporarily_unlock(nodes_to_unlock):
                 try:
                     if delete_history:
                         pm.delete(obj, constructionHistory=True)
@@ -694,7 +694,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
             obj = pm.PyNode(obj)
 
-            with AttributeManager.temporarily_unlock([obj]):
+            with Attributes.temporarily_unlock([obj]):
                 rotate_pivot_ws = pm.xform(obj, q=True, ws=True, rp=True)
                 scale_pivot_ws = pm.xform(obj, q=True, ws=True, sp=True)
 

@@ -15,8 +15,8 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.rig_utils._rig_utils import RigUtils
 from mayatk.rig_utils.controls import Controls
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
-from mayatk.edit_utils.naming import Naming
+from mayatk.node_utils.attributes._attributes import Attributes
+from mayatk.edit_utils.naming._naming import Naming
 
 
 class TubePath:
@@ -1415,9 +1415,7 @@ class TubeRig(ptk.LoggingMixin):
             # IK follows end_locator without offset
             pm.pointConstraint(end_locator, ik_handle, maintainOffset=False)
 
-        AttributeManager.set_lock_state(
-            (start_locator, end_locator), rotate=True, scale=True
-        )
+        Attributes.set_lock_state((start_locator, end_locator), rotate=True, scale=True)
 
         self.start_loc = start_locator
         self.end_loc = end_locator

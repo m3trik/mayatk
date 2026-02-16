@@ -23,7 +23,7 @@ from mayatk.mat_utils.shader_templates._shader_templates import (
     ShaderTemplates,
 )
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class TestShaderTemplates(MayaTkTestCase):
@@ -260,7 +260,7 @@ class TestShaderTemplates(MayaTkTestCase):
         self.nodes_to_delete.append(node)
 
         # Get attributes
-        attrs = AttributeManager.get_attributes(
+        attrs = Attributes.get_attributes(
             node, exc_defaults=False, scalarAndArray=False
         )
 

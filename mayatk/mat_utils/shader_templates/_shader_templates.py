@@ -16,7 +16,7 @@ from pythontk.img_utils.map_factory import (
 
 # from this package:
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -62,7 +62,7 @@ class GraphCollector:
         return placeholder_name
 
     def _create_node_entry(self, graph_info, placeholder_name, node, node_type):
-        attributes = AttributeManager.get_attributes(node, exc_defaults=True)
+        attributes = Attributes.get_attributes(node, exc_defaults=True)
 
         # Ensure fileTextureName is captured for file nodes
         if node_type == "file":

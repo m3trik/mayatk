@@ -13,7 +13,7 @@ except ModuleNotFoundError as error:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class ExplodedView:
@@ -174,7 +174,7 @@ class ExplodedView:
 
         for obj in objects:
             pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
-            AttributeManager.set_attributes(obj, create=True, original_position=pos)
+            Attributes.set_attributes(obj, create=True, original_position=pos)
 
         self.arrange_objects(objects)
 

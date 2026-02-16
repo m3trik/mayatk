@@ -30,25 +30,49 @@
 
 ### Test Infrastructure
 
+> **CRITICAL — Maya Runtime Required**:
+> All mayatk tests depend on `pymel` / `maya.cmds` and **cannot** be run with
+> `pytest`, the workspace `.venv`, or any standard Python interpreter.
+> They **must** be executed through one of the methods below.
+>
+> **Syntax-only validation** (no Maya needed):
+> ```powershell
+> .\.venv\Scripts\python.exe -c "import ast, os; c=0; [((ast.parse(open(os.path.join(r,f),encoding='utf-8').read()), c:=c+1) if f.endswith('.py') else None) for r,_,fs in os.walk(r'mayatk\mayatk') for f in fs]; print(f'{c} files OK')"
+> ```
+> Use this to verify edits parse correctly when Maya is unavailable.
+
 > **Testing Workflow**: Follow the **Issue-Driven TDD** workflow defined in the main [copilot-instructions.md](../../.github/copilot-instructions.md#testing-workflow-issue-driven-tdd).
 
 - **Base Classes**: `test/base_test.py` (`MayaTkTestCase` for full cleanup, `QuickTestCase` for speed).
 - **Runner**: `test/run_tests.py` (CLI entry point).
 - **Connection**: `test/maya_connection.py` handles Port, Standalone, and Interactive modes.
 
-### Execution Guide
-**Powershell (Recommended)**:
-```powershell
-# Run All
-$env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"; & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
+### Running Tests
 
-# Run Specific Module
-... o:\Cloud\Code\_scripts\mayatk\test\run_tests.py core_utils components
+**1. mayapy (Recommended — headless)**:
+```powershell
+$env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"
+
+# Run all tests
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
+
+# Run a specific module's tests
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py core_utils components
+
+# List available test modules
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --list
 ```
-**Maya Script Editor**:
+
+**2. Maya Script Editor (interactive)**:
 ```python
 import mayatk.test.run_tests as runner
 runner.MayaTestRunner().run_tests(['core_utils'])
+```
+
+**3. Maya Command Port (remote)**:
+Requires Maya running with `cmds.commandPort(name=":7002", sourceType="python")` open.
+```powershell
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
 ```
 
 ---

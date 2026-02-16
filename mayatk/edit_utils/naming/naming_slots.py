@@ -8,7 +8,7 @@ import pythontk as ptk
 from uitk import Signals
 
 # From this package
-from mayatk.edit_utils.naming import Naming
+from mayatk.edit_utils.naming._naming import Naming
 
 
 class NamingSlots(Naming, ptk.LoggingMixin):

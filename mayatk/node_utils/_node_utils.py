@@ -10,7 +10,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class NodeUtils(ptk.HelpMixin):
@@ -785,7 +785,7 @@ class NodeUtils(ptk.HelpMixin):
 
                 # Ensure complex attributes are set (this is slower but only runs for failed attrs or complex cases)
                 # But since we tried setting above, we can assume simple ones are done.
-                # Re-running AttributeManager.set_attributes might be redundant but ensures correctness if the fast loop failed.
+                # Re-running Attributes.set_attributes might be redundant but ensures correctness if the fast loop failed.
                 # However, for pure speed optimization, we rely on the fast loop.
                 # If attributes were passed that failed above, they might be custom attrs.
                 # Let's call set_attributes only if we have remaining attributes?
@@ -820,7 +820,7 @@ class NodeUtils(ptk.HelpMixin):
             if name:
                 node.rename(name)
             if node:  # Set attributes if the node was created successfully
-                AttributeManager.set_attributes(node, quiet=False, **attributes)
+                Attributes.set_attributes(node, quiet=False, **attributes)
             return node
         except Exception as e:
             print(f"Failed to create node of type '{node_type}'. Error: {e}")

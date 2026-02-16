@@ -7,8 +7,10 @@ import os
 try:
     from qtpy import QtWidgets
 
-    if not QtWidgets.QApplication.instance():
-        app = QtWidgets.QApplication([])
+    # Keep reference to app to prevent GC
+    _app = QtWidgets.QApplication.instance()
+    if not _app:
+        _app = QtWidgets.QApplication([])
 except ImportError:
     pass
 except Exception:

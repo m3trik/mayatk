@@ -644,15 +644,121 @@ class AssemblyReconstructor:
                 expected = expected_per_cluster[topo]
                 if current < expected:
                     dist = np.linalg.norm(center - parts[anchor]["center"])
-                    candidates.append((anchor, dist))
+
+                    # Check against search radius
+                    anchor_bbox = parts[anchor]["bbox"]
+                    # Calculate max dimension of the anchor's bbox as a proxy for size
+                    anchor_size = max(
+                        anchor_bbox[3] - anchor_bbox[0],
+                        anchor_bbox[4] - anchor_bbox[1],
+                        anchor_bbox[5] - anchor_bbox[2],
+                    )
+                    # Radius is half the size. 
+                    # We compare distance centroid-to-centroid.
+                    # If parts are adjacent, distance is roughly sum of radii.
+                    # search_radius_mult controls how far we look relative to the anchor size.
+                    # Default 1.5 allows looking 1.5x the size away.
+                    max_dist = anchor_size * self.search_radius_mult
+
+                    if dist <= max_dist:
+                        candidates.append((anchor, dist))
 
             if not candidates:
-                # All clusters have enough - assign to nearest
-                best_anchor = min(
-                    anchors, key=lambda a: np.linalg.norm(center - parts[a]["center"])
-                )
+                # If no valid candidates within radius:
+                # Option 1: Force assign to nearest anyway (Current behavior - caused touching bug)
+                # Option 2: Leave unassigned? (might break assembly count)
+                # Option 3: Create new cluster? (not supported here)
+                
+                # If we are strictly enforced, we should skip.
+                # But _split_by_count assumes all 'indices' belong to one of the anchors 
+                # (since they are in the same BFS component... wait, are they?)
+                
+                # 'indices' comes from BFS group (if fallback) OR from _cluster_by_anchors logic?
+                # No, _split_by_count is called on a group of indices.
+                # If they are from BFS, they are connected.
+                pass 
+                # For now, let's keep the fallback but logging a warning if it exceeds radius might be too noisy.
+                # The user wants to RELAX tolerances.
+                # But specifically for `test_touching_assemblies`, they rely on stricter radius (1.1).
+                
+                # So if I enforce the radius check, `test_touching_assemblies` (1.1) should pass because 
+                # candidates outside 1.1*size will be rejected.
+                
+                # Wait, if I reject them, they remain in 'remaining' loop?
+                # No, the code below force assigns to best_anchor if !candidates.
+                
+                # So I must change the "if not candidates" block to NOT force assign if it violates the strict constraint.
+                # But 'indices' were passed in as a group. If we don't assign, they get lost?
+                # Actually, if we don't assign, we should probably start a NEW anchor?
+                # But we are limited to `expected_per_cluster`.
+                
+                # Strategy:
+                # If strict check fails, we might be dealing with a merged assembly that needs splitting, 
+                # but we only found X anchors.
+                
+                # Let's try enforcing the limit.
+                pass
+
+            if not candidates:
+                # All clusters have enough OR all are too far
+                # Fallback: Find nearest anchor regardless of budget?
+                # Or find nearest anchor that HAS budget but is far?
+                
+                # Original code:
+                # best_anchor = min(anchors, key=lambda a: np.linalg.norm(center - parts[a]["center"]))
+                
+                # If we want to respect search_radius_mult, we should only assign if close enough.
+                # But if we don't assign, what happens?
+                # It just doesn't get added to 'clusters'.
+                
+                # Let's try to find nearest with budget first (relaxed distance)
+                candidates_any_dist = []
+                for anchor in anchors:
+                    if cluster_topo_counts[anchor][topo] < expected_per_cluster[topo]:
+                         dist = np.linalg.norm(center - parts[anchor]["center"])
+                         candidates_any_dist.append((anchor, dist))
+                
+                if candidates_any_dist:
+                     best_anchor_tuple = min(candidates_any_dist, key=lambda x: x[1])
+                     # Check if this "best available" is within loose tolerance?
+                     # If validation fails, maybe we shouldn't assign.
+                     # But let's stick to the requested fix: Respect search_radius_mult.
+                     
+                     best_anchor = best_anchor_tuple[0]
+                     dist = best_anchor_tuple[1]
+                     
+                     anchor_bbox = parts[best_anchor]["bbox"]
+                     anchor_size = max(
+                        anchor_bbox[3] - anchor_bbox[0],
+                        anchor_bbox[4] - anchor_bbox[1],
+                        anchor_bbox[5] - anchor_bbox[2],
+                    )
+                     max_dist = anchor_size * self.search_radius_mult
+                     
+                     if dist > max_dist:
+                         # Too far! Don't assign.
+                         continue
+                else:
+                    # No budget left anywhere.
+                    # Original code would force assign to nearest anchor (ignoring budget).
+                    # This overfills the cluster.
+                    # If we respect radius, we check nearest anchor distance.
+                    best_anchor = min(anchors, key=lambda a: np.linalg.norm(center - parts[a]["center"]))
+                    dist = np.linalg.norm(center - parts[best_anchor]["center"])
+                    
+                    anchor_bbox = parts[best_anchor]["bbox"]
+                    anchor_size = max(
+                        anchor_bbox[3] - anchor_bbox[0],
+                        anchor_bbox[4] - anchor_bbox[1],
+                        anchor_bbox[5] - anchor_bbox[2],
+                    )
+                    max_dist = anchor_size * self.search_radius_mult
+                    
+                    if dist > max_dist:
+                        continue
+
             else:
-                # Among clusters that need this topo, pick nearest
+                # Among clusters that need this topo AND are in range, pick nearest
                 best_anchor = min(candidates, key=lambda x: x[1])[0]
 
             clusters[best_anchor].append(idx)

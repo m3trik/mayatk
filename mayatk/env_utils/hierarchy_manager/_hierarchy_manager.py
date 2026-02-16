@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
 import pymel.core as pm
 import pythontk as ptk
-from pythontk.core_utils.hierarchy_utils import HierarchyMatching
+from pythontk.core_utils.hierarchy_utils.hierarchy_matching import HierarchyMatching
 
 # Third-party imports
 from qtpy import QtCore, QtWidgets
@@ -210,7 +210,9 @@ class TreePathMatcher(ptk.LoggingMixin):
 
     def _iter_items(self, widget):
         """Iterate through all tree widget items recursively."""
-        from pythontk.core_utils.hierarchy_utils import HierarchyIndexer
+        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
+            HierarchyIndexer,
+        )
 
         stack = [widget.topLevelItem(i) for i in range(widget.topLevelItemCount())]
         while stack:
@@ -223,7 +225,9 @@ class TreePathMatcher(ptk.LoggingMixin):
 
     def _get_item_path(self, item) -> str:
         """Extract the full hierarchy path from a tree widget item."""
-        from pythontk.core_utils.hierarchy_utils import HierarchyIndexer
+        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
+            HierarchyIndexer,
+        )
 
         parts = []
         cur = item
@@ -234,7 +238,9 @@ class TreePathMatcher(ptk.LoggingMixin):
 
     def _get_item_raw_path(self, item) -> str:
         """Extract the full hierarchy path using raw names (with namespaces) if stored."""
-        from pythontk.core_utils.hierarchy_utils import HierarchyIndexer
+        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
+            HierarchyIndexer,
+        )
 
         parts = []
         cur = item

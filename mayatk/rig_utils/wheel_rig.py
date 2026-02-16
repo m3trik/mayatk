@@ -12,7 +12,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
-from mayatk.edit_utils.naming import Naming
+from mayatk.edit_utils.naming._naming import Naming
 
 
 class WheelRig(ptk.LoggingMixin):

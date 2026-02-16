@@ -18,7 +18,7 @@ import unittest
 import pymel.core as pm
 import mayatk as mtk
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 from base_test import MayaTkTestCase
 
 
@@ -156,22 +156,22 @@ class TestNodeUtils(MayaTkTestCase):
 
     def test_get_maya_attribute_type(self):
         """Test get_maya_attribute_type."""
-        self.assertEqual(AttributeManager.get_type(1), "long")
-        self.assertEqual(AttributeManager.get_type(1.0), "double")
-        self.assertEqual(AttributeManager.get_type("s"), "string")
-        self.assertEqual(AttributeManager.get_type(True), "bool")
-        self.assertEqual(AttributeManager.get_type([1.0, 2.0, 3.0]), "double3")
-        self.assertEqual(AttributeManager.get_type(["a", "b"]), "stringArray")
+        self.assertEqual(Attributes.get_type(1), "long")
+        self.assertEqual(Attributes.get_type(1.0), "double")
+        self.assertEqual(Attributes.get_type("s"), "string")
+        self.assertEqual(Attributes.get_type(True), "bool")
+        self.assertEqual(Attributes.get_type([1.0, 2.0, 3.0]), "double3")
+        self.assertEqual(Attributes.get_type(["a", "b"]), "stringArray")
 
     def test_set_node_custom_attributes(self):
         """Test set_node_custom_attributes."""
         # Simple attribute
-        AttributeManager.create_or_set(self.cyl, myFloat=1.5)
+        Attributes.create_or_set(self.cyl, myFloat=1.5)
         self.assertTrue(self.cyl.hasAttr("myFloat"))
         self.assertEqual(self.cyl.myFloat.get(), 1.5)
 
         # Compound attribute (vector)
-        AttributeManager.create_or_set(self.cyl, myVec=[1.0, 2.0, 3.0])
+        Attributes.create_or_set(self.cyl, myVec=[1.0, 2.0, 3.0])
         self.assertTrue(self.cyl.hasAttr("myVec"))
         self.assertEqual(self.cyl.myVec.get(), (1.0, 2.0, 3.0))
 
@@ -181,7 +181,7 @@ class TestNodeUtils(MayaTkTestCase):
         self.cyl.translateX.set(5.0)
 
         # Test exc_defaults=True
-        attrs = AttributeManager.get_attributes(self.cyl, exc_defaults=True)
+        attrs = Attributes.get_attributes(self.cyl, exc_defaults=True)
         self.assertIn("translateX", attrs)
         self.assertNotIn(
             "translateY", attrs
@@ -211,7 +211,7 @@ class TestNodeUtils(MayaTkTestCase):
     def test_connect_multi_attr(self):
         """Test connect_multi_attr."""
         cube = pm.polyCube()[0]
-        AttributeManager.connect_multi((self.cyl.tx, cube.tx), (self.cyl.ty, cube.ty))
+        Attributes.connect_multi((self.cyl.tx, cube.tx), (self.cyl.ty, cube.ty))
         self.assertTrue(pm.isConnected(self.cyl.tx, cube.tx))
         self.assertTrue(pm.isConnected(self.cyl.ty, cube.ty))
 

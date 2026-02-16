@@ -12,7 +12,7 @@ except ImportError as error:
 from mayatk.core_utils.preview import Preview
 from mayatk import DisplayUtils
 from mayatk import XformUtils
-from mayatk.edit_utils.naming import Naming
+from mayatk.edit_utils.naming._naming import Naming
 
 
 class DuplicateRadial(ptk.LoggingMixin):

@@ -1,4 +1,4 @@
-description: Per-object opacity attribute for render-opacity workflows
+description: "Per-object opacity attribute (0-1) for render-transparency control."
 attributes:
   - long_name: opacity
     type: float

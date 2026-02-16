@@ -11,7 +11,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
@@ -260,7 +260,7 @@ class RigUtils(ptk.HelpMixin):
             if parent:
                 XformUtils.freeze_transforms(grp, scale=True)
 
-            AttributeManager.set_lock_state(
+            Attributes.set_lock_state(
                 obj,
                 translate=lock_translate,
                 rotate=lock_rotation,
@@ -286,7 +286,7 @@ class RigUtils(ptk.HelpMixin):
                     continue
 
                 # Unlock attributes
-                AttributeManager.set_lock_state(
+                Attributes.set_lock_state(
                     obj, translate=False, rotate=False, scale=False
                 )
 
@@ -574,7 +574,7 @@ class RigUtils(ptk.HelpMixin):
         pm.poleVectorConstraint(pole_vector, ik_handle)
 
         # Lock generic unused attrs
-        AttributeManager.set_lock_state(pole_vector, rotate=True, scale=True)
+        Attributes.set_lock_state(pole_vector, rotate=True, scale=True)
 
         return pole_vector
 
@@ -812,7 +812,7 @@ class RigUtils(ptk.HelpMixin):
 
                 # Preserve inheritsTransform and unlock transform attrs
                 original_inherits = transform.inheritsTransform.get()
-                lock_state = AttributeManager.get_lock_state(transform, unlock=True)
+                lock_state = Attributes.get_lock_state(transform, unlock=True)
 
                 # Cache influences and bindPreMatrix
                 influences = pm.skinCluster(skin_cluster, query=True, influence=True)
@@ -874,9 +874,7 @@ class RigUtils(ptk.HelpMixin):
                 transform.inheritsTransform.showInChannelBox(True)
 
                 # Restore transform lock state
-                AttributeManager.set_lock_state(
-                    transform, **lock_state[transform.name()]
-                )
+                Attributes.set_lock_state(transform, **lock_state[transform.name()])
 
                 print(f"✔ Rebound: {transform_name}")
 

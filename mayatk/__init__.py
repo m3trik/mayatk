@@ -36,7 +36,10 @@ DEFAULT_INCLUDE = {
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
     # Attribute utils
-    "node_utils.attribute_manager._attribute_manager": ["AttributeManager"],
+    "node_utils.attributes._attributes": ["Attributes"],
+    # Environment utils
+    "env_utils.devtools": "*",
+    "env_utils.channel_box": "ChannelBox",
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.instancing.auto_instancer": "AutoInstancer",
@@ -50,7 +53,7 @@ DEFAULT_INCLUDE = {
     ],
     # Edit utils - specific classes
     "edit_utils.selection": "Selection",
-    "edit_utils.naming": "Naming",
+    "edit_utils.naming._naming": "Naming",
     "edit_utils.primitives": "Primitives",
     "edit_utils.snap": "Snap",
     "edit_utils.macros": "Macros",
@@ -70,7 +73,10 @@ DEFAULT_INCLUDE = {
     "env_utils.namespace_sandbox": "NamespaceSandbox",
     "env_utils.reference_manager": "ReferenceManager",
     "env_utils.script_output": "ScriptOutput",
-    "env_utils.hierarchy_manager": "HierarchyManager",
+    "env_utils.hierarchy_manager._hierarchy_manager": [
+        "HierarchyManager",
+        "ObjectSwapper",
+    ],
     "env_utils.fbx_utils": "FbxUtils",
     # Material utils
     "mat_utils.game_shader": "GameShader",
@@ -92,6 +98,12 @@ DEFAULT_INCLUDE = {
     # Rig utils
     "rig_utils.controls": "Controls",
     "rig_utils.shadow_rig": "ShadowRig",
+    # UV utils
+    "uv_utils.rizom_bridge._rizom_bridge": "RizomUVBridge",
+    # Scene exporter
+    "env_utils.scene_exporter._scene_exporter": "SceneExporter",
+    "env_utils.scene_exporter.task_manager": "TaskManager",
+    "env_utils.scene_exporter.task_factory": "TaskFactory",
 }
 
 bootstrap_package(
@@ -104,7 +116,9 @@ bootstrap_package(
 try:
     import sys
     import os
-    from pythontk.core_utils.execution_monitor import ExecutionMonitor
+    from pythontk.core_utils.execution_monitor._execution_monitor import (
+        ExecutionMonitor,
+    )
 
     # Only configure if running in Maya GUI
     executable = sys.executable
@@ -140,3 +154,5 @@ except ImportError:
 # Notes
 # --------------------------------------------------------------------------------------------
 # Test: 222117
+
+print('DEBUG: Loading LOCAL mayatk package')

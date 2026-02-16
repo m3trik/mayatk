@@ -168,8 +168,14 @@ class AutoInstancer(ptk.LoggingMixin):
             else:
                 self.check_hierarchy = True
 
-            # Canonicalize leaf meshes AFTER reassembly so instancing can match them
-            nodes = self.reconstructor.canonicalize_leaf_meshes(nodes)
+        # Canonicalize leaf meshes AFTER reassembly so instancing can match them
+        # NOTE: If we canonicalize, we reset transforms to align with PCA.
+        # This makes the local geometry identical (good for instancing).
+        # But it also changes the rotation of the assembly parts.
+        # If we re-parent them later, we might lose the "assembly rotation" if not careful.
+        # However, for single-level assemblies (groups), correct instance transforms should cover it.
+        # The issue is if assemblers rely on world-space assumptions.
+        nodes = self.reconstructor.canonicalize_leaf_meshes(nodes)
 
         groups = self.find_instance_groups(nodes)
 

@@ -1,4 +1,4 @@
-﻿# !/usr/bin/python
+# !/usr/bin/python
 # coding=utf-8
 """
 Test Suite for mayatk.mat_utils.render_opacity module

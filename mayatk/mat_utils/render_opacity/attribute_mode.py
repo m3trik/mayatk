@@ -8,7 +8,7 @@ try:
 except ImportError:
     pass
 
-from mayatk.node_utils.attribute_manager._attribute_manager import AttributeManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class OpacityAttributeMode(ptk.LoggingMixin):
@@ -29,7 +29,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         """Add 'opacity' attribute on each transform (no keyframes)."""
         results = {}
 
-        AttributeManager.apply_preset("opacity", objects)
+        Attributes.apply_preset("opacity", objects)
 
         for obj in pm.ls(objects):
             # Drive Visibility from Opacity

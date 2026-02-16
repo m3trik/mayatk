@@ -3,13 +3,49 @@ MAYATK TEST RESULTS
 ======================================================================
 
 
-test_render_opacity_export: PASS
-  Tests: 2, Failures: 0, Errors: 0, Skipped: 0
+test_anim_utils: PASS
+  Tests: 26, Failures: 0, Errors: 0, Skipped: 0
 
-======================================================================
-SUMMARY
-======================================================================
-  test_render_opacity_export: PASS (2 tests, 0 failures, 0 errors)
-======================================================================
-Total: 2 tests, 0 failures, 0 errors, 0 skipped
-======================================================================
+test_attribute_manager: PASS
+  Tests: 51, Failures: 0, Errors: 0, Skipped: 0
+
+test_auto_instancer: FAIL
+  Tests: 29, Failures: 5, Errors: 0, Skipped: 1
+
+  FAILURE: test_canisters_random_rotation (test_auto_instancer.TestAutoInstancerAssembly.test_canisters_random_rotation)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1002, in test_canisters_random_rotation
+    self.assertEqual(
+AssertionError: 9 != 10 : Should have reconstructed all assemblies
+
+
+  FAILURE: test_clutter_rejection (test_auto_instancer.TestAutoInstancerAssembly.test_clutter_rejection)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1079, in test_clutter_rejection
+    self.assertGreaterEqual(
+AssertionError: 2 not greater than or equal to 3 : Should have recovered canister assemblies
+
+
+  FAILURE: test_touching_assemblies (test_auto_instancer.TestAutoInstancerAssembly.test_touching_assemblies)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 1131, in test_touching_assemblies
+    self.assertTrue(
+AssertionError: False is not true : Should handle stacked assemblies reasonably well
+
+
+  FAILURE: test_complex_scene_integration (test_auto_instancer.TestAutoInstancerIntegration.test_complex_scene_integration)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 734, in test_complex_scene_integration
+    self.assertTrue(
+AssertionError: False is not true : GroupC Cylinder (Locked) should be instanced
+
+
+  FAILURE: test_deep_hierarchy_many_duplicates (test_auto_instancer.TestRealWorldScenarios.test_deep_hierarchy_many_duplicates)
+  Traceback (most recent call last):
+  File "O:/Cloud/Code/_scripts/mayatk/test/test_auto_instancer.py", line 780, in test_deep_hierarchy_many_duplicates
+    self.assertEqual(len(instances), 20, "Should create 19 instances + 1 prototype")
+AssertionError: 18 != 20 : Should create 19 instances + 1 prototype
+
+
+test_auto_instancer_scene: PASS
+  Tests: 1, Failures: 0, Errors: 0, Skipped: 0

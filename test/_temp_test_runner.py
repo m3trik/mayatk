@@ -72,7 +72,7 @@ print("\n" + "="*70)
 print("MAYATK TEST SUITE")
 print("="*70)
 
-test_modules = ['test_render_opacity_export']
+test_modules = ['test_anim_utils', 'test_attribute_manager', 'test_auto_instancer', 'test_auto_instancer_scene', 'test_calculator', 'test_cam_utils', 'test_channel_box', 'test_components', 'test_controls', 'test_core_utils', 'test_display_utils', 'test_edit_utils', 'test_env_utils', 'test_game_shader', 'test_game_shader_config', 'test_group_combine', 'test_image_tracer', 'test_light_utils', 'test_marmoset_bridge', 'test_mat_utils', 'test_mat_utils_extended', 'test_material_updater', 'test_material_updater_diagnostics', 'test_maya_connection', 'test_maya_menu_handler', 'test_msao_fbx_export', 'test_namespace_alias_edge_cases', 'test_naming', 'test_node_utils', 'test_nurbs_utils', 'test_original_mesh_separated', 'test_pivot_rot_place', 'test_pivot_transfer_scenarios', 'test_playblast_exporter', 'test_preview', 'test_reference_manager', 'test_render_opacity', 'test_render_opacity_export', 'test_rig_utils', 'test_scale_keys', 'test_scene_audit', 'test_scene_exporter', 'test_script_output', 'test_segment_keys', 'test_shader_templates', 'test_stagger_keys', 'test_telescope_rig', 'test_tentacle_editors', 'test_tube_rig_cleanliness', 'test_ui_utils', 'test_uv_cleanup_actions', 'test_uv_diagnostics', 'test_uv_utils', 'test_wheel_rig', 'test_xform_utils']
 total_tests = 0
 total_failures = 0
 total_errors = 0

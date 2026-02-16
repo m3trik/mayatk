@@ -565,6 +565,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                         item.setSelected(False)
                         break
 
+        # Sync reference action icons to current state
+        self._sync_reference_icons()
+
     @block_table_selection_method
     def sync_selection_to_references(self):
         """Sync the table selection to match current scene references."""
@@ -1044,6 +1047,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 else ""
             )
 
+            # Build a set of referenced file paths for fast lookup
+            ref_path_set = {
+                os.path.normcase(os.path.normpath(ref.path))
+                for ref in self.current_references
+            }
+
             for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
                 if not item:
@@ -1074,19 +1083,28 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 self._format_table_item(item, file_path)
 
-                # Set the action column state (highlight if this is the current scene)
+                # Set action column states
                 norm_fp = os.path.normcase(os.path.normpath(file_path))
                 is_current = norm_fp == current_scene
-                t.actions.set(row, 1, "current" if is_current else "default")
+                is_referenced = norm_fp in ref_path_set
 
-                # Column 2: Notes (Metadata)
-                item_notes = t.item(row, 2)
+                # Reference action column (index 1)
+                if is_referenced:
+                    t.actions.set(row, 1, "referenced")
+                else:
+                    t.actions.set(row, 1, "unreferenced")
+
+                # Open action column (index 2)
+                t.actions.set(row, 2, "current" if is_current else "default")
+
+                # Column 3: Notes (Metadata)
+                item_notes = t.item(row, 3)
                 if not item_notes:
                     item_notes = self.sb.QtWidgets.QTableWidgetItem()
                     item_notes.setFlags(
                         item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
                     )
-                    t.setItem(row, 2, item_notes)
+                    t.setItem(row, 3, item_notes)
 
                 # Store file path in notes item too for easy access during edit
                 item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
@@ -1106,6 +1124,25 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         finally:
             t.setSortingEnabled(sorting_enabled)
             t.setUpdatesEnabled(True)  # Restore updates
+
+    def _sync_reference_icons(self):
+        """Update the reference action icon (col 1) for every row to match current references."""
+        t = self.ui.tbl000
+        ref_path_set = {
+            os.path.normcase(os.path.normpath(ref.path))
+            for ref in self.current_references
+        }
+        for row in range(t.rowCount()):
+            item = t.item(row, 0)
+            if not item:
+                continue
+            file_path = item.data(self.sb.QtCore.Qt.UserRole)
+            if not file_path:
+                continue
+            norm_fp = os.path.normcase(os.path.normpath(file_path))
+            t.actions.set(
+                row, 1, "referenced" if norm_fp in ref_path_set else "unreferenced"
+            )
 
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.
@@ -1641,8 +1678,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:
-            widget.setColumnCount(3)
-            widget.setHorizontalHeaderLabels(["FILES:", "", "NOTES:"])
+            widget.setColumnCount(4)
+            widget.setHorizontalHeaderLabels(["FILES:", "", "", "NOTES:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -1650,9 +1687,31 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setSortingEnabled(True)
             widget.verticalHeader().setVisible(False)
 
-            # Action column (index 1) — "Open" icon
+            # Single source of truth for the "current scene" highlight colour
+            current_clr = widget.ACTION_COLOR_MAP["current"][0]
+
+            # Action column (index 1) — "Reference" icon
             widget.actions.add(
                 1,
+                states={
+                    "unreferenced": {
+                        "icon": "link",
+                        "color": "#555555",
+                        "tooltip": "Not referenced \u2014 click to add reference",
+                        "action": self._toggle_reference_at_row,
+                    },
+                    "referenced": {
+                        "icon": "link",
+                        "color": "#6b8fa3",
+                        "tooltip": "Referenced \u2014 click to remove reference",
+                        "action": self._toggle_reference_at_row,
+                    },
+                },
+            )
+
+            # Action column (index 2) — "Open" icon
+            widget.actions.add(
+                2,
                 states={
                     "default": {
                         "icon": "open_external",
@@ -1662,15 +1721,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     },
                     "current": {
                         "icon": "open_external",
-                        "color": "#e8c44a",
+                        "color": current_clr,
                         "tooltip": "Current Scene",
                         "action": self._open_scene_at_row,
                     },
                 },
             )
 
-            # Make the Notes column (index 2) non-selecting so clicking it doesn't trigger reference logic
-            widget.set_column_selectable(2, False)
+            # Make the Notes column (index 3) non-selecting so clicking it doesn't trigger reference logic
+            widget.set_column_selectable(3, False)
             widget.setAlternatingRowColors(False)
             widget.setWordWrap(False)
             widget.set_stretch_column(0)
@@ -1705,6 +1764,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             widget.menu.add(
                 "QPushButton",
+                setText="Reference / Unreference",
+                setObjectName="btn_toggle_reference",
+                setToolTip="Toggle reference state for the selected scene(s).",
+            )
+
+            widget.menu.add(
+                "QPushButton",
                 setText="Unlink and Import",
                 setObjectName="btn_unlink_import",
                 setToolTip="Unlink and import the selected reference(s).",
@@ -1717,6 +1783,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             widget.register_menu_action(
                 "btn_delete_scene", self.controller.delete_scene
+            )
+            widget.register_menu_action(
+                "btn_toggle_reference", self.btn_toggle_reference
             )
             widget.register_menu_action("btn_unlink_import", self.btn_unlink_import)
 
@@ -1744,7 +1813,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             table = self.ui.tbl000
             table.editItem(item)
 
-        elif item and item.column() == 2:  # Notes column
+        elif item and item.column() == 3:  # Notes column
             self.logger.debug(f"Starting edit for notes: {item.text()}")
             table = self.ui.tbl000
             table.editItem(item)
@@ -1769,7 +1838,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # Update the stored display name
             item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
 
-        elif item.column() == 2:  # Notes column
+        elif item.column() == 3:  # Notes column
             file_path = item.data(self.sb.QtCore.Qt.UserRole)
             if not file_path:
                 return
@@ -1820,6 +1889,41 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     selected_namespaces.extend(path_to_namespaces[norm_path])
 
         return selected_namespaces
+
+    def _toggle_reference_at_row(self, row, col):
+        """Toggle reference state for the scene at the given row."""
+        t = self.ui.tbl000
+        item = t.item(row, 0)
+        if not item:
+            return
+
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if not file_path:
+            return
+
+        # Check if this file is already referenced
+        norm_fp = os.path.normcase(os.path.normpath(file_path))
+        current_refs = self.controller.current_references
+        ref_match = None
+        for ref in current_refs:
+            if os.path.normcase(os.path.normpath(ref.path)) == norm_fp:
+                ref_match = ref
+                break
+
+        if ref_match:
+            # Currently referenced — remove it
+            self.controller.remove_references(ref_match.namespace)
+            t.actions.set(row, 1, "unreferenced")
+            item.setSelected(False)
+            self.logger.debug(f"Unreferenced: {file_path}")
+        else:
+            # Not referenced — add it
+            namespace = item.text()
+            success = self.controller.add_reference(namespace, file_path)
+            if success:
+                t.actions.set(row, 1, "referenced")
+                item.setSelected(True)
+                self.logger.debug(f"Referenced: {file_path}")
 
     def _open_scene_at_row(self, row, col):
         """Open the scene file associated with the given table row."""
@@ -2214,6 +2318,22 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             file_path = item.data(self.sb.QtCore.Qt.UserRole)
             if file_path:
                 self.controller.open_scene(file_path)
+
+    def btn_toggle_reference(self):
+        """Toggle reference state for the selected scene(s) via context menu."""
+        t = self.ui.tbl000
+        selected_rows = set(idx.row() for idx in t.selectedIndexes())
+
+        if not selected_rows:
+            current_item = t.currentItem()
+            if current_item:
+                selected_rows = {current_item.row()}
+
+        if not selected_rows:
+            return
+
+        for row in selected_rows:
+            self._toggle_reference_at_row(row, 1)
 
     def btn_unlink_import(self):
         """Unlink and import the selected reference(s)."""
