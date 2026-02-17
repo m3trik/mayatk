@@ -1,0 +1,23 @@
+# Reference template for event trigger attributes.
+#
+# EventTriggers creates attributes programmatically (to support the category
+# parameter), so this file is not consumed at runtime.  It serves as
+# documentation of the default attribute shape.
+#
+# Attribute naming follows the pattern:
+#   {category}_trigger (enum) — keyable artist-facing dropdown
+#   {category}_manifest (string) — baked pre-export via bake_manifest()
+# where category defaults to "event".
+#
+# Pipeline:
+#   1. Artist keys the enum dropdown on the timeline
+#   2. Before FBX export: EventTriggers.bake_manifest() serialises
+#      keyframes into the manifest string: "12:Footstep,24:Jump"
+#   3. Engine importer parses manifest → native AnimationEvents
+description: "Event trigger attribute for game-engine export (audio, VFX, gameplay, etc.)."
+attributes:
+  - long_name: event_trigger
+    type: enum
+    keyable: true
+    enum_names: ["None"]
+    default: 0

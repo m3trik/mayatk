@@ -13,7 +13,7 @@ import unittest
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase, skipUnlessExtended
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 
 
 # =========================================================================

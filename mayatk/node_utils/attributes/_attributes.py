@@ -362,7 +362,7 @@ class Attributes(ptk.HelpMixin):
         Returns:
             list[str]: e.g. ``['tx', 'ry', 'sz']``
         """
-        from mayatk.env_utils.channel_box import ChannelBox
+        from mayatk.ui_utils.channel_box import ChannelBox
 
         return ChannelBox.get_selected_attrs(sections="main")
 
@@ -1074,6 +1074,267 @@ class Attributes(ptk.HelpMixin):
             filtered.append(attr)
 
         return filtered
+
+    # ------------------------------------------------------------------
+    # Enum helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def parse_enum_def(node, attr_name):
+        """Return ``[(label, index), ...]`` for an enum attribute.
+
+        Handles Maya's ``Label=N`` explicit-index syntax that appears
+        after a deletion that left gaps in the index sequence.
+        Returns an empty list if the attribute is not an enum.
+
+        Parameters:
+            node: Node name (str or PyNode).
+            attr_name: Short attribute name.
+
+        Returns:
+            List of ``(label, int_index)`` tuples.
+        """
+        import maya.cmds as cmds
+
+        node = str(node)
+        try:
+            enums = cmds.attributeQuery(attr_name, node=node, listEnum=True)
+        except Exception:
+            return []
+        if not enums:
+            return []
+        pairs = []
+        auto_idx = 0
+        for token in enums[0].split(":"):
+            if "=" in token:
+                name, idx_str = token.rsplit("=", 1)
+                try:
+                    auto_idx = int(idx_str)
+                except ValueError:
+                    name = token  # malformed — treat whole token as label
+            else:
+                name = token
+            pairs.append((name, auto_idx))
+            auto_idx += 1
+        return pairs
+
+    @staticmethod
+    def build_enum_string(pairs):
+        """Build an ``enumName`` string from ``[(label, index), ...]``.
+
+        Uses explicit ``Label=N`` only where gaps exist so the string
+        stays clean for the common sequential case.
+
+        Parameters:
+            pairs: Sequence of ``(label, int_index)`` tuples.
+
+        Returns:
+            Colon-delimited string suitable for ``cmds.addAttr(enumName=...)``.
+        """
+        parts = []
+        expected = 0
+        for label, idx in pairs:
+            if idx != expected:
+                parts.append(f"{label}={idx}")
+            else:
+                parts.append(label)
+            expected = idx + 1
+        return ":".join(parts)
+
+    @staticmethod
+    def get_enum_fields(node, attr_name):
+        """Return the list of enum field labels for *attr_name*.
+
+        Strips any ``=N`` index suffixes so callers receive clean
+        display names.  Returns an empty list if the attribute is
+        not an enum.
+
+        Parameters:
+            node: Node name (str or PyNode).
+            attr_name: Short attribute name.
+        """
+        pairs = Attributes.parse_enum_def(node, attr_name)
+        return [label for label, _ in pairs]
+
+    @staticmethod
+    def get_enum_label(node, attr_name):
+        """Return the current enum label for an enum attribute, or ``None``.
+
+        Parameters:
+            node: Node name (str or PyNode).
+            attr_name: Short attribute name.
+        """
+        import maya.cmds as cmds
+
+        try:
+            idx = cmds.getAttr(f"{node}.{attr_name}")
+            pairs = Attributes.parse_enum_def(node, attr_name)
+            for label, i in pairs:
+                if i == idx:
+                    return label
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def enum_label_to_index(node, attr_name, label):
+        """Return the integer index for an enum label, or ``-1`` if not found.
+
+        Parameters:
+            node: Node name (str or PyNode).
+            attr_name: Short attribute name.
+            label: Enum field label to look up.
+        """
+        pairs = Attributes.parse_enum_def(node, attr_name)
+        for lbl, idx in pairs:
+            if lbl == label:
+                return idx
+        return -1
+
+    @staticmethod
+    def rename_enum_field(nodes, attr_name, old_label, new_label):
+        """Rename a single enum field from *old_label* to *new_label*.
+
+        Preserves indices so existing keyframes stay valid.
+
+        Parameters:
+            nodes: Node name(s) (str, list, or PyNode).
+            attr_name: Short attribute name.
+            old_label: Current label to rename.
+            new_label: New label.
+
+        Returns:
+            ``True`` if at least one node was modified.
+        """
+        import maya.cmds as cmds
+
+        if not new_label or new_label == old_label:
+            return False
+        nodes = [
+            str(n) for n in (nodes if isinstance(nodes, (list, tuple)) else [nodes])
+        ]
+        cmds.undoInfo(openChunk=True, chunkName="Rename Enum Field")
+        try:
+            for node in nodes:
+                pairs = Attributes.parse_enum_def(node, attr_name)
+                if not pairs:
+                    continue
+                found = False
+                new_pairs = []
+                for label, idx in pairs:
+                    if label == old_label and not found:
+                        new_pairs.append((new_label, idx))
+                        found = True
+                    else:
+                        new_pairs.append((label, idx))
+                if not found:
+                    continue
+                cmds.addAttr(
+                    f"{node}.{attr_name}",
+                    edit=True,
+                    enumName=Attributes.build_enum_string(new_pairs),
+                )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return True
+
+    @staticmethod
+    def add_enum_field(nodes, attr_name, new_label):
+        """Append a new enum field *new_label* to *attr_name*.
+
+        The new label receives the next available index (one past the
+        current maximum).
+
+        Parameters:
+            nodes: Node name(s) (str, list, or PyNode).
+            attr_name: Short attribute name.
+            new_label: Label to append.
+
+        Returns:
+            ``True`` on success.
+        """
+        import maya.cmds as cmds
+
+        if not new_label:
+            return False
+        nodes = [
+            str(n) for n in (nodes if isinstance(nodes, (list, tuple)) else [nodes])
+        ]
+        cmds.undoInfo(openChunk=True, chunkName="Add Enum Field")
+        try:
+            for node in nodes:
+                pairs = Attributes.parse_enum_def(node, attr_name)
+                if not pairs:
+                    continue
+                existing_labels = {label for label, _ in pairs}
+                if new_label in existing_labels:
+                    cmds.warning(f"'{new_label}' already exists on {node}.{attr_name}")
+                    continue
+                next_idx = max(idx for _, idx in pairs) + 1
+                pairs.append((new_label, next_idx))
+                cmds.addAttr(
+                    f"{node}.{attr_name}",
+                    edit=True,
+                    enumName=Attributes.build_enum_string(pairs),
+                )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return True
+
+    @staticmethod
+    def delete_enum_field(nodes, attr_name, label):
+        """Remove the enum field *label* from *attr_name*.
+
+        Preserves the integer indices of the remaining fields so
+        existing keyframes and connections remain valid.
+
+        Parameters:
+            nodes: Node name(s) (str, list, or PyNode).
+            attr_name: Short attribute name.
+            label: Label to remove.
+
+        Returns:
+            ``True`` if at least one node was modified.
+        """
+        import maya.cmds as cmds
+
+        if not label:
+            return False
+        nodes = [
+            str(n) for n in (nodes if isinstance(nodes, (list, tuple)) else [nodes])
+        ]
+        cmds.undoInfo(openChunk=True, chunkName="Delete Enum Field")
+        try:
+            for node in nodes:
+                pairs = Attributes.parse_enum_def(node, attr_name)
+                if not pairs:
+                    continue
+                new_pairs = [(l, i) for l, i in pairs if l != label]
+                if len(new_pairs) == len(pairs):
+                    continue  # label not found
+                if not new_pairs:
+                    cmds.warning(
+                        f"Cannot delete the last enum field on " f"{node}.{attr_name}"
+                    )
+                    continue
+                # If current value pointed to the deleted label, clamp
+                # to the nearest valid index.
+                try:
+                    cur = cmds.getAttr(f"{node}.{attr_name}")
+                    valid_indices = {i for _, i in new_pairs}
+                    if cur not in valid_indices:
+                        nearest = min(valid_indices, key=lambda v: abs(v - cur))
+                        cmds.setAttr(f"{node}.{attr_name}", nearest)
+                except Exception:
+                    pass
+                cmds.addAttr(
+                    f"{node}.{attr_name}",
+                    edit=True,
+                    enumName=Attributes.build_enum_string(new_pairs),
+                )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return True
 
 
 # --- Auto-load YAML templates at import time ---
