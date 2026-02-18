@@ -337,7 +337,7 @@ else:
         conn,
         "19. get_selected_attrs",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 print(f'selected: {ChannelBox.get_selected_attrs()}')
 """,
     )
@@ -346,7 +346,7 @@ print(f'selected: {ChannelBox.get_selected_attrs()}')
         conn,
         "20. select + get_selected_plugs",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 ChannelBox.select(['translateX', 'translateY'])
 print(f'selected: {ChannelBox.get_selected_attrs()}')
 print(f'plugs: {ChannelBox.get_selected_plugs()}')
@@ -357,7 +357,7 @@ print(f'plugs: {ChannelBox.get_selected_plugs()}')
         conn,
         "21. clear_selection",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 ChannelBox.clear_selection()
 print(f'after clear: {ChannelBox.get_selected_attrs()}')
 """,
@@ -369,7 +369,7 @@ print(f'after clear: {ChannelBox.get_selected_attrs()}')
         conn,
         "22. get_all_attrs('testCube1')",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 attrs = ChannelBox.get_all_attrs('testCube1', section='main')
 print(f'{len(attrs)} main attrs:')
 for a in attrs:
@@ -381,7 +381,7 @@ for a in attrs:
         conn,
         "23. get_all_attrs shape section",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 attrs = ChannelBox.get_all_attrs('testCube1', section='shape')
 print(f'{len(attrs)} shape attrs')
 for a in attrs[:5]:
@@ -393,7 +393,7 @@ for a in attrs[:5]:
         conn,
         "24. get_all_attrs history section",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 attrs = ChannelBox.get_all_attrs('testCube1', section='history')
 print(f'{len(attrs)} history attrs')
 for a in attrs[:5]:
@@ -405,7 +405,7 @@ for a in attrs[:5]:
         conn,
         "25. get_attr_properties",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 # Limit to safe attributes to avoid crashing on complex types
 props = ChannelBox.get_attr_properties('testCube1', ['translateX', 'scaleY', 'visibility'])
 for p in props:
@@ -417,7 +417,7 @@ for p in props:
         conn,
         "26. get_context_menu_actions",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 actions = ChannelBox.get_context_menu_actions()
 for a in actions[:8]:
     print(f"  [{a.get('menu','')}] {a['text']!r}")
@@ -429,7 +429,7 @@ print(f'{len(actions)} actions total')
         conn,
         "27. snapshot + diff (select changes)",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 snap1 = ChannelBox.snapshot(max_depth=2)
 print(f'snapshot: {snap1.get("class", "?")} children={len(snap1.get("children", []))}')
 # Diff with itself
@@ -442,7 +442,7 @@ print(f'self-diff: {len(diffs)} changes')
         conn,
         "28. list_mel_procs('channelBox')",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 procs = ChannelBox.list_mel_procs('channelBox')
 for p in procs[:5]:
     print(f"  {p['scope']:6s} {p['signature']}")
@@ -455,7 +455,7 @@ print(f'{len(procs)} procs found')
         conn,
         "29. read_mel_proc('channelBoxCommand')",
         """
-from mayatk.env_utils.channel_box import ChannelBox
+from mayatk.ui_utils.channel_box import ChannelBox
 src = ChannelBox.read_mel_proc('channelBoxCommand')
 if src:
     lines = src.strip().splitlines()

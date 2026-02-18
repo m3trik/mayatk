@@ -10,6 +10,7 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 from uitk.widgets.footer import FooterStatusController
+from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -28,7 +29,7 @@ class AttributeManagerController:
         "Keyable": {"keyable": True},
         "Channel Box": {"_custom_filter": "channel_box"},
         "Locked": {"locked": True},
-        "Connected": {"connected": True},
+        "Connected": {"_custom_filter": "connected"},
         "Settable": {"settable": True},
         "Visible": {"visible": True},
         "Keyed": {"_custom_filter": "keyed"},
@@ -55,7 +56,7 @@ class AttributeManagerController:
         Aggregates selection from Main, Shape, History, and Output sections.
         """
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             return ChannelBox.get_selected_attrs(sections="all")
         except Exception:
@@ -78,6 +79,9 @@ class AttributeManagerController:
         ).copy()
         if invert:
             kwargs["_invert"] = True
+        # Apply channel-box priority ordering for all filters except "All".
+        if filter_key != "All":
+            kwargs["_priority_sort"] = True
         return kwargs
 
     @staticmethod
@@ -103,6 +107,7 @@ class AttributeManagerController:
 
         custom_filter = filter_kwargs.pop("_custom_filter", None)
         invert = filter_kwargs.pop("_invert", False)
+        priority_sort = filter_kwargs.pop("_priority_sort", False)
 
         if custom_filter == "channel_box":
             # Union of keyable attrs + non-keyable attrs shown in channel box
@@ -111,6 +116,12 @@ class AttributeManagerController:
             common = sets_k[0] | sets_c[0]
             for sk, sc in zip(sets_k[1:], sets_c[1:]):
                 common &= sk | sc
+        elif custom_filter == "connected":
+            # Attrs with incoming connections (not a native listAttr flag)
+            sets = [AttributeManagerController.query_connected_attrs(n) for n in nodes]
+            common = sets[0]
+            for s in sets[1:]:
+                common &= s
         else:
             sets = [set(cmds.listAttr(n, **filter_kwargs) or []) for n in nodes]
             common = sets[0]
@@ -148,7 +159,7 @@ class AttributeManagerController:
                 all_common &= s
             common = all_common - common
 
-        if custom_filter == "channel_box":
+        if priority_sort or custom_filter == "channel_box":
             return AttributeManagerController._sort_channel_box(common)
         return sorted(common)
 
@@ -362,17 +373,28 @@ class AttributeManagerController:
         attr_states = []
         for attr_name in attr_names:
             # Value
-            val = cls.get_attr_value(primary, attr_name)
-            if multi:
-                for other in nodes[1:]:
-                    other_val = cls.get_attr_value(other, attr_name)
-                    if other_val != val:
-                        val = "*"
-                        break
-            val_str = cls.format_value(val)
-
-            # Type
             attr_type = cls.get_attr_type(primary, attr_name)
+
+            if attr_type == "enum":
+                val = cls.get_enum_label(primary, attr_name)
+                if multi:
+                    for other in nodes[1:]:
+                        other_val = cls.get_enum_label(other, attr_name)
+                        if other_val != val:
+                            val = "*"
+                            break
+                val_str = val if val is not None else ""
+            else:
+                val = cls.get_attr_value(primary, attr_name)
+                if multi:
+                    for other in nodes[1:]:
+                        other_val = cls.get_attr_value(other, attr_name)
+                        if other_val != val:
+                            val = "*"
+                            break
+                val_str = cls.format_value(val)
+
+            # Type (already fetched above for enum check)
 
             # Locked
             try:
@@ -591,8 +613,21 @@ class AttributeManagerController:
                         attr_name, node=node, attributeType=True
                     )
                     value = cls.parse_value(text, attr_type)
-                    if value is not None:
-                        cmds.setAttr(f"{node}.{attr_name}", value)
+                    if value is None:
+                        continue
+                    # Resolve enum label strings to integer indices.
+                    if attr_type == "enum" and isinstance(value, str):
+                        pairs = cls._parse_enum_def(node, attr_name)
+                        match = [idx for lab, idx in pairs if lab == value]
+                        if match:
+                            value = match[0]
+                        else:
+                            cmds.warning(
+                                f"Unknown enum label '{value}' for "
+                                f"{node}.{attr_name}"
+                            )
+                            continue
+                    cmds.setAttr(f"{node}.{attr_name}", value)
                 except Exception as e:
                     cmds.warning(f"Failed to set {node}.{attr_name}: {e}")
         finally:
@@ -832,6 +867,19 @@ class AttributeManagerController:
             pass
         return False
 
+    # ------------------------------------------------------------------
+    # Enum field helpers — thin wrappers around Attributes.*
+    # ------------------------------------------------------------------
+
+    # Keep backward-compatible names so existing call sites work unchanged.
+    _parse_enum_def = staticmethod(Attributes.parse_enum_def)
+    _build_enum_string = staticmethod(Attributes.build_enum_string)
+    get_enum_fields = staticmethod(Attributes.get_enum_fields)
+    get_enum_label = staticmethod(Attributes.get_enum_label)
+    rename_enum_field = staticmethod(Attributes.rename_enum_field)
+    add_enum_field = staticmethod(Attributes.add_enum_field)
+    delete_enum_field = staticmethod(Attributes.delete_enum_field)
+
 
 class AttributeManagerSlots:
     """Switchboard slots for the Attribute Manager UI.
@@ -894,6 +942,8 @@ class AttributeManagerSlots:
         self._cb_signal_connected = False
         self._syncing_selection = False
         self._connect_cb_signal()
+
+        self._combo_setting = False
 
     # ------------------------------------------------------------------
     # Header
@@ -1349,6 +1399,9 @@ class AttributeManagerSlots:
             # store the original name so renames can be detected.
             self._set_name_editability(widget, nodes)
 
+            # Replace enum value cells with comboboxes.
+            self._setup_enum_combos(widget, nodes)
+
             # Sync table selection with channel box selection.
             # Fetch fresh CB data *before* syncing so the table reflects
             # the current state rather than a stale cache.
@@ -1424,7 +1477,7 @@ class AttributeManagerSlots:
 
         self._syncing_selection = True
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             ChannelBox.select_visual(attr_names)
             self._last_cb_selection = set(attr_names)
@@ -1498,6 +1551,169 @@ class AttributeManagerSlots:
             else:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
+    # Sentinel labels for enum combobox action items.
+    _ENUM_ACTION_RENAME = "Rename"
+    _ENUM_ACTION_ADD = "Add"
+    _ENUM_ACTION_DELETE = "Delete"
+
+    def _setup_enum_combos(self, widget, nodes):
+        """Replace value cells with comboboxes for enum-type rows.
+
+        Each combobox is populated with the attribute's enum labels,
+        followed by a separator and Rename / Add / Delete action items
+        using ``combo.actions.add()``.
+        The ``activated`` signal (user interaction only) is used so that
+        programmatic index changes never trigger side-effects.
+        """
+        if not nodes:
+            return
+        primary = nodes[0]
+        Qt = self.sb.QtCore.Qt
+
+        for row in range(widget.rowCount()):
+            type_item = widget.item(row, self.COL_TYPE)
+            if not type_item or type_item.text() != "enum":
+                continue
+
+            name_item = widget.item(row, self.COL_NAME)
+            if not name_item:
+                continue
+            attr_name = name_item.text().strip()
+
+            labels = self.controller.get_enum_fields(primary, attr_name)
+            if not labels:
+                continue
+
+            pairs = self.controller._parse_enum_def(primary, attr_name)
+            maya_indices = [idx for _, idx in pairs]
+
+            try:
+                current_maya_idx = cmds.getAttr(f"{primary}.{attr_name}")
+            except Exception:
+                current_maya_idx = 0
+
+            combo = WidgetComboBox()
+            combo.setSizeAdjustPolicy(WidgetComboBox.SizeAdjustPolicy.AdjustToContents)
+            combo.setStyleSheet(
+                "QComboBox { padding: 0; margin: 0; border: none; }"
+                "QComboBox::drop-down { subcontrol-position: right center; }"
+            )
+            combo.add(labels)
+
+            # --- persistent action items via actions namespace ---
+            actions = combo.actions.add(
+                {
+                    self._ENUM_ACTION_RENAME: lambda checked=False, c=combo: self._on_enum_action_rename(
+                        c
+                    ),
+                    self._ENUM_ACTION_ADD: lambda checked=False, c=combo: self._on_enum_action_add(
+                        c
+                    ),
+                    self._ENUM_ACTION_DELETE: lambda checked=False, c=combo: self._on_enum_action_delete(
+                        c
+                    ),
+                }
+            )
+            # Apply SVG icons to each action (edit / add / trash).
+            try:
+                from uitk.widgets.mixins.icon_manager import IconManager
+
+                _icon_names = ("edit", "add", "trash")
+                for action, icon_name in zip(actions, _icon_names):
+                    action.setIcon(IconManager.get(icon_name, size=(14, 14)))
+                combo._rebuild_actions_section()
+            except Exception:
+                pass
+
+            # Map Maya int value to combo position.
+            if current_maya_idx in maya_indices:
+                combo.setCurrentIndex(maya_indices.index(current_maya_idx))
+            else:
+                combo.setCurrentIndex(0)
+
+            # Store metadata for the value handler.
+            combo.setProperty("_attr_name", attr_name)
+            combo.setProperty("_table_row", row)
+            combo.setProperty("_maya_indices", maya_indices)
+
+            # Disable the text-item underneath so double-click can't
+            # open a line-edit behind the combobox.
+            val_item = widget.item(row, self.COL_VALUE)
+            if val_item:
+                val_item.setFlags(val_item.flags() & ~Qt.ItemIsEditable)
+
+            # Use ``activated`` (user-click only) instead of
+            # ``currentIndexChanged`` to avoid re-entrancy when the
+            # index is changed programmatically or the widget is removed.
+            combo.activated.connect(
+                lambda idx, c=combo: self._on_enum_combo_activated(c, idx)
+            )
+            widget.setCellWidget(row, self.COL_VALUE, combo)
+
+    def _on_enum_combo_activated(self, combo, index):
+        """Handle user-initiated enum combobox value selection.
+
+        Action items (Rename / Add / Delete) are handled by callbacks
+        wired through ``combo.actions.add()``, so this handler only
+        needs to process real enum value selections.
+        """
+        attr_name = combo.property("_attr_name")
+        maya_indices = combo.property("_maya_indices") or []
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+
+        # Translate combo position to Maya integer index.
+        maya_idx = maya_indices[index] if index < len(maya_indices) else index
+        self._combo_setting = True
+        cmds.undoInfo(openChunk=True, chunkName=f"Set Enum: {attr_name}")
+        try:
+            for node in nodes:
+                try:
+                    cmds.setAttr(f"{node}.{attr_name}", maya_idx)
+                except Exception:
+                    pass
+        finally:
+            cmds.undoInfo(closeChunk=True)
+            self._combo_setting = False
+
+    def _on_enum_action_rename(self, combo):
+        """Handle Rename action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        current_label = self.controller.get_enum_label(nodes[0], attr_name)
+        if current_label:
+            cmds.evalDeferred(
+                lambda: self._enum_rename_dialog(nodes, attr_name, current_label)
+            )
+
+    def _on_enum_action_add(self, combo):
+        """Handle Add action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        cmds.evalDeferred(lambda: self._enum_add_dialog(nodes, attr_name))
+
+    def _on_enum_action_delete(self, combo):
+        """Handle Delete action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        current_label = self.controller.get_enum_label(nodes[0], attr_name)
+        if current_label:
+            cmds.evalDeferred(
+                lambda: self._deferred_delete_enum(nodes, attr_name, current_label)
+            )
+
+    def _deferred_delete_enum(self, nodes, attr_name, label):
+        """Delete an enum field and refresh (called via evalDeferred)."""
+        self.controller.delete_enum_field(nodes, attr_name, label)
+        self._refresh_table(self.ui.tbl000)
+
     def _handle_cell_edit(self, row, col):
         """Handle inline editing of the Name or Value column."""
         tbl = self.ui.tbl000
@@ -1531,8 +1747,28 @@ class AttributeManagerSlots:
         if not attr_name:
             return
 
-        new_text = tbl.item(row, col).text().strip()
+        val_item = tbl.item(row, col)
+        # If a cell widget (combobox) owns this cell, skip text handling.
+        if val_item is None or tbl.cellWidget(row, col) is not None:
+            return
+        new_text = val_item.text().strip()
+
         self.controller.set_attribute_value(nodes, attr_name, new_text)
+
+        # Read back the actual value Maya stored (it may have been clamped
+        # or rejected) and update the cell so the table never shows a
+        # value that differs from the real attribute.
+        attr_type = self.controller.get_attr_type(nodes[0], attr_name)
+        if attr_type == "enum":
+            actual_str = self.controller.get_enum_label(nodes[0], attr_name) or ""
+        else:
+            actual = self.controller.get_attr_value(nodes[0], attr_name)
+            actual_str = self.controller.format_value(actual)
+        cell = tbl.item(row, col)
+        if cell and cell.text() != actual_str:
+            tbl.blockSignals(True)
+            cell.setText(actual_str)
+            tbl.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Sync with Channel Box
@@ -1546,14 +1782,14 @@ class AttributeManagerSlots:
         (which may invalidate the C++ pointer).
         """
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             ChannelBox.disconnect_selection_changed(self._on_cb_selection_changed)
         except Exception:
             pass
 
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             self._cb_signal_connected = ChannelBox.connect_selection_changed(
                 self._on_cb_selection_changed
@@ -1570,7 +1806,7 @@ class AttributeManagerSlots:
             return
 
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             raw_sel = set(ChannelBox.get_selected_attrs(sections="all"))
         except Exception:
@@ -1718,6 +1954,34 @@ class AttributeManagerSlots:
         else:
             self.sb.message_box("Warning: No connections to break.")
 
+    # ------------------------------------------------------------------
+    # Enum field editing
+    # ------------------------------------------------------------------
+
+    def _enum_rename_dialog(self, nodes, attr_name, old_label):
+        """Show an input dialog to rename the current enum label."""
+        new_label = self.sb.input_dialog(
+            title="Rename Enum Value",
+            label=f"Rename '{old_label}' to:",
+            text=old_label,
+            parent=self.ui.tbl000,
+        )
+        if new_label and new_label != old_label:
+            self.controller.rename_enum_field(nodes, attr_name, old_label, new_label)
+            self._refresh_table(self.ui.tbl000)
+
+    def _enum_add_dialog(self, nodes, attr_name):
+        """Show an input dialog to add a new enum label."""
+        new_label = self.sb.input_dialog(
+            title="Add Enum Value",
+            label="New enum label:",
+            placeholder="e.g. Footstep",
+            parent=self.ui.tbl000,
+        )
+        if new_label:
+            self.controller.add_enum_field(nodes, attr_name, new_label)
+            self._refresh_table(self.ui.tbl000)
+
     def _ctx_delete(self, selection):
         attrs, nodes = self._selected_attrs_and_nodes(selection)
         if not attrs:
@@ -1773,6 +2037,126 @@ class AttributeManagerSlots:
         except Exception:
             self._om_callback_ids = []
 
+        # --- Per-node attribute-added/removed callbacks ---
+        self._node_attr_callback_ids = []
+        self._register_attr_change_callbacks(widget)
+
+    def _register_attr_change_callbacks(self, widget):
+        """Register per-node attribute-added/removed and value-changed callbacks.
+
+        Uses ``MNodeMessage.addAttributeAddedOrRemovedCallback`` to detect
+        when custom attributes are created or deleted on the selected nodes,
+        and ``MNodeMessage.addAttributeChangedCallback`` to detect value
+        changes (e.g. via channel box) so enum comboboxes stay in sync.
+        Re-called after every selection change to track the new selection.
+        """
+        self._cleanup_attr_change_callbacks()
+
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return
+
+        try:
+            import maya.api.OpenMaya as om2
+
+            def _on_attr_added_removed(msg, plug, *args):
+                self._on_scene_change(widget)
+
+            def _on_attr_value_changed(msg, plug, other_plug, *args):
+                # Only react to value-set messages.
+                if not (msg & om2.MNodeMessage.kAttributeSet):
+                    return
+                self._on_attr_value_set(widget, plug)
+
+            sel = om2.MSelectionList()
+            for node_name in nodes:
+                try:
+                    sel.clear()
+                    sel.add(node_name)
+                    mobj = sel.getDependNode(0)
+                    cb_id = om2.MNodeMessage.addAttributeAddedOrRemovedCallback(
+                        mobj, _on_attr_added_removed
+                    )
+                    self._node_attr_callback_ids.append(cb_id)
+                    cb_id2 = om2.MNodeMessage.addAttributeChangedCallback(
+                        mobj, _on_attr_value_changed
+                    )
+                    self._node_attr_callback_ids.append(cb_id2)
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+
+    def _on_attr_value_set(self, widget, plug):
+        """Update the table cell for a single attribute whose value just changed.
+
+        For enum attributes with a combobox widget this updates the
+        combobox index directly (no full rebuild).  For other types it
+        updates the cell text.
+        """
+        # Skip echo when we ourselves just set the value from the combobox.
+        if getattr(self, "_combo_setting", False):
+            return
+
+        attr_name = plug.partialName(useLongNames=True)
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return
+        primary = nodes[0]
+
+        # Find the table row for this attribute.
+        for row in range(widget.rowCount()):
+            name_item = widget.item(row, self.COL_NAME)
+            if not name_item or name_item.text().strip() != attr_name:
+                continue
+
+            combo = widget.cellWidget(row, self.COL_VALUE)
+            if combo is not None:
+                # Enum combobox — update index without re-firing our signal.
+                try:
+                    maya_idx = cmds.getAttr(f"{primary}.{attr_name}")
+                    maya_indices = combo.property("_maya_indices") or []
+                    if maya_idx in maya_indices:
+                        pos = maya_indices.index(maya_idx)
+                    else:
+                        pos = 0
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(pos)
+                    combo.blockSignals(False)
+                except Exception:
+                    pass
+            else:
+                # Plain text cell — update displayed value.
+                attr_type = self.controller.get_attr_type(primary, attr_name)
+                if attr_type == "enum":
+                    val_str = self.controller.get_enum_label(primary, attr_name) or ""
+                else:
+                    val = self.controller.get_attr_value(primary, attr_name)
+                    val_str = self.controller.format_value(val)
+                cell = widget.item(row, self.COL_VALUE)
+                if cell:
+                    widget.blockSignals(True)
+                    cell.setText(val_str)
+                    widget.blockSignals(False)
+            break
+
+    def _cleanup_attr_change_callbacks(self):
+        """Remove per-node attribute-added/removed callbacks."""
+        ids = getattr(self, "_node_attr_callback_ids", [])
+        if not ids:
+            return
+        try:
+            import maya.api.OpenMaya as om2
+
+            for cb_id in ids:
+                try:
+                    om2.MMessage.removeCallback(cb_id)
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        self._node_attr_callback_ids = []
+
     def _on_scene_change(self, widget):
         """Debounced callback for scriptJob events."""
         if self._refresh_pending:
@@ -1792,6 +2176,9 @@ class AttributeManagerSlots:
 
             self._refresh_table(widget)
 
+            # Re-register per-node callbacks for the (possibly new) selection.
+            self._register_attr_change_callbacks(widget)
+
             # Reconnect the CB signal — the C++ pointer may have changed.
             self._connect_cb_signal()
 
@@ -1802,12 +2189,15 @@ class AttributeManagerSlots:
         disconnect the Channel Box selection signal."""
         # Disconnect CB signal
         try:
-            from mayatk.env_utils.channel_box import ChannelBox
+            from mayatk.ui_utils.channel_box import ChannelBox
 
             ChannelBox.disconnect_selection_changed(self._on_cb_selection_changed)
         except Exception:
             pass
         self._cb_signal_connected = False
+
+        # Clean up per-node attr callbacks first (synchronous)
+        self._cleanup_attr_change_callbacks()
 
         if self._scene_change_job_ids is None and not getattr(
             self, "_om_callback_ids", None

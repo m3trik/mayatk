@@ -621,9 +621,9 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.mayatk_ui_manager import UiManager
+    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = UiManager.instance().get("shader_templates", reload=True)
+    ui = MayaUiHandler.instance().get("shader_templates", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

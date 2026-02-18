@@ -4,6 +4,7 @@ import os
 import re
 import time
 from functools import partial, wraps
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -1573,6 +1574,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
         widget.menu.setTitle("Global Settings:")
+        widget.menu.add_presets = True
+        widget.menu.presets.preset_dir = "~/.mayatk/presets/reference_manager"
         widget.menu.add(
             "QPushButton",
             setText="Refresh",
@@ -2372,9 +2375,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.mayatk_ui_manager import UiManager
+    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = UiManager.instance().get("reference_manager", reload=True)
+    ui = MayaUiHandler.instance().get("reference_manager", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

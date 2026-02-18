@@ -71,14 +71,14 @@ class TelescopeRig(ptk.LoggingMixin):
             midpoint_locator_name = f"segment_locator_{index}_LOC"
             # Let Maya handle unique naming if collision occurs
             midpoint_locator = pm.spaceLocator(name=midpoint_locator_name)
-            
+
             # Simple average position start
             midpoint_pos = (
                 pm.datatypes.Vector(start_locator.getTranslation(space="world"))
                 + pm.datatypes.Vector(end_locator.getTranslation(space="world"))
             ) / 2
             midpoint_locator.setTranslation(midpoint_pos, space="world")
-            
+
             pm.pointConstraint(start_locator, end_locator, midpoint_locator)
             pm.aimConstraint(
                 end_locator,
@@ -163,7 +163,7 @@ class TelescopeRig(ptk.LoggingMixin):
         initial_distance = pm.getAttr(distance_node.distance)
         set_driven_keys(distance_node, initial_distance)
         lock_segment_attributes()
-        
+
         self.logger.success("Telescope Rig setup complete.")
 
 
@@ -172,19 +172,19 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         super().__init__()
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.telescope_rig
-        
+
         # Setup Logging Redirect
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt003)
         self.logger.info("Telescope Rig Tool initialized.", preset="italic")
-        
+
         # Connect Signals
         self.ui.btn_build.clicked.connect(self.build_rig)
 
     @CoreUtils.undoable
     def build_rig(self):
         self.logger.log_divider()
-        
+
         # Parse Selection: Base -> Segments... -> End
         sel = pm.selected(transforms=True, flatten=True)
         if len(sel) < 4:
@@ -210,7 +210,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             # Redirect rig logger too if we want
             rig.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
             rig.logger.setup_logging_redirect(self.ui.txt003)
-            
+
             self.logger.info(f"Base detected: <hl>{base_locator}</hl>")
             self.logger.info(f"End detected: <hl>{end_locator}</hl>")
             self.logger.info(f"Segments detected: <hl>{len(segments)}</hl>")
@@ -219,7 +219,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
                 base_locator=base_locator,
                 end_locator=end_locator,
                 segments=segments,
-                collapsed_distance=collapsed_dist
+                collapsed_distance=collapsed_dist,
             )
         except Exception as e:
             self.logger.error(f"Error setting up rig: {str(e)}")
@@ -227,7 +227,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
 
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.mayatk_ui_manager import UiManager
+    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = UiManager.instance().get("telescope_rig", reload=True)
+    ui = MayaUiHandler.instance().get("telescope_rig", reload=True)
     ui.show(pos="screen", app_exec=True)

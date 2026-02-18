@@ -67,7 +67,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         # Create Condition Node
         # if opacity > 0: visibility = 1
         # else: visibility = 0
-        cond = pm.createNode("condition", name=f"{obj.name()}_VisDriver")
+        cond = pm.createNode("condition", name=f"{obj.nodeName()}_VisDriver")
         cond.operation.set(2)  # Greater Than
         cond.secondTerm.set(0.0)
         cond.colorIfTrueR.set(1.0)
