@@ -10,6 +10,7 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 from uitk.widgets.footer import FooterStatusController
+from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -1551,22 +1552,22 @@ class AttributeManagerSlots:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
     # Sentinel labels for enum combobox action items.
-    _ENUM_ACTION_RENAME = "✏ Rename…"
-    _ENUM_ACTION_ADD = "＋ Add…"
-    _ENUM_ACTION_DELETE = "✕ Delete"
+    _ENUM_ACTION_RENAME = "Rename"
+    _ENUM_ACTION_ADD = "Add"
+    _ENUM_ACTION_DELETE = "Delete"
 
     def _setup_enum_combos(self, widget, nodes):
         """Replace value cells with comboboxes for enum-type rows.
 
         Each combobox is populated with the attribute's enum labels,
-        followed by a separator and Rename / Add / Delete action items.
+        followed by a separator and Rename / Add / Delete action items
+        using ``combo.actions.add()``.
         The ``activated`` signal (user interaction only) is used so that
         programmatic index changes never trigger side-effects.
         """
         if not nodes:
             return
         primary = nodes[0]
-        QComboBox = self.sb.QtWidgets.QComboBox
         Qt = self.sb.QtCore.Qt
 
         for row in range(widget.rowCount()):
@@ -1591,19 +1592,38 @@ class AttributeManagerSlots:
             except Exception:
                 current_maya_idx = 0
 
-            combo = QComboBox()
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            combo = WidgetComboBox()
+            combo.setSizeAdjustPolicy(WidgetComboBox.SizeAdjustPolicy.AdjustToContents)
             combo.setStyleSheet(
                 "QComboBox { padding: 0; margin: 0; border: none; }"
                 "QComboBox::drop-down { subcontrol-position: right center; }"
             )
-            combo.addItems(labels)
+            combo.add(labels)
 
-            # --- action items after a separator ---
-            combo.insertSeparator(len(labels))
-            combo.addItem(self._ENUM_ACTION_RENAME)
-            combo.addItem(self._ENUM_ACTION_ADD)
-            combo.addItem(self._ENUM_ACTION_DELETE)
+            # --- persistent action items via actions namespace ---
+            actions = combo.actions.add(
+                {
+                    self._ENUM_ACTION_RENAME: lambda checked=False, c=combo: self._on_enum_action_rename(
+                        c
+                    ),
+                    self._ENUM_ACTION_ADD: lambda checked=False, c=combo: self._on_enum_action_add(
+                        c
+                    ),
+                    self._ENUM_ACTION_DELETE: lambda checked=False, c=combo: self._on_enum_action_delete(
+                        c
+                    ),
+                }
+            )
+            # Apply SVG icons to each action (edit / add / trash).
+            try:
+                from uitk.widgets.mixins.icon_manager import IconManager
+
+                _icon_names = ("edit", "add", "trash")
+                for action, icon_name in zip(actions, _icon_names):
+                    action.setIcon(IconManager.get(icon_name, size=(14, 14)))
+                combo._rebuild_actions_section()
+            except Exception:
+                pass
 
             # Map Maya int value to combo position.
             if current_maya_idx in maya_indices:
@@ -1611,25 +1631,7 @@ class AttributeManagerSlots:
             else:
                 combo.setCurrentIndex(0)
 
-            # Widen the dropdown popup so long labels aren't clipped.
-            view = combo.view()
-            if view:
-                longest = max(
-                    labels
-                    + [
-                        self._ENUM_ACTION_RENAME,
-                        self._ENUM_ACTION_ADD,
-                        self._ENUM_ACTION_DELETE,
-                    ],
-                    key=len,
-                )
-                fm = combo.fontMetrics()
-                view.setMinimumWidth(fm.horizontalAdvance(longest) + 40)
-
-            # Store metadata so the handler can distinguish values from
-            # actions and identify the attribute.  ``_maya_indices``
-            # maps combo position -> Maya integer index.
-            combo.setProperty("_enum_count", len(labels))
+            # Store metadata for the value handler.
             combo.setProperty("_attr_name", attr_name)
             combo.setProperty("_table_row", row)
             combo.setProperty("_maya_indices", maya_indices)
@@ -1649,68 +1651,63 @@ class AttributeManagerSlots:
             widget.setCellWidget(row, self.COL_VALUE, combo)
 
     def _on_enum_combo_activated(self, combo, index):
-        """Handle user-initiated enum combobox selection or action.
+        """Handle user-initiated enum combobox value selection.
 
-        Indices below ``_enum_count`` set the Maya attribute.
-        Indices at or above that boundary are action items
-        (Rename / Add / Delete).  After an action fires the
-        combobox is reset to the previous real value.
+        Action items (Rename / Add / Delete) are handled by callbacks
+        wired through ``combo.actions.add()``, so this handler only
+        needs to process real enum value selections.
         """
         attr_name = combo.property("_attr_name")
-        enum_count = combo.property("_enum_count")
         maya_indices = combo.property("_maya_indices") or []
-        row = combo.property("_table_row")
         nodes = self.controller.get_selected_nodes()
         if not nodes or not attr_name:
             return
 
-        # --- Real enum value selected ---
-        if index < enum_count:
-            # Translate combo position to Maya integer index.
-            maya_idx = maya_indices[index] if index < len(maya_indices) else index
-            self._combo_setting = True
-            cmds.undoInfo(openChunk=True, chunkName=f"Set Enum: {attr_name}")
-            try:
-                for node in nodes:
-                    try:
-                        cmds.setAttr(f"{node}.{attr_name}", maya_idx)
-                    except Exception:
-                        pass
-            finally:
-                cmds.undoInfo(closeChunk=True)
-                self._combo_setting = False
-            return
-
-        # --- Action item selected ---
-        label_text = combo.itemText(index)
-
-        # Revert combobox to the real Maya value before acting.
+        # Translate combo position to Maya integer index.
+        maya_idx = maya_indices[index] if index < len(maya_indices) else index
+        self._combo_setting = True
+        cmds.undoInfo(openChunk=True, chunkName=f"Set Enum: {attr_name}")
         try:
-            real_maya_idx = cmds.getAttr(f"{nodes[0]}.{attr_name}")
-        except Exception:
-            real_maya_idx = 0
-        combo.blockSignals(True)
-        if real_maya_idx in maya_indices:
-            combo.setCurrentIndex(maya_indices.index(real_maya_idx))
-        else:
-            combo.setCurrentIndex(0)
-        combo.blockSignals(False)
+            for node in nodes:
+                try:
+                    cmds.setAttr(f"{node}.{attr_name}", maya_idx)
+                except Exception:
+                    pass
+        finally:
+            cmds.undoInfo(closeChunk=True)
+            self._combo_setting = False
 
-        # Defer so the combo dropdown fully closes first.
-        if label_text == self._ENUM_ACTION_RENAME:
-            current_label = self.controller.get_enum_label(nodes[0], attr_name)
-            if current_label:
-                cmds.evalDeferred(
-                    lambda: self._enum_rename_dialog(nodes, attr_name, current_label)
-                )
-        elif label_text == self._ENUM_ACTION_ADD:
-            cmds.evalDeferred(lambda: self._enum_add_dialog(nodes, attr_name))
-        elif label_text == self._ENUM_ACTION_DELETE:
-            current_label = self.controller.get_enum_label(nodes[0], attr_name)
-            if current_label:
-                cmds.evalDeferred(
-                    lambda: self._deferred_delete_enum(nodes, attr_name, current_label)
-                )
+    def _on_enum_action_rename(self, combo):
+        """Handle Rename action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        current_label = self.controller.get_enum_label(nodes[0], attr_name)
+        if current_label:
+            cmds.evalDeferred(
+                lambda: self._enum_rename_dialog(nodes, attr_name, current_label)
+            )
+
+    def _on_enum_action_add(self, combo):
+        """Handle Add action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        cmds.evalDeferred(lambda: self._enum_add_dialog(nodes, attr_name))
+
+    def _on_enum_action_delete(self, combo):
+        """Handle Delete action from enum combobox."""
+        attr_name = combo.property("_attr_name")
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or not attr_name:
+            return
+        current_label = self.controller.get_enum_label(nodes[0], attr_name)
+        if current_label:
+            cmds.evalDeferred(
+                lambda: self._deferred_delete_enum(nodes, attr_name, current_label)
+            )
 
     def _deferred_delete_enum(self, nodes, attr_name, label):
         """Delete an enum field and refresh (called via evalDeferred)."""

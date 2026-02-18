@@ -457,9 +457,9 @@ class WheelRigSlots:
 
 
 if __name__ == "__main__":
-    from mayatk.ui_utils.mayatk_ui_manager import UiManager
+    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = UiManager.instance().get("wheel_rig", reload=True)
+    ui = MayaUiHandler.instance().get("wheel_rig", reload=True)
     ui.header.config_buttons("hide")
     ui.show(pos="screen", app_exec=True)
 

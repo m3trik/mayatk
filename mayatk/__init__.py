@@ -155,5 +155,3 @@ except ImportError:
 # Notes
 # --------------------------------------------------------------------------------------------
 # Test: 222117
-
-print("DEBUG: Loading LOCAL mayatk package")
