@@ -477,7 +477,8 @@ class SceneExporterSlots(SceneExporter):
                 default_dir = None
 
             is_default = False
-
+            widget.option_box.menu.setTitle("Preset Options:")
+            widget.option_box.menu.add_defaults_button = False
             # Add CheckBox to toggle default directory usage
             self.chk_default_presets = widget.option_box.menu.add(
                 "QCheckBox",
@@ -485,7 +486,6 @@ class SceneExporterSlots(SceneExporter):
                 setToolTip=f"Use the standard Maya user presets directory:\n{default_dir}",
                 setChecked=is_default,
             )
-
             # Add Set Button
             self.btn_set_presets = widget.option_box.menu.add(
                 "QPushButton",
@@ -576,6 +576,8 @@ class SceneExporterSlots(SceneExporter):
 
     def txt000_init(self, widget) -> None:
         """Init Output Directory"""
+        widget.option_box.menu.setTitle("Output Directory:")
+        widget.option_box.menu.add_defaults_button = False
         widget.option_box.menu.add(
             "QPushButton",
             setToolTip="Set the output directory.",
@@ -604,6 +606,8 @@ class SceneExporterSlots(SceneExporter):
 
     def txt001_init(self, widget) -> None:
         """Init Output Name"""
+        widget.option_box.menu.setTitle("Output Name:")
+        widget.option_box.menu.add_defaults_button = False
         widget.option_box.clear_option = True
         widget.option_box.menu.add(
             "QCheckBox",
