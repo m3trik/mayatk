@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import pythontk as ptk
 
 try:
@@ -33,7 +33,7 @@ class OpacityMaterialMode(ptk.LoggingMixin):
     """Suffix appended to material names in ``"material"`` mode."""
 
     @classmethod
-    def get_stingray_mats(cls, objects: Optional[List] = None) -> List:
+    def get_stingray_mats(cls, objects: Optional[list] = None) -> list:
         """Return unique StingrayPBS materials assigned to *objects*."""
         return MatUtils.get_mats(objects, mat_type="StingrayPBS")
 
@@ -223,27 +223,19 @@ class OpacityMaterialMode(ptk.LoggingMixin):
                         f"Connected {target_obj}.opacity -> {my_mat}.opacity"
                     )
 
-                # 3d. Ensure 'use_opacity_map' implies usage of opacity value
+                # 3d. Ensure 'use_opacity_map' toggle is active so the
+                #     opacity value actually takes effect in the viewport.
                 if my_mat.hasAttr("use_opacity_map"):
-                    # Often these graphs use a toggle. Ensure it's active.
-                    # We don't connect this, just set it.
-                    pass
+                    try:
+                        if not my_mat.use_opacity_map.isLocked():
+                            my_mat.use_opacity_map.set(1.0)
+                    except Exception:
+                        pass
 
-            status = "configured"
             results[final_mat.name()] = {"status": "configured"}
 
-        # Select the modified materials so the Channel Box displays their attributes
-        configured_mats = [
-            name for name, res in results.items() if res.get("status") == "configured"
-        ]
-        if configured_mats:
-            try:
-                # Select the materials to show attributes
-                pm.select(configured_mats)
-            except Exception:
-                pass
-
-        # Force Channel Box refresh if UI is active
+        # Force Channel Box refresh if UI is active (without
+        # changing the user's selection — that is a UI concern).
         if not pm.about(batch=True):
             try:
                 cmds.channelBox("mainChannelBox", edit=True, update=True)

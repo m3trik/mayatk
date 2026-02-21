@@ -1587,7 +1587,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             "QPushButton",
             setText="Save Current Scene",
             setObjectName="btn_save_scene",
-            setToolTip="Save the current scene to the workspace.",
+            setToolTip="Save the current scene to the workspace with naming and folder structure based on settings.",
         )
         widget.menu.add(
             "QLineEdit",

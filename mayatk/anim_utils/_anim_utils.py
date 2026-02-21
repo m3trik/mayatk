@@ -1394,7 +1394,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
     @staticmethod
     def get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]:
-        """Get tangent information (in and out angles and weights) for a given attribute at a specific time.
+        """Get tangent information (types, angles, and weights) for a given attribute at a specific time.
 
         Parameters:
             attr_name (str): The name of the attribute.
@@ -1404,6 +1404,12 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             Dict[str, Any]: A dictionary containing tangent information.
         """
         return {
+            "inTangentType": pm.keyTangent(
+                attr_name, query=True, time=(time,), inTangentType=True
+            )[0],
+            "outTangentType": pm.keyTangent(
+                attr_name, query=True, time=(time,), outTangentType=True
+            )[0],
             "inAngle": pm.keyTangent(attr_name, query=True, time=(time,), inAngle=True)[
                 0
             ],
@@ -1417,6 +1423,36 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 attr_name, query=True, time=(time,), outWeight=True
             )[0],
         }
+
+    @staticmethod
+    def set_tangent_info(
+        attr_name: str, time: float, tangent_info: Dict[str, Any]
+    ) -> None:
+        """Restore tangent information on a keyframe.
+
+        Applies tangent types in a separate call after angles/weights so that
+        type-specific tangents (e.g. stepped) are not overridden by the
+        angle/weight values which would implicitly force the type to 'fixed'.
+
+        Parameters:
+            attr_name (str): The attribute name.
+            time (float): The time of the keyframe.
+            tangent_info (Dict[str, Any]): Tangent dict from ``get_tangent_info``.
+        """
+        types = {}
+        weights_angles = {}
+        for k, v in tangent_info.items():
+            if "TangentType" in k:
+                types[k] = v
+            else:
+                weights_angles[k] = v
+
+        # Angles/weights first (these may implicitly set type to 'fixed')
+        if weights_angles:
+            pm.keyTangent(attr_name, time=(time,), edit=True, **weights_angles)
+        # Types last so they take precedence
+        if types:
+            pm.keyTangent(attr_name, time=(time,), edit=True, **types)
 
     @staticmethod
     def set_current_frame(
@@ -1862,46 +1898,42 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         current_time = pm.currentTime(query=True)
         adjusted_time = time + current_time if relative else time
 
-        keyframe_movements = []
+        # If preserve_keys, save keyframes at adjusted_time before moving them
+        preserved_keys = []  # [(attr_name, value, tangent_info)]
 
         for obj in objects:
             for attr in pm.listAnimatable(obj):
                 attr_name = f"{obj}.{attr.split('.')[-1]}"
                 keyframes = pm.keyframe(attr_name, query=True)
+                if not keyframes:
+                    continue
 
-                if keyframes:
-                    key_exists_at_time = adjusted_time in keyframes
-                    for key in keyframes:
-                        if key >= adjusted_time:
-                            new_time = max(key + spacing, 0)
-                            tangent_info = cls.get_tangent_info(attr_name, key)
-                            keyframe_movements.append(
-                                (
-                                    attr_name,
-                                    key,
-                                    new_time,
-                                    key_exists_at_time,
-                                    tangent_info,
-                                )
-                            )
-        for (
-            attr_name,
-            key,
-            new_time,
-            key_exists_at_time,
-            tangent_info,
-        ) in keyframe_movements:
-            value = pm.getAttr(attr_name, time=key)
-            pm.setKeyframe(attr_name, time=(new_time,), value=value)
-            pm.keyTangent(attr_name, time=(new_time,), edit=True, **tangent_info)
+                if preserve_keys and adjusted_time in keyframes:
+                    value = pm.getAttr(attr_name, time=adjusted_time)
+                    tangent_info = cls.get_tangent_info(attr_name, adjusted_time)
+                    preserved_keys.append((attr_name, value, tangent_info))
 
-            if key != adjusted_time or (
-                key == adjusted_time and not key_exists_at_time
-            ):
-                pm.cutKey(attr_name, time=(key, key))
+                # Use keyframe -edit -timeChange to MOVE keys.
+                # This natively preserves all tangent types, angles, and weights.
+                # Process keys individually with clamping to time >= 0.
+                keys_to_move = sorted(
+                    [k for k in keyframes if k >= adjusted_time],
+                    reverse=(spacing > 0),
+                )
+                for key in keys_to_move:
+                    new_time = max(key + spacing, 0)
+                    if new_time != key:
+                        pm.keyframe(
+                            attr_name,
+                            edit=True,
+                            time=(key,),
+                            timeChange=new_time,
+                        )
 
-            if key == adjusted_time and not preserve_keys:
-                pm.cutKey(attr_name, time=(adjusted_time, adjusted_time))
+        # Restore preserved keyframes at the original time
+        for attr_name, value, tangent_info in preserved_keys:
+            pm.setKeyframe(attr_name, time=(adjusted_time,), value=value)
+            cls.set_tangent_info(attr_name, adjusted_time, tangent_info)
 
     @staticmethod
     def add_intermediate_keys(
@@ -3292,11 +3324,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             tangent_info = cls.get_tangent_info(
                                 source_obj.attr(attr), time
                             )
-                            pm.keyTangent(
-                                target_obj.attr(attr),
-                                time=(time,),
-                                edit=True,
-                                **tangent_info,
+                            cls.set_tangent_info(
+                                target_obj.attr(attr), time, tangent_info
                             )
 
     @staticmethod

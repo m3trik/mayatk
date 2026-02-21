@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Dict, List, Optional
+import re
+from typing import Dict
 import pythontk as ptk
 
 try:
@@ -23,6 +24,9 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
     ATTR_NAME = "opacity"
     """Custom attribute name used in ``"attribute"`` mode."""
+
+    _VIS_DRIVER_RE = re.compile(r"_VisDriver\d*$")
+    """Matches condition node names including Maya auto-incremented variants."""
 
     @classmethod
     def create(cls, objects) -> Dict[str, Dict]:
@@ -48,19 +52,19 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         if obj.visibility.isLocked():
             return
 
-        # Check if already driven by our specific condition setup
+        # Check if already driven
         inputs = obj.visibility.inputs()
-        if (
-            inputs
-            and isinstance(inputs[0], pm.nt.Condition)
-            and inputs[0].name().endswith("_VisDriver")
-        ):
-            return  # Already setup
+        if inputs:
+            if (
+                isinstance(inputs[0], pm.nt.Condition)
+                and cls._VIS_DRIVER_RE.search(inputs[0].name())
+            ):
+                return  # Already our setup
 
-        if inputs and not isinstance(inputs[0], pm.nt.Condition):
-            # Driven by something else (e.g. animator), don't stomp.
+            # Driven by something else (foreign Condition, animator, etc.)
             cls.logger.info(
-                f"[{obj.name()}] Visibility already driven by {inputs[0]}. Skipping auto-hide setup."
+                f"[{obj.name()}] Visibility already driven by {inputs[0]}. "
+                "Skipping auto-hide setup."
             )
             return
 
@@ -82,16 +86,30 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             if not obj.hasAttr(cls.ATTR_NAME):
                 continue
 
-            # Clean up Visibility Driver
+            # Clean up Visibility Driver (via visibility input)
             inputs = obj.visibility.inputs()
             if (
                 inputs
                 and isinstance(inputs[0], pm.nt.Condition)
-                and inputs[0].name().endswith("_VisDriver")
+                and cls._VIS_DRIVER_RE.search(inputs[0].name())
             ):
                 pm.delete(inputs[0])
-                # Reset visibility to default
-                obj.visibility.set(True)
+                # Reset visibility to default (guard against locked attr)
+                try:
+                    if not obj.visibility.isLocked():
+                        obj.visibility.set(True)
+                except Exception:
+                    pass
+
+            # Fallback: find orphaned VisDrivers still connected via
+            # opacity → condition.firstTerm (e.g. visibility connection
+            # was broken externally but condition node still exists).
+            conds = (
+                pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
+            )
+            for c in conds:
+                if cls._VIS_DRIVER_RE.search(c.name()):
+                    pm.delete(c)
 
             # Delete anim curves first (deleteAttr errors on connected attrs)
             curves = pm.listConnections(obj.attr(cls.ATTR_NAME), type="animCurve")
@@ -99,3 +117,4 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 pm.delete(curves)
             obj.deleteAttr(cls.ATTR_NAME)
             cls.logger.info(f"Removed {cls.ATTR_NAME} from {obj}")
+

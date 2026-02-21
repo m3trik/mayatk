@@ -329,16 +329,23 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
         widget.option_box.menu.add(
             "QCheckBox",
+            setText="Strip Trailing Padding",
+            setObjectName="tb003_chk004",
+            setChecked=True,
+            setToolTip="Strip orphaned trailing underscores and, only when underscores were at the end, also strip exposed trailing digits. Preserves intentional '_02' numbering.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
             setText="Strip Trailing Integers",
             setObjectName="tb003_chk002",
-            setChecked=True,
+            setChecked=False,
             setToolTip="Strip any trailing integers. ie. '123' of 'cube123'",
         )
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Strip Trailing Underscores",
             setObjectName="tb003_chk003",
-            setChecked=True,
+            setChecked=False,
             setToolTip="Strip any trailing underscores after stripping integers (e.g. 'cube_01_' -> 'cube').",
         )
 
@@ -357,6 +364,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "display_layer_suffix": widget.option_box.menu.tb003_txt007.text(),
             "strip_trailing_ints": widget.option_box.menu.tb003_chk002.isChecked(),
             "strip_trailing_underscores": widget.option_box.menu.tb003_chk003.isChecked(),
+            "strip_trailing_padding": widget.option_box.menu.tb003_chk004.isChecked(),
         }
         self.suffix_by_type(objects, **kwargs)
 

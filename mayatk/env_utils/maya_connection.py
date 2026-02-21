@@ -173,13 +173,17 @@ class MayaConnection:
         mode: ConnectionMode = "auto",
         port: int = 7002,
         host: str = "localhost",
-        launch: bool = False,
+        launch: bool = True,
         app_path: Optional[str] = None,
-        force_new_instance: bool = False,
+        force_new_instance: bool = True,
         launch_args: Optional[List[str]] = None,
     ) -> bool:
         """
         Connect to Maya using the specified mode.
+
+        By default this launches a **new** Maya instance on an available port
+        so that an existing session is never disturbed.  Pass
+        ``force_new_instance=False`` to reuse an already-running instance.
 
         Parameters:
             mode: Connection mode - "port", "standalone", "interactive", or "auto"
@@ -188,7 +192,9 @@ class MayaConnection:
             host: Hostname for command port connection (default: "localhost")
             launch: If True, attempts to launch Maya GUI with the command port open if connection fails.
             app_path: Optional path to the Maya executable to use when launching.
-            force_new_instance: If True, finds an available port and launches a new Maya instance regardless of existing ones.
+            force_new_instance: If True (default), finds an available port and launches a new Maya
+                instance regardless of existing ones.  This prevents accidentally modifying
+                a user's open scene.
             launch_args: Optional list of additional arguments to pass to Maya when launching (e.g. ['-noAutoloadPlugins']).
 
         Returns:

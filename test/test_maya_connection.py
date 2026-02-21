@@ -169,7 +169,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
         conn = MayaConnection()
 
         # Mock connect to succeed (no exception)
-        result = conn.connect(mode="port", port=12345)
+        result = conn.connect(mode="port", port=12345, force_new_instance=False)
 
         self.assertTrue(result)
         self.assertEqual(conn.mode, "port")
@@ -185,7 +185,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
         mock_socket.connect.side_effect = ConnectionRefusedError("Connection refused")
 
         conn = MayaConnection()
-        result = conn.connect(mode="port")
+        result = conn.connect(mode="port", force_new_instance=False)
 
         self.assertFalse(result)
         self.assertFalse(conn.is_connected)
@@ -227,7 +227,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
     def _run_connect_standalone_test(self):
         conn = MayaConnection()
         with patch("maya.standalone.initialize") as mock_initialize:
-            result = conn.connect(mode="standalone")
+            result = conn.connect(mode="standalone", force_new_instance=False)
 
             self.assertTrue(result)
             self.assertEqual(conn.mode, "standalone")
@@ -257,7 +257,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
             mock_connect_port.side_effect = [False, True]
             mock_launch_gui.return_value = True
 
-            result = conn.connect(mode="auto", launch=True)
+            result = conn.connect(mode="auto", launch=True, force_new_instance=False)
 
             self.assertTrue(result)
 

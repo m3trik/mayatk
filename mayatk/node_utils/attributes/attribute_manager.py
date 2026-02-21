@@ -1150,7 +1150,7 @@ class AttributeManagerSlots:
 
         # -- Create handler -------------------------------------------------
         def _on_create():
-            name = le_name.text().strip()
+            name = le_name.text().strip().replace(" ", "_")
             if not name:
                 self.sb.message_box("Warning: Attribute name cannot be empty.")
                 return
@@ -1160,16 +1160,20 @@ class AttributeManagerSlots:
                 return
 
             attr_type = cmb_type.currentText()
-            self.controller.create_attribute(
-                sel,
-                name,
-                attr_type,
-                keyable=chk_keyable.isChecked(),
-                min_val=spn_min.value() if spn_min.isEnabled() else None,
-                max_val=spn_max.value() if spn_max.isEnabled() else None,
-                default_val=spn_default.value(),
-                enum_names=le_enum.text().strip() if attr_type == "enum" else "",
-            )
+            try:
+                self.controller.create_attribute(
+                    sel,
+                    name,
+                    attr_type,
+                    keyable=chk_keyable.isChecked(),
+                    min_val=spn_min.value() if spn_min.isEnabled() else None,
+                    max_val=spn_max.value() if spn_max.isEnabled() else None,
+                    default_val=spn_default.value(),
+                    enum_names=le_enum.text().strip() if attr_type == "enum" else "",
+                )
+            except RuntimeError as e:
+                self.sb.message_box(f"Error: {e}")
+                return
             menu.hide()
             self._refresh_table(self.ui.tbl000)
 

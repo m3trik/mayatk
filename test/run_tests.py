@@ -64,7 +64,9 @@ class MayaTestRunner:
             print("[ERROR] MayaConnection not available")
             return False
 
-        if self.connection.connect(mode="auto", port=self.port, host=self.host):
+        if self.connection.connect(
+            mode="auto", port=self.port, host=self.host, force_new_instance=False
+        ):
             print(f"[OK] Connected to Maya in {self.connection.mode} mode")
             return True
         else:

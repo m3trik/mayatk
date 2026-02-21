@@ -38,6 +38,7 @@ DEFAULT_INCLUDE = {
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",
+    "node_utils.attributes.audio_events._audio_events": "AudioEvents",
     # Environment utils
     "env_utils.devtools": "*",
     # Core utils - specific classes
