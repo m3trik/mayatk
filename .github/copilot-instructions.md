@@ -28,6 +28,27 @@
   - `mayatk/test/` (Production/Standardized).
   - `mayatk/test/temp_tests/` (Scratchpad - Gitignored usually).
 
+### MayaConnection Defaults
+
+> **CRITICAL — Protect User Work**:
+> `MayaConnection.connect()` defaults to `launch=True, force_new_instance=True`.
+> This means every call **launches a fresh Maya instance on an unused port** so an
+> existing user session is **never** disturbed.
+>
+> - **`run_tests.py` also defaults to `force_new_instance=True`** (launches a new Maya).
+>   Only `--reuse` overrides this to attach to an existing session.
+> - To reuse an already-running instance, pass `force_new_instance=False` (or `--reuse`
+>   on the CLI). **This will DESTROY any unsaved work in that session.**
+> - Unit tests in `test_maya_connection.py` pass `force_new_instance=False`
+>   only because they use mocks — never in a real Maya context.
+>
+> **AI AGENT RULE**: When running tests, **NEVER** pass `force_new_instance=False`
+> or `--reuse`. Always let the runner launch its own Maya instance. Connecting to
+> an existing session risks destroying the user's scene and hours of unsaved work.
+>
+> `_launch_maya_gui()` delegates to `pythontk.AppLauncher` internally — do **not**
+> bypass it with raw `subprocess` calls.
+
 ### Test Infrastructure
 
 > **CRITICAL — Maya Runtime Required**:
@@ -53,7 +74,7 @@
 ```powershell
 $env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"
 
-# Run all tests
+# Run all tests (launches a NEW Maya instance automatically)
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
 
 # Run a specific module's tests
@@ -61,6 +82,9 @@ $env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk
 
 # List available test modules
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --list
+
+# DANGEROUS: Reuse an existing Maya session (only if you know what you're doing)
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --reuse core_utils
 ```
 
 **2. Maya Script Editor (interactive)**:
@@ -87,3 +111,17 @@ Requires Maya running with `cmds.commandPort(name=":7002", sourceType="python")`
 - [x] **Animation Tools** — Recursive scaling, overlap prevention strategies, absolute/relative modes.
 - [x] **AutoInstancer** — Deep hierarchy support, robust PCA alignment, `InstancingStrategy` implementation.
 - [x] **Scene Exporter** — Transitioned critical paths from PyMEL to `maya.cmds` for 5x speedup.
+
+### Maya Development (2026)
+- [x] **Audio Events Import Conversion** — Added automatic source-to-WAV conversion (MP3/OGG/M4A/FLAC via `ffmpeg`) for timeline-safe Maya audio playback, with cached outputs and UI/tooling updates.
+- [x] **Audio Composite Refactor** — Moved composite WAV mixing from `mayatk` into reusable `pythontk.AudioUtils` and updated Audio Events to call shared utility logic.
+- [x] **Audio Events DRY Cleanup** — Consolidated remove-flow to use `EventTriggers.remove` as the teardown SSoT, removed stale sync flags/guards in `audio_events_slots.py`, and simplified Channel Box connect/disconnect handling.
+- [x] **Overlap None-Key Cleanup** — Updated Key Event auto-end behavior to remove stale intermediate `None` keys inside overlapping clip ranges before writing the latest end-None key; added lifecycle regression coverage.
+- [x] **Audio Events SoC/DRY Pass 2** — Extracted shared sync/persist flow (`_sync_and_refresh_target`) and overlap-none pruning (`_prune_overlap_none_keys`) so `tb000` and `b005` reuse single internal primitives.
+- [x] **Overlap None-Key Hardening** — Made overlap pruning enum-index aware (uses `EventTriggers.event_index(..., "None")` instead of hardcoded `0`) and boundary-inclusive to clean stale `None` keys at overlap boundaries.
+- [x] **Overlap None-Key Hardening (Pass 2)** — Modified `_prune_overlap_none_keys` to remove all `None` keys from the new clip's start frame up to the *next non-None key*, rather than bounding it by the new clip's end frame. This fixes the bug where a shorter overlapping clip would leave behind the longer clip's `None` key.
+- [x] **Audio Events UI Grouping** — Reorganized `audio_events.ui` into collapsible groups (`Tracks`, `Key`, `Sync`, `Manage`) to mirror the grouped layout style used in the polygons UI.
+- [x] **Audio Events Designer Compatibility** — Switched `audio_events.ui` grouping containers to standard `QGroupBox` so section groups are visible in Qt Designer while preserving grouped layout and existing widget IDs.- [x] **Render Opacity VisDriver Name Fix** — Fixed fragile `endswith("_VisDriver")` check in `OpacityAttributeMode` that broke when Maya auto-incremented condition node names (e.g. `cube_VisDriver1`). Replaced with regex `_VisDriver\d*$` in both `_connect_visibility_driver` and `remove`. Added regression tests for name-collision and object-recreate scenarios.
+- [x] **Adjust Key Spacing Tangent Preservation** — Rewrote `adjust_key_spacing` to MOVE keys via `pm.keyframe(edit=True, timeChange=...)` instead of recreating them, which natively preserves all tangent data. Added `set_tangent_info` helper that applies angles/weights in a separate call from types to prevent Maya from overriding stepped→fixed tangents. Updated `transfer_keyframes` to use `set_tangent_info`. Verified with 7 in-Maya tests (stepped, flat, mixed, negative spacing, preserve_keys).
+- [x] **MayaConnection Safe Defaults** — Changed `MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` so callers always get a fresh Maya instance by default, protecting existing user sessions. Updated `run_tests.py` and `test_maya_connection.py` to pass `force_new_instance=False` where needed. `_launch_maya_gui()` already delegates to `pythontk.AppLauncher` internally.
+- [x] **run_tests.py Session Safety** — Fixed `run_tests.py` to default to `force_new_instance=True` (was `False`, which hijacked the user's open Maya). Added `--reuse` CLI flag as the only opt-in to existing sessions. Added warning banners in both `run_tests.py` and `MayaConnection.connect()` when reuse is active. Updated copilot-instructions with explicit AI agent rule to never pass `--reuse`.

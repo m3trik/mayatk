@@ -312,8 +312,11 @@ class SmartBake:
         # Find blend shapes connected to our objects
         blend_shapes = set()
         for obj in objects:
-            # Get shapes under transform
-            shapes = cmds.listRelatives(obj, shapes=True, noIntermediate=True) or []
+            # Get shapes under transform (fullPath avoids ambiguous short names)
+            shapes = (
+                cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+                or []
+            )
             for shape in shapes:
                 # Find blend shape deformers
                 bs_nodes = (
@@ -684,19 +687,35 @@ class SmartBake:
                                 except RuntimeError:
                                     pass  # Node already deleted or protected
 
-        # Optimize keys if requested
+        # Optimize keys if requested — only on baked channels, not the
+        # entire object.  Passing whole objects would let optimize_keys
+        # delete pre-existing curves (e.g. stepped keys the user placed
+        # manually) that happen to be constant-valued.
         if self.optimize_keys and result.baked:
             from mayatk.anim_utils._anim_utils import AnimUtils
 
-            baked_objects = list(result.baked.keys())
-            AnimUtils.optimize_keys(
-                baked_objects,
-                remove_flat_keys=True,
-                remove_static_curves=True,
-                simplify_keys=False,
-                quiet=True,
-            )
-            result.optimized = baked_objects
+            baked_curves = []
+            for obj, channels in result.baked.items():
+                for ch in channels:
+                    plug = f"{obj}.{ch}"
+                    curves = cmds.listConnections(
+                        plug, type="animCurve", source=True, destination=False
+                    )
+                    if curves:
+                        baked_curves.extend(curves)
+
+            if baked_curves:
+                # Deduplicate
+                baked_curves = list(set(baked_curves))
+                AnimUtils.optimize_keys(
+                    baked_curves,
+                    remove_flat_keys=True,
+                    remove_static_curves=True,
+                    simplify_keys=False,
+                    recursive=False,
+                    quiet=True,
+                )
+            result.optimized = list(result.baked.keys())
 
         return result
 

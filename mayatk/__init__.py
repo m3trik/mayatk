@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.10.2"
+__version__ = "0.10.7"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -38,6 +38,7 @@ DEFAULT_INCLUDE = {
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",
+    "node_utils.attributes.audio_events._audio_events": "AudioEvents",
     # Environment utils
     "env_utils.devtools": "*",
     # Core utils - specific classes
@@ -81,6 +82,7 @@ DEFAULT_INCLUDE = {
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
+    "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
     "mat_utils.shader_templates": "ShaderTemplates",

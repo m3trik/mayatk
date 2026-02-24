@@ -154,6 +154,65 @@ class TestNaming(MayaTkTestCase):
         self.assertEqual(g1.nodeName(), "Container_01")
         self.assertEqual(g2.nodeName(), "Container_02")
 
+    # ------------------------------------------------------------------
+    # suffix_by_type: strip_trailing_padding
+    # ------------------------------------------------------------------
+
+    def test_suffix_by_type_padding_preserves_underscore_number(self):
+        """Verify strip_trailing_padding=True keeps intentional '_02' numbering.
+
+        Bug: When strip_trailing_ints and strip_trailing_underscores were both
+        True (old UI defaults), names like 'Foo_02' were reduced to 'Foo'
+        because ints were stripped first ('Foo_'), then the orphan underscore
+        was stripped ('Foo').
+        Fixed: 2026-02-20 — added strip_trailing_padding option.
+        """
+        cube = pm.polyCube(n="Cube_02")[0]
+        Naming.suffix_by_type(
+            [cube],
+            strip_trailing_ints=False,
+            strip_trailing_underscores=False,
+            strip_trailing_padding=True,
+        )
+        # '_02' is intentional — should be preserved.
+        self.assertEqual(cube.nodeName(), "Cube_02_GEO")
+
+    def test_suffix_by_type_padding_strips_orphan_underscores(self):
+        """Verify strip_trailing_padding cleans up bare trailing underscores."""
+        cube = pm.polyCube(n="Cube_")[0]
+        Naming.suffix_by_type(
+            [cube],
+            strip_trailing_ints=False,
+            strip_trailing_underscores=False,
+            strip_trailing_padding=True,
+        )
+        self.assertEqual(cube.nodeName(), "Cube_GEO")
+
+    def test_suffix_by_type_padding_strips_orphan_underscore_digits(self):
+        """Verify strip_trailing_padding cleans orphaned '_' + digits left
+        after removing a wrong suffix (e.g. 'Foo_01_' -> 'Foo')."""
+        cube = pm.polyCube(n="Cube_01_")[0]
+        Naming.suffix_by_type(
+            [cube],
+            strip_trailing_ints=False,
+            strip_trailing_underscores=False,
+            strip_trailing_padding=True,
+        )
+        # Trailing '_' triggers cascade: strip '_' -> 'Cube_01'
+        # then strip digits '01' -> 'Cube_' -> strip '_' -> 'Cube'
+        self.assertEqual(cube.nodeName(), "Cube_GEO")
+
+    def test_suffix_by_type_padding_no_trailing_artifact(self):
+        """Verify strip_trailing_padding is a no-op when name is clean."""
+        cube = pm.polyCube(n="CleanName")[0]
+        Naming.suffix_by_type(
+            [cube],
+            strip_trailing_ints=False,
+            strip_trailing_underscores=False,
+            strip_trailing_padding=True,
+        )
+        self.assertEqual(cube.nodeName(), "CleanName_GEO")
+
 
 if __name__ == "__main__":
     unittest.main()

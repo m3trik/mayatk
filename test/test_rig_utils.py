@@ -136,6 +136,80 @@ class TestRigUtils(MayaTkTestCase):
         # Verify positions match
         self.assertAlmostEqual(loc.getTranslation(space="world")[0], 10.0)
 
+    def test_create_locator_at_group_preserves_position(self):
+        """Verify locator is placed at the group's content center, not scene root.
+
+        Bug: When create_locator_at_object was called on a group node whose own
+        transforms were at origin (but whose children were offset), the locator
+        was placed at scene root (0,0,0) instead of at the center of the group's
+        children. This happened because bake_pivot was skipped for groups and
+        get_manip_pivot_matrix returned the group's identity transform.
+        Fixed: 2026-02-23
+        """
+        # Create a group at origin with a child mesh offset to (10, 0, 0)
+        child = self.create_test_cube("child_mesh")
+        pm.move(child, 10, 0, 0)
+        grp = pm.group(em=True, n="org_group")
+        pm.parent(child, grp)
+
+        # Group is at origin, child is at (10, 0, 0) world
+        grp_pos = pm.xform(grp, q=True, ws=True, t=True)
+        self.assertAlmostEqual(grp_pos[0], 0.0, places=3)
+
+        # Run create_locator_at_object on the group
+        RigUtils.create_locator_at_object(grp)
+
+        # The locator should be at the child's center (~10, 0, 0), NOT at scene root
+        loc = pm.PyNode("org_group_LOC")
+        loc_pos = pm.xform(loc, q=True, ws=True, t=True)
+        self.assertAlmostEqual(
+            loc_pos[0], 10.0, places=1,
+            msg=f"Locator X should be ~10 (children center), got {loc_pos[0]}"
+        )
+
+    def test_create_locator_at_group_with_transforms(self):
+        """Verify locator matches position for a group that has non-zero transforms."""
+        # Create a group at (5, 10, 0) with a child at (0,0,0) relative
+        child = self.create_test_cube("offset_child")
+        grp = pm.group(child, n="offset_group")
+        pm.move(grp, 5, 10, 0)
+
+        RigUtils.create_locator_at_object(grp)
+
+        loc = pm.PyNode("offset_group_LOC")
+        loc_pos = pm.xform(loc, q=True, ws=True, t=True)
+        self.assertAlmostEqual(loc_pos[0], 5.0, places=1)
+        self.assertAlmostEqual(loc_pos[1], 10.0, places=1)
+
+    def test_create_locator_at_group_preserves_orientation(self):
+        """Verify locator orientation matches the group's manip pivot orientation.
+
+        Bug: For groups, bake_pivot was skipped (correct) but the code only
+        read the group's world-transform matrix for orientation, missing any
+        custom manipulator-pivot orientation.  The locator ended up with
+        identity rotation even when the group had a visible orientation.
+        Fixed: 2026-02-23
+        """
+        # Create a rotated group with a child
+        child = self.create_test_cube("rot_child")
+        grp = pm.group(child, n="rotated_group")
+        pm.rotate(grp, 0, 45, 0, ws=True)
+
+        # Before calling create_locator_at_object, the group is rotated 45 Y
+        grp_rot = pm.xform(grp, q=True, ws=True, ro=True)
+        self.assertAlmostEqual(grp_rot[1], 45.0, places=1)
+
+        RigUtils.create_locator_at_object(grp)
+
+        loc = pm.PyNode("rotated_group_LOC")
+        # The locator (or its parent GRP) should reflect the 45° Y rotation
+        grp_node = pm.PyNode("rotated_group_GRP")
+        grp_rot_result = pm.xform(grp_node, q=True, ws=True, ro=True)
+        self.assertAlmostEqual(
+            grp_rot_result[1], 45.0, places=1,
+            msg=f"Locator rig Y rotation should be ~45°, got {grp_rot_result[1]}"
+        )
+
     def test_remove_locator(self):
         """Test remove_locator method."""
         # Setup hierarchy: GRP -> LOC -> CUBE

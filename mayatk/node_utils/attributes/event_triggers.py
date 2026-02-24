@@ -24,6 +24,8 @@ Pipeline
 --------
 1. **Maya authoring**: Enum attribute with named events -- artists key
    directly from the channel box dropdown.
+1b. **Audio preview** *(optional)*: ``AudioEvents.sync()`` places
+   matching audio clips on the timeline for playback during animation.
 2. **Pre-export bake**: ``bake_manifest()`` reads enum keyframes and
    writes a ``{cat}_manifest`` string: ``"frame:event,frame:event,..."``
 3. **Engine import**: Parse the manifest string and inject native
@@ -31,10 +33,12 @@ Pipeline
 4. **Engine runtime**: Standard event callback -- no per-frame polling.
 """
 from typing import Dict, List, Optional, Tuple
+import os
 import pythontk as ptk
 
 try:
     import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
     pass
 
@@ -164,6 +168,11 @@ class EventTriggers(ptk.LoggingMixin):
             cls.logger.info(
                 f"Event triggers ({trigger_attr}) on {obj}: " f"{':'.join(event_list)}"
             )
+
+        # Protect empty transforms from "Optimize Scene Size" which
+        # deletes transforms with no shape children.
+        cls._protect_empty_transforms(objects)
+
         # Auto-bake manifest so it stays current.
         cls.bake_manifest(objects, category=category)
         return results
@@ -346,6 +355,9 @@ class EventTriggers(ptk.LoggingMixin):
             time = pm.currentTime(query=True)
 
         if auto_clear and idx != 0 and time > 1:
+            # Guard: only insert the "None" clear-key when the trigger
+            # is at frame 2+, so we never write a key at frame 0 which
+            # would conflict with the default rest pose.
             pm.setKeyframe(
                 obj,
                 attribute=trigger_attr,
@@ -379,6 +391,62 @@ class EventTriggers(ptk.LoggingMixin):
         if time is not None:
             kwargs["time"] = (time, time)
         pm.cutKey(obj, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Key Iteration (shared primitive)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def iter_keyed_events(
+        cls,
+        obj,
+        category: Optional[str] = None,
+    ) -> List[Tuple[float, str]]:
+        """Return ``(frame, label)`` for every non-None keyed event.
+
+        Shared primitive consumed by ``bake_manifest`` and
+        ``AudioEvents.sync`` to avoid duplicating the key-reading /
+        enum-resolving loop.
+
+        Parameters:
+            obj: A single Maya transform with a trigger attribute.
+            category: Attribute prefix (default ``"event"``).
+
+        Returns:
+            Sorted list of ``(frame, event_label)`` tuples.
+            Only non-zero (non-"None") events are included.
+        """
+        trigger_attr, _ = cls.attr_names(category)
+        obj = pm.PyNode(obj)
+
+        if not obj.hasAttr(trigger_attr):
+            return []
+
+        # Build index -> label map (handles gapped indices).
+        pairs = Attributes.parse_enum_def(str(obj), trigger_attr)
+        idx_to_label = {idx: label for label, idx in pairs}
+
+        key_times = pm.keyframe(
+            obj, attribute=trigger_attr, query=True, timeChange=True
+        )
+        if not key_times:
+            return []
+
+        result = []
+        for t in sorted(key_times):
+            val = pm.keyframe(
+                obj,
+                attribute=trigger_attr,
+                query=True,
+                time=(t, t),
+                valueChange=True,
+            )
+            if val:
+                idx = int(round(val[0]))
+                label = idx_to_label.get(idx)
+                if label and idx != 0:
+                    result.append((t, label))
+        return result
 
     # ------------------------------------------------------------------
     # Manifest Baking (pre-export)
@@ -426,36 +494,11 @@ class EventTriggers(ptk.LoggingMixin):
                 cls.logger.warning(f"{obj} has no '{trigger_attr}'. Skipping.")
                 continue
 
-            events = cls.get_events(obj, category=category)
-            if not events:
-                continue
-
-            # Build index→label map for correct lookup with gapped indices.
-            pairs = Attributes.parse_enum_def(str(obj), trigger_attr)
-            idx_to_label = {idx: label for label, idx in pairs}
-
-            # Get all keyframe times on the trigger attribute
-            key_times = pm.keyframe(
-                obj, attribute=trigger_attr, query=True, timeChange=True
-            )
-
+            keyed = cls.iter_keyed_events(obj, category=category)
             entries = []
-            if key_times:
-                for t in sorted(key_times):
-                    val = pm.keyframe(
-                        obj,
-                        attribute=trigger_attr,
-                        query=True,
-                        time=(t, t),
-                        valueChange=True,
-                    )
-                    if val:
-                        idx = int(round(val[0]))
-                        label = idx_to_label.get(idx)
-                        # Skip "None" (index 0) and unknown indices
-                        if label and idx != 0:
-                            frame = int(t) if t == int(t) else t
-                            entries.append(f"{frame}:{label}")
+            for t, label in keyed:
+                frame = int(t) if t == int(t) else t
+                entries.append(f"{frame}:{label}")
 
             manifest_str = ",".join(entries) if entries else ""
 
@@ -501,6 +544,7 @@ class EventTriggers(ptk.LoggingMixin):
             return
 
         trigger_attr, manifest_attr = cls.attr_names(category)
+        cat = category or cls.DEFAULT_CATEGORY
 
         for obj in pm.ls(objects):
             if obj.hasAttr(trigger_attr):
@@ -512,7 +556,19 @@ class EventTriggers(ptk.LoggingMixin):
             if obj.hasAttr(manifest_attr):
                 obj.deleteAttr(manifest_attr)
 
+            # Clean up persisted file map from AudioEventsSlots
+            file_map_attr = f"{cat}_file_map" if cat != "audio" else "audio_file_map"
+            if obj.hasAttr(file_map_attr):
+                obj.deleteAttr(file_map_attr)
+
             cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
+
+        # Also clean up any imported audio nodes for this category.
+        from mayatk.node_utils.attributes.audio_events._audio_events import (
+            AudioEvents,
+        )
+
+        AudioEvents.remove(category=category)
 
     @classmethod
     def _remove_all_categories(cls, objects) -> None:
@@ -532,4 +588,72 @@ class EventTriggers(ptk.LoggingMixin):
                     obj.deleteAttr(trigger_attr)
                 if obj.hasAttr(manifest_attr):
                     obj.deleteAttr(manifest_attr)
+
+                # Clean up persisted file map
+                file_map_attr = (
+                    f"{cat}_file_map" if cat != "audio" else "audio_file_map"
+                )
+                if obj.hasAttr(file_map_attr):
+                    obj.deleteAttr(file_map_attr)
+
+                # Clean up audio set for this category.
+                from mayatk.node_utils.attributes.audio_events._audio_events import (
+                    AudioEvents,
+                )
+
+                AudioEvents.remove(category=cat)
+
                 cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
+
+    # ------------------------------------------------------------------
+    # Optimize Scene protection
+    # ------------------------------------------------------------------
+
+    _LOCATOR_ATTR = "event_trigger_locator"
+    """Marker attribute added to locator shapes created for protection."""
+
+    @classmethod
+    def _protect_empty_transforms(cls, objects) -> None:
+        """Add a hidden locator shape to empty transforms.
+
+        Maya's *Optimize Scene Size → Remove empty transforms* deletes
+        transforms that have no shape children.  When an empty group or
+        null is used purely as a data carrier for keyed event triggers,
+        this silently destroys the artist's work.
+
+        This helper adds a tiny, hidden ``locatorShape`` under each
+        empty transform so Maya no longer considers it "empty".  The
+        shape is set to **template** display and marked with
+        ``event_trigger_locator`` so it can be identified later.
+
+        Already-populated transforms (meshes, joints, etc.) are skipped.
+        """
+        for obj in pm.ls(objects, type="transform"):
+            shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
+            if shapes:
+                continue  # already has shape children — safe
+
+            # Create a locator shape directly under this transform.
+            # Using createNode with parent= avoids creating (and
+            # having to delete) a separate transform, and
+            # skipSelect=True prevents selection side-effects.
+            shape_name = cmds.createNode(
+                "locator",
+                name=f"{obj}Shape",
+                parent=str(obj),
+                skipSelect=True,
+            )
+            # Hide it: template display + zero scale + invisible
+            cmds.setAttr(f"{shape_name}.visibility", 0)
+            cmds.setAttr(f"{shape_name}.overrideEnabled", 1)
+            cmds.setAttr(f"{shape_name}.overrideDisplayType", 1)  # template
+            cmds.setAttr(f"{shape_name}.localScaleX", 0)
+            cmds.setAttr(f"{shape_name}.localScaleY", 0)
+            cmds.setAttr(f"{shape_name}.localScaleZ", 0)
+            # Stamp a marker so we can identify it later
+            if not cmds.attributeQuery(cls._LOCATOR_ATTR, node=shape_name, exists=True):
+                cmds.addAttr(shape_name, ln=cls._LOCATOR_ATTR, at="bool", dv=True)
+                cmds.setAttr(f"{shape_name}.{cls._LOCATOR_ATTR}", True)
+            cls.logger.info(
+                f"Protected '{obj}' from Optimize Scene (added hidden locator shape)"
+            )

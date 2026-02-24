@@ -315,7 +315,8 @@ class Naming(ptk.HelpMixin):
         custom_suffixes: Optional[Dict[str, str]] = None,
         strip: Union[str, List[str]] = None,
         strip_trailing_ints: bool = False,
-        strip_trailing_underscores: bool = True,
+        strip_trailing_underscores: bool = False,
+        strip_trailing_padding: bool = True,
     ) -> List[str]:
         """Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
 
@@ -333,6 +334,10 @@ class Naming(ptk.HelpMixin):
             strip (str or list): Extra suffix(es) to strip from the end of the name before applying the new suffix.
             strip_trailing_ints (bool): If True, remove all trailing integers after stripping suffixes.
             strip_trailing_underscores (bool): If True, remove trailing underscores after stripping.
+            strip_trailing_padding (bool): If True, strip orphaned trailing underscores and,
+                only when underscores were actually at the end, also strip the now-exposed
+                trailing digits.  This preserves intentional ``_02`` numbering while cleaning
+                up artifacts left by suffix removal (e.g. ``Foo_`` → ``Foo``).
 
         Returns:
             List[str]: List of new names assigned.
@@ -387,6 +392,15 @@ class Naming(ptk.HelpMixin):
 
             if strip_trailing_underscores:
                 base_name = re.sub(r"_+$", "", base_name)
+
+            if strip_trailing_padding:
+                cleaned = re.sub(r"_+$", "", base_name)
+                if cleaned != base_name:
+                    # Underscores were at the very end — also strip now-exposed
+                    # trailing digits and any further orphaned underscores.
+                    cleaned = re.sub(r"\d+$", "", cleaned)
+                    cleaned = re.sub(r"_+$", "", cleaned)
+                base_name = cleaned
 
             # Only add target suffix if not already present
             if target_suffix and not base_name.endswith(target_suffix):

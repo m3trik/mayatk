@@ -199,6 +199,78 @@ class TestSceneExporter(MayaTkTestCase):
         success = self.exporter.task_manager.run_tasks(tasks)
         self.assertFalse(success)
 
+    def test_materials_cache_populated(self):
+        """Verify _get_all_materials caches results after first call.
+
+        Bug: _get_all_materials was called 4 times per export with zero caching,
+        each time re-walking all shape->shadingEngine->material connections.
+        Fixed: 2026-02-22
+        """
+        # Assign a material so there's something to find
+        shader = pm.shadingNode("lambert", asShader=True)
+        pm.select(self.cube)
+        pm.hyperShade(assign=shader)
+
+        self.exporter.task_manager.objects = [self.cube.longName()]
+
+        # First call should populate cache
+        mats1 = self.exporter.task_manager._get_all_materials()
+        self.assertGreater(len(mats1), 0)
+        self.assertIsNotNone(self.exporter.task_manager._cached_materials)
+
+        # Second call should return same cached list (same id)
+        mats2 = self.exporter.task_manager._get_all_materials()
+        self.assertIs(mats1, mats2, "Second call should return cached result")
+
+    def test_materials_cache_invalidated_on_objects_change(self):
+        """Verify materials cache is invalidated when objects list changes.
+
+        The objects property setter must clear _cached_materials so stale
+        material data from a previous object set isn't reused.
+        Fixed: 2026-02-22
+        """
+        shader = pm.shadingNode("lambert", asShader=True)
+        pm.select(self.cube)
+        pm.hyperShade(assign=shader)
+
+        self.exporter.task_manager.objects = [self.cube.longName()]
+        mats1 = self.exporter.task_manager._get_all_materials()
+        self.assertIsNotNone(self.exporter.task_manager._cached_materials)
+
+        # Changing objects must clear the cache
+        self.exporter.task_manager.objects = [self.sphere.longName()]
+        self.assertIsNone(
+            self.exporter.task_manager._cached_materials,
+            "Cache should be None after objects change",
+        )
+
+    def test_task_timing_logged(self):
+        """Verify per-task timing is logged at INFO level.
+
+        Added timing instrumentation to _manage_context so each task/check
+        logs its execution duration for performance diagnostics.
+        Fixed: 2026-02-22
+        """
+        import logging
+
+        log_output = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_output.append(record.getMessage())
+        handler.setLevel(logging.INFO)
+        self.exporter.logger.addHandler(handler)
+        self.exporter.logger.setLevel(logging.INFO)
+
+        self.exporter.task_manager.objects = [self.cube.longName()]
+        tasks = {"set_linear_unit": "cm"}
+        self.exporter.task_manager.run_tasks(tasks)
+
+        timing_msgs = [m for m in log_output if "Completed" in m and "in" in m]
+        self.assertGreater(
+            len(timing_msgs), 0, "Expected timing log messages from task execution"
+        )
+
+        self.exporter.logger.removeHandler(handler)
+
 
 if __name__ == "__main__":
     unittest.main()

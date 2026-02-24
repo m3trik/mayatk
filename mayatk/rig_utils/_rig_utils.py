@@ -226,6 +226,48 @@ class RigUtils(ptk.HelpMixin):
 
             matrix = XformUtils.get_manip_pivot_matrix(obj, ws=True)
 
+            # For groups, bake_pivot is skipped so the world matrix only
+            # contains the group's own rotation — it misses any custom
+            # manipulator-pivot orientation the user has set.  Query the
+            # actual manip-pivot orientation so the locator axes match
+            # what the user sees in the viewport, and use the bounding-box
+            # centre for position so the rig is visually meaningful.
+            if is_group:
+                children = pm.listRelatives(obj, children=True, type="transform")
+                if children:
+                    bb = pm.exactWorldBoundingBox(obj)  # [xmin,ymin,zmin,xmax,ymax,zmax]
+                    center = [
+                        (bb[0] + bb[3]) / 2.0,
+                        (bb[1] + bb[4]) / 2.0,
+                        (bb[2] + bb[5]) / 2.0,
+                    ]
+                    # Start with the world-matrix rotation as default
+                    flat = [matrix(r, c) for r in range(4) for c in range(4)]
+                    # Try to capture the actual manip pivot orientation
+                    prev_sel = pm.selected()
+                    try:
+                        pm.select(obj, replace=True)
+                        rot_deg = pm.manipPivot(q=True, o=True)[0]
+                        if isinstance(rot_deg[0], (list, tuple)):
+                            rot_deg = rot_deg[0]
+                        from math import radians
+                        euler = pm.datatypes.EulerRotation(
+                            radians(rot_deg[0]),
+                            radians(rot_deg[1]),
+                            radians(rot_deg[2]),
+                        )
+                        rot_mat = euler.asMatrix()
+                        flat = [rot_mat(r, c) for r in range(4) for c in range(4)]
+                    except Exception:
+                        pass  # Keep flat from world matrix
+                    finally:
+                        pm.select(prev_sel, replace=True)
+                    # Override translation with bounding-box centre
+                    flat[12] = center[0]
+                    flat[13] = center[1]
+                    flat[14] = center[2]
+                    matrix = pm.datatypes.Matrix(flat)
+
             loc = cls.create_locator(scale=loc_scale)
             pm.xform(loc, matrix=matrix, ws=True)
 

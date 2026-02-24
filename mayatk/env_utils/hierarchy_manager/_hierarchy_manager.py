@@ -1,20 +1,187 @@
 # !/usr/bin/python
 # coding=utf-8
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
+
+import maya.cmds as cmds
 import pymel.core as pm
 import pythontk as ptk
-from pythontk.core_utils.hierarchy_utils.hierarchy_matching import HierarchyMatching
-
-# Third-party imports
-from qtpy import QtCore, QtWidgets
 
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 
 
+# ---------------------------------------------------------------------------
+# Node name utilities (module-level functions, no class wrapper needed)
+# ---------------------------------------------------------------------------
+
+# Maya default cameras that should be excluded from analysis
+MAYA_DEFAULT_CAMERAS = frozenset({"persp", "top", "front", "side"})
+
+
+def get_clean_node_name(node) -> str:
+    """Get a consistent clean node name for matching (strips namespace)."""
+    try:
+        node_name = node.nodeName()
+        if node_name:
+            return node_name.split(":")[-1] if ":" in node_name else node_name
+        full_path = node.fullPath()
+        last_component = full_path.split("|")[-1] if "|" in full_path else str(node)
+        return (
+            last_component.split(":")[-1] if ":" in last_component else last_component
+        )
+    except Exception:
+        s = str(node)
+        return s.split(":")[-1] if ":" in s else s
+
+
+def get_clean_node_name_from_string(node_name: str) -> str:
+    """Get a clean node name from a string path (removes namespace prefix)."""
+    if not node_name:
+        return ""
+    last_component = node_name.split("|")[-1] if "|" in node_name else node_name
+    return last_component.split(":")[-1] if ":" in last_component else last_component
+
+
+def clean_hierarchy_path(path: str) -> str:
+    """Clean namespace prefixes from all components of a hierarchical path."""
+    if "|" in path:
+        parts = path.split("|")
+        return "|".join(p.split(":")[-1] if ":" in p else p for p in parts)
+    return path.split(":")[-1] if ":" in path else path
+
+
+def format_component(name: str, strip_namespaces: bool = False) -> str:
+    """Format a single component name with optional namespace stripping."""
+    if strip_namespaces and ":" in name:
+        return name.split(":")[-1]
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Node filtering utilities (module-level functions)
+# ---------------------------------------------------------------------------
+
+
+def is_default_maya_camera(path: str, node) -> bool:
+    """Check if *node* represents a Maya default camera."""
+    try:
+        base_name = path.split("|")[-1].split(":")[-1]
+        if base_name not in MAYA_DEFAULT_CAMERAS:
+            return False
+        shapes = node.getShapes()
+        for shape in shapes:
+            try:
+                if pm.nodeType(shape) == "camera":
+                    return True
+            except (RuntimeError, AttributeError):
+                continue
+        return False
+    except (RuntimeError, AttributeError):
+        return False
+
+
+def should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool:
+    """Filter nodes by shape types."""
+    try:
+        shapes = node.getShapes()
+        if not shapes:
+            return True  # Keep transform-only nodes
+        shape_types = [shape.nodeType() for shape in shapes]
+        has_filtered_type = any(t in shape_types for t in node_types)
+        return not has_filtered_type if exclude else has_filtered_type
+    except (RuntimeError, AttributeError):
+        return True
+
+
+def filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove Maya default cameras from *path_map*."""
+    return {
+        path: node
+        for path, node in path_map.items()
+        if not is_default_maya_camera(path, node)
+    }
+
+
+def filter_path_map_by_types(
+    path_map: Dict[str, Any], node_types: List[str], exclude: bool = True
+) -> Dict[str, Any]:
+    """Filter *path_map* by shape node types."""
+    return {
+        path: node
+        for path, node in path_map.items()
+        if should_keep_node_by_type(node, node_types, exclude)
+    }
+
+
+def select_objects_in_maya(object_names: List[str]) -> int:
+    """Select objects in Maya scene by name. Returns count of selected."""
+    if not object_names:
+        return 0
+    valid = [n for n in object_names if cmds.objExists(n)]
+    if valid:
+        cmds.select(valid, replace=True)
+    return len(valid)
+
+
+# ---------------------------------------------------------------------------
+# Shared rename helper (used by ObjectSwapper methods)
+# ---------------------------------------------------------------------------
+
+
+def _rename_node_removing_namespace(
+    node, allow_maya_auto_rename: bool = False, logger=None
+):
+    """Rename a single PyMEL *node* by stripping its namespace prefix.
+
+    If *allow_maya_auto_rename* is True Maya will resolve conflicts automatically.
+    Otherwise a ``_1``, ``_2`` … suffix is appended manually.
+    """
+    try:
+        current_name = node.nodeName()
+        if ":" not in current_name:
+            return  # nothing to strip
+        clean_name = current_name.split(":")[-1]
+
+        if allow_maya_auto_rename:
+            try:
+                node.rename(clean_name)
+                final_name = node.nodeName()
+                if logger and final_name != clean_name:
+                    logger.debug(f"Maya auto-renamed {current_name} -> {final_name}")
+            except RuntimeError as e:
+                if logger:
+                    logger.debug(f"Maya auto-rename failed for {current_name}: {e}")
+        else:
+            if not pm.objExists(clean_name) or pm.PyNode(clean_name) == node:
+                node.rename(clean_name)
+            else:
+                counter = 1
+                unique_name = f"{clean_name}_{counter}"
+                while pm.objExists(unique_name):
+                    counter += 1
+                    unique_name = f"{clean_name}_{counter}"
+                node.rename(unique_name)
+                if logger:
+                    logger.debug(f"Renamed {current_name} -> {unique_name} (conflict)")
+    except RuntimeError as e:
+        if logger:
+            logger.debug(f"Could not rename {node}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# HierarchyMapBuilder — uses maya.cmds for fast traversal
+# ---------------------------------------------------------------------------
+
+
 class HierarchyMapBuilder:
-    """Handles building hierarchy path maps for Maya transforms."""
+    """Builds hierarchy path maps for Maya transforms.
+
+    Uses ``maya.cmds`` internally for significantly faster scene traversal
+    compared to PyMEL, while still returning PyMEL nodes in the resulting map
+    so that downstream consumers keep working unchanged.
+    """
 
     @staticmethod
     def build_path_map(
@@ -25,295 +192,76 @@ class HierarchyMapBuilder:
         """Build a mapping of hierarchical paths to transform nodes.
 
         Args:
-            root: "SCENE_WIDE_MODE" sentinel or a PyMEL transform root
-            exclude_namespace_prefixes: namespace prefixes to exclude from traversal when scene-wide
-            strip_namespaces: if True, remove namespace prefixes from each component stored
+            root: ``"SCENE_WIDE_MODE"`` sentinel or a PyMEL transform root.
+            exclude_namespace_prefixes: namespace prefixes to skip.
+            strip_namespaces: if True, strip namespace prefixes from stored
+                component names.
         """
         path_map: Dict[str, Any] = {}
-        exclude_namespace_prefixes = exclude_namespace_prefixes or []
+        exclude_ns = exclude_namespace_prefixes or []
 
-        def should_exclude(node) -> bool:
-            try:
-                nn = node.nodeName()
-            except Exception:
-                nn = str(node)
-
-            # Exclude namespace prefixes
-            for ns in exclude_namespace_prefixes:
-                if nn.startswith(ns + ":"):
+        def _should_exclude(short_name: str) -> bool:
+            for ns in exclude_ns:
+                if short_name.startswith(ns + ":"):
                     return True
             return False
 
-        def traverse(node, path: str = ""):
-            if should_exclude(node):
+        def _traverse(long_path: str, parent_key: str = ""):
+            short_name = long_path.rsplit("|", 1)[-1]
+            if _should_exclude(short_name):
                 return
-            try:
-                node_name = node.nodeName()
-            except Exception:
-                node_name = str(node)
-            comp = NodeNameUtilities.format_component(node_name, strip_namespaces)
-            current_path = f"{path}|{comp}" if path else comp
-            path_map[current_path] = node
-            for child in node.getChildren(type="transform"):
-                traverse(child, current_path)
+            comp = format_component(short_name, strip_namespaces)
+            current_key = f"{parent_key}|{comp}" if parent_key else comp
+            path_map[current_key] = pm.PyNode(long_path)
+            children = cmds.listRelatives(
+                long_path, children=True, fullPath=True, type="transform"
+            )
+            if children:
+                for child_path in children:
+                    _traverse(child_path, current_key)
 
         if root == "SCENE_WIDE_MODE":
-            for root_node in pm.ls(assemblies=True):
-                if root_node.nodeType() == "transform":
-                    traverse(root_node)
+            assemblies = cmds.ls(assemblies=True, long=True) or []
+            for asm in assemblies:
+                if cmds.nodeType(asm) == "transform":
+                    _traverse(asm)
         else:
-            traverse(root)
+            _traverse(root.fullPath())
         return path_map
 
     @staticmethod
     def build_path_map_from_nodes(
         nodes: List[Any], strip_namespaces: bool = False
     ) -> Dict[str, Any]:
-        """Build a path map starting from an arbitrary list of transform nodes.
+        """Build a path map from an arbitrary list of PyMEL transform nodes.
 
-        Root nodes are inferred as those whose parent is not in the provided node set.
+        Root nodes are inferred as those whose parent is not in the set.
         """
         path_map: Dict[str, Any] = {}
-        node_set = set(nodes)
+        # Build a set of full paths for fast membership checks
+        node_paths = {n.fullPath(): n for n in nodes}
 
-        def is_root(n) -> bool:
+        def _is_root(n) -> bool:
             try:
                 p = n.getParent()
-            except Exception:
+            except (RuntimeError, AttributeError):
                 p = None
-            return (p is None) or (p not in node_set)
+            return (p is None) or (p.fullPath() not in node_paths)
 
-        def traverse(node, path: str = ""):
-            try:
-                node_name = node.nodeName()
-            except Exception:
-                node_name = str(node)
-            comp = NodeNameUtilities.format_component(node_name, strip_namespaces)
+        def _traverse(node, path: str = ""):
+            node_name = node.nodeName()
+            comp = format_component(node_name, strip_namespaces)
             current_path = f"{path}|{comp}" if path else comp
             path_map[current_path] = node
-            for child in node.getChildren(type="transform"):
-                if child in node_set:  # stay within imported cluster
-                    traverse(child, current_path)
+            children = node.getChildren(type="transform")
+            for child in children:
+                if child.fullPath() in node_paths:
+                    _traverse(child, current_path)
 
         for n in nodes:
-            if is_root(n):
-                traverse(n)
+            if _is_root(n):
+                _traverse(n)
         return path_map
-
-
-class TreePathMatcher(ptk.LoggingMixin):
-    """Tree path matching functionality for UI tree widgets."""
-
-    def build_tree_index(self, widget):
-        """Build tree indices for fast item lookup."""
-        items = list(self._iter_items(widget))
-
-        # Build full path index using raw (namespace) names if available
-        by_full = {}
-        for item in items:
-            raw_path = self._get_item_raw_path(item)
-            if raw_path:
-                existing = by_full.get(raw_path)
-                if existing is None:
-                    by_full[raw_path] = item
-                else:  # preserve all duplicates (rare but possible)
-                    if not isinstance(existing, list):
-                        by_full[raw_path] = [existing]
-                    by_full[raw_path].append(item)
-
-        # Build cleaned path index with custom cleaning preserving hierarchy
-        by_clean_full = {}
-        for item in items:
-            raw_path = self._get_item_raw_path(item)
-            if raw_path:
-                cleaned_path = NodeNameUtilities.clean_hierarchy_path(raw_path)
-                existing = by_clean_full.get(cleaned_path)
-                if existing is None:
-                    by_clean_full[cleaned_path] = item
-                else:  # accumulate duplicates under same cleaned representation
-                    if not isinstance(existing, list):
-                        by_clean_full[cleaned_path] = [existing]
-                    by_clean_full[cleaned_path].append(item)
-
-        # Build component index for last component matching
-        by_last = {}
-        for item in items:
-            path = self._get_item_path(item)
-            if path:
-                last_component = HierarchyMatching._clean_namespace(path.split("|")[-1])
-                by_last.setdefault(last_component, []).append(item)
-
-        return by_full, by_clean_full, by_last
-
-    def find_path_matches(
-        self,
-        target_path,
-        by_full,
-        by_clean_full,
-        by_last,
-        prefer_cleaned=False,
-        strict: bool = False,
-    ):
-        """Find tree items matching a target path using multiple strategies."""
-        cleaned_path = NodeNameUtilities.clean_hierarchy_path(target_path)
-        last_clean = HierarchyMatching._clean_namespace(target_path.split("|")[-1])
-
-        candidates = []
-        strategy = "none"
-
-        # Strategy order depends on prefer_cleaned flag
-        if prefer_cleaned:
-            # For reference trees that display cleaned names - use exact cleaned path match
-            item = by_clean_full.get(cleaned_path)
-            if item is not None:
-                candidates = [item]
-                strategy = "clean_full"
-
-            if not candidates:
-                item = by_full.get(target_path)
-                if item is not None:
-                    candidates = [item]
-                    strategy = "full"
-        else:
-            # For current scene trees that may have exact paths
-            item = by_full.get(target_path)
-            if item is not None:
-                candidates = [item]
-                strategy = "full"
-
-            if not candidates:
-                item = by_clean_full.get(cleaned_path)
-                if item is not None:
-                    candidates = [item]
-                    strategy = "clean_full"
-
-        # Last component fallback - only if no exact matches found and not in strict mode
-        if not strict and not candidates:
-            candidates = by_last.get(last_clean, [])
-            if candidates:
-                strategy = "last"
-
-        # Flatten candidates list
-        if candidates:
-            flat = []
-            for entry in candidates:
-                if isinstance(entry, (list, tuple, set)):
-                    for sub in entry:
-                        if sub is not None and sub not in flat:
-                            flat.append(sub)
-                else:
-                    if entry is not None and entry not in flat:
-                        flat.append(entry)
-            candidates = flat
-
-        return candidates, strategy
-
-    def _iter_items(self, widget):
-        """Iterate through all tree widget items recursively."""
-        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
-            HierarchyIndexer,
-        )
-
-        stack = [widget.topLevelItem(i) for i in range(widget.topLevelItemCount())]
-        while stack:
-            n = stack.pop()
-            if not n:
-                continue
-            yield n
-            for ci in range(n.childCount() - 1, -1, -1):
-                stack.append(n.child(ci))
-
-    def _get_item_path(self, item) -> str:
-        """Extract the full hierarchy path from a tree widget item."""
-        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
-            HierarchyIndexer,
-        )
-
-        parts = []
-        cur = item
-        while cur:
-            parts.insert(0, cur.text(0))
-            cur = cur.parent()
-        return HierarchyIndexer._join_hierarchy_path(parts)
-
-    def _get_item_raw_path(self, item) -> str:
-        """Extract the full hierarchy path using raw names (with namespaces) if stored."""
-        from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import (
-            HierarchyIndexer,
-        )
-
-        parts = []
-        cur = item
-        while cur:
-            part = getattr(cur, "_raw_name", cur.text(0))
-            parts.insert(0, part)
-            cur = cur.parent()
-        return HierarchyIndexer._join_hierarchy_path(parts)
-
-    def log_matching_debug(self, path, candidates, strategy, prefix=""):
-        """Log debug information about path matching."""
-        self.logger.debug(
-            f"{prefix} path '{path}' -> {len(candidates)} candidates via {strategy}"
-        )
-
-    def log_tree_index_debug(self, by_full, by_clean_full, by_last, tree_type):
-        """Log debug information about tree indices."""
-        self.logger.debug(
-            f"{tree_type} tree index: {len(by_full)} full, {len(by_clean_full)} clean, {len(by_last)} last"
-        )
-
-
-class NodeNameUtilities:
-    """Centralized utilities for consistent node name handling."""
-
-    @staticmethod
-    def get_clean_node_name(node) -> str:
-        """Get a consistent clean node name for matching operations."""
-        try:
-            node_name = node.nodeName()
-            if node_name:
-                return node_name.split(":")[-1] if ":" in node_name else node_name
-            full_path = node.fullPath()
-            last_component = full_path.split("|")[-1] if "|" in full_path else str(node)
-            return (
-                last_component.split(":")[-1]
-                if ":" in last_component
-                else last_component
-            )
-        except Exception:
-            return str(node).split(":")[-1] if ":" in str(node) else str(node)
-
-    @staticmethod
-    def get_clean_node_name_from_string(node_name: str) -> str:
-        """Get a clean node name from a string path (removes namespace prefix)."""
-        if not node_name:
-            return ""
-
-        # Handle hierarchical paths (with |)
-        if "|" in node_name:
-            last_component = node_name.split("|")[-1]
-        else:
-            last_component = node_name
-
-        # Remove namespace prefix (after :)
-        return (
-            last_component.split(":")[-1] if ":" in last_component else last_component
-        )
-
-    @staticmethod
-    def clean_hierarchy_path(path: str) -> str:
-        """Clean namespace prefixes from hierarchical path components."""
-        if "|" in path:
-            parts = path.split("|")
-            return "|".join(p.split(":")[-1] if ":" in p else p for p in parts)
-        return path.split(":")[-1] if ":" in path else path
-
-    @staticmethod
-    def format_component(name: str, strip_namespaces: bool = False) -> str:
-        """Format a single component name with optional namespace stripping."""
-        if strip_namespaces and ":" in name:
-            return name.split(":")[-1]
-        return name
 
 
 class MayaObjectMatcher(ptk.LoggingMixin):
@@ -364,7 +312,7 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         return [
             node
             for node in imported_transforms
-            if NodeNameUtilities.get_clean_node_name(node) == target_name
+            if get_clean_node_name(node) == target_name
         ]
 
     def _find_fuzzy_match(
@@ -378,9 +326,7 @@ class MayaObjectMatcher(ptk.LoggingMixin):
             )
 
         # Get clean names for fuzzy matching using consistent extraction
-        import_names = [
-            NodeNameUtilities.get_clean_node_name(node) for node in imported_transforms
-        ]
+        import_names = [get_clean_node_name(node) for node in imported_transforms]
 
         # Try fuzzy matching with standard threshold
         matches = ptk.FuzzyMatcher.find_all_matches(
@@ -392,10 +338,10 @@ class MayaObjectMatcher(ptk.LoggingMixin):
             f"{log_prefix}Fuzzy matching for '{target_name}' with threshold 0.7: {len(matches)} matches found"
         )
 
-        if matches:
-            target, matched_name, score = matches[0]
+        if matches and target_name in matches:
+            matched_name, score = matches[target_name]
             for node in imported_transforms:
-                if NodeNameUtilities.get_clean_node_name(node) == matched_name:
+                if get_clean_node_name(node) == matched_name:
                     self.logger.notice(
                         f"{log_prefix}Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
                     )
@@ -408,118 +354,10 @@ class MayaObjectMatcher(ptk.LoggingMixin):
     ):
         """Log debug information for matching process."""
         log_prefix = "[DRY-RUN] " if dry_run else ""
-        import_names = [
-            NodeNameUtilities.get_clean_node_name(node) for node in imported_transforms
-        ]
+        import_names = [get_clean_node_name(node) for node in imported_transforms]
         self.logger.debug(
             f"{log_prefix}No exact match for '{target_name}' in imported objects: {import_names}"
         )
-
-
-class NodeFilterUtilities:
-    """Centralized filtering utilities for Maya nodes."""
-
-    # Maya default cameras that should be excluded from analysis
-    MAYA_DEFAULT_CAMERAS = {"persp", "top", "front", "side"}
-
-    @staticmethod
-    def is_default_maya_camera(path: str, node) -> bool:
-        """Check if node represents a Maya default camera."""
-        try:
-            base_name = path.split("|")[-1].split(":")[-1]
-            if base_name not in NodeFilterUtilities.MAYA_DEFAULT_CAMERAS:
-                return False
-            shapes = node.getShapes()
-            for shape in shapes:
-                try:
-                    if pm.nodeType(shape) == "camera":
-                        return True
-                except Exception:
-                    continue
-            return False
-        except Exception:
-            return False
-
-    @staticmethod
-    def should_keep_node_by_type(
-        node, node_types: List[str], exclude: bool = True
-    ) -> bool:
-        """Filter nodes by shape types."""
-        try:
-            shapes = node.getShapes()
-            if not shapes:
-                return True  # Keep transform-only nodes
-
-            shape_types = [shape.nodeType() for shape in shapes]
-            has_filtered_type = any(t in shape_types for t in node_types)
-            return not has_filtered_type if exclude else has_filtered_type
-        except:
-            return True
-
-    @staticmethod
-    def filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]:
-        """Remove Maya default cameras from path map."""
-        return {
-            path: node
-            for path, node in path_map.items()
-            if not NodeFilterUtilities.is_default_maya_camera(path, node)
-        }
-
-    @staticmethod
-    def filter_path_map_by_types(
-        path_map: Dict[str, Any], node_types: List[str], exclude: bool = True
-    ) -> Dict[str, Any]:
-        """Filter path map by node types."""
-        return {
-            path: node
-            for path, node in path_map.items()
-            if NodeFilterUtilities.should_keep_node_by_type(node, node_types, exclude)
-        }
-
-
-class ValidationManager(ptk.LoggingMixin):
-    """Handles input validation and backup operations."""
-
-    def __init__(self, dry_run: bool = True):
-        super().__init__()
-        self.dry_run = dry_run
-
-    def validate_inputs(
-        self, objects: List[str], scene_file: Path, operation: str
-    ) -> bool:
-        """Validate inputs for both push and pull operations."""
-        if not scene_file.exists():
-            self.logger.error(f"Scene file does not exist: {scene_file}")
-            return False
-
-        # Support only fbx, ma, and mb files
-        if scene_file.suffix.lower() not in [".fbx", ".ma", ".mb"]:
-            self.logger.error(
-                f"Unsupported scene file format: {scene_file.suffix}. Supported formats: .fbx, .ma, .mb"
-            )
-            return False
-
-        if not objects:
-            self.logger.error(f"No objects specified for {operation} operation")
-            return False
-
-        return True
-
-    def create_backup(self, target_scene: Optional[Path] = None) -> None:
-        """Create backup of current scene or specified scene."""
-        try:
-            if target_scene:
-                backup_path = target_scene.with_suffix(".backup.ma")
-                self.logger.info(f"Creating backup: {backup_path}")
-                # Implementation for file backup
-            else:
-                current_file = pm.sceneName()
-                if current_file:
-                    backup_path = Path(current_file).with_suffix(".backup.ma")
-                    pm.saveAs(str(backup_path))
-                    self.logger.info(f"Created backup: {backup_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to create backup: {e}")
 
 
 class HierarchyManager(ptk.LoggingMixin):
@@ -534,18 +372,14 @@ class HierarchyManager(ptk.LoggingMixin):
         super().__init__()
         self.dry_run = dry_run
         self.fuzzy_matching = fuzzy_matching
-
-        # Initialize managers
         self.import_manager = import_manager
-        self.validation_manager = ValidationManager(dry_run)
-        self.matcher = MayaObjectMatcher(import_manager, fuzzy_matching)
 
         # Initialize state
-        self.current_scene_path_map = {}
-        self.reference_scene_path_map = {}
-        self.differences = {}
-        self.missing_objects = []
-        self.extra_objects = []
+        self.current_scene_path_map: Dict[str, Any] = {}
+        self.reference_scene_path_map: Dict[str, Any] = {}
+        self.differences: Dict[str, Any] = {}
+        self.missing_objects: List[str] = []
+        self.extra_objects: List[str] = []
 
     def analyze_hierarchies(
         self,
@@ -584,9 +418,8 @@ class HierarchyManager(ptk.LoggingMixin):
                 strip_namespaces=False,
             )
 
-            current_sample = list(self.current_scene_path_map.keys())[:3]
-            self.logger.info(
-                f"Current scene path map (excluding ref namespaces): {len(self.current_scene_path_map)} paths (sample: {current_sample})"
+            self.logger.progress(
+                f"Built current scene path map: {len(self.current_scene_path_map)} paths"
             )
 
             # Build reference map strictly from imported reference objects (keeps namespaces)
@@ -603,22 +436,17 @@ class HierarchyManager(ptk.LoggingMixin):
                     strip_namespaces=False,
                 )
 
-            reference_sample = list(self.reference_scene_path_map.keys())[:3]
-            self.logger.info(
-                f"Reference path map (raw): {len(self.reference_scene_path_map)} paths (sample: {reference_sample})"
+            self.logger.progress(
+                f"Built reference path map: {len(self.reference_scene_path_map)} paths"
             )
 
             # Filter out Maya default cameras from BOTH maps (current map is rebuilt scene-wide and may still contain them)
             try:
-                self.current_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_cameras(
-                        self.current_scene_path_map
-                    )
+                self.current_scene_path_map = filter_path_map_by_cameras(
+                    self.current_scene_path_map
                 )
-                self.reference_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_cameras(
-                        self.reference_scene_path_map
-                    )
+                self.reference_scene_path_map = filter_path_map_by_cameras(
+                    self.reference_scene_path_map
                 )
                 self.logger.debug("Default camera filtering applied to both path maps")
             except Exception as cam_filt_err:
@@ -626,48 +454,34 @@ class HierarchyManager(ptk.LoggingMixin):
 
             # Apply other filters (meshes, lights etc.)
             if filter_meshes:
-                self.current_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.current_scene_path_map, ["mesh"], exclude=True
-                    )
+                self.current_scene_path_map = filter_path_map_by_types(
+                    self.current_scene_path_map, ["mesh"], exclude=True
                 )
-                self.reference_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.reference_scene_path_map, ["mesh"], exclude=True
-                    )
+                self.reference_scene_path_map = filter_path_map_by_types(
+                    self.reference_scene_path_map, ["mesh"], exclude=True
                 )
             if filter_cameras:
-                self.current_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.current_scene_path_map, ["camera"], exclude=True
-                    )
+                self.current_scene_path_map = filter_path_map_by_types(
+                    self.current_scene_path_map, ["camera"], exclude=True
                 )
-                self.reference_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.reference_scene_path_map, ["camera"], exclude=True
-                    )
+                self.reference_scene_path_map = filter_path_map_by_types(
+                    self.reference_scene_path_map, ["camera"], exclude=True
                 )
             if filter_lights:
-                self.current_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.current_scene_path_map, ["light"], exclude=True
-                    )
+                self.current_scene_path_map = filter_path_map_by_types(
+                    self.current_scene_path_map, ["light"], exclude=True
                 )
-                self.reference_scene_path_map = (
-                    NodeFilterUtilities.filter_path_map_by_types(
-                        self.reference_scene_path_map, ["light"], exclude=True
-                    )
+                self.reference_scene_path_map = filter_path_map_by_types(
+                    self.reference_scene_path_map, ["light"], exclude=True
                 )
 
             # Prepare cleaned versions (strip namespaces per component) for comparison
             current_paths_raw = set(self.current_scene_path_map.keys())
             reference_paths_raw = set(self.reference_scene_path_map.keys())
 
-            cleaned_current_paths = {
-                NodeNameUtilities.clean_hierarchy_path(p) for p in current_paths_raw
-            }
+            cleaned_current_paths = {clean_hierarchy_path(p) for p in current_paths_raw}
             cleaned_reference_paths = {
-                NodeNameUtilities.clean_hierarchy_path(p) for p in reference_paths_raw
+                clean_hierarchy_path(p) for p in reference_paths_raw
             }
 
             # Differences
@@ -711,9 +525,7 @@ class HierarchyManager(ptk.LoggingMixin):
                         def build_type_map(path_map):
                             result = {}
                             for raw_path, node in path_map.items():
-                                cleaned = NodeNameUtilities.clean_hierarchy_path(
-                                    raw_path
-                                )
+                                cleaned = clean_hierarchy_path(raw_path)
                                 try:
                                     shapes = node.getShapes()
                                     if shapes:
@@ -762,11 +574,15 @@ class HierarchyManager(ptk.LoggingMixin):
                 except Exception as type_filt_err:
                     self.logger.warning(f"Type filtering failed: {type_filt_err}")
 
-            self.logger.info(
-                f"Path comparison (cleaned): {len(cleaned_current_paths)} current vs {len(cleaned_reference_paths)} reference"
-            )
-            self.logger.info(
-                f"Differences -> missing: {len(self.missing_objects)}, extra: {len(self.extra_objects)}"
+            self.log_table(
+                data=[
+                    ["Current paths", str(len(cleaned_current_paths))],
+                    ["Reference paths", str(len(cleaned_reference_paths))],
+                    ["Missing", str(len(self.missing_objects))],
+                    ["Extra", str(len(self.extra_objects))],
+                ],
+                headers=["Metric", "Count"],
+                title="PATH COMPARISON",
             )
 
             # Debug final differences
@@ -777,131 +593,139 @@ class HierarchyManager(ptk.LoggingMixin):
                 f"[RESULT] Extra objects (sample): {self.extra_objects[:5]}"
             )
 
-            # (No special-case diagnostics; uniform treatment of names.)
+            # ── Build reverse mapping: cleaned_path → raw_path ──
+            clean_to_raw_current: Dict[str, str] = {}
+            for raw_path in current_paths_raw:
+                clean_to_raw_current[clean_hierarchy_path(raw_path)] = raw_path
+
+            clean_to_raw_reference: Dict[str, str] = {}
+            for raw_path in reference_paths_raw:
+                clean_to_raw_reference[clean_hierarchy_path(raw_path)] = raw_path
+
+            # ── Detect reparented items ──
+            # Same leaf name appears in both missing and extra but under different parents.
+            reparented: list = []
+            remaining_missing = list(self.missing_objects)
+            remaining_extra = list(self.extra_objects)
+
+            try:
+                # Build leaf-name → [cleaned_path] indexes for both pools
+                missing_by_leaf: Dict[str, List[str]] = {}
+                for p in remaining_missing:
+                    leaf = p.rsplit("|", 1)[-1]
+                    missing_by_leaf.setdefault(leaf, []).append(p)
+
+                extra_by_leaf: Dict[str, List[str]] = {}
+                for p in remaining_extra:
+                    leaf = p.rsplit("|", 1)[-1]
+                    extra_by_leaf.setdefault(leaf, []).append(p)
+
+                # Match strictly: only when there's exactly 1 candidate on each side
+                matched_missing = set()
+                matched_extra = set()
+                for leaf, missing_paths in missing_by_leaf.items():
+                    extra_paths = extra_by_leaf.get(leaf, [])
+                    if len(missing_paths) == 1 and len(extra_paths) == 1:
+                        ref_path = missing_paths[0]
+                        cur_path = extra_paths[0]
+                        reparented.append({
+                            "leaf": leaf,
+                            "reference_path": ref_path,
+                            "current_path": cur_path,
+                        })
+                        matched_missing.add(ref_path)
+                        matched_extra.add(cur_path)
+
+                # Remove reparented items from the missing/extra pools
+                remaining_missing = [p for p in remaining_missing if p not in matched_missing]
+                remaining_extra = [p for p in remaining_extra if p not in matched_extra]
+
+                if reparented:
+                    self.logger.debug(
+                        f"Detected {len(reparented)} reparented items "
+                        f"(e.g. {reparented[0]['leaf']}: "
+                        f"{reparented[0]['reference_path']} → {reparented[0]['current_path']})"
+                    )
+            except Exception as rp_err:
+                self.logger.debug(f"Reparented detection failed: {rp_err}")
+
+            # ── Detect renamed (fuzzy) items ──
+            fuzzy_matches: list = []
+            try:
+                if remaining_missing and remaining_extra and self.fuzzy_matching:
+                    missing_leaves = [p.rsplit("|", 1)[-1] for p in remaining_missing]
+                    extra_leaves = [p.rsplit("|", 1)[-1] for p in remaining_extra]
+
+                    raw_matches = ptk.FuzzyMatcher.find_all_matches(
+                        missing_leaves, extra_leaves, score_threshold=0.7,
+                    )
+                    # raw_matches: Dict[str, Tuple[str, float]]
+                    matched_fm_missing = set()
+                    matched_fm_extra = set()
+                    for query_leaf, (best_leaf, score) in raw_matches.items():
+                        # Map leaves back to full cleaned paths
+                        ref_path = next(
+                            (p for p in remaining_missing if p.rsplit("|", 1)[-1] == query_leaf),
+                            None,
+                        )
+                        cur_path = next(
+                            (p for p in remaining_extra if p.rsplit("|", 1)[-1] == best_leaf),
+                            None,
+                        )
+                        if ref_path and cur_path and ref_path not in matched_fm_missing and cur_path not in matched_fm_extra:
+                            fuzzy_matches.append({
+                                "target_name": ref_path,
+                                "current_name": cur_path,
+                                "score": score,
+                            })
+                            matched_fm_missing.add(ref_path)
+                            matched_fm_extra.add(cur_path)
+
+                    # Remove fuzzy-matched from the remaining pools
+                    remaining_missing = [p for p in remaining_missing if p not in matched_fm_missing]
+                    remaining_extra = [p for p in remaining_extra if p not in matched_fm_extra]
+
+                    if fuzzy_matches:
+                        self.logger.debug(
+                            f"Detected {len(fuzzy_matches)} fuzzy renamed matches "
+                            f"(e.g. {fuzzy_matches[0]['target_name']} ↔ {fuzzy_matches[0]['current_name']} "
+                            f"score={fuzzy_matches[0]['score']:.2f})"
+                        )
+            except Exception as fz_err:
+                self.logger.debug(f"Fuzzy renamed detection failed: {fz_err}")
+
+            # Update missing/extra to only contain truly-missing/truly-extra items
+            self.missing_objects = remaining_missing
+            self.extra_objects = remaining_extra
 
             # Build detailed differences
             self.differences = {
                 "missing": self.missing_objects,
                 "extra": self.extra_objects,
+                "reparented": reparented,
+                "fuzzy_matches": fuzzy_matches,
                 "total_missing": len(self.missing_objects),
                 "total_extra": len(self.extra_objects),
+                "total_reparented": len(reparented),
+                "total_fuzzy": len(fuzzy_matches),
             }
+
+            self.log_table(
+                data=[
+                    ["Truly missing", str(len(self.missing_objects))],
+                    ["Truly extra", str(len(self.extra_objects))],
+                    ["Reparented", str(len(reparented))],
+                    ["Fuzzy renamed", str(len(fuzzy_matches))],
+                ],
+                headers=["Category", "Count"],
+                title="DIFF CATEGORIES",
+            )
 
             return self.differences
 
         except Exception as e:
             self.logger.error(f"Failed to analyze hierarchies: {e}")
             return {}
-
-
-class TreeWidgetUtilities(ptk.LoggingMixin):
-    """Centralized utilities for tree widget operations."""
-
-    @staticmethod
-    def get_selected_object_names(tree_widget) -> List[str]:
-        """Extract object names from selected tree widget items."""
-        selected_objects = []
-        for item in TreeWidgetUtilities.get_selected_tree_items(tree_widget):
-            object_name = TreeWidgetUtilities._extract_object_name_from_item(item)
-            if object_name:
-                selected_objects.append(object_name)
-        return selected_objects
-
-    @staticmethod
-    def get_selected_tree_items(tree_widget):
-        """Get all selected items from tree widget."""
-        selected_items = []
-        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if item.isSelected():
-                selected_items.append(item)
-            iterator += 1
-        return selected_items
-
-    @staticmethod
-    def _extract_object_name_from_item(item) -> str:
-        """Extract Maya object name from tree widget item."""
-        # Check for stored raw name first (with namespace)
-        raw_name = getattr(item, "_raw_name", None)
-        if raw_name:
-            return raw_name
-
-        # Build path from tree hierarchy
-        parts = []
-        current = item
-        while current:
-            parts.insert(0, current.text(0))
-            current = current.parent()
-
-        return "|".join(parts) if len(parts) > 1 else parts[0] if parts else ""
-
-    @staticmethod
-    def find_tree_item_by_name(tree_widget, object_name: str):
-        """Find tree widget item by object name."""
-        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if TreeWidgetUtilities._extract_object_name_from_item(item) == object_name:
-                return item
-            iterator += 1
-        return None
-
-    @staticmethod
-    def build_hierarchy_structure(objects: List) -> Tuple[Dict[str, Dict], List[str]]:
-        """Build hierarchical structure from Maya transform objects.
-
-        Returns:
-            Tuple of (object_items_dict, root_objects_list) to match original API
-        """
-        object_items = {}  # obj_name -> dict with object info
-        root_objects = []  # Objects with no parent
-
-        for obj in objects:
-            try:
-                obj_name = obj.nodeName()
-                obj_type = obj.type()
-                parent = obj.getParent()
-
-                # Store object info for later use
-                object_items[obj_name] = {
-                    "object": obj,
-                    "type": obj_type,
-                    "parent": parent.nodeName() if parent else None,
-                    "item": None,  # Will be created in second pass
-                }
-
-                # Track root objects (no parent)
-                if not parent:
-                    root_objects.append(obj_name)
-
-            except Exception:
-                continue
-
-        return object_items, root_objects
-
-
-class MayaSelectionUtilities(ptk.LoggingMixin):
-    """Utilities for Maya object selection operations."""
-
-    @staticmethod
-    def select_objects_in_maya(object_names: List[str]) -> int:
-        """Select objects in Maya scene by name."""
-        import pymel.core as pm
-
-        if not object_names:
-            return 0
-
-        valid_objects = []
-        for name in object_names:
-            if pm.objExists(name):
-                valid_objects.append(name)
-
-        if valid_objects:
-            pm.select(valid_objects, replace=True)
-            return len(valid_objects)
-
-        return 0
 
 
 class ObjectSwapper(ptk.LoggingMixin):
@@ -922,8 +746,6 @@ class ObjectSwapper(ptk.LoggingMixin):
         self.pull_children = pull_children
         self.import_manager = import_manager or NamespaceSandbox(dry_run=dry_run)
 
-        # Initialize managers
-        self.validation_manager = ValidationManager(dry_run)
         self.matcher = MayaObjectMatcher(self.import_manager, fuzzy_matching)
 
     def push_objects_to_scene(
@@ -935,13 +757,12 @@ class ObjectSwapper(ptk.LoggingMixin):
         """Push objects from current scene to target scene."""
         target_file = Path(target_file)
 
-        if not self.validation_manager.validate_inputs(
-            target_objects, target_file, "push"
-        ):
+        if not target_objects:
+            self.logger.error("No target objects specified for push")
             return False
-
-        if backup:
-            self.validation_manager.create_backup(target_file)
+        if not target_file.exists():
+            self.logger.error(f"Target file not found: {target_file}")
+            return False
 
         return self.pull_objects_from_scene(target_objects, target_file, backup)
 
@@ -954,13 +775,12 @@ class ObjectSwapper(ptk.LoggingMixin):
         """Pull objects from source scene into current scene."""
         source_file = Path(source_file)
 
-        if not self.validation_manager.validate_inputs(
-            target_objects, source_file, "pull"
-        ):
+        if not target_objects:
+            self.logger.error("No target objects specified for pull")
             return False
-
-        if backup:
-            self.validation_manager.create_backup()
+        if not source_file.exists():
+            self.logger.error(f"Source file not found: {source_file}")
+            return False
 
         try:
             # Import the source scene - use complete import for user pulls to ensure objects are available
@@ -976,8 +796,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Clean namespace from target object names to match against cleaned imported names
             cleaned_target_objects = [
-                NodeNameUtilities.get_clean_node_name_from_string(obj)
-                for obj in target_objects
+                get_clean_node_name_from_string(obj) for obj in target_objects
             ]
 
             # Find matching objects
@@ -1006,48 +825,46 @@ class ObjectSwapper(ptk.LoggingMixin):
     def _process_found_objects(self, found_objects: List, fuzzy_match_map: Dict):
         """Process and integrate found objects into current scene based on pull mode."""
 
-        self.logger.info(
-            f"[DEBUG] _process_found_objects called with pull_children={self.pull_children}"
+        self.logger.debug(
+            f" _process_found_objects called with pull_children={self.pull_children}"
         )
-        self.logger.info(f"[DEBUG] Found {len(found_objects)} objects to process")
+        self.logger.debug(f" Found {len(found_objects)} objects to process")
 
         # Log the names of found objects for debugging
         for i, obj in enumerate(found_objects[:5]):  # Show first 5
             try:
                 obj_name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
-                self.logger.info(f"[DEBUG] Found object [{i}]: {obj_name}")
-            except:
-                self.logger.info(f"[DEBUG] Found object [{i}]: <name unavailable>")
+                self.logger.debug(f" Found object [{i}]: {obj_name}")
+            except Exception:
+                self.logger.debug(f" Found object [{i}]: <name unavailable>")
 
         # When pull_children is enabled, filter to only root objects to avoid processing
         # hierarchies multiple times. Root objects will naturally include their children.
         if self.pull_children:
-            self.logger.info(
-                "[DEBUG] Pull children is ENABLED - filtering to root objects"
-            )
+            self.logger.debug(" Pull children is ENABLED - filtering to root objects")
             # Filter to root objects only (objects that are not children of other selected objects)
             root_objects = self._filter_to_root_objects(found_objects)
-            self.logger.info(
-                f"[DEBUG] Filtered {len(found_objects)} objects to {len(root_objects)} root objects for hierarchy pulling"
+            self.logger.debug(
+                f" Filtered {len(found_objects)} objects to {len(root_objects)} root objects for hierarchy pulling"
             )
 
             # Log the root objects for debugging
             for i, obj in enumerate(root_objects):
                 try:
                     obj_name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
-                    self.logger.info(f"[DEBUG] Root object [{i}]: {obj_name}")
-                except:
-                    self.logger.info(f"[DEBUG] Root object [{i}]: <name unavailable>")
+                    self.logger.debug(f" Root object [{i}]: {obj_name}")
+                except Exception:
+                    self.logger.debug(f" Root object [{i}]: <name unavailable>")
 
             objects_to_process = root_objects
         else:
-            self.logger.info(
-                "[DEBUG] Pull children is DISABLED - processing individual objects"
+            self.logger.debug(
+                " Pull children is DISABLED - processing individual objects"
             )
             # Process individual objects without their children
             objects_to_process = found_objects
 
-        self.logger.info(f"[DEBUG] Processing {len(objects_to_process)} objects")
+        self.logger.debug(f" Processing {len(objects_to_process)} objects")
 
         for i, obj in enumerate(objects_to_process):
             try:
@@ -1056,39 +873,39 @@ class ObjectSwapper(ptk.LoggingMixin):
                     self.logger.warning(f"Object {obj} no longer exists, skipping")
                     continue
 
-                clean_name = NodeNameUtilities.get_clean_node_name(obj)
-                self.logger.info(
-                    f"[DEBUG] Processing object [{i}]: {clean_name} (pull_mode={self.pull_mode})"
+                clean_name = get_clean_node_name(obj)
+                self.logger.debug(
+                    f"Processing object [{i}]: {clean_name} (pull_mode={self.pull_mode})"
                 )
 
                 if self.pull_mode == "Merge Hierarchies":
                     # Merge Hierarchies: preserve parent hierarchy structure
                     if self.pull_children:
-                        self.logger.info(
-                            f"[DEBUG] Calling _process_with_hierarchy_and_children for {clean_name}"
+                        self.logger.debug(
+                            f" Calling _process_with_hierarchy_and_children for {clean_name}"
                         )
                         self._process_with_hierarchy_and_children(obj, clean_name)
                     else:
-                        self.logger.info(
-                            f"[DEBUG] Calling _process_with_hierarchy for {clean_name}"
+                        self.logger.debug(
+                            f" Calling _process_with_hierarchy for {clean_name}"
                         )
                         self._process_with_hierarchy(obj, clean_name)
                 else:
                     # Add to Scene: add object to scene, maintaining hierarchy if pull_children=True
                     if self.pull_children:
-                        self.logger.info(
-                            f"[DEBUG] Calling _process_with_hierarchy_non_destructive_and_children for {clean_name}"
+                        self.logger.debug(
+                            f" Calling _process_with_hierarchy_non_destructive_and_children for {clean_name}"
                         )
                         self._process_with_hierarchy_non_destructive_and_children(
                             obj, clean_name
                         )
                     else:
-                        self.logger.info(
-                            f"[DEBUG] Calling _process_as_root_object for {clean_name}"
+                        self.logger.debug(
+                            f" Calling _process_as_root_object for {clean_name}"
                         )
                         self._process_as_root_object(obj, clean_name)
 
-                self.logger.info(f"[DEBUG] Successfully processed object: {clean_name}")
+                self.logger.debug(f" Successfully processed object: {clean_name}")
 
             except Exception as e:
                 self.logger.error(f"Failed to process object {obj}: {e}")
@@ -1105,7 +922,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         for obj in objects:
             try:
                 object_paths.add(obj.fullPath())
-            except:
+            except Exception:
                 continue
 
         # Check each object to see if it's a root (no parent in the selected set)
@@ -1175,7 +992,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             all_objects = []
             self._collect_object_and_children(obj, all_objects, set())
 
-            self.logger.info(
+            self.logger.debug(
                 f"Processing hierarchy root '{clean_name}' with {len(all_objects)} total objects for Merge mode"
             )
 
@@ -1187,16 +1004,18 @@ class ObjectSwapper(ptk.LoggingMixin):
                 # Check if the existing object is at world level (from "Add to Scene")
                 parent = existing_obj.getParent()
                 if parent is None:  # Object is at world level
-                    self.logger.info(
+                    self.logger.debug(
                         f"Existing object '{clean_name}' from previous pull found at world level - preserving it"
                     )
-                    self.logger.info(
+                    self.logger.debug(
                         f"Maya will automatically rename new object to avoid conflict"
                     )
                     # Let Maya handle the naming - don't pre-rename
                 else:
                     # Object is part of another hierarchy, safe to replace
-                    self.logger.info(f"Replacing existing hierarchy root: {clean_name}")
+                    self.logger.debug(
+                        f"Replacing existing hierarchy root: {clean_name}"
+                    )
                     pm.delete(existing_obj)
 
             # Process the root object to establish hierarchy
@@ -1212,8 +1031,8 @@ class ObjectSwapper(ptk.LoggingMixin):
     def _process_with_hierarchy_merge_root_only(self, obj, clean_name: str):
         """Process root object preserving hierarchy for Merge mode without aggressive deletion."""
         try:
-            self.logger.info(
-                f"[DEBUG] _process_with_hierarchy_merge_root_only called for {clean_name}"
+            self.logger.debug(
+                f" _process_with_hierarchy_merge_root_only called for {clean_name}"
             )
 
             # Get the full path of the object in the imported scene
@@ -1224,9 +1043,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             clean_path_components = []
             for component in path_components:
                 if component:  # Skip empty components
-                    clean_component = NodeNameUtilities.get_clean_node_name_from_string(
-                        component
-                    )
+                    clean_component = get_clean_node_name_from_string(component)
                     clean_path_components.append(clean_component)
 
             # Build the hierarchy in current scene (similar to non-destructive but for root only)
@@ -1252,8 +1069,8 @@ class ObjectSwapper(ptk.LoggingMixin):
             # CRITICAL FIX: Remove namespace from the entire hierarchy
             # When we pull a hierarchy, we need to remove the temp namespace from ALL objects
             if ":" in obj.nodeName():
-                self.logger.info(
-                    f"[DEBUG] Removing namespace from entire hierarchy under {obj.nodeName()}"
+                self.logger.debug(
+                    f" Removing namespace from entire hierarchy under {obj.nodeName()}"
                 )
                 # Let Maya handle naming conflicts naturally
                 self._remove_namespace_from_hierarchy(obj, allow_maya_auto_rename=True)
@@ -1263,7 +1080,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Rename root if needed (after namespace removal)
             current_name = obj.nodeName()
             if current_name != clean_name:
-                self.logger.info(f"[DEBUG] Renaming {current_name} to {clean_name}")
+                self.logger.debug(f" Renaming {current_name} to {clean_name}")
                 obj.rename(clean_name)
 
         except Exception as e:
@@ -1288,8 +1105,8 @@ class ObjectSwapper(ptk.LoggingMixin):
             all_objects = []
             self._collect_object_and_children(root_obj, all_objects, set())
 
-            self.logger.info(
-                f"[DEBUG] Removing namespace from {len(all_objects)} objects in hierarchy (maya_auto_rename={allow_maya_auto_rename})"
+            self.logger.debug(
+                f" Removing namespace from {len(all_objects)} objects in hierarchy (maya_auto_rename={allow_maya_auto_rename})"
             )
 
             # Process from bottom up (children first) to avoid parenting issues
@@ -1310,11 +1127,11 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 final_name = obj.nodeName()
                                 if final_name != clean_name:
                                     self.logger.debug(
-                                        f"[DEBUG] Maya auto-renamed {current_name} to {final_name}"
+                                        f"Maya auto-renamed {current_name} to {final_name}"
                                     )
                                 else:
                                     self.logger.debug(
-                                        f"[DEBUG] Renamed {current_name} to {clean_name}"
+                                        f"Renamed {current_name} to {clean_name}"
                                     )
                             except Exception as maya_rename_error:
                                 self.logger.debug(
@@ -1329,7 +1146,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             ):
                                 obj.rename(clean_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed {current_name} to {clean_name}"
+                                    f"Renamed {current_name} to {clean_name}"
                                 )
                             else:
                                 # Find a unique name with _1, _2, etc.
@@ -1340,7 +1157,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                     unique_name = f"{clean_name}_{counter}"
                                 obj.rename(unique_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed {current_name} to {unique_name} (conflict resolved)"
+                                    f"Renamed {current_name} to {unique_name} (conflict resolved)"
                                 )
                 except Exception as rename_error:
                     self.logger.debug(f"Could not rename {obj}: {rename_error}")
@@ -1441,7 +1258,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 material.rename(clean_name)
                                 final_name = material.nodeName()
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed material {current_name} to {final_name}"
+                                    f"Renamed material {current_name} to {final_name}"
                                 )
                             except Exception as e:
                                 self.logger.debug(
@@ -1452,7 +1269,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             if not pm.objExists(clean_name):
                                 material.rename(clean_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed material {current_name} to {clean_name}"
+                                    f"Renamed material {current_name} to {clean_name}"
                                 )
                             else:
                                 counter = 1
@@ -1462,7 +1279,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                     unique_name = f"{clean_name}_{counter}"
                                 material.rename(unique_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed material {current_name} to {unique_name}"
+                                    f"Renamed material {current_name} to {unique_name}"
                                 )
 
                 except Exception as e:
@@ -1480,7 +1297,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 sg.rename(clean_name)
                                 final_name = sg.nodeName()
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed shading engine {current_name} to {final_name}"
+                                    f"Renamed shading engine {current_name} to {final_name}"
                                 )
                             except Exception as e:
                                 self.logger.debug(
@@ -1491,7 +1308,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             if not pm.objExists(clean_name):
                                 sg.rename(clean_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed shading engine {current_name} to {clean_name}"
+                                    f"Renamed shading engine {current_name} to {clean_name}"
                                 )
                             else:
                                 counter = 1
@@ -1501,7 +1318,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                     unique_name = f"{clean_name}_{counter}"
                                 sg.rename(unique_name)
                                 self.logger.debug(
-                                    f"[DEBUG] Renamed shading engine {current_name} to {unique_name}"
+                                    f"Renamed shading engine {current_name} to {unique_name}"
                                 )
 
                 except Exception as e:
@@ -1515,16 +1332,16 @@ class ObjectSwapper(ptk.LoggingMixin):
     ):
         """Process object and all its children preserving hierarchy for Add to Scene mode."""
         try:
-            self.logger.info(
-                f"[DEBUG] _process_with_hierarchy_non_destructive_and_children called for {clean_name}"
+            self.logger.debug(
+                f" _process_with_hierarchy_non_destructive_and_children called for {clean_name}"
             )
 
             # Get the complete hierarchy for this root object
             all_objects = []
             self._collect_object_and_children(obj, all_objects, set())
 
-            self.logger.info(
-                f"[DEBUG] Processing hierarchy root '{clean_name}' with {len(all_objects)} total objects for Add to Scene mode"
+            self.logger.debug(
+                f" Processing hierarchy root '{clean_name}' with {len(all_objects)} total objects for Add to Scene mode"
             )
 
             # Log a few child names for debugging
@@ -1535,9 +1352,9 @@ class ObjectSwapper(ptk.LoggingMixin):
                         if hasattr(child_obj, "nodeName")
                         else str(child_obj)
                     )
-                    self.logger.info(f"[DEBUG] Child object [{i}]: {child_name}")
-                except:
-                    self.logger.info(f"[DEBUG] Child object [{i}]: <name unavailable>")
+                    self.logger.debug(f" Child object [{i}]: {child_name}")
+                except Exception:
+                    self.logger.debug(f" Child object [{i}]: <name unavailable>")
 
             # For Add to Scene mode, just parent the root object to world
             # and let Maya handle any naming conflicts automatically
@@ -1545,13 +1362,13 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Simply parent the root object to world - Maya will handle naming automatically
             pm.parent(obj, world=True)
-            self.logger.info(f"[DEBUG] Parented {clean_name} to world successfully")
+            self.logger.debug(f" Parented {clean_name} to world successfully")
 
             # CRITICAL FIX: Remove namespace from the entire hierarchy
             # When we pull a hierarchy, we need to remove the temp namespace from ALL objects
             if ":" in obj.nodeName():
-                self.logger.info(
-                    f"[DEBUG] Removing namespace from entire hierarchy under {obj.nodeName()}"
+                self.logger.debug(
+                    f" Removing namespace from entire hierarchy under {obj.nodeName()}"
                 )
                 # For Add to Scene mode: Let Maya handle naming conflicts automatically
                 self._remove_namespace_from_hierarchy(obj, allow_maya_auto_rename=True)
@@ -1563,8 +1380,8 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Log the actual hierarchy that was added
             final_objects = []
             self._collect_object_and_children(obj, final_objects, set())
-            self.logger.info(
-                f"[DEBUG] Successfully added hierarchy with {len(final_objects)} objects"
+            self.logger.debug(
+                f" Successfully added hierarchy with {len(final_objects)} objects"
             )
 
         except Exception as e:
@@ -1581,7 +1398,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Check if object already exists in current scene and handle replacement
             if pm.objExists(clean_name):
                 existing_obj = pm.PyNode(clean_name)
-                self.logger.info(f"Replacing existing object: {clean_name}")
+                self.logger.debug(f"Replacing existing object: {clean_name}")
                 # If pull_children is enabled, also delete all children to avoid orphans
                 if self.pull_children:
                     children = existing_obj.getChildren(
@@ -1602,9 +1419,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             clean_path_components = []
             for component in path_components:
                 if component:  # Skip empty components
-                    clean_component = NodeNameUtilities.get_clean_node_name_from_string(
-                        component
-                    )
+                    clean_component = get_clean_node_name_from_string(component)
                     clean_path_components.append(clean_component)
 
             # Build the hierarchy in current scene
@@ -1643,7 +1458,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Let Maya handle naming conflicts automatically instead of pre-renaming
             final_name = clean_name
             if pm.objExists(clean_name):
-                self.logger.info(
+                self.logger.debug(
                     f"Object {clean_name} already exists, Maya will automatically rename"
                 )
 
@@ -1655,9 +1470,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             clean_path_components = []
             for component in path_components:
                 if component:  # Skip empty components
-                    clean_component = NodeNameUtilities.get_clean_node_name_from_string(
-                        component
-                    )
+                    clean_component = get_clean_node_name_from_string(component)
                     clean_path_components.append(clean_component)
 
             # For non-destructive mode, we need to handle name conflicts for the entire hierarchy
@@ -1701,7 +1514,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                 # Log the actual final name after Maya's automatic handling
                 actual_final_name = obj.nodeName()
                 if actual_final_name != final_name:
-                    self.logger.info(f"Maya auto-renamed to: {actual_final_name}")
+                    self.logger.debug(f"Maya auto-renamed to: {actual_final_name}")
 
         except Exception as e:
             self.logger.warning(
@@ -1716,7 +1529,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         # Let Maya handle naming conflicts automatically
         final_name = clean_name
         if pm.objExists(clean_name):
-            self.logger.info(
+            self.logger.debug(
                 f"Object {clean_name} already exists, Maya will automatically rename"
             )
 
@@ -1729,21 +1542,25 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Log the actual final name after Maya's automatic handling
             actual_final_name = obj.nodeName()
             if actual_final_name != final_name:
-                self.logger.info(f"Maya auto-renamed to: {actual_final_name}")
+                self.logger.debug(f"Maya auto-renamed to: {actual_final_name}")
 
 
-# Export the main classes
+# Export the main classes and key functions
 __all__ = [
     "HierarchyManager",
     "ObjectSwapper",
     "MayaObjectMatcher",
-    "TreePathMatcher",
-    "NodeNameUtilities",
-    "NodeFilterUtilities",
     "HierarchyMapBuilder",
-    "ValidationManager",
-    "TreeWidgetUtilities",
-    "MayaSelectionUtilities",
+    "MAYA_DEFAULT_CAMERAS",
+    "get_clean_node_name",
+    "get_clean_node_name_from_string",
+    "clean_hierarchy_path",
+    "format_component",
+    "is_default_maya_camera",
+    "should_keep_node_by_type",
+    "filter_path_map_by_cameras",
+    "filter_path_map_by_types",
+    "select_objects_in_maya",
 ]
 # --------------------------------------------------------------------------------------------
 

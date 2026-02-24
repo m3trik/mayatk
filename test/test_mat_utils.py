@@ -279,6 +279,75 @@ class TestMatUtils(MayaTkTestCase):
         except Exception as e:
             self.fail(f"reload_textures raised exception: {e}")
 
+    # -------------------------------------------------------------------------
+    # Regression: _resolve_texture_targets traverses utility nodes
+    # -------------------------------------------------------------------------
+
+    def test_resolve_texture_targets_finds_file_nodes_behind_utility_nodes(self):
+        """Verify _resolve_texture_targets finds file nodes connected through
+        intermediate utility nodes (bump2d, colorCorrect, etc.).
+
+        Bug: listConnections(material, type='file') only finds directly
+        connected file nodes. File nodes behind bump2d, colorCorrect,
+        aiNormalMap, etc. were silently missed, causing find_texture_files
+        and related helpers to skip one or two textures.
+        Fixed: 2026-02-23
+        """
+        from maya import cmds
+
+        # Create material with a directly-connected diffuse file node
+        mat = cmds.shadingNode("lambert", asShader=True, name="resolve_test_mat")
+        diffuse_file = cmds.shadingNode("file", asTexture=True, name="diffuse_file")
+        cmds.setAttr(f"{diffuse_file}.fileTextureName", "diffuse.png", type="string")
+        cmds.connectAttr(f"{diffuse_file}.outColor", f"{mat}.color", force=True)
+
+        # Create a bump map behind a bump2d node (indirect connection)
+        bump_file = cmds.shadingNode("file", asTexture=True, name="bump_file")
+        cmds.setAttr(f"{bump_file}.fileTextureName", "bump.png", type="string")
+        bump2d = cmds.shadingNode("bump2d", asUtility=True, name="test_bump2d")
+        cmds.connectAttr(f"{bump_file}.outAlpha", f"{bump2d}.bumpValue", force=True)
+        cmds.connectAttr(f"{bump2d}.outNormal", f"{mat}.normalCamera", force=True)
+
+        # Resolve — both file nodes should be found
+        result = MatUtils._resolve_texture_targets(materials=[mat], as_strings=True)
+        file_node_names = result["file_nodes"]
+
+        self.assertIn(
+            "diffuse_file",
+            file_node_names,
+            "Directly connected file node should be found",
+        )
+        self.assertIn(
+            "bump_file",
+            file_node_names,
+            "File node behind bump2d should be found (was missed by listConnections)",
+        )
+
+    def test_resolve_texture_targets_finds_file_behind_color_correct(self):
+        """Verify file nodes behind colorCorrect utility nodes are found.
+
+        Bug: Same as above — listConnections missed any file node not
+        directly connected to the material.
+        Fixed: 2026-02-23
+        """
+        from maya import cmds
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="cc_test_mat")
+
+        # File -> colorCorrect -> material.color
+        cc_file = cmds.shadingNode("file", asTexture=True, name="cc_file")
+        cmds.setAttr(f"{cc_file}.fileTextureName", "diffuse_cc.png", type="string")
+        cc = cmds.shadingNode("colorCorrect", asUtility=True, name="test_cc")
+        cmds.connectAttr(f"{cc_file}.outColor", f"{cc}.inColor", force=True)
+        cmds.connectAttr(f"{cc}.outColor", f"{mat}.color", force=True)
+
+        result = MatUtils._resolve_texture_targets(materials=[mat], as_strings=True)
+        self.assertIn(
+            "cc_file",
+            result["file_nodes"],
+            "File node behind colorCorrect should be found",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -367,6 +367,73 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertNotIn(5.5, keys)
         self.assertIn(6.0, keys)  # Nearest
 
+    def test_snap_keys_to_frames_preserves_values(self):
+        """Verify snap_keys_to_frames preserves keyframe values after snap.
+
+        Bug: Previous implementation deleted and recreated keys (~8 cmds per key),
+        risking tangent/value loss. Now uses keyframe(edit=True, timeChange=...).
+        Fixed: 2026-02-22
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=3.7, value=42.0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=8.3, value=-15.5)
+
+        AnimUtils.snap_keys_to_frames([self.cube])
+
+        keys = cmds.keyframe(
+            str(self.cube), attribute="translateX", query=True, timeChange=True
+        )
+        vals = cmds.keyframe(
+            str(self.cube), attribute="translateX", query=True, valueChange=True
+        )
+
+        # Keys should be at whole frames
+        self.assertIn(4.0, keys)
+        self.assertIn(8.0, keys)
+        # Values must be preserved exactly
+        self.assertAlmostEqual(vals[keys.index(4.0)], 42.0, places=3)
+        self.assertAlmostEqual(vals[keys.index(8.0)], -15.5, places=3)
+
+    def test_snap_keys_to_frames_multiple_fractional(self):
+        """Test snapping multiple fractional keys on the same curve."""
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateY", clear=True)
+        for t in [1.1, 2.9, 5.5, 10.2]:
+            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=t * 2)
+
+        count = AnimUtils.snap_keys_to_frames([self.cube])
+        self.assertEqual(count, 4)
+
+        keys = cmds.keyframe(
+            str(self.cube), attribute="translateY", query=True, timeChange=True
+        )
+        for k in keys:
+            self.assertEqual(
+                k, round(k), f"Key at {k} is not on a whole frame after snap"
+            )
+
+    def test_optimize_keys_returns_strings(self):
+        """Verify optimize_keys returns string curve names, not PyNodes.
+
+        Changed from PyNode return to strings to avoid expensive PyNode
+        construction per curve. All callers checked — none depend on PyNode type.
+        Fixed: 2026-02-22
+        """
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+
+        result = AnimUtils.optimize_keys([self.cube])
+        self.assertGreater(len(result), 0)
+        for item in result:
+            self.assertIsInstance(
+                item, str, f"Expected string, got {type(item).__name__}"
+            )
+
     def test_set_current_frame(self):
         """Test setting current timeline frame."""
         frame = AnimUtils.set_current_frame(5.0)

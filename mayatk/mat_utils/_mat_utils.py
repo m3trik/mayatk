@@ -70,8 +70,13 @@ class MatUtilsInternals(ptk.HelpMixin):
         resolved_file_nodes_set = set()
 
         if resolved_materials:
-            # cmds.listConnections on a list of nodes works and is fast
-            files = cmds.listConnections(resolved_materials, type="file") or []
+            # Use listHistory to traverse the full upstream shading network,
+            # catching file nodes behind utility nodes (bump2d, colorCorrect,
+            # aiNormalMap, gammaCorrect, remapHsv, clamp, etc.).
+            # listConnections only finds *directly* connected file nodes and
+            # misses anything behind an intermediate node.
+            history = cmds.listHistory(resolved_materials, pruneDagObjects=True) or []
+            files = cmds.ls(history, type="file") or []
             resolved_file_nodes_set.update(files)
 
         if file_nodes:
@@ -189,7 +194,9 @@ class MatUtilsInternals(ptk.HelpMixin):
             return None
 
         # Direct file connection
-        files = cmds.listConnections(full_attr, source=True, destination=False, type="file")
+        files = cmds.listConnections(
+            full_attr, source=True, destination=False, type="file"
+        )
         if files:
             return files[0]
 
@@ -203,19 +210,19 @@ class MatUtilsInternals(ptk.HelpMixin):
 
         # Map node types to the input attribute(s) to follow
         _FOLLOW = {
-            "bump2d":       ["bumpValue"],
-            "aiNormalMap":  ["input"],
-            "projection":   ["image"],
-            "stencil":      ["image"],
+            "bump2d": ["bumpValue"],
+            "aiNormalMap": ["input"],
+            "projection": ["image"],
+            "stencil": ["image"],
             "gammaCorrect": ["value"],
-            "luminance":    ["value"],
-            "reverse":      ["input"],
-            "clamp":        ["input"],
+            "luminance": ["value"],
+            "reverse": ["input"],
+            "clamp": ["input"],
             "colorCorrect": ["color", "inColor", "input"],
             "aiColorCorrect": ["input"],
-            "remapHsv":     ["color", "inColor"],
-            "remapColor":   ["color", "inColor"],
-            "remapValue":   ["inputValue", "color"],
+            "remapHsv": ["color", "inColor"],
+            "remapColor": ["color", "inColor"],
+            "remapValue": ["inputValue", "color"],
         }
 
         candidates = _FOLLOW.get(ntype, ["input", "color", "inColor"])
@@ -979,6 +986,130 @@ class MatUtils(MatUtilsInternals):
         if valid_objects:
             cmds.sets(valid_objects, forceElement=shading_group)
 
+    # ------------------------------------------------------------------
+    # Shared material-graph helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def create_file_node(image_path, name=None, color_space=None):
+        """Create a ``file`` texture node with a wired ``place2dTexture``.
+
+        Parameters:
+            image_path (str): Absolute or project-relative texture path.
+            name (str, optional): Base name for the nodes.  Defaults to the
+                file stem of *image_path*.
+            color_space (str, optional): Explicit ``colorSpace`` override
+                (e.g. ``"Raw"``, ``"sRGB"``).  When *None* Maya's default
+                rules apply.
+
+        Returns:
+            tuple: ``(file_node, place2d_node)`` as *PyNode* objects.
+        """
+        from pathlib import Path
+
+        if name is None:
+            name = Path(image_path).stem
+
+        file_node = pm.shadingNode("file", asTexture=True, name=f"{name}_file")
+        file_node.fileTextureName.set(image_path)
+
+        if color_space:
+            file_node.colorSpace.set(color_space)
+
+        place2d = pm.shadingNode(
+            "place2dTexture", asUtility=True, name=f"{name}_place2d"
+        )
+
+        # Standard place2dTexture → file wiring
+        connections = [
+            ("outUV", "uvCoord"),
+            ("outUvFilterSize", "uvFilterSize"),
+            ("coverage", "coverage"),
+            ("translateFrame", "translateFrame"),
+            ("rotateFrame", "rotateFrame"),
+            ("mirrorU", "mirrorU"),
+            ("mirrorV", "mirrorV"),
+            ("stagger", "stagger"),
+            ("wrapU", "wrapU"),
+            ("wrapV", "wrapV"),
+            ("repeatUV", "repeatUV"),
+            ("vertexUvOne", "vertexUvOne"),
+            ("vertexUvTwo", "vertexUvTwo"),
+            ("vertexUvThree", "vertexUvThree"),
+            ("vertexCameraOne", "vertexCameraOne"),
+            ("noiseUV", "noiseUV"),
+            ("offset", "offset"),
+            ("rotateUV", "rotateUV"),
+        ]
+        for src, dst in connections:
+            pm.connectAttr(f"{place2d}.{src}", f"{file_node}.{dst}", force=True)
+
+        return file_node, place2d
+
+    @staticmethod
+    def create_shading_group(shader, name=None, assign_to=None):
+        """Create a shading group for *shader* and optionally assign objects.
+
+        Parameters:
+            shader: Shader node (PyNode or string).
+            name (str, optional): SG node name.  Defaults to ``{shader}_SG``.
+            assign_to: Object(s) to assign.  Accepts a single item or list.
+
+        Returns:
+            PyNode: The created shading-group set.
+        """
+        shader_name = shader.name() if hasattr(shader, "name") else str(shader)
+        sg_name = name or f"{shader_name}_SG"
+
+        sg = pm.sets(
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
+            name=sg_name,
+        )
+        pm.connectAttr(f"{shader_name}.outColor", f"{sg}.surfaceShader", force=True)
+
+        if assign_to is not None:
+            items = (
+                assign_to if isinstance(assign_to, (list, tuple, set)) else [assign_to]
+            )
+            pm.sets(sg, forceElement=items)
+
+        return sg
+
+    @staticmethod
+    def create_stingray_shader(name, opacity=False):
+        """Create a StingrayPBS shader with an optional transparency graph.
+
+        Loads the ``shaderFXPlugin`` and applies either the standard or
+        transparent Stingray graph.
+
+        Parameters:
+            name (str): Shader node name.
+            opacity (bool): When *True* loads ``Standard_Transparent.sfx``
+                instead of ``Standard.sfx``.
+
+        Returns:
+            PyNode: The created StingrayPBS shader node.
+
+        Raises:
+            RuntimeError: If the Stingray shader cannot be created.
+        """
+        EnvUtils.load_plugin("shaderFXPlugin")
+        shader = NodeUtils.create_render_node(
+            "StingrayPBS", name=name, create_shading_group=False
+        )
+
+        maya_install = EnvUtils.get_env_info("install_path")
+        graph_name = "Standard_Transparent.sfx" if opacity else "Standard.sfx"
+        graph = os.path.join(
+            maya_install, "presets", "ShaderFX", "Scenes", "StingrayPBS", graph_name
+        )
+        if os.path.exists(graph):
+            cmds.shaderfx(sfxnode=shader.name(), loadGraph=graph)
+
+        return shader
+
     @classmethod
     def find_by_mat_id(
         cls, material: str, objects: Optional[List[str]] = None, shell: bool = False
@@ -1118,8 +1249,10 @@ class MatUtils(MatUtilsInternals):
         )
 
         for material in materials:
+            # Hoist listConnections outside the attribute loop — the connected
+            # file nodes don't change per attribute, so one query suffices.
+            file_nodes = cmds.listConnections(material, type="file") or []
             for attr in attributes:
-                file_nodes = cmds.listConnections(material, type="file") or []
                 for file_node in file_nodes:
                     if not cmds.attributeQuery(attr, node=file_node, exists=True):
                         continue
@@ -1174,7 +1307,8 @@ class MatUtils(MatUtilsInternals):
         target_dir: str,
         silent: bool = False,
         limit_to_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
-    ) -> List["pm.nt.File"]:
+        as_strings: bool = False,
+    ) -> Union[List["pm.nt.File"], List[str]]:
         """Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimages.
 
         Parameters:
@@ -1183,9 +1317,11 @@ class MatUtils(MatUtilsInternals):
             silent (bool): If True, suppresses output messages.
             limit_to_nodes (Optional[List[str/pm.nt.File]]): Restrict remapping to
                 the provided file nodes instead of the entire scene.
+            as_strings (bool): If True, returns node names as strings instead
+                of ``pm.nt.File`` objects (much faster for bulk operations).
 
         Returns:
-            List[pm.nt.File]: List of remapped file nodes.
+            List[pm.nt.File] | List[str]: List of remapped file nodes.
         """
         sourceimages_dir = EnvUtils.get_env_info("sourceimages")
         sourceimages_dir_norm = os.path.normpath(sourceimages_dir).replace("\\", "/")
@@ -1234,7 +1370,7 @@ class MatUtils(MatUtilsInternals):
                     file_nodes[key] = []
                 file_nodes[key].append(fn)
 
-        remapped_nodes: List[pm.nt.File] = []
+        remapped_nodes = []
         remap_data = ptk.remap_file_paths(file_paths, target_dir, sourceimages_dir)
 
         for key, new_full_path, maya_path in remap_data:
@@ -1253,11 +1389,15 @@ class MatUtils(MatUtilsInternals):
                         cmds.setAttr(
                             f"{fn_name}.fileTextureName", maya_path, type="string"
                         )
-                        remapped_nodes.append(pm.PyNode(fn_name))
+                        if as_strings:
+                            remapped_nodes.append(fn_name)
+                        else:
+                            remapped_nodes.append(pm.PyNode(fn_name))
             else:
-                pm.warning(
-                    f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"
-                )
+                if not silent:
+                    pm.warning(
+                        f"// Skipping: No file node found for key '{key}' (original: {new_full_path})"
+                    )
         return remapped_nodes
 
     @classmethod
@@ -1269,6 +1409,7 @@ class MatUtils(MatUtilsInternals):
         silent: bool = False,
         file_nodes: Optional[List[Union[str, "pm.nt.File"]]] = None,
         objects: Optional[List[str]] = None,
+        as_strings: bool = False,
     ) -> None:
         """Remaps file texture paths for materials to new_dir, using relative paths if inside sourceimages.
 
@@ -1279,6 +1420,8 @@ class MatUtils(MatUtilsInternals):
             file_nodes (Optional[List[Union[str, pm.nt.File]]]): Specific file nodes to remap. When provided,
                 only these nodes are processed unless materials are also supplied.
             objects (Optional[List[str]]): Scene objects whose assigned materials should be remapped.
+            as_strings (bool): If True, returns node names as strings instead
+                of ``pm.nt.File`` objects (avoids expensive PyNode construction).
         """
         new_dir = new_dir or EnvUtils.get_env_info("sourceimages")
         if not new_dir or not os.path.isdir(new_dir):
@@ -1310,6 +1453,7 @@ class MatUtils(MatUtilsInternals):
             target_dir=new_dir,
             silent=silent,
             limit_to_nodes=resolved_nodes,
+            as_strings=as_strings,
         )
         if not silent:
             pm.displayInfo(
@@ -1552,8 +1696,12 @@ class MatUtils(MatUtilsInternals):
 
         file_nodes = []
         for material in materials:
+            # Use listHistory to traverse through utility nodes (bump2d,
+            # colorCorrect, aiNormalMap, etc.) that sit between the
+            # material and the file node.
+            history = pm.listHistory(material, pruneDagObjects=True) or []
             for tex_type in texture_types:
-                file_nodes.extend(pm.listConnections(material, type=tex_type))
+                file_nodes.extend(pm.ls(history, type=tex_type))
 
         # Remove duplicates
         file_nodes = list(set(file_nodes))
@@ -1688,8 +1836,11 @@ class MatUtils(MatUtilsInternals):
             )
             return []
 
-        # Collect target filenames
+        # Collect target filenames (and UDIM regex patterns)
+        import re as _re
+
         target_filenames = set()
+        udim_patterns = []  # compiled regexes for UDIM-token filenames
         for node in texture_nodes:
             try:
                 # Handle both PyNodes and strings
@@ -1698,11 +1849,19 @@ class MatUtils(MatUtilsInternals):
                 if path:
                     filename = os.path.basename(path)
                     if filename:
-                        target_filenames.add(filename.lower())
+                        lower_name = filename.lower()
+                        if "<udim>" in lower_name:
+                            # Build a regex that matches any 4-digit UDIM tile
+                            pattern = _re.escape(lower_name).replace(
+                                _re.escape("<udim>"), r"\d{4}"
+                            )
+                            udim_patterns.append(_re.compile(pattern))
+                        else:
+                            target_filenames.add(lower_name)
             except Exception:
                 continue
 
-        if not target_filenames:
+        if not target_filenames and not udim_patterns:
             pm.warning("No texture names available for lookup.")
             return []
 
@@ -1710,7 +1869,11 @@ class MatUtils(MatUtilsInternals):
 
         for root, dirs, files in os.walk(source_dir):
             for file in files:
-                if file.lower() in target_filenames:
+                lower_file = file.lower()
+                matched = lower_file in target_filenames
+                if not matched and udim_patterns:
+                    matched = any(p.fullmatch(lower_file) for p in udim_patterns)
+                if matched:
                     full_path = os.path.join(root, file).replace("\\", "/")
                     if return_dir:
                         results.append((root.replace("\\", "/"), file))
