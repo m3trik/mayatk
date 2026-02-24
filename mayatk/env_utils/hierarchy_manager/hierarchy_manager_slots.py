@@ -512,7 +512,12 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
             if not filtered_transforms:
                 tree_widget.setHeaderLabels([scene_name])
-                empty_item = tree_widget.create_item(["Empty Scene"])
+                open_item = tree_widget.create_item(["Open Scene"])
+                font = open_item.font(0)
+                font.setUnderline(True)
+                open_item.setFont(0, font)
+                open_item.setForeground(0, QtGui.QBrush(QtGui.QColor("#6699CC")))
+                open_item.setData(0, QtCore.Qt.UserRole, "open_scene_placeholder")
                 self.logger.debug(
                     "No transform objects found in current scene (excluding temp imports)."
                 )
@@ -1333,6 +1338,20 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         if item.data(0, self.sb.QtCore.Qt.UserRole) == "browse_placeholder":
             self.b003()
 
+    def _on_current_tree_item_clicked(self, item, column):
+        """Handle clicks on the current scene tree — opens a scene file for the placeholder."""
+        if item.data(0, self.sb.QtCore.Qt.UserRole) == "open_scene_placeholder":
+            scene_files = self.sb.file_dialog(
+                file_types="Maya Files (*.ma *.mb);;FBX Files (*.fbx);;All Files (*.*)",
+                title="Open Scene:",
+                start_dir=self.controller.workspace,
+            )
+            if scene_files and len(scene_files) > 0:
+                import maya.cmds as cmds
+
+                cmds.file(scene_files[0], open=True, force=True)
+                self.controller.refresh_trees()
+
     def tree001_init(self, widget):
         """Initialize the current scene hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
@@ -1366,6 +1385,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 setObjectName="b008",
                 setToolTip="Collapse all hierarchy items.",
             )
+
+            # Open file dialog when the placeholder item is clicked
+            widget.itemClicked.connect(self._on_current_tree_item_clicked)
 
             # Mark as initialized to prevent re-adding menu items
             widget.is_initialized = True
