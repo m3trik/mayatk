@@ -327,26 +327,34 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, messages
 
-    def ignore_temp_group(self) -> None:
-        """Exclude any top-level group named 'temp' (case-insensitive) and all its
-        descendants from the export object list.
+    def ignore_groups(self, names: str) -> None:
+        """Exclude top-level groups matching *names* (case-insensitive) and all
+        their descendants from the export object list.
+
+        Parameters:
+            names: Comma-separated group names to exclude (e.g. ``"temp, proxy"``).
         """
-        if not self.objects:
+        if not self.objects or not names:
             return
 
-        # Find top-level 'temp' groups among the current objects
+        # Parse comma-separated names, strip whitespace, lowercase for matching
+        target_names = {n.strip().lower() for n in names.split(",") if n.strip()}
+        if not target_names:
+            return
+
+        # Find top-level groups whose short name matches any target
         root_nodes = cmds.ls(self.objects, assemblies=True, long=True) or []
-        temp_roots = [
-            node for node in root_nodes if node.split("|")[-1].lower() == "temp"
+        matched_roots = [
+            node for node in root_nodes if node.split("|")[-1].lower() in target_names
         ]
 
-        if not temp_roots:
-            self.logger.debug("No top-level 'temp' groups found.")
+        if not matched_roots:
+            self.logger.debug(f"No top-level groups matching {target_names} found.")
             return
 
-        # Gather the temp roots and all their descendants
-        exclude = set(temp_roots)
-        for root in temp_roots:
+        # Gather the matched roots and all their descendants
+        exclude = set(matched_roots)
+        for root in matched_roots:
             descendants = (
                 cmds.listRelatives(root, allDescendents=True, fullPath=True) or []
             )
@@ -356,10 +364,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         self.objects = [obj for obj in self.objects if obj not in exclude]
         removed = original_count - len(self.objects)
 
-        for root in temp_roots:
-            self.logger.info(f"Ignoring TEMP group: {root}")
+        for root in matched_roots:
+            self.logger.info(f"Ignoring group: {root}")
         self.logger.info(
-            f"Excluded {removed} object(s) under TEMP group(s) from export."
+            f"Excluded {removed} object(s) under {len(matched_roots)} group(s) from export."
         )
 
     def check_root_default_transforms(self) -> tuple:
@@ -834,7 +842,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "set_workspace",
         "set_linear_unit",
         # Phase 2 — Object filtering
-        "ignore_temp_group",
+        "ignore_groups",
         # Phase 3 — Material cleanup (reassign THEN delete unused)
         "reassign_duplicate_materials",
         "delete_unused_materials",
@@ -977,11 +985,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "Separator",
                 "title": "Hierarchy",
             },
-            "ignore_temp_group": {
-                "widget_type": "QCheckBox",
-                "setText": "Ignore TEMP Group",
-                "setToolTip": "Exclude a group named 'temp' (case-insensitive) and all its descendants from the export.\nOnly top-level (root) groups are considered; nested groups named 'temp' are not affected.",
-                "setChecked": True,
+            "ignore_groups": {
+                "widget_type": "QLineEdit",
+                "setPlaceholderText": "Group names to ignore (comma-separated)",
+                "setToolTip": "Comma-separated names of top-level groups to exclude from export (case-insensitive).\nExample: temp, proxy\nLeave empty to skip.",
+                "setText": "temp",
+                "value_method": "text",
             },
         }
 

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>280</width>
-    <height>380</height>
+    <width>293</width>
+    <height>320</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -75,6 +75,9 @@
        </property>
        <item>
         <layout class="QHBoxLayout" name="browseLayout">
+         <property name="spacing">
+          <number>1</number>
+         </property>
          <item>
           <widget class="QPushButton" name="b000">
            <property name="minimumSize">
@@ -151,7 +154,7 @@
       <property name="title">
        <string>Settings</string>
       </property>
-      <layout class="QFormLayout" name="settingsLayout">
+      <layout class="QGridLayout" name="gridLayout">
        <property name="leftMargin">
         <number>1</number>
        </property>
@@ -164,14 +167,10 @@
        <property name="bottomMargin">
         <number>1</number>
        </property>
+       <property name="spacing">
+        <number>1</number>
+       </property>
        <item row="0" column="0">
-        <widget class="QLabel" name="lbl_mat_type">
-         <property name="text">
-          <string>Material:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="0" column="1">
         <widget class="QComboBox" name="cmb_mat_type">
          <property name="minimumSize">
           <size>
@@ -202,14 +201,7 @@
          </item>
         </widget>
        </item>
-       <item row="1" column="0">
-        <widget class="QLabel" name="lbl_suffix">
-         <property name="text">
-          <string>Suffix:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="1">
+       <item row="0" column="1">
         <widget class="QLineEdit" name="txt_suffix">
          <property name="minimumSize">
           <size>
@@ -219,27 +211,23 @@
          </property>
          <property name="maximumSize">
           <size>
-           <width>16777215</width>
+           <width>60</width>
            <height>20</height>
           </size>
          </property>
          <property name="toolTip">
           <string>Suffix appended to the image name for material naming.
-Example: image "brick" with suffix "_MAT" → material "brick_MAT".</string>
+Example: image &quot;brick&quot; with suffix &quot;_MAT&quot; → material &quot;brick_MAT&quot;.</string>
          </property>
          <property name="text">
           <string>_MAT</string>
          </property>
-        </widget>
-       </item>
-       <item row="2" column="0">
-        <widget class="QLabel" name="lbl_height">
-         <property name="text">
-          <string>Height:</string>
+         <property name="placeholderText">
+          <string>Material Suffix</string>
          </property>
         </widget>
        </item>
-       <item row="2" column="1">
+       <item row="2" column="0" colspan="2">
         <widget class="QDoubleSpinBox" name="spn_height">
          <property name="minimumSize">
           <size>
@@ -256,6 +244,9 @@ Example: image "brick" with suffix "_MAT" → material "brick_MAT".</string>
          <property name="toolTip">
           <string>Height of each plane in scene units.
 Width is calculated from the image aspect ratio.</string>
+         </property>
+         <property name="prefix">
+          <string>Height:	</string>
          </property>
          <property name="minimum">
           <double>0.100000000000000</double>
