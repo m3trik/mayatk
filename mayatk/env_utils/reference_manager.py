@@ -1350,7 +1350,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         try:
             pm.saveAs(new_path, type="mayaAscii")
             self.logger.info(f"Saved scene to: {new_path}")
-            self.refresh_file_list()
+            self.refresh_file_list(invalidate=True)
         except Exception as e:
             self.sb.message_box(f"Failed to save scene: {e}")
 
@@ -1585,7 +1585,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
             "QPushButton",
-            setText="Save Current Scene",
+            setText="Save To Workspace",
             setObjectName="btn_save_scene",
             setToolTip="Save the current scene to the workspace with naming and folder structure based on settings.",
         )

@@ -1311,37 +1311,46 @@ class EditUtils(ptk.HelpMixin):
         return find_duplicates(faces)
 
     @staticmethod
-    def get_similar_mesh(obj, tolerance=0.0, inc_orig=False, **kwargs):
+    @CoreUtils.undoable
+    def get_similar_mesh(
+        objects, tolerance=0.0, inc_orig=False, select=False, **kwargs
+    ):
         """Find similar geometry objects using the polyEvaluate command.
         Default behaviour is to compare all flags.
 
         Parameters:
-            obj (str/obj/list): The object to find similar for.
+            objects (str/obj/list): The object(s) to find similar for.
+                    Accepts a single object or a list of objects.
             tolerance (float) = The allowed difference in any of the given polyEvalute flag results (that return an int, float (or list of the int or float) value(s)).
-            inc_orig (bool): Include the original given obj with the return results.
+            inc_orig (bool): Include the original given obj(s) with the return results.
+            select (bool): Select the resulting similar objects.
             kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
                     ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d,
                     vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
         Returns:
-            (list) Similar objects.
+            (obj/list) Similar object(s). Returns a single object when a single
+            object is given, or a list when multiple objects are given.
 
         Example:
             get_similar_mesh(selection, vertex=True, area=True)
         """
-        obj, *other = pm.ls(obj, long=True, transforms=True)
-
-        # Ensure the evaluation results are consistently processed
-        objProps = []
-        for key in kwargs:
-            result = pm.polyEvaluate(obj, **{key: kwargs[key]})
-            objProps.append(ptk.make_iterable(result))
+        objects_list = pm.ls(objects, long=True, transforms=True)
 
         otherSceneMeshes = set(
             pm.filterExpand(pm.ls(long=True, typ="transform"), selectionMask=12)
         )  # polygon selection mask.
 
-        similar = pm.ls(
-            [
+        all_similar = []
+        originals = set()
+        for obj in objects_list:
+            originals.add(obj)
+            # Ensure the evaluation results are consistently processed
+            objProps = []
+            for key in kwargs:
+                result = pm.polyEvaluate(obj, **{key: kwargs[key]})
+                objProps.append(ptk.make_iterable(result))
+
+            similar = [
                 m
                 for m in otherSceneMeshes
                 if ptk.are_similar(
@@ -1354,8 +1363,22 @@ class EditUtils(ptk.HelpMixin):
                 )
                 and m != obj
             ]
-        )
-        return similar + [obj] if inc_orig else similar
+            all_similar.extend(similar)
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique = []
+        for m in all_similar:
+            if m not in seen:
+                seen.add(m)
+                unique.append(m)
+
+        result = pm.ls(unique + list(originals) if inc_orig else unique)
+
+        if select:
+            pm.select(result)
+
+        return ptk.format_return(result, objects)
 
     @staticmethod
     def get_similar_topo(obj, inc_orig=False, **kwargs):

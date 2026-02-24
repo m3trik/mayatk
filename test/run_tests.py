@@ -16,6 +16,7 @@ Usage:
     python run_tests.py --quick                  # Run quick validation test
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
+    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene)
 
 Directory Structure:
     - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
@@ -43,9 +44,10 @@ except ImportError:
 class MayaTestRunner:
     """Test runner for mayatk test suite via Maya command port."""
 
-    def __init__(self, host="localhost", port=7002):
+    def __init__(self, host="localhost", port=7002, reuse_instance=False):
         self.host = host
         self.port = port
+        self.reuse_instance = reuse_instance
         self.test_dir = Path(__file__).parent
 
         # FIX: Save results and temp files in temp_tests directory to avoid pollution
@@ -59,13 +61,31 @@ class MayaTestRunner:
             self.connection = None
 
     def connect_to_maya(self):
-        """Connect to Maya using MayaConnection."""
+        """Connect to Maya using MayaConnection.
+
+        By default launches a NEW Maya instance to protect the user's session.
+        Pass --reuse on the CLI (or reuse_instance=True) to attach to an
+        already-running instance instead.
+        """
         if not self.connection:
             print("[ERROR] MayaConnection not available")
             return False
 
+        force_new = not self.reuse_instance
+
+        if force_new:
+            print(
+                "[INFO] Launching a NEW Maya instance for testing "
+                "(user sessions will not be touched)."
+            )
+        else:
+            print(
+                "[WARNING] --reuse flag active: connecting to an EXISTING Maya "
+                "instance. The current scene WILL be modified/reset by tests!"
+            )
+
         if self.connection.connect(
-            mode="auto", port=self.port, host=self.host, force_new_instance=False
+            mode="auto", port=self.port, host=self.host, force_new_instance=force_new
         ):
             print(f"[OK] Connected to Maya in {self.connection.mode} mode")
             return True
@@ -589,7 +609,12 @@ def main():
             print("Invalid port specified")
             return
 
-    runner = MayaTestRunner(port=port)
+    # --reuse: connect to an existing Maya session (DANGEROUS: will reset the scene)
+    reuse_instance = "--reuse" in args
+    if reuse_instance:
+        args = [arg for arg in args if arg != "--reuse"]
+
+    runner = MayaTestRunner(port=port, reuse_instance=reuse_instance)
 
     # Check for flags
     dry_run = "--dry-run" in args or "-d" in args

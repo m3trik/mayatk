@@ -55,9 +55,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         # Check if already driven
         inputs = obj.visibility.inputs()
         if inputs:
-            if (
-                isinstance(inputs[0], pm.nt.Condition)
-                and cls._VIS_DRIVER_RE.search(inputs[0].name())
+            if isinstance(inputs[0], pm.nt.Condition) and cls._VIS_DRIVER_RE.search(
+                inputs[0].name()
             ):
                 return  # Already our setup
 
@@ -79,6 +78,15 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
         pm.connectAttr(obj.attr(cls.ATTR_NAME), cond.firstTerm)
         pm.connectAttr(cond.outColorR, obj.visibility, force=True)
+
+    @classmethod
+    def ensure_connections(cls, objects) -> None:
+        """Re-establish the opacity → visibility driver for objects that
+        already have the ``opacity`` attribute but are missing the
+        condition-node connection (e.g. after a duplicate operation)."""
+        for obj in pm.ls(objects):
+            if obj.hasAttr(cls.ATTR_NAME):
+                cls._connect_visibility_driver(obj)
 
     @classmethod
     def remove(cls, objects):
@@ -104,9 +112,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             # Fallback: find orphaned VisDrivers still connected via
             # opacity → condition.firstTerm (e.g. visibility connection
             # was broken externally but condition node still exists).
-            conds = (
-                pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
-            )
+            conds = pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
             for c in conds:
                 if cls._VIS_DRIVER_RE.search(c.name()):
                     pm.delete(c)
@@ -117,4 +123,3 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 pm.delete(curves)
             obj.deleteAttr(cls.ATTR_NAME)
             cls.logger.info(f"Removed {cls.ATTR_NAME} from {obj}")
-

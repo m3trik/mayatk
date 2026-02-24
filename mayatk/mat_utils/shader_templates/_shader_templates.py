@@ -435,7 +435,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 
         # Setup logging
         self.logger.setLevel(log_level)
-        self.logger.hide_logger_name(False)
+        self.logger.hide_logger_name(True)
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt001)
 

@@ -411,11 +411,17 @@ class AudioEvents(ptk.LoggingMixin):
         audio_files: List[str],
         category: Optional[str] = None,
     ) -> List[str]:
-        """Import audio files as nodes at offset 0 for immediate preview.
+        """Import audio files as preview nodes at offset 0.
 
         Creates one audio node per file (named after the stem) and adds
-        it to the category's ``objectSet``.  Existing preview nodes
-        (plain stems) are preserved — only new stems are added.
+        it to the category's ``objectSet``.
+
+        - **New stems** create a fresh audio node.
+        - **Existing stems whose file path changed** are updated
+          in-place (``_configure_audio_node`` is re-run on the
+          existing node) so the preview reflects the new file
+          without deleting/recreating the node.
+        - **Existing stems with the same path** are skipped.
 
         Unlike ``sync()``, this does **not** require keyed events — it
         is intended to let the user preview clips before keying.
@@ -425,7 +431,7 @@ class AudioEvents(ptk.LoggingMixin):
             category: Attribute prefix (default ``"event"``).
 
         Returns:
-            List of created audio node names.
+            List of created *and* updated audio node names.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
 
@@ -435,8 +441,10 @@ class AudioEvents(ptk.LoggingMixin):
         cat = category or EventTriggers.DEFAULT_CATEGORY
         audio_set = cls._get_or_create_set(cat, clear=False)
 
-        # Collect existing plain-stem node names so we skip duplicates.
+        # Collect existing plain-stem node names so we skip duplicates,
+        # and build a map of preview stem -> node name for path-change detection.
         existing_stems: set = set()
+        existing_preview_nodes: dict = {}  # {lower_stem: node_name}
         for member in audio_set.members():
             name = str(member)
             # Prefer stamped attr (new-style)
@@ -444,6 +452,7 @@ class AudioEvents(ptk.LoggingMixin):
                 ntype = cmds.getAttr(f"{name}.{cls.NODE_TYPE_ATTR}") or ""
                 if ntype == "preview":
                     existing_stems.add(name.lower())
+                    existing_preview_nodes[name.lower()] = name
             else:
                 # Legacy fallback: exclude synced + composite
                 parts = name.rsplit("_", 1)
@@ -452,14 +461,34 @@ class AudioEvents(ptk.LoggingMixin):
                     existing_stems.add(name.lower())
 
         created: List[str] = []
+        updated: List[str] = []
         for path in audio_files:
             path = path.replace("\\", "/")
             playable_path = cls._resolve_playable_path(path)
             if not playable_path:
                 continue
             stem = os.path.splitext(os.path.basename(path))[0]
-            if stem.lower() in existing_stems:
-                cls.logger.debug(f"Preview node '{stem}' already exists — skipping.")
+            key = stem.lower()
+
+            if key in existing_stems:
+                # Check whether the file path changed — update if so.
+                existing_node = existing_preview_nodes.get(key)
+                if existing_node:
+                    cur_path = (
+                        cmds.getAttr(f"{existing_node}.filename") or ""
+                    ).replace("\\", "/")
+                    if cur_path != playable_path:
+                        cls._configure_audio_node(existing_node, playable_path, 0)
+                        updated.append(existing_node)
+                        cls.logger.debug(
+                            f"Updated preview node '{existing_node}': {cur_path} → {playable_path}"
+                        )
+                    else:
+                        cls.logger.debug(f"Preview node '{stem}' unchanged — skipping.")
+                else:
+                    cls.logger.debug(
+                        f"Preview node '{stem}' already exists — skipping."
+                    )
                 continue
             node_name = cmds.createNode("audio", name=stem, skipSelect=True)
             cls._configure_audio_node(node_name, playable_path, 0)
@@ -470,8 +499,10 @@ class AudioEvents(ptk.LoggingMixin):
         if created:
             cls.set_active(created[0])
             cls.logger.info(f"Loaded {len(created)} track(s). Active: {created[0]}")
+        if updated:
+            cls.logger.info(f"Updated {len(updated)} existing preview node(s).")
 
-        return created
+        return created + updated
 
     # ------------------------------------------------------------------
     # Internal helpers

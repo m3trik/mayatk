@@ -129,72 +129,52 @@ class FBXImporter:
                     self.logger.warning(f"Could not load FBX plugin: {e}")
                     return
 
-            # Check if FBX commands are available before using them
-            fbx_commands_available = True
+            # Check if FBX commands are available (use catchQuiet to suppress script editor noise)
+            fbx_commands_available = False
             try:
-                # Test if FBXImportMaterials command exists (suppress error output)
-                try:
-                    pm.mel.eval("help FBXImportMaterials")
-                except RuntimeError:
-                    # Expected if command doesn't exist
-                    raise Exception("FBX commands not available")
-            except:
-                fbx_commands_available = False
+                result = pm.mel.eval('catchQuiet(`FBXImportMode -v "add"`)')
+                fbx_commands_available = result == 0
+            except Exception:
+                pass
+            if not fbx_commands_available:
                 self.logger.debug(
-                    "FBX MEL commands not available - using alternative approach"
+                    "FBX MEL commands not available - skipping FBX settings"
                 )
 
             # Apply FBX import settings using proper MEL commands
             if fbx_commands_available:
-                try:
-                    # Set import mode
-                    pm.mel.eval('FBXImportMode -v "add"')
-
-                    # Enable material and texture import - CRITICAL for preserving materials
-                    pm.mel.eval("FBXImportMaterials -v true")
-                    pm.mel.eval("FBXImportTextures -v true")
-                    pm.mel.eval("FBXImportEmbeddedTextures -v true")
-
-                    # Other important settings
-                    pm.mel.eval("FBXImportConvertDeformingNullsToJoint -v true")
-                    pm.mel.eval("FBXImportConvertNullsToJoint -v false")
-                    pm.mel.eval("FBXImportMergeAnimationLayers -v true")
-                    pm.mel.eval("FBXImportConstraints -v true")
-                    pm.mel.eval("FBXImportCameras -v true")
-                    pm.mel.eval("FBXImportLights -v true")
-                    pm.mel.eval("FBXImportGenerateLog -v false")
-
-                    # Units and axis
-                    pm.mel.eval('FBXImportUpAxis -v "Y"')
-
+                # Use catchQuiet for each setting so missing commands
+                # (e.g. FBXImportMaterials) never surface as error popups.
+                settings = [
+                    'FBXImportMode -v "add"',
+                    "FBXImportMaterials -v true",
+                    "FBXImportTextures -v true",
+                    "FBXImportEmbeddedTextures -v true",
+                    "FBXImportConvertDeformingNullsToJoint -v true",
+                    "FBXImportConvertNullsToJoint -v false",
+                    "FBXImportMergeAnimationLayers -v true",
+                    "FBXImportConstraints -v true",
+                    "FBXImportCameras -v true",
+                    "FBXImportLights -v true",
+                    "FBXImportGenerateLog -v false",
+                    'FBXImportUpAxis -v "Y"',
+                ]
+                failed = []
+                for cmd in settings:
+                    try:
+                        if pm.mel.eval(f"catchQuiet(`{cmd}`)") != 0:
+                            failed.append(cmd.split()[0])
+                    except Exception:
+                        failed.append(cmd.split()[0])
+                if failed:
+                    self.logger.debug(
+                        f"Some FBX settings unavailable (OK): {', '.join(failed)}"
+                    )
+                else:
                     self.logger.debug(
                         "Applied FBX import settings including material preservation"
                     )
-
-                except Exception as e:
-                    self.logger.warning(f"Could not set some FBX settings: {e}")
-                    # Try basic material import at minimum
-                    try:
-                        pm.mel.eval("FBXImportMaterials -v true")
-                        pm.mel.eval("FBXImportTextures -v true")
-                        self.logger.debug("Applied basic material import settings")
-                    except Exception as fallback_error:
-                        self.logger.warning(
-                            f"Could not set even basic material settings: {fallback_error}"
-                        )
-            else:
-                # Alternative approach when FBX MEL commands aren't available
-                self.logger.debug(
-                    "Using alternative FBX import approach without MEL commands"
-                )
-                # Set general import options that should work regardless
-                try:
-                    # These are more universally available
-                    pm.mel.eval(
-                        'FBXImport -file ""'
-                    )  # This will fail but may initialize FBX
-                except:
-                    pass  # Expected to fail, but may load FBX procedures
+            # No fallback needed — FBX plugin will use its defaults
 
         except Exception as e:
             self.logger.warning(f"Failed to setup FBX import settings: {e}")
@@ -235,7 +215,13 @@ class FBXImporter:
 
             try:
                 # Primary method: Use FBX MEL command
-                pm.mel.eval(f'FBXImport -file "{fbx_path}"')
+                # The scriptEditorInfo trick suppresses noisy setAttr warnings
+                # that Maya's FBX importer emits for malformed UV set paths
+                pm.scriptEditorInfo(suppressErrors=True, suppressWarnings=True)
+                try:
+                    pm.mel.eval(f'FBXImport -file "{fbx_path}"')
+                finally:
+                    pm.scriptEditorInfo(suppressErrors=False, suppressWarnings=False)
                 import_success = True
                 self.logger.debug("FBX import completed using MEL command")
             except Exception as mel_error:
@@ -334,39 +320,33 @@ class FBXImporter:
                 filtered_transforms = []
                 for transform in new_transforms:
                     try:
-                        # Skip objects with malformed names (duplicated path elements)
-                        name = transform.nodeName()
+                        # Skip objects with consecutive duplicate path elements.
+                        # These legitimately appear in Maya (e.g. parent and child
+                        # with the same name) but renaming them into a namespace
+                        # can cause issues because pm.rename() resolves the short
+                        # name ambiguously when parent already has the same
+                        # namespaced name.
                         long_name = transform.longName()
-
-                        # Check for malformed FBX paths with duplicate elements
                         if "|" in long_name:
                             path_parts = long_name.split("|")
-                            # Check if any path element appears multiple times consecutively
-                            has_duplicates = False
-                            for i in range(len(path_parts) - 1):
-                                if path_parts[i] == path_parts[i + 1]:
-                                    has_duplicates = True
-                                    break
-
-                            if has_duplicates:
+                            has_consecutive_dupes = any(
+                                path_parts[i] == path_parts[i + 1]
+                                for i in range(len(path_parts) - 1)
+                            )
+                            if has_consecutive_dupes:
                                 self.logger.debug(
-                                    f"Skipping malformed FBX object with duplicate path elements: {long_name}"
+                                    f"Skipping object with consecutive duplicate path elements: {long_name}"
                                 )
                                 continue
 
-                        # Check for excessive path depth (indicates malformed FBX structure)
-                        if "|" in long_name and long_name.count("|") > 10:
-                            self.logger.debug(
-                                f"Skipping object with excessive path depth: {long_name}"
-                            )
-                            continue
-
                         # Verify object actually exists and is valid
-                        if pm.objExists(transform.nodeName()):
+                        # Use longName() for unambiguous lookup (short names
+                        # can match multiple DAG objects at different levels).
+                        if pm.objExists(long_name):
                             filtered_transforms.append(transform)
                         else:
                             self.logger.debug(
-                                f"Skipping non-existent object: {transform.nodeName()}"
+                                f"Skipping non-existent object: {long_name}"
                             )
                     except Exception as e:
                         self.logger.debug(
@@ -516,15 +496,20 @@ class FBXImporter:
                             f"Method 6 hierarchical pattern search failed: {e}"
                         )
 
-                # Remove duplicates if any methods found overlapping results
+                # Remove duplicates if any methods found overlapping results.
+                # Use fullPath() (DAG long name) so that objects with the same
+                # short name at different hierarchy levels are all kept.
                 if namespaced_transforms:
                     unique_transforms = []
-                    seen_names = set()
+                    seen_paths = set()
                     for transform in namespaced_transforms:
-                        name = transform.nodeName()
-                        if name not in seen_names:
+                        try:
+                            fp = transform.fullPath()
+                        except Exception:
+                            fp = transform.nodeName()
+                        if fp not in seen_paths:
                             unique_transforms.append(transform)
-                            seen_names.add(name)
+                            seen_paths.add(fp)
 
                     namespaced_transforms = unique_transforms
                     self.logger.debug(
@@ -779,17 +764,17 @@ class FBXImporter:
                     # Get the object as PyNode for reliable operations
                     obj_node = pm.PyNode(obj) if not isinstance(obj, pm.PyNode) else obj
 
-                    # Rename to move to namespace
+                    # Rename to move to namespace.
+                    # NOTE: Do NOT pre-check pm.objExists(new_name) — that uses
+                    # the short name which matches ANY object with the same leaf
+                    # name regardless of hierarchy level.  Maya allows duplicate
+                    # short names under different parents (distinguished by DAG
+                    # path), so rename() will succeed naturally.  The old check
+                    # was a false-positive trap that appended '_1' to nodes like
+                    # WHEELS_GRP that legitimately appear at multiple hierarchy
+                    # levels, corrupting the comparison paths.
                     original_name = obj_node.nodeName()
                     new_name = f"{namespace}:{original_name}"
-
-                    # Check if target name already exists
-                    if pm.objExists(new_name):
-                        # Generate unique name
-                        counter = 1
-                        while pm.objExists(f"{new_name}_{counter}"):
-                            counter += 1
-                        new_name = f"{new_name}_{counter}"
 
                     obj_node.rename(new_name)
                     moved_count += 1
@@ -872,8 +857,8 @@ class FBXImporter:
                         self.logger.debug(f"Could not rename {transform}: {e}")
 
             if renamed_objects:
-                self.logger.info(
-                    f"Temporarily renamed {len(renamed_objects)} objects to avoid FBX import name conflicts"
+                self.logger.debug(
+                    f"Shelved {len(renamed_objects)} current-scene objects to avoid FBX import name clashes (will restore after import)"
                 )
 
         except Exception as e:
@@ -882,8 +867,17 @@ class FBXImporter:
         return renamed_objects
 
     def _restore_renamed_objects(self, renamed_objects: Dict[str, str]) -> None:
-        """
-        Restore objects that were temporarily renamed to avoid import conflicts.
+        """Restore objects that were temporarily renamed to avoid import conflicts.
+
+        SAFETY: This method NEVER deletes any scene objects.
+        ``_temp_import_conflict_*`` objects are ALWAYS the user's original
+        scene objects and must be preserved unconditionally.
+
+        If the original short-name happens to be occupied (e.g. by an un-moved
+        imported copy or another already-restored original with the same leaf
+        name), ``pm.rename`` is still called — Maya will either succeed
+        (different parent paths allow duplicate short-names) or auto-suffix.
+        Either way the geometry survives.
 
         Args:
             renamed_objects: Dict mapping temporary names to original names
@@ -893,27 +887,30 @@ class FBXImporter:
 
         try:
             restored_count = 0
+            kept_temp_name = 0
 
             for temp_name, original_name in renamed_objects.items():
                 try:
-                    if pm.objExists(temp_name):
-                        # Check if original name is now available
-                        if not pm.objExists(original_name):
-                            pm.rename(temp_name, original_name)
-                            restored_count += 1
-                            self.logger.debug(f"Restored {temp_name} → {original_name}")
-                        else:
-                            # Original name exists - this means the new import created a new object
-                            # with that name, so we can safely delete the old temporary object
-                            self.logger.info(
-                                f"Deleting superseded temporary object: {temp_name} (new {original_name} imported)"
-                            )
-                            temp_obj = pm.PyNode(temp_name)
-                            pm.delete(temp_obj)
-                            restored_count += 1
-                    else:
+                    if not pm.objExists(temp_name):
                         self.logger.debug(
                             f"Temp object {temp_name} no longer exists (already cleaned up)"
+                        )
+                        continue
+
+                    # Always try to rename back to original name.
+                    # NEVER delete _temp_import_conflict_ objects — they are the
+                    # user's real scene geometry.
+                    # Maya allows duplicate short names under different parents,
+                    # and will auto-suffix when truly ambiguous — either way the
+                    # object is preserved rather than destroyed.
+                    try:
+                        pm.rename(temp_name, original_name)
+                        restored_count += 1
+                        self.logger.debug(f"Restored {temp_name} → {original_name}")
+                    except Exception as rename_err:
+                        kept_temp_name += 1
+                        self.logger.warning(
+                            f"Could not restore {temp_name} → {original_name}: {rename_err}"
                         )
 
                 except Exception as e:
@@ -922,8 +919,13 @@ class FBXImporter:
                     )
 
             if restored_count > 0:
-                self.logger.info(
-                    f"Restored {restored_count} temporarily renamed objects"
+                self.logger.debug(
+                    f"Restored {restored_count} shelved current-scene objects"
+                )
+            if kept_temp_name > 0:
+                self.logger.warning(
+                    f"{kept_temp_name} objects could not be renamed back "
+                    f"(retained temporary names — scene objects preserved)"
                 )
 
         except Exception as e:

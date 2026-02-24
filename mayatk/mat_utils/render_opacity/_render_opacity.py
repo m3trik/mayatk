@@ -89,6 +89,25 @@ class RenderOpacity(ptk.LoggingMixin):
     setup = create
 
     @classmethod
+    def ensure_connections(cls, objects=None) -> None:
+        """Re-establish opacity driver connections on objects that already
+        have the ``opacity`` attribute but lost their wiring — typically
+        after a **Duplicate** operation in Maya.
+
+        This is lightweight and idempotent; safe to call before every
+        keyframe operation.
+
+        Parameters:
+            objects: Objects to check. If *None*, uses the current selection.
+        """
+        if objects is None:
+            objects = pm.selected()
+        if not objects:
+            return
+        OpacityAttributeMode.ensure_connections(objects)
+        OpacityMaterialMode.ensure_connections(objects)
+
+    @classmethod
     def remove(
         cls,
         objects=None,

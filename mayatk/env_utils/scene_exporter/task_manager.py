@@ -71,9 +71,16 @@ class _TaskDataMixin:
         return sorted(key_times)
 
     def _get_all_materials(self) -> List[str]:
-        """Return a list of all materials assigned to the specified objects."""
-        mats = MatUtils.filter_materials_by_objects(self.objects, as_strings=True)
-        return mats
+        """Return a list of all materials assigned to the specified objects.
+
+        Results are cached per export run. The cache is invalidated when
+        ``objects`` is reassigned via ``_initialize_objects``.
+        """
+        if not hasattr(self, "_cached_materials") or self._cached_materials is None:
+            self._cached_materials = MatUtils.filter_materials_by_objects(
+                self.objects, as_strings=True
+            )
+        return self._cached_materials
 
 
 class _TaskActionsMixin(_TaskDataMixin):
@@ -123,7 +130,11 @@ class _TaskActionsMixin(_TaskDataMixin):
         """Convert absolute material paths to relative paths."""
         self.logger.debug("Converting absolute paths to relative")
         materials = self._get_all_materials()
-        MatUtils.remap_texture_paths(materials)
+        # Pass silent=True and as_strings=True to avoid pm.displayInfo
+        # and pm.PyNode overhead.  Do NOT disable undo here — the
+        # perform_export undo chunk needs to capture these changes so
+        # the scene can be restored after export.
+        MatUtils.remap_texture_paths(materials, silent=True, as_strings=True)
         self.logger.debug("Path conversion completed.")
 
     def reassign_duplicate_materials(self):
@@ -166,11 +177,11 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         Uses SmartBake to detect objects with constraints, driven keys,
         expressions, IK, motion paths, and blend shapes, then bakes only
-        those specific channels to an override animation layer. Time range
-        is auto-detected from driver animation. Original constraints remain
-        connected on base layer but are overridden by baked keyframes.
-        Optimizes keys after baking to remove redundant keys.
-        FBX export will flatten layers when FBXExportBakeComplexAnimation=True.
+        those specific channels directly onto the base animation layer.
+        Driver nodes (constraints, expressions, etc.) are deleted after
+        baking so they don't interfere with FBX's own complex bake pass.
+        The perform_export undo chunk restores the scene after the FBX is
+        written, so these destructive operations are safe.
         """
         from mayatk.anim_utils.smart_bake import SmartBake
 
@@ -180,8 +191,10 @@ class _TaskActionsMixin(_TaskDataMixin):
             sample_by=1,
             preserve_outside_keys=True,
             optimize_keys=True,  # Remove redundant keys after baking
-            use_override_layer=True,  # Non-destructive: bake to override layer
-            mute_drivers=True,  # Disable drivers for playback performance
+            use_override_layer=False,  # Bake to base layer for FBX compatibility
+            delete_inputs=True,  # Remove constraints/expressions after baking
+            # Scene is restored by the undo chunk in perform_export, so
+            # destructive operations here are safe.
         )
 
         analysis = baker.analyze()
@@ -202,10 +215,8 @@ class _TaskActionsMixin(_TaskDataMixin):
             f"Smart bake completed: {result.baked_count} objects baked",
             f"range {result.time_range[0]}-{result.time_range[1]}",
         ]
-        if result.override_layer:
-            log_parts.append(f"layer '{result.override_layer}'")
-        if result.muted_drivers:
-            log_parts.append(f"{len(result.muted_drivers)} drivers muted")
+        if result.deleted:
+            log_parts.append(f"{len(result.deleted)} driver nodes deleted")
         if result.optimized:
             log_parts.append(f"{len(result.optimized)} objects optimized")
 
@@ -222,6 +233,8 @@ class _TaskActionsMixin(_TaskDataMixin):
             return
 
         self.logger.info("Optimizing baked animation keys...")
+        # Do NOT disable undo here — the perform_export undo chunk
+        # needs to capture these changes so the scene can be restored.
         AnimUtils.optimize_keys(self.objects, recursive=True, quiet=True)
         self.logger.info("Optimization completed.")
 
@@ -314,33 +327,40 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, messages
 
-    def check_top_level_group_temp(self) -> tuple:
-        """Fail if any top-level group (assembly) is named 'temp' (case-insensitive).
-
-        Returns:
-            tuple: (status: bool, messages: list)
+    def ignore_temp_group(self) -> None:
+        """Exclude any top-level group named 'temp' (case-insensitive) and all its
+        descendants from the export object list.
         """
-        log_messages: List[str] = []
-        offenders: List[str] = []
+        if not self.objects:
+            return
 
-        # Consider only assemblies (top-level DAG nodes)
-        # Use cmds for speed
-        root_nodes = (
-            cmds.ls(self.objects, assemblies=True, long=True) if self.objects else []
+        # Find top-level 'temp' groups among the current objects
+        root_nodes = cmds.ls(self.objects, assemblies=True, long=True) or []
+        temp_roots = [
+            node for node in root_nodes if node.split("|")[-1].lower() == "temp"
+        ]
+
+        if not temp_roots:
+            self.logger.debug("No top-level 'temp' groups found.")
+            return
+
+        # Gather the temp roots and all their descendants
+        exclude = set(temp_roots)
+        for root in temp_roots:
+            descendants = (
+                cmds.listRelatives(root, allDescendents=True, fullPath=True) or []
+            )
+            exclude.update(descendants)
+
+        original_count = len(self.objects)
+        self.objects = [obj for obj in self.objects if obj not in exclude]
+        removed = original_count - len(self.objects)
+
+        for root in temp_roots:
+            self.logger.info(f"Ignoring TEMP group: {root}")
+        self.logger.info(
+            f"Excluded {removed} object(s) under TEMP group(s) from export."
         )
-        for node in root_nodes:
-            short_name = node.split("|")[-1]
-            if short_name.lower() == "temp":
-                offenders.append(node)
-
-        if offenders:
-            log_messages.append("Top-level group(s) named 'temp' found:")
-            for n in sorted(set(offenders)):
-                log_messages.append(f"  - {n}")
-            # Treat as a failure so it blocks export until renamed
-            return False, log_messages
-
-        return True, log_messages
 
     def check_root_default_transforms(self) -> tuple:
         """Check if all root group nodes have default transforms."""
@@ -804,6 +824,29 @@ class _TaskChecksMixin(_TaskDataMixin):
 class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     """Contains all task-related UI definitions for the Scene Exporter."""
 
+    # Explicit execution order for export tasks.  Tasks not listed here
+    # are appended at the end in alphabetical order.  This prevents the
+    # alphabetical-sort default from running tasks in the wrong sequence
+    # (e.g. set_bake_animation_range before smart_bake, or
+    # delete_unused_materials before reassign_duplicate_materials).
+    TASK_ORDER = [
+        # Phase 1 — Environment setup
+        "set_workspace",
+        "set_linear_unit",
+        # Phase 2 — Object filtering
+        "ignore_temp_group",
+        # Phase 3 — Material cleanup (reassign THEN delete unused)
+        "reassign_duplicate_materials",
+        "delete_unused_materials",
+        "convert_to_relative_paths",
+        "delete_env_nodes",
+        # Phase 4 — Animation (bake THEN snap/tie THEN set range)
+        "smart_bake",
+        "snap_keys_to_frame",
+        "tie_all_keyframes",
+        "set_bake_animation_range",
+    ]
+
     _frame_rate_options: Dict[str, Any] = {
         f"Check Scene FPS: {v}": k
         for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
@@ -820,7 +863,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         super().__init__(logger)
 
         self.logger = logger
-        self.objects = None
+        self._objects = None
+        self._cached_materials = None
+
+    @property
+    def objects(self):
+        return self._objects
+
+    @objects.setter
+    def objects(self, value):
+        """Invalidate the materials cache whenever objects change."""
+        self._objects = value
+        self._cached_materials = None
 
     _export_mode_options: Dict[str, Any] = {
         "Export: All Scene Objects": "all",
@@ -919,6 +973,16 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
                 "setChecked": True,
             },
+            "sep_hierarchy": {
+                "widget_type": "Separator",
+                "title": "Hierarchy",
+            },
+            "ignore_temp_group": {
+                "widget_type": "QCheckBox",
+                "setText": "Ignore TEMP Group",
+                "setToolTip": "Exclude a group named 'temp' (case-insensitive) and all its descendants from the export.\nOnly top-level (root) groups are considered; nested groups named 'temp' are not affected.",
+                "setChecked": True,
+            },
         }
 
     @property
@@ -943,12 +1007,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "sep_hierarchy": {
                 "widget_type": "Separator",
                 "title": "Hierarchy & Naming",
-            },
-            "check_top_level_group_temp": {
-                "widget_type": "QCheckBox",
-                "setText": "Check Top-level Group Named 'temp'",
-                "setToolTip": "Fail if any top-level group (assembly) is named 'temp' (case-insensitive).",
-                "setChecked": True,
             },
             "check_geometry_lod_suffix": {
                 "widget_type": "QCheckBox",

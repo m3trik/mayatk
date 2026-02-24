@@ -814,7 +814,15 @@ class EditMacros:
         before_paste = set(pm.ls())
 
         # Perform the paste operation
-        pm.mel.cutCopyPaste("paste")
+        try:
+            pm.mel.cutCopyPaste("paste")
+        except Exception:
+            pm.inViewMessage(
+                statusMessage="<hl>Nothing to paste from</hl>.",
+                pos="topCenter",
+                fade=True,
+            )
+            return
 
         # Get a list of all nodes in the scene after pasting and find the difference
         after_paste = set(pm.ls())

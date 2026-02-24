@@ -11,6 +11,8 @@ try:
 except ImportError:
     pass
 
+import logging
+
 import mayatk as mtk
 
 
@@ -32,8 +34,6 @@ class RenderOpacitySlots:
 
         # Wire plain QPushButton widgets (not auto-connected by switchboard)
         self.ui.b000.clicked.connect(self._apply_opacity)
-        self.ui.b001.clicked.connect(self._key_fade_in)
-        self.ui.b002.clicked.connect(self._key_fade_out)
         self.ui.b003.clicked.connect(self._remove_opacity)
 
         # Selection-changed job to enable/disable fade controls
@@ -70,9 +70,11 @@ class RenderOpacitySlots:
                 "Workflow:\n"
                 "  1. Select one or more objects.\n"
                 "  2. Choose Material or Attribute mode (option box ▸).\n"
-                "  3. Press 'Render Opacity' to apply.\n"
-                "  4. Use Keyframe Fade to animate opacity over time.\n"
-                "  5. Use Remove Opacity to clean up all artifacts."
+                "  3. Press 'Create' to apply.\n"
+                "  4. Press 'Key Render Opacity' to animate fades.\n"
+                "     • Use the option box to set frames, direction\n"
+                "       (Fade In / Fade Out / Auto), and timing.\n"
+                "  5. Use 'Remove Opacity' to clean up all artifacts."
             ),
         )
 
@@ -113,43 +115,82 @@ class RenderOpacitySlots:
     # Keyframe Fade
     # ------------------------------------------------------------------
 
-    def _key_fade_in(self):
-        """Key opacity from 0 → 1 starting at the current frame."""
-        self._key_opacity_fade(fade_in=True)
-
-    def _key_fade_out(self):
-        """Key opacity from 1 → 0."""
-        self._key_opacity_fade(fade_in=False)
+    def tb000_init(self, widget):
+        """Key Render Opacity Init — configure option-box menu."""
+        widget.option_box.menu.setTitle("Key Render Opacity")
+        widget.option_box.menu.add(
+            "QSpinBox",
+            setPrefix="Frames: ",
+            setObjectName="s000",
+            setMinimum=1,
+            setMaximum=1000,
+            setValue=15,
+            setToolTip="Number of frames over which the fade occurs.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="End at Playhead",
+            setObjectName="chk000",
+            setChecked=True,
+            setToolTip=(
+                "When checked, the fade ends at the playhead\n"
+                "(keys span current\u2212frames \u2192 current).\n"
+                "When unchecked, the fade starts at the playhead\n"
+                "(keys span current \u2192 current+frames)."
+            ),
+        )
+        cmb = widget.option_box.menu.add(
+            "QComboBox",
+            setObjectName="cmb_direction",
+            setToolTip=(
+                "Fade direction:\n"
+                "\u2022 Fade In: Key opacity 0 \u2192 1.\n"
+                "\u2022 Fade Out: Key opacity 1 \u2192 0.\n"
+                "\u2022 Auto: Detect from previous key \u2014\n"
+                "  if last keyed value is 1 \u2192 fade out,\n"
+                "  if 0 or no key \u2192 fade in."
+            ),
+        )
+        for text, data in [
+            ("Fade In", "in"),
+            ("Fade Out", "out"),
+            ("Auto", "auto"),
+        ]:
+            cmb.addItem(text, data)
 
     @mtk.CoreUtils.undoable
-    def _key_opacity_fade(self, fade_in=True):
-        """Key a fade-in or fade-out on the opacity attribute."""
-        frames = self.ui.s000.value()
+    def tb000(self, widget):
+        """Key Render Opacity \u2014 key a fade on the opacity attribute."""
+        frames = widget.option_box.menu.s000.value()
+        ends_at_cursor = widget.option_box.menu.chk000.isChecked()
+        cmb = widget.option_box.menu.cmb_direction
+        direction_mode = cmb.currentData()
+
         objects = pm.selected()
         if not objects:
             self.ui.footer.setText("Select objects with an opacity attribute.")
             return
 
         current = pm.currentTime(query=True)
-        ends_at_cursor = self.ui.chk000.isChecked()
 
-        if fade_in:
-            start_val, end_val = 0, 1
-            if ends_at_cursor:
-                start, end = current - frames, current
-            else:
-                start, end = current, current + frames
+        if ends_at_cursor:
+            start, end = current - frames, current
         else:
-            start_val, end_val = 1, 0
-            if ends_at_cursor:
-                start, end = current - frames, current
-            else:
-                start, end = current, current + frames
+            start, end = current, current + frames
 
         keyed = []
         for obj in objects:
             if not obj.hasAttr("opacity"):
                 continue
+
+            # Resolve fade direction per object
+            if direction_mode == "auto":
+                fade_in = self._resolve_auto_fade(obj, current)
+            else:
+                fade_in = direction_mode == "in"
+
+            start_val, end_val = (0, 1) if fade_in else (1, 0)
+
             pm.setKeyframe(
                 obj,
                 attribute="opacity",
@@ -166,18 +207,52 @@ class RenderOpacitySlots:
                 inTangentType="linear",
                 outTangentType="linear",
             )
-            keyed.append(obj.name())
+            keyed.append((obj.name(), fade_in))
 
-        direction = "Fade In" if fade_in else "Fade Out"
         if keyed:
-            label = ", ".join(keyed[:5])
-            if len(keyed) > 5:
-                label += f" … (+{len(keyed) - 5} more)"
+            dirs = {"Fade In" if fi else "Fade Out" for _, fi in keyed}
+            direction = " / ".join(sorted(dirs))
             self.ui.footer.setText(
-                f"{direction}: {len(keyed)} object(s), frames {int(start)}–{int(end)}"
+                f"{direction}: {len(keyed)} object(s), frames {int(start)}\u2013{int(end)}"
             )
         else:
-            self.ui.footer.setText(f"{direction}: No objects have opacity attribute.")
+            self.ui.footer.setText("No objects have opacity attribute.")
+
+    @staticmethod
+    def _resolve_auto_fade(obj, current_time):
+        """Return True for fade-in, False for fade-out based on previous key.
+
+        Looks at the most recent opacity keyframe at or before
+        ``current_time``.  If its value is >= 0.5 (opaque), the object
+        needs a fade-out; otherwise a fade-in.  Defaults to fade-in
+        when no previous key exists.
+        """
+        key_times = (
+            pm.keyframe(obj, attribute="opacity", query=True, timeChange=True) or []
+        )
+
+        # Find the latest key at or before current_time
+        prev_time = None
+        for t in sorted(key_times):
+            if t <= current_time:
+                prev_time = t
+            else:
+                break
+
+        if prev_time is None:
+            return True  # No previous key \u2014 fade in
+
+        vals = pm.keyframe(
+            obj,
+            attribute="opacity",
+            query=True,
+            time=(prev_time, prev_time),
+            valueChange=True,
+        )
+        if vals:
+            return vals[0] < 0.5  # Opaque \u2192 fade out; transparent \u2192 fade in
+
+        return True  # Fallback \u2014 fade in
 
     # ------------------------------------------------------------------
     # Manage
@@ -218,7 +293,8 @@ class RenderOpacitySlots:
         if self._sel_job_id is not None:
             return
         self._sel_job_id = cmds.scriptJob(
-            event=["SelectionChanged", self._update_fade_enabled]
+            event=["SelectionChanged", self._update_fade_enabled],
+            killWithScene=True,
         )
 
     def _kill_selection_job(self):
@@ -231,9 +307,33 @@ class RenderOpacitySlots:
             self._sel_job_id = None
 
     def _update_fade_enabled(self):
-        """Enable/disable fade widgets based on whether selection has opacity."""
-        has_opacity = any(obj.hasAttr("opacity") for obj in pm.selected())
-        self.ui.s000.setEnabled(has_opacity)
-        self.ui.b001.setEnabled(has_opacity)
-        self.ui.b002.setEnabled(has_opacity)
-        self.ui.chk000.setEnabled(has_opacity)
+        """Enable/disable fade widgets based on whether selection has opacity.
+
+        Also re-establishes driver connections that may have been lost
+        (e.g. after a Duplicate operation) so the user always operates
+        on a healthy object.
+        """
+        try:
+            # Guard: skip if the UI has been destroyed (prevents crash
+            # when the callback fires after the widget is garbage-collected).
+            if not self.ui or not self.ui.isVisible():
+                return
+
+            selected = pm.selected()
+            if not selected:
+                for item in self.ui.tb000.option_box.menu.get_items():
+                    item.setEnabled(False)
+                return
+
+            # Repair any broken opacity wiring (cheap & idempotent).
+            mtk.RenderOpacity.ensure_connections(selected)
+
+            has_opacity = any(obj.hasAttr("opacity") for obj in selected)
+            for item in self.ui.tb000.option_box.menu.get_items():
+                item.setEnabled(has_opacity)
+        except RuntimeError:
+            pass  # Deleted C++ object — swallow to prevent crash
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "_update_fade_enabled error", exc_info=True
+            )

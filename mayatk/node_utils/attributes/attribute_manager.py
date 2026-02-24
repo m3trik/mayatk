@@ -13,6 +13,8 @@ from uitk.widgets.footer import FooterStatusController
 from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.node_utils.attributes._attributes import Attributes
 
+import pythontk as ptk
+
 
 class AttributeManagerController:
     """Controller for Maya attribute operations.
@@ -838,6 +840,15 @@ class AttributeManagerController:
             cmds.undoInfo(closeChunk=True)
 
     @staticmethod
+    def show_attrs(nodes, attr_names):
+        """Show (unhide) *attr_names* in the channel box."""
+        cmds.undoInfo(openChunk=True, chunkName="Show Attrs")
+        try:
+            Attributes.set_channel_box_visibility(nodes, attr_names, visible=True)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    @staticmethod
     def lock_and_hide_attrs(nodes, attr_names):
         """Lock and hide *attr_names*."""
         cmds.undoInfo(openChunk=True, chunkName="Lock and Hide")
@@ -944,6 +955,19 @@ class AttributeManagerSlots:
         self._connect_cb_signal()
 
         self._combo_setting = False
+
+        # Debounced refresh for the text filter.
+        from uitk.widgets.header import QtCore
+
+        self._filter_timer = QtCore.QTimer()
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(200)
+        self._filter_timer.timeout.connect(lambda: self._refresh_table(self.ui.tbl000))
+        self.ui.txt000.textChanged.connect(lambda _: self._filter_timer.start())
+        self.ui.txt000.option_box.clear_option = True
+
+        # Stop timer when the UI is destroyed to avoid dangling callbacks.
+        self.ui.destroyed.connect(self._filter_timer.stop)
 
     # ------------------------------------------------------------------
     # Header
@@ -1301,6 +1325,7 @@ class AttributeManagerSlots:
             ("Mute",       "ctx_mute",            "Mute selected attribute(s) — suppress animation."),
             ("Unmute",     "ctx_unmute",          "Unmute selected attribute(s)."),
             ("Hide Selected",     "ctx_hide",     "Hide the attribute from the channel box."),
+            ("Show Selected",     "ctx_show",     "Show (unhide) the attribute in the channel box."),
             ("Lock and Hide",     "ctx_lock_and_hide", "Lock the attribute and hide it from the channel box."),
             ("Select Connection", "ctx_select_connection", "Select the upstream node driving this attribute."),
             ("Break Connection",  "ctx_break_connection",  "Break incoming connection(s) on the selected attribute(s)."),
@@ -1320,6 +1345,7 @@ class AttributeManagerSlots:
             "ctx_mute": self._ctx_mute,
             "ctx_unmute": self._ctx_unmute,
             "ctx_hide": self._ctx_hide,
+            "ctx_show": self._ctx_show,
             "ctx_lock_and_hide": self._ctx_lock_and_hide,
             "ctx_select_connection": self._ctx_select_connection,
             "ctx_break_connection": self._ctx_break_connection,
@@ -1382,6 +1408,21 @@ class AttributeManagerSlots:
 
             filter_kwargs = self._get_filter_kwargs()
             rows, attr_states = self.controller.build_table_data(nodes, filter_kwargs)
+
+            # Apply wildcard text filter if the user typed something.
+            pattern = getattr(self.ui, "txt000", None)
+            if pattern and pattern.text().strip():
+                text = pattern.text().strip()
+                # Build name list from rows for filtering.
+                names = [r[0] for r in rows]
+                filtered = ptk.IterUtils.filter_list(names, inc=text, ignore_case=True)
+                keep = set(filtered)
+                zipped = [(r, s) for r, s in zip(rows, attr_states) if r[0] in keep]
+                if zipped:
+                    rows, attr_states = zip(*zipped)
+                    rows, attr_states = list(rows), list(attr_states)
+                else:
+                    rows, attr_states = [], []
 
             widget.add(rows, headers=["Name", "", "", "Value", "Type"])
             self._configure_columns(widget)
@@ -1932,6 +1973,13 @@ class AttributeManagerSlots:
         if not attrs:
             return
         self.controller.hide_attrs(nodes, attrs)
+        self._refresh_table(self.ui.tbl000)
+
+    def _ctx_show(self, selection):
+        attrs, nodes = self._selected_attrs_and_nodes(selection)
+        if not attrs:
+            return
+        self.controller.show_attrs(nodes, attrs)
         self._refresh_table(self.ui.tbl000)
 
     def _ctx_lock_and_hide(self, selection):

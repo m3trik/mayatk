@@ -35,11 +35,16 @@
 > This means every call **launches a fresh Maya instance on an unused port** so an
 > existing user session is **never** disturbed.
 >
-> - To reuse an already-running instance, pass `force_new_instance=False`.
-> - The test runner (`run_tests.py`) passes `force_new_instance=False` so it can
->   attach to an existing Maya or its own `mayapy` session.
-> - Unit tests in `test_maya_connection.py` also pass `force_new_instance=False`
->   to keep mocks deterministic.
+> - **`run_tests.py` also defaults to `force_new_instance=True`** (launches a new Maya).
+>   Only `--reuse` overrides this to attach to an existing session.
+> - To reuse an already-running instance, pass `force_new_instance=False` (or `--reuse`
+>   on the CLI). **This will DESTROY any unsaved work in that session.**
+> - Unit tests in `test_maya_connection.py` pass `force_new_instance=False`
+>   only because they use mocks — never in a real Maya context.
+>
+> **AI AGENT RULE**: When running tests, **NEVER** pass `force_new_instance=False`
+> or `--reuse`. Always let the runner launch its own Maya instance. Connecting to
+> an existing session risks destroying the user's scene and hours of unsaved work.
 >
 > `_launch_maya_gui()` delegates to `pythontk.AppLauncher` internally — do **not**
 > bypass it with raw `subprocess` calls.
@@ -69,7 +74,7 @@
 ```powershell
 $env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"
 
-# Run all tests
+# Run all tests (launches a NEW Maya instance automatically)
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
 
 # Run a specific module's tests
@@ -77,6 +82,9 @@ $env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk
 
 # List available test modules
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --list
+
+# DANGEROUS: Reuse an existing Maya session (only if you know what you're doing)
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --reuse core_utils
 ```
 
 **2. Maya Script Editor (interactive)**:
@@ -116,3 +124,4 @@ Requires Maya running with `cmds.commandPort(name=":7002", sourceType="python")`
 - [x] **Audio Events Designer Compatibility** — Switched `audio_events.ui` grouping containers to standard `QGroupBox` so section groups are visible in Qt Designer while preserving grouped layout and existing widget IDs.- [x] **Render Opacity VisDriver Name Fix** — Fixed fragile `endswith("_VisDriver")` check in `OpacityAttributeMode` that broke when Maya auto-incremented condition node names (e.g. `cube_VisDriver1`). Replaced with regex `_VisDriver\d*$` in both `_connect_visibility_driver` and `remove`. Added regression tests for name-collision and object-recreate scenarios.
 - [x] **Adjust Key Spacing Tangent Preservation** — Rewrote `adjust_key_spacing` to MOVE keys via `pm.keyframe(edit=True, timeChange=...)` instead of recreating them, which natively preserves all tangent data. Added `set_tangent_info` helper that applies angles/weights in a separate call from types to prevent Maya from overriding stepped→fixed tangents. Updated `transfer_keyframes` to use `set_tangent_info`. Verified with 7 in-Maya tests (stepped, flat, mixed, negative spacing, preserve_keys).
 - [x] **MayaConnection Safe Defaults** — Changed `MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` so callers always get a fresh Maya instance by default, protecting existing user sessions. Updated `run_tests.py` and `test_maya_connection.py` to pass `force_new_instance=False` where needed. `_launch_maya_gui()` already delegates to `pythontk.AppLauncher` internally.
+- [x] **run_tests.py Session Safety** — Fixed `run_tests.py` to default to `force_new_instance=True` (was `False`, which hijacked the user's open Maya). Added `--reuse` CLI flag as the only opt-in to existing sessions. Added warning banners in both `run_tests.py` and `MayaConnection.connect()` when reuse is active. Updated copilot-instructions with explicit AI agent rule to never pass `--reuse`.

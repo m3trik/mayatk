@@ -110,6 +110,41 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="LineEdit" name="txt000">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Filter attributes by name using wildcards (case-insensitive).
+
+  *          any characters    translate*  → translateX, translateY …
+  ?          single character   translate?  → translateX, translateY
+  [XY]       character set      translate[XY] → translateX, translateY
+  [!Z]       exclude character  translate[!Z] → translateX, translateY
+
+Separate multiple patterns with commas:
+  translate*, rotate*   → matches either group
+
+Exact name (no wildcards) matches that attribute only.</string>
+        </property>
+        <property name="placeholderText">
+         <string>Filter… (translate*, rotate[XY], *visibility)</string>
+        </property>
+        <property name="clearButtonEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
     <item>
@@ -162,14 +197,19 @@
  </widget>
  <customwidgets>
   <customwidget>
+   <class>Header</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
+  </customwidget>
+  <customwidget>
    <class>Footer</class>
    <extends>QWidget</extends>
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
-   <class>Header</class>
-   <extends>QWidget</extends>
-   <header>uitk.widgets.header</header>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>uitk.widgets.lineEdit</header>
   </customwidget>
   <customwidget>
    <class>TableWidget</class>

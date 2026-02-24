@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import contextlib
+import time
 from inspect import signature
 from typing import Dict, Any
 
@@ -41,15 +42,16 @@ class TaskFactory:
 
         for index, (task_name, value) in enumerate(valid_tasks.items(), start=1):
             method = self._method_cache[task_name]  # Already cached
-            self.logger.debug(
-                f"Executing Task #{index}/{len(valid_tasks)}: {task_name}"
-            )
+            self.logger.info(f"Executing Task #{index}/{len(valid_tasks)}: {task_name}")
 
             # Get revert method BEFORE executing the task
             revert_method = self._get_revert_method(task_name)
 
             try:
+                t0 = time.perf_counter()
                 result = self._execute_task_method(method, value)
+                elapsed = time.perf_counter() - t0
+                self.logger.info(f"  Completed {task_name} in {elapsed:.3f}s")
                 task_results[task_name] = result
 
                 # Store original state for reversion if this is a "set_" task
@@ -126,6 +128,27 @@ class TaskFactory:
         """Alternative method to run tasks and checks separately with better organization."""
         return self._execute_tasks_and_checks(task_definitions, check_definitions)
 
+    def _order_tasks(self, tasks: Dict[str, Any]) -> Dict[str, Any]:
+        """Order tasks according to TASK_ORDER if defined, else alphabetically.
+
+        Subclasses (e.g. TaskManager) can define a ``TASK_ORDER`` list to
+        control execution sequence.  Tasks not in the list are appended
+        alphabetically after the ordered ones.
+        """
+        explicit_order = getattr(self, "TASK_ORDER", None)
+        if not explicit_order:
+            return tasks if self._is_sorted(tasks) else dict(sorted(tasks.items()))
+
+        ordered: Dict[str, Any] = {}
+        for key in explicit_order:
+            if key in tasks:
+                ordered[key] = tasks[key]
+        # Append any remaining tasks not in TASK_ORDER (alphabetical)
+        for key in sorted(tasks.keys()):
+            if key not in ordered:
+                ordered[key] = tasks[key]
+        return ordered
+
     def _execute_tasks_and_checks(
         self,
         tasks_only: Dict[str, Any],
@@ -137,13 +160,9 @@ class TaskFactory:
 
         # Run tasks first
         if tasks_only:
-            sorted_tasks = (
-                tasks_only
-                if self._is_sorted(tasks_only)
-                else dict(sorted(tasks_only.items()))
-            )
-            self.logger.info(f"Running {len(sorted_tasks)} export tasks...")
-            with self._manage_context(sorted_tasks):
+            ordered_tasks = self._order_tasks(tasks_only)
+            self.logger.info(f"Running {len(ordered_tasks)} export tasks...")
+            with self._manage_context(ordered_tasks):
                 pass
 
         # Run checks second

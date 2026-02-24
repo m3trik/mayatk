@@ -28,6 +28,7 @@ class MayaConnection:
 
     ConnectionMode = Literal["port", "standalone", "interactive"]
     _instance = None
+    _open_command_ports: dict = {}  # {":7001": "mel", ":7002": "python"}
 
     @staticmethod
     def get_instance() -> "MayaConnection":
@@ -85,9 +86,106 @@ class MayaConnection:
 
             try:  # open new port.
                 cmds.commandPort(name=port, sourceType=source_type)
-            except RuntimeError:
-                # Port likely in use by another instance. Valid behavior, suppress warning.
-                pass
+                MayaConnection._open_command_ports[port] = source_type
+            except RuntimeError as e:
+                print(f"[commandPort] Failed to open {port} ({source_type}): {e}")
+
+    @staticmethod
+    def close_command_ports(ports=None):
+        """Close the specified Maya command ports.
+
+        Parameters:
+            ports: Port names to close.  If *None*, closes all tracked ports.
+
+        Returns:
+            list: Names of the ports that were successfully closed.
+        """
+        import maya.cmds as cmds
+
+        if ports is None:
+            ports = list(MayaConnection._open_command_ports.keys())
+
+        closed = []
+        for port in ports:
+            try:
+                cmds.commandPort(name=port, close=True)
+                closed.append(port)
+            except RuntimeError as e:
+                print(f"[commandPort] Failed to close {port}: {e}")
+            MayaConnection._open_command_ports.pop(port, None)
+        return closed
+
+    @staticmethod
+    def _is_port_free(port_num: int) -> bool:
+        """Check whether a TCP port is free on localhost."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = s.connect_ex(("localhost", port_num))
+            s.close()
+            return result != 0  # 0 means connected → port in use
+        except Exception:
+            return True
+
+    @staticmethod
+    def _find_port_pair(
+        mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50
+    ) -> tuple:
+        """Find two free consecutive ports starting from the given defaults.
+
+        Returns:
+            tuple: (mel_port_str, python_port_str) e.g. (':7001', ':7002').
+
+        Raises:
+            RuntimeError: If no pair of free ports can be found.
+        """
+        # First, try the exact requested pair
+        if MayaConnection._is_port_free(mel_start) and MayaConnection._is_port_free(
+            python_start
+        ):
+            return (f":{mel_start}", f":{python_start}")
+
+        # Fall back: search from mel_start upward in steps of 2
+        for offset in range(2, max_offset * 2, 2):
+            mel_p = mel_start + offset
+            py_p = mel_p + 1
+            if MayaConnection._is_port_free(mel_p) and MayaConnection._is_port_free(
+                py_p
+            ):
+                return (f":{mel_p}", f":{py_p}")
+
+        raise RuntimeError(
+            f"No available port pair found near {mel_start}/{python_start}"
+        )
+
+    @staticmethod
+    def toggle_command_ports(mel_port: int = 7001, python_port: int = 7002) -> tuple:
+        """Toggle Maya command ports on or off.
+
+        If ports are currently tracked as open, closes them.
+        Otherwise, opens new ports — using the requested numbers if free,
+        or the next available pair if they are busy.
+
+        Parameters:
+            mel_port: Preferred port number for MEL (default 7001).
+            python_port: Preferred port number for Python (default 7002).
+
+        Returns:
+            tuple: (is_open: bool, ports: dict) where *is_open* indicates
+                the new state and *ports* maps port name → source type,
+                e.g. ``{':7001': 'mel', ':7002': 'python'}``.
+        """
+        if MayaConnection._open_command_ports:
+            closed = MayaConnection.close_command_ports()
+            result = (False, {p: "closed" for p in closed})
+            print(f"[commandPort] Closed: {', '.join(closed)}")
+            return result
+
+        mel_p, py_p = MayaConnection._find_port_pair(mel_port, python_port)
+        MayaConnection.open_command_ports(mel=mel_p, python=py_p)
+        opened = dict(MayaConnection._open_command_ports)
+        port_summary = ", ".join(f"{p} ({s})" for p, s in opened.items())
+        print(f"[commandPort] Opened: {port_summary}")
+        return (True, opened)
 
     @staticmethod
     def reload_modules(
@@ -203,10 +301,17 @@ class MayaConnection:
         if force_new_instance:
             port = self.get_available_port(start_port=port)
             launch = True
-            # Build connection string for the log
             print(
                 f"[MayaConnection] Force new instance requested. Selected available port: {port}"
             )
+        else:
+            # Warn loudly when reusing — callers should know the risk.
+            if not self._is_port_free(port):
+                print(
+                    "[MayaConnection] WARNING: Connecting to an EXISTING Maya "
+                    f"session on port {port}. Any unsaved work in that session "
+                    "may be lost if the caller resets the scene."
+                )
 
         if mode == "auto":
             detected_mode = self._detect_mode()
@@ -866,6 +971,11 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 def open_command_ports(**kwargs):
     """Wrapper for MayaConnection.open_command_ports."""
     MayaConnection.open_command_ports(**kwargs)
+
+
+def toggle_command_ports(mel_port=7001, python_port=7002):
+    """Wrapper for MayaConnection.toggle_command_ports."""
+    return MayaConnection.toggle_command_ports(mel_port, python_port)
 
 
 if __name__ == "__main__":

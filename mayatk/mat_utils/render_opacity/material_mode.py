@@ -263,6 +263,40 @@ class OpacityMaterialMode(ptk.LoggingMixin):
                     )
 
     @classmethod
+    def ensure_connections(cls, objects) -> None:
+        """Re-establish ``Transform.opacity → Material.opacity`` proxy
+        connections that were lost (e.g. after a duplicate operation).
+
+        Only attempts reconnection when the object has the ``opacity``
+        attribute and is assigned a StingrayPBS material that also
+        exposes ``opacity``.
+        """
+        for obj in pm.ls(objects):
+            if not obj.hasAttr(OpacityAttributeMode.ATTR_NAME):
+                continue
+
+            mats = cls.get_stingray_mats([obj])
+            for mat in mats:
+                if not mat.hasAttr("opacity"):
+                    continue
+                # Already connected from this transform → skip
+                if pm.isConnected(
+                    obj.attr(OpacityAttributeMode.ATTR_NAME), mat.opacity
+                ):
+                    continue
+                # If the material opacity is already driven by another
+                # object, skip to avoid stealing the connection.
+                existing = mat.opacity.inputs(plugs=True)
+                if existing:
+                    continue
+                pm.connectAttr(
+                    obj.attr(OpacityAttributeMode.ATTR_NAME),
+                    mat.opacity,
+                    force=True,
+                )
+                cls.logger.info(f"Reconnected {obj}.opacity -> {mat}.opacity")
+
+    @classmethod
     def remove(cls, objects):
         """Remove material-mode artifacts from *objects*.
 

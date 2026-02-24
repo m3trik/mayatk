@@ -134,42 +134,61 @@ class SceneExporter(ptk.LoggingMixin):
         if self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
 
-        # Run tasks and checks
-        if tasks:
-            tasks_successful = self.task_manager.run_tasks(tasks)
-            if not tasks_successful:  # If any tasks failed, return them
+        # Wrap destructive tasks + export in an undo chunk so the
+        # original scene can be restored after the FBX is written.
+        # Tasks like smart_bake (override layers, muted drivers),
+        # material deletion, path conversion, and key modifications
+        # are all reverted automatically by the undo.
+        cmds.undoInfo(openChunk=True, chunkName="scene_export")
+        export_succeeded = False
+        try:
+            # Run tasks and checks
+            if tasks:
+                tasks_successful = self.task_manager.run_tasks(tasks)
+                if not tasks_successful:  # If any tasks failed, return them
+                    return False
+
+            # Select objects to export
+            if export_visible:
+                # Use cmds.select for performance (avoids PyNode overhead)
+                cmds.select(self.task_manager.objects, replace=True)
+                self.logger.info(
+                    f"Selected {len(self.task_manager.objects)} objects for export."
+                )
+
+            if not cmds.ls(selection=True):
+                self.logger.error("No objects to export.")
                 return False
 
-        # Select objects to export
-        if export_visible:
-            # Use cmds.select for performance (avoids PyNode overhead)
-            cmds.select(self.task_manager.objects, replace=True)
-            self.logger.info(
-                f"Selected {len(self.task_manager.objects)} objects for export."
-            )
-
-        if not cmds.ls(selection=True):
-            self.logger.error("No objects to export.")
-            return False
-
-        # Perform the actual export
-        try:
-            # Use cmds.file for export to avoid PyMel overhead
-            # pm.exportSelected wraps cmds.file(..., exportSelected=True)
-            cmds.file(
-                self.export_path,
-                force=True,
-                options="v=0;",
-                type=file_format,
-                exportSelected=True,
-            )
-            self.logger.info(f"File exported: {self.export_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to export objects: {e}")
-            raise RuntimeError(f"Failed to export objects: {e}")
+            # Perform the actual export
+            try:
+                # Use cmds.file for export to avoid PyMel overhead
+                # pm.exportSelected wraps cmds.file(..., exportSelected=True)
+                cmds.file(
+                    self.export_path,
+                    force=True,
+                    options="v=0;",
+                    type=file_format,
+                    exportSelected=True,
+                )
+                self.logger.info(f"File exported: {self.export_path}")
+                export_succeeded = True
+            except Exception as e:
+                self.logger.error(f"Failed to export objects: {e}")
+                raise RuntimeError(f"Failed to export objects: {e}")
+            finally:
+                if self.create_log_file:
+                    self.close_file_handlers()
         finally:
-            if self.create_log_file:
-                self.close_file_handlers()
+            cmds.undoInfo(closeChunk=True)
+            # Undo the entire chunk to restore the scene to its
+            # pre-export state (reverts smart_bake layers, muted
+            # drivers, deleted materials, path changes, etc.).
+            cmds.undo()
+            self.logger.info("Scene restored to pre-export state.")
+
+        if not export_succeeded:
+            return False
 
         # After successful export, gather detailed info
         export_info = {
@@ -384,7 +403,7 @@ class SceneExporterSlots(SceneExporter):
         self.ui.b009.setStyleSheet("QPushButton:checked {background-color: #FF9999;}")
 
         self.logger.setLevel(log_level)
-        self.logger.hide_logger_name(False)  # Hide the logger name in output
+        self.logger.hide_logger_name(True)  # Hide the logger name in output
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt003)
 

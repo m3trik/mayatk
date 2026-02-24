@@ -82,6 +82,7 @@ DEFAULT_INCLUDE = {
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
+    "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
     "mat_utils.texture_path_editor": "TexturePathEditor",
     "mat_utils.shader_templates": "ShaderTemplates",

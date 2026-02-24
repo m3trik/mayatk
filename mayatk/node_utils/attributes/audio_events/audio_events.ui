@@ -57,7 +57,7 @@
       <property name="title">
        <string>Tracks</string>
       </property>
-      <layout class="QVBoxLayout" name="tracksLayout">
+      <layout class="QHBoxLayout" name="horizontalLayout">
        <property name="spacing">
         <number>1</number>
        </property>
@@ -104,17 +104,21 @@ clip on the time slider waveform.</string>
          </property>
          <property name="maximumSize">
           <size>
-           <width>16777215</width>
+           <width>60</width>
            <height>20</height>
           </size>
          </property>
          <property name="toolTip">
-          <string>Browse for audio files to load.
+          <string>Browse for audio files to add or replace tracks.
 File stems become event trigger names.
+Re-adding a file with the same name overwrites it
+at the same enum index — keyframes are preserved.
+If events are already keyed, a sync is triggered
+automatically to rebuild the composite WAV.
 Creates an audio_events locator if nothing is selected.</string>
          </property>
          <property name="text">
-          <string>Add Audio Files</string>
+          <string>Add</string>
          </property>
         </widget>
        </item>
@@ -205,11 +209,38 @@ auto-key 'None' at clip end (if enabled), and sync.</string>
          </property>
          <property name="toolTip">
           <string>Create audio nodes at keyed event positions.
-Builds a composite WAV and activates it
-on the time slider for scrub playback.</string>
+Rebuilds synced nodes and the composite WAV
+from the current track map and keyframes.
+Activates the composite on the time slider
+for scrub playback.</string>
          </property>
          <property name="text">
           <string>Sync Audio to Timeline</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="b005">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Replace the currently selected track with a different audio file.
+Renames the enum entry to the new file's stem (preserving the
+index and all keyframes), updates the preview node, and re-syncs
+if keyed events exist.</string>
+         </property>
+         <property name="text">
+          <string>Replace Selected Track</string>
          </property>
         </widget>
        </item>
@@ -311,9 +342,9 @@ delete their preview audio nodes.</string>
  </widget>
  <customwidgets>
   <customwidget>
-   <class>Footer</class>
-   <extends>QWidget</extends>
-   <header>uitk.widgets.footer</header>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>widgets.pushbutton.h</header>
   </customwidget>
   <customwidget>
    <class>Header</class>
@@ -321,20 +352,20 @@ delete their preview audio nodes.</string>
    <header>uitk.widgets.header</header>
   </customwidget>
   <customwidget>
-   <class>PushButton</class>
-   <extends>QPushButton</extends>
-   <header>widgets.pushbutton.h</header>
+   <class>CollapsableGroup</class>
+   <extends>QGroupBox</extends>
+   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>Footer</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
-  </customwidget>
-  <customwidget>
-   <class>CollapsableGroup</class>
-   <extends>QGroupBox</extends>
-   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
-   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>

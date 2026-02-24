@@ -847,5 +847,711 @@ class TestSceneReopenDetection(MayaTkTestCase):
                     pass
 
 
+# ===========================================================================
+# Add / Overwrite Track Behavior
+# ===========================================================================
+
+
+class TestAddTrackOverwritesBehavior(MayaTkTestCase):
+    """Adding a track with the same name must overwrite at the same enum index.
+
+    The Add button (_browse_audio_files) merges selected files into the
+    _audio_files dict keyed by lowercase stem.  Re-adding a file with
+    the same stem must:
+
+    1. Overwrite the path in _audio_files (same key).
+    2. Preserve the enum index for that event (EventTriggers.ensure is
+       additive — existing labels keep their indices).
+    3. Not create a duplicate enum field.
+
+    This suite verifies all three invariants without requiring audio
+    fixture files on disk.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.loc = pm.spaceLocator(name="carrier")[0]
+        self.slots._current_target = self.loc
+
+    # -- 1. Dict-level overwrite ------------------------------------------
+
+    def test_audio_files_dict_overwrites_path_on_same_stem(self):
+        """Re-adding a stem replaces the path, not appends a duplicate."""
+        self.slots._audio_files["footstep"] = "/old/footstep.wav"
+        # Simulate the merge loop from _browse_audio_files
+        new_path = "/new/footstep.wav"
+        stem = "footstep"
+        self.slots._audio_files[stem] = new_path.replace("\\", "/")
+        self.assertEqual(self.slots._audio_files["footstep"], "/new/footstep.wav")
+        self.assertEqual(
+            len(self.slots._audio_files), 1, "Should be one entry, not two"
+        )
+
+    def test_audio_files_dict_adds_new_stems_alongside_existing(self):
+        """New stems are added without removing existing ones."""
+        self.slots._audio_files["footstep"] = "/audio/footstep.wav"
+        self.slots._audio_files["jump"] = "/audio/jump.wav"
+        self.assertEqual(len(self.slots._audio_files), 2)
+        self.assertIn("footstep", self.slots._audio_files)
+        self.assertIn("jump", self.slots._audio_files)
+
+    # -- 2. Enum index preserved on re-add --------------------------------
+
+    def test_ensure_preserves_enum_index_on_duplicate_event(self):
+        """ensure() with an already-existing event name keeps its enum index.
+
+        Bug scenario: User adds 'Footstep' (gets index 1), then re-adds
+        'Footstep' with a different file.  The enum index must stay at 1.
+        """
+        EventTriggers.create([self.loc], events=["Footstep", "Jump"], category="audio")
+        events_before = EventTriggers.get_events(self.loc, category="audio")
+        idx_before = events_before.index("Footstep")
+
+        # Second ensure with same + additional event
+        EventTriggers.ensure(
+            [self.loc], events=["Footstep", "Jump", "Land"], category="audio"
+        )
+        events_after = EventTriggers.get_events(self.loc, category="audio")
+        idx_after = events_after.index("Footstep")
+
+        self.assertEqual(
+            idx_before,
+            idx_after,
+            f"Footstep index shifted from {idx_before} to {idx_after}",
+        )
+
+    def test_ensure_no_duplicate_enum_field(self):
+        """ensure() with a duplicate event name does not create a second field."""
+        EventTriggers.create([self.loc], events=["Footstep"], category="audio")
+        EventTriggers.ensure([self.loc], events=["Footstep"], category="audio")
+        events = EventTriggers.get_events(self.loc, category="audio")
+        self.assertEqual(
+            events.count("Footstep"),
+            1,
+            "Duplicate enum field created for 'Footstep'",
+        )
+
+    def test_ensure_preserves_keyframes_when_readding_event(self):
+        """Keyframes on the original event survive an ensure() with the same name."""
+        EventTriggers.create([self.loc], events=["Footstep", "Jump"], category="audio")
+        EventTriggers.set_key(self.loc, "Footstep", time=12, category="audio")
+        EventTriggers.set_key(self.loc, "Jump", time=24, category="audio")
+
+        # Re-ensure with the same events (simulates Add with same file names)
+        EventTriggers.ensure([self.loc], events=["Footstep", "Jump"], category="audio")
+
+        keyed = EventTriggers.iter_keyed_events(self.loc, category="audio")
+        times_and_labels = [(int(t), lbl) for t, lbl in keyed]
+        self.assertIn(
+            (12, "Footstep"), times_and_labels, "Footstep key at frame 12 lost"
+        )
+        self.assertIn((24, "Jump"), times_and_labels, "Jump key at frame 24 lost")
+
+    # -- 3. All enum indices stable when new events added -----------------
+
+    def test_existing_indices_stable_after_adding_new_event(self):
+        """Adding a new event via ensure() must not shift existing indices.
+
+        Enum indices for 'Footstep' and 'Jump' must remain unchanged
+        when 'Land' is appended.
+        """
+        EventTriggers.create([self.loc], events=["Footstep", "Jump"], category="audio")
+        events_before = EventTriggers.get_events(self.loc, category="audio")
+        # Record ALL indices
+        indices_before = {e: i for i, e in enumerate(events_before)}
+
+        EventTriggers.ensure(
+            [self.loc], events=["Footstep", "Jump", "Land"], category="audio"
+        )
+        events_after = EventTriggers.get_events(self.loc, category="audio")
+        indices_after = {e: i for i, e in enumerate(events_after)}
+
+        for event in ["None", "Footstep", "Jump"]:
+            self.assertEqual(
+                indices_before[event],
+                indices_after[event],
+                f"Index of '{event}' shifted from {indices_before[event]} "
+                f"to {indices_after[event]} after adding 'Land'",
+            )
+        self.assertIn("Land", events_after, "New event 'Land' not added")
+
+    # -- 4. End-to-end overwrite simulation -------------------------------
+
+    def test_end_to_end_readd_same_track_overwrites_path_keeps_index(self):
+        """Simulate the full Add flow: browse → merge dict → ensure enum.
+
+        1. Add 'Footstep' and 'Jump' files.
+        2. Key 'Footstep' at frame 12.
+        3. Re-add 'Footstep' with a different file path.
+        4. Verify: path updated, enum index unchanged, keyframe intact.
+        """
+        # Step 1 — initial add
+        self.slots._audio_files["footstep"] = "/audio/v1/Footstep.wav"
+        self.slots._audio_files["jump"] = "/audio/v1/Jump.wav"
+        EventTriggers.ensure(
+            [self.loc],
+            events=["Footstep", "Jump"],
+            category="audio",
+        )
+
+        events_v1 = EventTriggers.get_events(self.loc, category="audio")
+        idx_footstep_v1 = events_v1.index("Footstep")
+        idx_jump_v1 = events_v1.index("Jump")
+
+        # Step 2 — key events
+        EventTriggers.set_key(self.loc, "Footstep", time=12, category="audio")
+
+        # Step 3 — re-add Footstep with new path (simulates browse merge)
+        self.slots._audio_files["footstep"] = "/audio/v2/Footstep.wav"
+        EventTriggers.ensure(
+            [self.loc],
+            events=["Footstep", "Jump"],
+            category="audio",
+        )
+
+        # Step 4 — verify
+        self.assertEqual(
+            self.slots._audio_files["footstep"],
+            "/audio/v2/Footstep.wav",
+            "Path should be v2",
+        )
+
+        events_v2 = EventTriggers.get_events(self.loc, category="audio")
+        self.assertEqual(
+            events_v2.index("Footstep"),
+            idx_footstep_v1,
+            "Footstep enum index must not change",
+        )
+        self.assertEqual(
+            events_v2.index("Jump"),
+            idx_jump_v1,
+            "Jump enum index must not change",
+        )
+
+        keyed = EventTriggers.iter_keyed_events(self.loc, category="audio")
+        keyed_dict = {lbl: int(t) for t, lbl in keyed}
+        self.assertIn("Footstep", keyed_dict, "Footstep keyframe lost after re-add")
+        self.assertEqual(keyed_dict["Footstep"], 12, "Footstep keyframe time changed")
+
+    def test_readd_only_one_of_multiple_tracks_does_not_affect_others(self):
+        """Re-adding one track must leave sibling tracks completely intact."""
+        self.slots._audio_files["footstep"] = "/audio/Footstep.wav"
+        self.slots._audio_files["jump"] = "/audio/Jump.wav"
+        self.slots._audio_files["land"] = "/audio/Land.wav"
+        EventTriggers.ensure(
+            [self.loc],
+            events=["Footstep", "Jump", "Land"],
+            category="audio",
+        )
+        EventTriggers.set_key(self.loc, "Jump", time=24, category="audio")
+
+        events_before = EventTriggers.get_events(self.loc, category="audio")
+        idx_jump = events_before.index("Jump")
+        idx_land = events_before.index("Land")
+
+        # Re-add only Footstep
+        self.slots._audio_files["footstep"] = "/audio/v2/Footstep.wav"
+        EventTriggers.ensure(
+            [self.loc],
+            events=["Footstep", "Jump", "Land"],
+            category="audio",
+        )
+
+        events_after = EventTriggers.get_events(self.loc, category="audio")
+        self.assertEqual(events_after.index("Jump"), idx_jump)
+        self.assertEqual(events_after.index("Land"), idx_land)
+
+        keyed = EventTriggers.iter_keyed_events(self.loc, category="audio")
+        keyed_dict = {lbl: int(t) for t, lbl in keyed}
+        self.assertIn("Jump", keyed_dict, "Jump keyframe lost when Footstep re-added")
+        self.assertEqual(keyed_dict["Jump"], 24)
+
+
+class TestLoadTracksPreviewNodeBehavior(MayaTkTestCase):
+    """load_tracks() creates and updates preview audio nodes.
+
+    - New stems create fresh audio nodes.
+    - Existing stems with unchanged paths are skipped.
+    - Existing stems with changed paths are updated in-place
+      (the node's filename is reconfigured without deleting/recreating).
+
+    Uses WAV files from the test fixtures directory if available,
+    otherwise skips gracefully.
+    """
+
+    FIXTURE_DIR = os.path.join(scripts_dir, "mayatk", "test", "fixtures", "audio")
+
+    def _wav_files(self):
+        if not os.path.isdir(self.FIXTURE_DIR):
+            return []
+        return [
+            os.path.join(self.FIXTURE_DIR, f)
+            for f in os.listdir(self.FIXTURE_DIR)
+            if f.lower().endswith(".wav")
+        ]
+
+    def test_second_load_tracks_unchanged_path_returns_empty(self):
+        """Calling load_tracks twice with the same path returns [] (no change)."""
+        wavs = self._wav_files()
+        if not wavs:
+            self.skipTest("No .wav fixtures in test/fixtures/audio/")
+        nodes_1 = AudioEvents.load_tracks(wavs[:1], category="audio")
+        nodes_2 = AudioEvents.load_tracks(wavs[:1], category="audio")
+        self.assertTrue(nodes_1, "First load should create a node")
+        self.assertEqual(
+            nodes_2, [], "Second load with same path should skip — no change"
+        )
+
+    def test_load_tracks_creates_new_stems_alongside_existing(self):
+        """New stems are added without removing existing preview nodes."""
+        wavs = self._wav_files()
+        if len(wavs) < 2:
+            self.skipTest("Need at least 2 .wav fixtures in test/fixtures/audio/")
+        nodes_1 = AudioEvents.load_tracks(wavs[:1], category="audio")
+        nodes_2 = AudioEvents.load_tracks(wavs[1:2], category="audio")
+        self.assertTrue(nodes_1)
+        self.assertTrue(nodes_2, "Second load with different stem should create a node")
+        all_members = AudioEvents.list_nodes(category="audio")
+        self.assertEqual(len(all_members), 2)
+
+    def test_load_tracks_updates_node_when_path_changes(self):
+        """Re-adding a stem with a different file updates the existing node.
+
+        Bug: load_tracks skipped existing stems unconditionally, so
+        re-adding a track with a new WAV left the old audio node stale.
+        Fixed: 2026-02-23 — load_tracks now detects path changes and
+        reconfigures the existing node in-place.
+        """
+        wavs = self._wav_files()
+        if len(wavs) < 2:
+            self.skipTest("Need at least 2 .wav fixtures in test/fixtures/audio/")
+
+        # Load first file under stem "TestStem"
+        first_path = wavs[0].replace("\\", "/")
+        second_path = wavs[1].replace("\\", "/")
+        stem = os.path.splitext(os.path.basename(first_path))[0]
+
+        nodes_1 = AudioEvents.load_tracks([first_path], category="audio")
+        self.assertTrue(nodes_1)
+        node = nodes_1[0]
+        path_before = cmds.getAttr(f"{node}.filename").replace("\\", "/")
+
+        # Now manually reconfigure: rename second file to same stem in a temp copy
+        # Instead, directly create a second call with a different path but same stem
+        # by creating a symlink or copy — but simpler: just set the node's filename
+        # to something else, then call load_tracks again with the original path.
+        cmds.setAttr(f"{node}.filename", "/fake/changed_path.wav", type="string")
+
+        # Now call load_tracks with original path — should detect the difference
+        nodes_2 = AudioEvents.load_tracks([first_path], category="audio")
+        self.assertTrue(
+            nodes_2,
+            "load_tracks should return the updated node when path changed",
+        )
+        path_after = cmds.getAttr(f"{nodes_2[0]}.filename").replace("\\", "/")
+        self.assertNotEqual(path_after, "/fake/changed_path.wav")
+
+
+class TestBrowseTriggersCompositeRebuild(MayaTkTestCase):
+    """_browse_audio_files rebuilds composite when keyed events exist.
+
+    Bug: After editing tracks via the Add button, the composite WAV
+    was stale because _browse_audio_files only called load_tracks()
+    (preview nodes) but never sync() to rebuild the composite.
+    Fixed: 2026-02-23 — _browse_audio_files now calls
+    _sync_and_refresh_target() when keyed events are present.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.loc = pm.spaceLocator(name="carrier")[0]
+        self.slots._current_target = self.loc
+
+    def test_browse_calls_sync_when_keyed_events_exist(self):
+        """After adding tracks, if events are already keyed, sync is triggered."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        EventTriggers.create([self.loc], events=["Footstep"], category="audio")
+        EventTriggers.set_key(self.loc, "Footstep", time=12, category="audio")
+        self.slots._audio_files["footstep"] = "/audio/Footstep.wav"
+
+        # Simulate _browse_audio_files with mocked dialog and sync
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/Footstep.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/Footstep.wav"],
+            ):
+                with patch.object(
+                    AudioEvents, "load_tracks", return_value=["footstep"]
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(
+                            self.slots, "_sync_and_refresh_target", return_value=1
+                        ) as mock_sync:
+                            with patch.object(self.slots, "_repair_enum_casing"):
+                                self.slots._browse_audio_files()
+                                mock_sync.assert_called_once_with(self.loc)
+
+    def test_browse_skips_sync_when_no_keyed_events(self):
+        """Without keyed events, browse only calls load_tracks, not sync."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        EventTriggers.create([self.loc], events=["Footstep"], category="audio")
+        # No set_key — no keyed events
+        self.slots._audio_files["footstep"] = "/audio/Footstep.wav"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/Footstep.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/Footstep.wav"],
+            ):
+                with patch.object(
+                    AudioEvents, "load_tracks", return_value=["footstep"]
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(
+                            self.slots, "_sync_and_refresh_target"
+                        ) as mock_sync:
+                            with patch.object(self.slots, "_repair_enum_casing"):
+                                with patch.object(
+                                    self.slots, "_refresh_combo_from_target"
+                                ):
+                                    self.slots._browse_audio_files()
+                                    mock_sync.assert_not_called()
+
+
+# ===========================================================================
+# Cross-target hydration isolation (dead-space bug)
+# ===========================================================================
+
+
+class TestHydrateCrossTargetIsolation(MayaTkTestCase):
+    """Verify _hydrate_from_target does not bleed nodes across targets.
+
+    Bug: The global ``audio_set`` contains nodes from ALL targets.  When
+    hydrating a new target with no persisted ``audio_file_map``, the
+    node-filename fallback read paths from other targets' preview nodes,
+    causing wrong/stale entries in ``_audio_files``.  Downstream,
+    ``build_composite_wav`` produced silence (dead spaces) because the
+    paths belonged to the wrong source directory.
+
+    Fixed: 2026-02-23  — When a persisted file-map exists, skip the
+    node-filename fallback entirely.  When the fallback runs, reject
+    any path containing ``_maya_audio_cache`` or ``_audio_cache``
+    directory segments.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+
+    def test_persisted_map_skips_node_fallback(self):
+        """When a persisted file map exists, node filenames are NOT read."""
+        target = pm.spaceLocator(name="targetA")[0]
+        EventTriggers.create([target], events=["Kick"], category="audio")
+
+        # Create a preview node in the global audio_set with a wrong path
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        wrong_node = cmds.createNode("audio", name="kick", skipSelect=True)
+        cmds.setAttr(f"{wrong_node}.filename", "/wrong/kick.wav", type="string")
+        AudioEvents._stamp_event_attrs(wrong_node, "kick", "preview")
+        cmds.sets(wrong_node, addElement=audio_set.name())
+
+        # Persist a correct file map on the target
+        self.slots._current_target = None
+        self.slots._audio_files = {"kick": "/correct/kick.wav"}
+        self.slots._save_file_map(target)
+        self.slots._audio_files.clear()
+
+        # Hydrate — should load persisted map, NOT the node filename
+        self.slots._hydrate_from_target(target)
+        self.assertEqual(
+            self.slots._audio_files.get("kick"),
+            "/correct/kick.wav",
+            "Persisted path should take priority; node fallback should be skipped.",
+        )
+
+    def test_fallback_rejects_cache_paths(self):
+        """Node filenames inside _maya_audio_cache dirs are rejected."""
+        target = pm.spaceLocator(name="targetB")[0]
+        EventTriggers.create([target], events=["Snare"], category="audio")
+
+        # Ensure no persisted file map on target so the fallback runs
+        node_name = str(target)
+        if cmds.attributeQuery(self.slots.FILE_MAP_ATTR, node=node_name, exists=True):
+            cmds.deleteAttr(f"{node_name}.{self.slots.FILE_MAP_ATTR}")
+
+        # Create a node with a cache path
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        cache_node = cmds.createNode("audio", name="snare", skipSelect=True)
+        cache_path = "/project/audio/_maya_audio_cache/snare_abc123.wav"
+        cmds.setAttr(f"{cache_node}.filename", cache_path, type="string")
+        AudioEvents._stamp_event_attrs(cache_node, "snare", "preview")
+        cmds.sets(cache_node, addElement=audio_set.name())
+
+        self.slots._current_target = None
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(target)
+        self.assertNotIn(
+            "snare",
+            self.slots._audio_files,
+            "Cache paths from node filenames must NOT enter _audio_files.",
+        )
+
+    def test_fallback_accepts_source_paths(self):
+        """Non-cache node filenames ARE accepted when no persisted map exists."""
+        target = pm.spaceLocator(name="targetC")[0]
+        EventTriggers.create([target], events=["HiHat"], category="audio")
+
+        # Ensure no persisted file map
+        node_name = str(target)
+        if cmds.attributeQuery(self.slots.FILE_MAP_ATTR, node=node_name, exists=True):
+            cmds.deleteAttr(f"{node_name}.{self.slots.FILE_MAP_ATTR}")
+
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        src_node = cmds.createNode("audio", name="hihat", skipSelect=True)
+        src_path = "/project/audio/hihat.wav"
+        cmds.setAttr(f"{src_node}.filename", src_path, type="string")
+        AudioEvents._stamp_event_attrs(src_node, "hihat", "preview")
+        cmds.sets(src_node, addElement=audio_set.name())
+
+        self.slots._current_target = None
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(target)
+        self.assertEqual(
+            self.slots._audio_files.get("hihat"),
+            src_path,
+            "Valid source path should be accepted by the node fallback.",
+        )
+
+    def test_two_targets_different_audio_no_cross_contamination(self):
+        """Two targets with identical event names but different audio files.
+
+        After hydrating target B, _audio_files must reflect target B's
+        persisted map — not target A's node filenames.
+        """
+        targetA = pm.spaceLocator(name="carrierA")[0]
+        targetB = pm.spaceLocator(name="carrierB")[0]
+        EventTriggers.create([targetA], events=["Boom"], category="audio")
+        EventTriggers.create([targetB], events=["Boom"], category="audio")
+
+        # Persist different file maps
+        self.slots._current_target = None
+        self.slots._audio_files = {"boom": "/dirA/boom.wav"}
+        self.slots._save_file_map(targetA)
+        self.slots._audio_files = {"boom": "/dirB/boom.wav"}
+        self.slots._save_file_map(targetB)
+
+        # Create a preview node (simulating that target A loaded first)
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="boom", skipSelect=True)
+        cmds.setAttr(f"{node}.filename", "/dirA/boom.wav", type="string")
+        AudioEvents._stamp_event_attrs(node, "boom", "preview")
+        cmds.sets(node, addElement=audio_set.name())
+
+        # Hydrate target B — must get B's path, not A's
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(targetB, old_target=targetA)
+        self.assertEqual(
+            self.slots._audio_files.get("boom"),
+            "/dirB/boom.wav",
+            "Target B should hydrate from its own persisted map, not target A's node.",
+        )
+
+
+# ===========================================================================
+# Replace Selected Track (b005)
+# ===========================================================================
+
+
+class TestReplaceSelectedTrack(MayaTkTestCase):
+    """Verify b005 renames the enum label, updates _audio_files, and re-syncs."""
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.loc = pm.spaceLocator(name="replaceCarrier")[0]
+        EventTriggers.create([self.loc], events=["OldClip", "Other"], category="audio")
+        self.slots._current_target = self.loc
+        self.slots._audio_files = {
+            "oldclip": "/audio/OldClip.wav",
+            "other": "/audio/Other.wav",
+        }
+        self.slots._save_file_map(self.loc)
+
+        # Create a preview node for OldClip
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="oldclip", skipSelect=True)
+        cmds.setAttr(f"{node}.filename", "/audio/OldClip.wav", type="string")
+        AudioEvents._stamp_event_attrs(node, "oldclip", "preview")
+        cmds.sets(node, addElement=audio_set.name())
+
+    def test_replace_renames_enum_label(self):
+        """Replacing a track renames the enum entry, preserving keyframe index."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        # Get original index of OldClip
+        trigger_attr, _ = EventTriggers.attr_names("audio")
+        pairs_before = Attributes.parse_enum_def(str(self.loc), trigger_attr)
+        old_idx = next(idx for label, idx in pairs_before if label == "OldClip")
+
+        # Mock the combo to return the selected track
+        self.slots.ui.cmb000.currentText.return_value = "OldClip"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/NewClip.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/NewClip.wav"],
+            ):
+                with patch.object(
+                    AudioEvents,
+                    "_resolve_playable_path",
+                    return_value="/audio/NewClip.wav",
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(self.slots, "_refresh_combo_from_target"):
+                            self.slots.b005()
+
+        # Verify enum was renamed
+        pairs_after = Attributes.parse_enum_def(str(self.loc), trigger_attr)
+        new_idx = next((idx for label, idx in pairs_after if label == "NewClip"), None)
+        old_still = any(label == "OldClip" for label, _ in pairs_after)
+
+        self.assertFalse(old_still, "OldClip should no longer exist in the enum.")
+        self.assertEqual(
+            new_idx,
+            old_idx,
+            "NewClip must occupy the same enum index as OldClip.",
+        )
+
+    def test_replace_updates_audio_files_dict(self):
+        """_audio_files should drop the old key and have the new key."""
+        self.slots.ui.cmb000.currentText.return_value = "OldClip"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/NewClip.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/NewClip.wav"],
+            ):
+                with patch.object(
+                    AudioEvents,
+                    "_resolve_playable_path",
+                    return_value="/audio/NewClip.wav",
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(self.slots, "_refresh_combo_from_target"):
+                            self.slots.b005()
+
+        self.assertNotIn("oldclip", self.slots._audio_files)
+        self.assertEqual(self.slots._audio_files.get("newclip"), "/audio/NewClip.wav")
+
+    def test_replace_same_stem_updates_path_only(self):
+        """When the new file has the same stem, only the path changes."""
+        self.slots.ui.cmb000.currentText.return_value = "OldClip"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/other_dir/OldClip.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/other_dir/OldClip.wav"],
+            ):
+                with patch.object(
+                    AudioEvents,
+                    "_resolve_playable_path",
+                    return_value="/other_dir/OldClip.wav",
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(self.slots, "_refresh_combo_from_target"):
+                            self.slots.b005()
+
+        self.assertEqual(
+            self.slots._audio_files.get("oldclip"), "/other_dir/OldClip.wav"
+        )
+
+    def test_replace_preserves_sibling_events(self):
+        """Replacing one track must not disturb other events."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        trigger_attr, _ = EventTriggers.attr_names("audio")
+        pairs_before = Attributes.parse_enum_def(str(self.loc), trigger_attr)
+        other_idx = next(idx for label, idx in pairs_before if label == "Other")
+
+        self.slots.ui.cmb000.currentText.return_value = "OldClip"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/NewClip.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/NewClip.wav"],
+            ):
+                with patch.object(
+                    AudioEvents,
+                    "_resolve_playable_path",
+                    return_value="/audio/NewClip.wav",
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(self.slots, "_refresh_combo_from_target"):
+                            self.slots.b005()
+
+        pairs_after = Attributes.parse_enum_def(str(self.loc), trigger_attr)
+        other_idx_after = next(
+            (idx for label, idx in pairs_after if label == "Other"), None
+        )
+        self.assertEqual(other_idx_after, other_idx, "Other event must be untouched.")
+        self.assertIn(
+            "other", self.slots._audio_files, "Sibling file-map entry must survive."
+        )
+
+    def test_replace_triggers_sync_when_keyed(self):
+        """If keyed events exist, replace should call _sync_and_refresh_target."""
+        EventTriggers.set_key(self.loc, "OldClip", time=10, category="audio")
+        self.slots.ui.cmb000.currentText.return_value = "OldClip"
+
+        with patch(
+            "qtpy.QtWidgets.QFileDialog.getOpenFileNames",
+            return_value=(["/audio/NewClip.wav"], ""),
+        ):
+            with patch.object(
+                self.slots,
+                "_prepare_selected_paths",
+                return_value=["/audio/NewClip.wav"],
+            ):
+                with patch.object(
+                    AudioEvents,
+                    "_resolve_playable_path",
+                    return_value="/audio/NewClip.wav",
+                ):
+                    with patch.object(self.slots, "_save_file_map"):
+                        with patch.object(
+                            self.slots, "_sync_and_refresh_target", return_value=1
+                        ) as mock_sync:
+                            self.slots.b005()
+                            mock_sync.assert_called_once_with(self.loc)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

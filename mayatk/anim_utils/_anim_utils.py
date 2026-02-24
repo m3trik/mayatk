@@ -733,37 +733,50 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             objects = [str(objects)]
 
         objects = cmds.ls(objects, flatten=True)
-        anim_curves = set()  # Use a set to ensure no duplicates
+        if not objects:
+            return []
 
-        for obj in objects:
-            # Early return if obj doesn't exist
-            if not cmds.objExists(obj):
-                continue
+        anim_curves = set()
 
-            # If the object is an animCurve, add it directly
-            if cmds.nodeType(obj).startswith("animCurve"):
-                anim_curves.add(obj)
-            else:  # Otherwise, list connections for animCurves of the object
-                connected_curves = cmds.listConnections(
-                    obj, type="animCurve", source=True, destination=False
+        # Batch: separate objects that are already anim curves
+        existing_curves = set(cmds.ls(objects, type="animCurve") or [])
+        anim_curves.update(existing_curves)
+
+        # Non-curve objects need connection queries
+        non_curves = [o for o in objects if o not in existing_curves]
+        if non_curves:
+            # Batch: single listConnections for all non-curve objects
+            connected = (
+                cmds.listConnections(
+                    non_curves, type="animCurve", source=True, destination=False
                 )
-                if connected_curves:
-                    anim_curves.update(connected_curves)
+                or []
+            )
+            anim_curves.update(connected)
 
-                # If recursive, look through all descendants for animation curves
-                if recursive:
-                    descendants = (
-                        cmds.listRelatives(
-                            obj, allDescendents=True, type="transform", fullPath=True
+            if recursive:
+                # Batch: get all descendants at once
+                descendants = (
+                    cmds.listRelatives(
+                        non_curves,
+                        allDescendents=True,
+                        type="transform",
+                        fullPath=True,
+                    )
+                    or []
+                )
+                if descendants:
+                    # Batch: single listConnections for all descendants
+                    desc_curves = (
+                        cmds.listConnections(
+                            descendants,
+                            type="animCurve",
+                            source=True,
+                            destination=False,
                         )
                         or []
                     )
-                    for desc in descendants:
-                        connected_curves = cmds.listConnections(
-                            desc, type="animCurve", source=True, destination=False
-                        )
-                        if connected_curves:
-                            anim_curves.update(connected_curves)
+                    anim_curves.update(desc_curves)
 
         # Return the results as a list, preserving the unique set of animCurves
         result = list(anim_curves)
@@ -871,6 +884,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         value_tolerance: float = 1e-5,
         remove: bool = False,
         recursive: bool = False,
+        as_strings: bool = False,
     ) -> List[Tuple[float, float]]:
         """Detects redundant flat keys in curves and optionally deletes them.
 
@@ -879,6 +893,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             value_tolerance: The value tolerance to consider for redundant flat keys.
             remove: If True, the redundant keys are deleted.
             recursive: Whether to recursively search through children of objects for curves.
+            as_strings: If True, returns curve names as strings instead of PyNodes.
 
         Returns:
             A list of redundant key ranges as tuples (start_time, end_time).
@@ -936,9 +951,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     cmds.cutKey(curve, time=(times[idx], times[idx]), option="keys")
 
             if remove_indices:
-                redundant.append(
-                    (pm.PyNode(curve), [times[idx] for idx in remove_indices])
-                )
+                curve_ref = curve if as_strings else pm.PyNode(curve)
+                redundant.append((curve_ref, [times[idx] for idx in remove_indices]))
 
         return redundant
 
@@ -1028,7 +1042,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         simplify_keys: bool = False,
         recursive: bool = True,
         quiet: bool = False,
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         """Optimize animation keys for the given objects by removing static curves,
         redundant flat keys, and simplifying curves.
 
@@ -1043,16 +1057,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             quiet (bool): If True, suppress output messages.
 
         Returns:
-            list: A list of modified curves.
+            list: A list of modified curve names (strings).
         """
         import maya.cmds as cmds
 
-        modified = []
         static_curves_deleted = 0
         flat_keys_deleted = 0
         simplified_curves_count = 0
 
-        # Convert the input objects into curves (avoid duplicates)
+        # Convert the input objects into curves once (avoid 3 redundant calls)
         if isinstance(objects, (str, pm.PyNode)):
             objects = [str(objects)]
         elif isinstance(objects, list):
@@ -1083,7 +1096,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Phase 2: Remove redundant flat keys (if remove_flat_keys is True)
         if remove_flat_keys:
             redundant_keys_to_delete = cls.get_redundant_flat_keys(
-                anim_curves, value_tolerance=value_tolerance, remove=True
+                anim_curves,
+                value_tolerance=value_tolerance,
+                remove=True,
+                as_strings=True,
             )
             flat_keys_deleted += sum(len(keys) for _, keys in redundant_keys_to_delete)
 
@@ -1097,14 +1113,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             )
             simplified_curves_count += len(simplified)
 
-        modified.extend(anim_curves)
-
         if not quiet:
             print(f"[optimize] → {static_curves_deleted} static curves deleted")
             print(f"[optimize] → {flat_keys_deleted} flat keys removed")
             print(f"[optimize] → {simplified_curves_count} curves simplified")
 
-        return [pm.PyNode(c) for c in modified if cmds.objExists(c)]
+        # Return strings to avoid expensive PyNode construction per curve
+        return [c for c in anim_curves if cmds.objExists(c)]
 
     @staticmethod
     def get_keyframe_times(
@@ -1453,6 +1468,70 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Types last so they take precedence
         if types:
             pm.keyTangent(attr_name, time=(time,), edit=True, **types)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def step_keys(objects=None, keys=None) -> dict:
+        """Set stepped (hold) out-tangents on animation keys.
+
+        Parameters:
+            objects: Transforms / anim curves to operate on.  Falls back
+                     to ``pm.selected()`` when *None*.
+            keys: Which keys to step.  Accepted values:
+
+                  - ``None``  — step **all** keys on *objects*.
+                  - A ``float`` or ``int`` — treated as a time; only keys
+                    at that frame are stepped.
+                  - A ``list[str]`` — treated as animation-curve node
+                    names (e.g. from ``cmds.keyframe(selected=True,
+                    name=True)``); those curves are stepped directly
+                    and *objects* is ignored.
+
+        Returns:
+            dict: ``{"curves": int, "objects": int}`` counts.
+        """
+        import maya.cmds as cmds
+
+        result = {"curves": 0, "objects": 0}
+
+        # --- Curve names passed directly (e.g. graph-editor selection) ---
+        if isinstance(keys, (list, tuple)) and keys:
+            unique = set(keys)
+            for curve in unique:
+                cmds.keyTangent(curve, edit=True, outTangentType="step")
+            result["curves"] = len(unique)
+            return result
+
+        # --- Resolve objects ---
+        if objects is None:
+            objects = pm.selected()
+        if not objects:
+            return result
+
+        curves = AnimUtils.objects_to_curves(objects, as_strings=True)
+        if not curves:
+            return result
+
+        # --- Time value: step only keys at that frame ---
+        if isinstance(keys, (int, float)):
+            time_arg = (keys, keys)
+            touched = [
+                c
+                for c in curves
+                if cmds.keyframe(c, query=True, time=time_arg, keyframeCount=True)
+            ]
+            for curve in touched:
+                cmds.keyTangent(curve, edit=True, time=time_arg, outTangentType="step")
+            result["curves"] = len(touched)
+            result["objects"] = len(objects)
+            return result
+
+        # --- None: step all keys ---
+        for curve in curves:
+            cmds.keyTangent(curve, edit=True, outTangentType="step")
+        result["curves"] = len(curves)
+        result["objects"] = len(objects)
+        return result
 
     @staticmethod
     def set_current_frame(
@@ -3090,23 +3169,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             pm.warning("No objects specified or selected.")
             return 0
 
-        # Ensure we have PyMel objects
         objects = cmds.ls(objects, flatten=True)
-
-        keys_snapped = 0
-        keys_to_move = (
-            {}
-        )  # Store keyframe data to move: {(obj, attr, old_time): new_time}
 
         # Optimization: Batch query all curves
         if selected_only:
-            # If selected only, we can't easily batch query curves that have selected keys without iterating?
-            # Actually, cmds.keyframe(objects, query=True, name=True, selected=True) works!
             all_curves = (
                 cmds.keyframe(objects, query=True, name=True, selected=True) or []
             )
         else:
-            # Use listConnections for speed
             all_curves = (
                 cmds.listConnections(
                     objects, type="animCurve", source=True, destination=False
@@ -3116,110 +3186,50 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         all_curves = list(set(all_curves))
 
+        keys_snapped = 0
+
         for curve in all_curves:
             # Query keyframe times
-            mode = "selected" if selected_only else "all"
-            keyframe_times = AnimUtils.get_keyframe_times(
-                curve, mode=mode, from_curves=True, time_range=time_range
-            )
+            if selected_only:
+                kw = {"selected": True}
+            else:
+                kw = {}
+            if time_range:
+                kw["time"] = time_range
 
+            keyframe_times = cmds.keyframe(curve, query=True, timeChange=True, **kw)
             if not keyframe_times:
                 continue
 
-            # Get the attribute name for this curve
-            connections = cmds.listConnections(
-                curve, plugs=True, destination=True, source=False
-            )
-            if not connections:
+            # Collect fractional keys for this curve and snap them in one pass
+            # Process in reverse time order to avoid time-shift collisions
+            moves = []
+            for t in keyframe_times:
+                if t != int(t):
+                    new_time = ptk.MathUtils.round_value(t, mode=method)
+                    moves.append((t, new_time))
+
+            if not moves:
                 continue
 
-            attr_name = str(connections[0])
-            # Extract object name from attribute (e.g. "pCube1.tx" -> "pCube1")
-            obj = attr_name.split(".")[0]
-
-            # Find keyframes with decimal values
-            for time in keyframe_times:
-                # Check if time has decimal places
-                if time != int(time):
-                    new_time = ptk.MathUtils.round_value(time, mode=method)
-
-                    # Store the keyframe data for moving
-                    key = (obj, attr_name, time)
-                    keys_to_move[key] = new_time
-
-        # Now move all the keyframes
-        for (obj, attr_name, old_time), new_time in keys_to_move.items():
-            try:
-                # Get the keyframe value and tangent info at the old time
-                value = cmds.keyframe(
-                    attr_name, query=True, time=(old_time,), valueChange=True
-                )
-                if not value:
-                    continue
-                value = value[0]
-
-                # Get tangent information
-                in_tangent_type = cmds.keyTangent(
-                    attr_name, query=True, time=(old_time,), inTangentType=True
-                )[0]
-                out_tangent_type = cmds.keyTangent(
-                    attr_name, query=True, time=(old_time,), outTangentType=True
-                )[0]
-
-                # Try to get angle and weight info
+            # Move keys in reverse order (highest time first) to avoid collisions
+            moves.sort(key=lambda x: x[0], reverse=True)
+            for old_time, new_time in moves:
                 try:
-                    in_angle = cmds.keyTangent(
-                        attr_name, query=True, time=(old_time,), inAngle=True
-                    )[0]
-                    out_angle = cmds.keyTangent(
-                        attr_name, query=True, time=(old_time,), outAngle=True
-                    )[0]
-                    in_weight = cmds.keyTangent(
-                        attr_name, query=True, time=(old_time,), inWeight=True
-                    )[0]
-                    out_weight = cmds.keyTangent(
-                        attr_name, query=True, time=(old_time,), outWeight=True
-                    )[0]
-                    has_tangent_data = True
-                except:
-                    has_tangent_data = False
-
-                # Delete the old keyframe
-                cmds.cutKey(attr_name, time=(old_time, old_time), option="keys")
-
-                # Create new keyframe at rounded time
-                cmds.setKeyframe(attr_name, time=new_time, value=value)
-
-                # Restore tangent types
-                cmds.keyTangent(
-                    attr_name,
-                    edit=True,
-                    time=(new_time,),
-                    inTangentType=in_tangent_type,
-                    outTangentType=out_tangent_type,
-                )
-
-                # Restore tangent angles and weights if available
-                if has_tangent_data:
-                    try:
-                        cmds.keyTangent(
-                            attr_name,
-                            edit=True,
-                            time=(new_time,),
-                            inAngle=in_angle,
-                            outAngle=out_angle,
-                            inWeight=in_weight,
-                            outWeight=out_weight,
-                        )
-                    except:
-                        pass  # Some tangent types don't support angle/weight editing
-
-                keys_snapped += 1
-
-            except Exception as e:
-                pm.warning(
-                    f"Failed to snap keyframe for {attr_name} at time {old_time}: {e}"
-                )
+                    # Use keyframe -edit -timeChange to move in-place,
+                    # preserving values and tangent data without
+                    # delete+recreate overhead (~1 cmd vs ~8 cmds per key)
+                    cmds.keyframe(
+                        curve,
+                        edit=True,
+                        time=(old_time, old_time),
+                        timeChange=new_time,
+                    )
+                    keys_snapped += 1
+                except Exception as e:
+                    pm.warning(
+                        f"Failed to snap keyframe on {curve} at time {old_time}: {e}"
+                    )
 
         if keys_snapped > 0:
             pm.displayInfo(
