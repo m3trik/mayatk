@@ -108,6 +108,12 @@ class WheelRig(ptk.LoggingMixin):
         else:
             self.logger.info(f"No expressions found to delete for rig: {self.rig_name}")
 
+        # Clean up the decomposeMatrix utility node
+        decomp_name = f"{self.rig_name}_decompose"
+        if pm.objExists(decomp_name):
+            pm.delete(decomp_name)
+            self.logger.info(f"Deleted decomposeMatrix node: {decomp_name}")
+
     @CoreUtils.undoable
     def rig_rotation(
         self,
@@ -115,9 +121,23 @@ class WheelRig(ptk.LoggingMixin):
         rotation_axis: Optional[str] = None,
         wheel_height: float = 1.0,
         wheels: Optional[List["pm.nodetypes.Transform"]] = None,
+        use_world_space: bool = False,
     ) -> None:
         """
         Rig wheels to rotate based on control movement.
+
+        Parameters:
+            movement_axis: Which translate channel drives rotation
+                (e.g. "translateZ").
+            rotation_axis: Which rotate channel to drive on the wheels.
+                Auto-inferred from *movement_axis* when ``None``.
+            wheel_height: Diameter used to compute rotation amount.
+            wheels: Wheel transforms to rig.  Falls back to ``self.wheels``.
+            use_world_space: When ``True``, create a ``decomposeMatrix`` node
+                and read world-space position so that parent movement is
+                captured.  When ``False`` (default), the expression reads
+                the control's local translate directly — simpler and
+                sufficient when the control itself is being animated.
         """
         if wheels is None:
             wheels = self.wheels
@@ -198,6 +218,29 @@ class WheelRig(ptk.LoggingMixin):
         # Get the control's reference vector for alignment check
         control_vec = get_axis_vector(self.control, rotation_axis)
 
+        # Determine how to read the control's position for the expression.
+        if use_world_space:
+            # Create or reuse a decomposeMatrix node for world-space position.
+            # This captures parent movement, not just local translate.
+            decomp_name = f"{self.rig_name}_decompose"
+            if pm.objExists(decomp_name):
+                decomp = pm.PyNode(decomp_name)
+            else:
+                decomp = pm.createNode("decomposeMatrix", name=decomp_name)
+                self.control.attr("worldMatrix[0]").connect(
+                    decomp.inputMatrix, force=True
+                )
+
+            _ws_attr_map = {
+                "translateX": f"{decomp_name}.outputTranslateX",
+                "translateY": f"{decomp_name}.outputTranslateY",
+                "translateZ": f"{decomp_name}.outputTranslateZ",
+            }
+            distance_attr = _ws_attr_map[movement_axis]
+        else:
+            # Read from the control's local translate directly.
+            distance_attr = f"{self.control}.{movement_axis}"
+
         for wheel in wheels:
             attr = wheel.attr(rotation_axis)
 
@@ -218,10 +261,8 @@ class WheelRig(ptk.LoggingMixin):
                 pm.delete(expr_name)
 
             # Build new expression
-            # Incorporated auto_flip constant to handle symmetry automatically
-            # Uses the specifically resolved height_attr_name
             expr_text = (
-                f"float $distance = {self.control}.{movement_axis};\n"
+                f"float $distance = {distance_attr};\n"
                 f"float $height = {self.control}.{height_attr_name};\n"
                 f"float $enable = {self.control}.enableRotation;\n"
                 f"float $dir = {self.control}.spinDirection;\n"
@@ -250,12 +291,16 @@ class WheelRigSlots:
         # Avoid creating a placeholder UI ("wheel_rig_slots") which has no widgets
         self.ui = self.sb.loaded_ui.wheel_rig
 
-        # Populate movement axis combo box (remove negative options)
+        # Populate axis combo box showing both movement and rotation axes
         self.ui.cmb000.clear()
         self.ui.cmb000.addItems(
-            ["Movement Axis: X", "Movement Axis: Y", "Movement Axis: Z"]
+            [
+                "Move X \u2192 Rotate Z",
+                "Move Y \u2192 Rotate Y",
+                "Move Z \u2192 Rotate X",
+            ]
         )
-        self.ui.cmb000.setCurrentIndex(2)  # Default to Z
+        self.ui.cmb000.setCurrentIndex(2)  # Default to Move Z \u2192 Rotate X
 
         # Remove redundant UI elements
         for widget_name in ["chk000", "cmb001"]:
@@ -264,7 +309,7 @@ class WheelRigSlots:
 
         # 1) update placeholder right away
         self._selection_job = pm.scriptJob(
-            event=["SelectionChanged", self.update_rig_name_placeholder],
+            event=["SelectionChanged", self._on_selection_changed],
             protected=True,
         )
         self.update_rig_name_placeholder()
@@ -274,18 +319,72 @@ class WheelRigSlots:
 
         # 3) Setup Tooltips
         self.ui.b000.setToolTip(
-            "<p><b>Rig Rotation Behavior:</b></p>"
-            "<p>1. Select <b>Control</b> object first.</p>"
-            "<p>2. Shift-Select one or more <b>Wheel</b> objects.</p>"
-            "<p>3. Run to create or update the rig.</p>"
-            "<br>"
-            "<p><b>Features:</b></p>"
-            "<ul>"
-            "<li>Adds <tt>wheelHeight</tt> and <tt>enableRotation</tt> attributes to Control for animation.</li>"
-            "<li>Stores <tt>wheelRigId</tt> on Control to allow unsafe updates/re-running without duplication.</li>"
-            "<li>Automatically detects and updates existing expressions if run again on the same control.</li>"
-            "</ul>"
+            "<b>Rig Rotation</b><br>"
+            "Select wheel objects, then the driver (last), and click to create or update the rig."
         )
+
+        # 4) World-space mode flag (toggled via header menu)
+        self._use_world_space = False
+
+    def header_init(self, widget):
+        """Configure header menu with mode toggle and instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.setTitle("Wheel Rig:")
+
+        widget.menu.add("Separator", setTitle="Mode")
+        chk_ws = widget.menu.add(
+            "QCheckBox",
+            setText="World Space (decomposeMatrix)",
+            setObjectName="chk_world_space",
+            setToolTip=(
+                "When checked, wheel rotation reads from a decomposeMatrix\n"
+                "node connected to the driver's worldMatrix.  This captures\n"
+                "movement from parent transforms, not just local translate.\n\n"
+                "When unchecked (default), the expression reads the driver's\n"
+                "local translate directly \u2014 simpler and sufficient when the\n"
+                "driver itself is being animated."
+            ),
+            setChecked=False,
+        )
+        chk_ws.toggled.connect(self._on_world_space_toggled)
+
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Wheel Rig \u2014 Links wheel rotation to a driver's linear movement.\n\n"
+                "Selection Order:\n"
+                "  1. Select one or more wheel objects (or locators driving them).\n"
+                "  2. Shift-select the driver / control object last.\n"
+                "  3. Click 'Rig Rotation'.\n\n"
+                "Axis Combo:\n"
+                "  Choose which translation axis drives which rotation axis.\n"
+                "  e.g. 'Move Z \u2192 Rotate X' means forward Z movement\n"
+                "  produces pitch rotation on X.\n\n"
+                "Wheel Height:\n"
+                "  The diameter used to compute rotation speed.\n"
+                "  Use 'Get Wheel Size' (slider option box) to auto-detect\n"
+                "  from the selected object's bounding box.\n\n"
+                "Modes:\n"
+                "  \u2022 Local (default): reads driver's local translate.\n"
+                "    Best when the driver itself is animated.\n"
+                "  \u2022 World Space: uses a decomposeMatrix node so parent\n"
+                "    movement is captured.  Enable via the header menu.\n\n"
+                "Re-running:\n"
+                "  Running the tool again on the same driver updates\n"
+                "  the existing expressions without duplication.\n"
+                "  A 'wheelRigId' attribute is stored on the driver for this.\n\n"
+                "Attributes added to driver:\n"
+                "  \u2022 wheelHeight \u2014 animation-friendly diameter control\n"
+                "  \u2022 enableRotation \u2014 on/off toggle (0..1)\n"
+                "  \u2022 spinDirection \u2014 flip spin direction (+1 / -1)"
+            ),
+        )
+
+    def _on_world_space_toggled(self, checked: bool):
+        self._use_world_space = checked
 
     @property
     def rig_name(self) -> str:
@@ -306,25 +405,37 @@ class WheelRigSlots:
         }
         return axis_map.get(self.ui.cmb000.currentIndex(), "translateZ")
 
+    @property
+    def rotation_axis(self) -> Optional[str]:
+        """Get the rotation axis that corresponds to the selected movement axis."""
+        rot_map = {
+            0: "rotateZ",  # Move X -> Rotate Z
+            1: "rotateY",  # Move Y -> Rotate Y
+            2: "rotateX",  # Move Z -> Rotate X
+        }
+        return rot_map.get(self.ui.cmb000.currentIndex(), "rotateX")
+
     def resolve_selection(
         self,
     ) -> Tuple["pm.nodetypes.Transform", List["pm.nodetypes.Transform"]]:
-        """Resolve the current selection into control and wheels.
+        """Resolve the current selection into control (driver) and wheels.
+
+        The driver is expected to be the **last** selected object.
+        All preceding objects are treated as wheel transforms.
 
         Returns:
             Tuple of (control, list of wheels).
         Raises:
             ValueError if selection is invalid.
         """
-        # Note: "wheels" here can be any transform you wish to rotate (e.g. locators),
-        # not necessarily the wheel geometry itself. The wheel geo can be driven by
-        # these transforms downstream if you don't want to rotate the mesh directly.
         sel = pm.selected(flatten=True)
         if len(sel) < 2:
-            raise ValueError("Select a control followed by one or more wheel objects.")
+            raise ValueError(
+                "Select one or more wheel objects, then the driver (last)."
+            )
 
-        control = NodeUtils.get_transform_node(sel[0])
-        wheels = NodeUtils.get_transform_node(sel[1:])
+        control = NodeUtils.get_transform_node(sel[-1])
+        wheels = NodeUtils.get_transform_node(sel[:-1])
 
         if not control or not all(wheels):
             raise ValueError(
@@ -382,14 +493,20 @@ class WheelRigSlots:
         )
         widget.option_box.menu.b010.clicked.connect(self.set_wheel_height)
 
+    def _on_selection_changed(self):
+        """Handle selection change: invalidate cached rig and update UI."""
+        # Discard the cached WheelRig so the property re-resolves from
+        # the current selection next time it is accessed.
+        self._wheel_rig = None
+        self.update_rig_name_placeholder()
+
     def update_rig_name_placeholder(self):
-        """Update the rig name placeholder based on first selected object."""
+        """Update the rig name placeholder based on the driver (last selected)."""
         selected = pm.selected(flatten=True)
         if not selected:
             return
 
-        selected.sort(key=lambda x: x.name().lower())  # Sort alphabetically
-        control = selected[0]
+        control = selected[-1]
 
         default_name = f"{control.name()}_wheel_rig"
         self.ui.txt000.setPlaceholderText(default_name)
@@ -401,11 +518,29 @@ class WheelRigSlots:
 
     @property
     def wheel_rig(self) -> Optional[WheelRig]:
-        """Get or create the wheel rig attached to the selected control."""
+        """Get or create the wheel rig attached to the selected control.
+
+        Returns None if the current selection is invalid, so the property
+        is safe for introspection (e.g. ``inspect.getmembers``).
+        """
         try:
-            return self._wheel_rig
+            rig = self._wheel_rig
+            if rig is None:
+                raise AttributeError
+            # Validate the cached rig's control still exists in the scene.
+            # PyMEL stores DAG paths; if the node was renamed, reparented,
+            # or deleted the reference goes stale and .name() will raise.
+            try:
+                rig.control.name()
+            except Exception:
+                self._wheel_rig = None
+                raise AttributeError
+            return rig
         except AttributeError:
-            control, wheels = self.resolve_selection()
+            try:
+                control, wheels = self.resolve_selection()
+            except ValueError:
+                return None
 
             # Check persistent ID on control to recover correct name
             if control.hasAttr("wheelRigId"):
@@ -435,21 +570,21 @@ class WheelRigSlots:
     @CoreUtils.undoable
     def b000(self):
         """Create or update Wheel Rig."""
-        try:
-            wheel_rig = self.wheel_rig
-        except ValueError as e:
-            self.sb.message_box(str(e))
-            return
-
+        wheel_rig = self.wheel_rig
         if not wheel_rig:
+            self.sb.message_box(
+                "Select one or more wheel objects, then the driver (last)."
+            )
             return
 
         _, wheels = self.resolve_selection()
 
         wheel_rig.rig_rotation(
             movement_axis=self.movement_axis,
+            rotation_axis=self.rotation_axis,
             wheel_height=float(self.ui.s000.text()),
             wheels=wheels,
+            use_world_space=self._use_world_space,
         )
 
 

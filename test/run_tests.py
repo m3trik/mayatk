@@ -85,7 +85,11 @@ class MayaTestRunner:
             )
 
         if self.connection.connect(
-            mode="auto", port=self.port, host=self.host, force_new_instance=force_new
+            mode="auto",
+            port=self.port,
+            host=self.host,
+            force_new_instance=force_new,
+            confirm_existing=not self.reuse_instance,
         ):
             print(f"[OK] Connected to Maya in {self.connection.mode} mode")
             return True

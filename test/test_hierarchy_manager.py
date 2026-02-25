@@ -98,7 +98,13 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIn("root|child2", diff_result["extra"])
 
     def test_analyze_hierarchies_reparented(self):
-        """Test detection of reparented objects."""
+        """Test detection of reparented objects.
+
+        When a node has the same leaf name but different parent in current vs
+        reference, it should appear in the ``reparented`` list with both paths,
+        and be removed from ``missing``/``extra``.
+        Updated: 2026-02-24 — matches new diff-categorization logic.
+        """
         # Current scene: child1 is under root1
         root1_current = pm.group(empty=True, name="root1")
         root2_current = pm.group(empty=True, name="root2")
@@ -124,10 +130,185 @@ class TestHierarchyManager(MayaTkTestCase):
             filter_lights=True,
         )
 
-        # Verify results
-        # child1 is missing from root2 and extra in root1
-        self.assertIn("root2|child1", diff_result["missing"])
-        self.assertIn("root1|child1", diff_result["extra"])
+        # child1 should be categorized as reparented, NOT missing/extra
+        self.assertNotIn(
+            "root2|child1",
+            diff_result["missing"],
+            "Reparented item should not appear in 'missing'",
+        )
+        self.assertNotIn(
+            "root1|child1",
+            diff_result["extra"],
+            "Reparented item should not appear in 'extra'",
+        )
+
+        reparented = diff_result.get("reparented", [])
+        self.assertEqual(
+            len(reparented),
+            1,
+            f"Expected exactly 1 reparented item, got {len(reparented)}",
+        )
+        self.assertEqual(reparented[0]["leaf"], "child1")
+        self.assertEqual(reparented[0]["reference_path"], "root2|child1")
+        self.assertEqual(reparented[0]["current_path"], "root1|child1")
+
+    def test_analyze_hierarchies_fuzzy_rename(self):
+        """Test that analyze_hierarchies detects renamed objects via fuzzy matching.
+
+        When a node in the reference has a similar but not identical leaf name to
+        one in the current scene (same parent), it should appear in ``fuzzy_matches``
+        and be removed from ``missing``/``extra``.
+        Added: 2026-02-24
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        # Current scene: root > my_object_v1
+        root_current = pm.group(empty=True, name="root")
+        pm.group(empty=True, name="my_object_v1", parent=root_current)
+
+        # Reference scene: root > my_object_v2  (fuzzy match for v1)
+        root_ref = pm.group(empty=True, name="ref:root")
+        pm.group(empty=True, name="ref:my_object_v2", parent=root_ref)
+
+        reference_objects = [root_ref] + list(root_ref.getChildren())
+
+        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+
+        diff_result = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=reference_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        fuzzy = diff_result.get("fuzzy_matches", [])
+        self.assertEqual(
+            len(fuzzy), 1, f"Expected 1 fuzzy match, got {len(fuzzy)}: {fuzzy}"
+        )
+        self.assertEqual(fuzzy[0]["target_name"], "root|my_object_v2")
+        self.assertEqual(fuzzy[0]["current_name"], "root|my_object_v1")
+        self.assertGreater(fuzzy[0]["score"], 0.7)
+
+        # Should NOT appear in missing/extra anymore
+        self.assertNotIn("root|my_object_v2", diff_result["missing"])
+        self.assertNotIn("root|my_object_v1", diff_result["extra"])
+
+    def test_analyze_hierarchies_all_categories(self):
+        """End-to-end test verifying all four diff categories are populated correctly.
+
+        Scene layout:
+        - ``shared`` — identical in both (no diff)
+        - ``only_current`` — extra in current, truly missing from reference
+        - ``only_ref`` — missing from current, truly only in reference
+        - ``moved`` — reparented (under grp_a in current, grp_b in reference)
+        - ``widget_v1`` / ``widget_v2`` — fuzzy renamed pair
+
+        Added: 2026-02-24
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        # --- Current scene ---
+        grp_a = pm.group(empty=True, name="grp_a")
+        grp_b = pm.group(empty=True, name="grp_b")
+        pm.group(empty=True, name="shared", parent=grp_a)
+        pm.group(empty=True, name="only_current", parent=grp_a)
+        pm.group(empty=True, name="moved", parent=grp_a)  # reparented
+        pm.group(empty=True, name="widget_v1", parent=grp_a)  # fuzzy rename
+
+        # --- Reference scene ---
+        grp_a_ref = pm.group(empty=True, name="ref:grp_a")
+        grp_b_ref = pm.group(empty=True, name="ref:grp_b")
+        pm.group(empty=True, name="ref:shared", parent=grp_a_ref)
+        pm.group(empty=True, name="ref:only_ref", parent=grp_a_ref)
+        pm.group(empty=True, name="ref:moved", parent=grp_b_ref)  # reparented
+        pm.group(empty=True, name="ref:widget_v2", parent=grp_a_ref)  # fuzzy rename
+
+        ref_objects = [grp_a_ref, grp_b_ref] + list(
+            grp_a_ref.getChildren() + grp_b_ref.getChildren()
+        )
+
+        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+        diff_result = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # --- Verify all four keys exist ---
+        for key in ("missing", "extra", "reparented", "fuzzy_matches"):
+            self.assertIn(key, diff_result, f"Key '{key}' missing from diff_result")
+
+        # Truly missing (only in reference, no match in current)
+        self.assertIn("grp_a|only_ref", diff_result["missing"])
+
+        # Truly extra (only in current, no match in reference)
+        self.assertIn("grp_a|only_current", diff_result["extra"])
+
+        # Reparented
+        reparented = diff_result["reparented"]
+        reparented_leaves = {r["leaf"] for r in reparented}
+        self.assertIn(
+            "moved",
+            reparented_leaves,
+            f"'moved' should be reparented. Got: {reparented}",
+        )
+
+        # Fuzzy renamed
+        fuzzy = diff_result["fuzzy_matches"]
+        fuzzy_pairs = {(f["target_name"], f["current_name"]) for f in fuzzy}
+        self.assertIn(
+            ("grp_a|widget_v2", "grp_a|widget_v1"),
+            fuzzy_pairs,
+            f"widget_v1↔v2 should be fuzzy matched. Got: {fuzzy}",
+        )
+
+        # Shared item should NOT appear anywhere
+        for key in ("missing", "extra"):
+            for path in diff_result[key]:
+                self.assertNotIn(
+                    "shared",
+                    path,
+                    f"'shared' should not be in '{key}': {diff_result[key]}",
+                )
+
+    def test_diff_result_counts(self):
+        """Verify total_* count fields match actual list lengths.
+
+        Added: 2026-02-24
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        root_cur = pm.group(empty=True, name="root")
+        pm.group(empty=True, name="a", parent=root_cur)
+        pm.group(empty=True, name="b", parent=root_cur)
+
+        root_ref = pm.group(empty=True, name="ref:root")
+        pm.group(empty=True, name="ref:a", parent=root_ref)
+        pm.group(empty=True, name="ref:c", parent=root_ref)
+
+        ref_objects = [root_ref] + list(root_ref.getChildren())
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        diff_result = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        self.assertEqual(diff_result["total_missing"], len(diff_result["missing"]))
+        self.assertEqual(diff_result["total_extra"], len(diff_result["extra"]))
+        self.assertEqual(
+            diff_result["total_reparented"], len(diff_result["reparented"])
+        )
+        self.assertEqual(diff_result["total_fuzzy"], len(diff_result["fuzzy_matches"]))
 
     def test_fuzzy_matching(self):
         """Test fuzzy matching logic."""

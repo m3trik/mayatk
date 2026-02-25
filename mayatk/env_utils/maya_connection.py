@@ -6,6 +6,7 @@ Maya Connection Module
 Provides utilities to connect to Maya either via command port or standalone mode.
 Supports both interactive Maya sessions and batch testing.
 """
+import os
 import socket
 import sys
 import base64
@@ -125,6 +126,55 @@ class MayaConnection:
             return result != 0  # 0 means connected → port in use
         except Exception:
             return True
+
+    @staticmethod
+    def _confirm_existing_session(port: int) -> bool:
+        """Show a confirmation dialog before connecting to an existing Maya session.
+
+        Attempts a Qt dialog first.  Falls back to a console prompt if no
+        display is available (e.g. headless CI).
+
+        Returns:
+            True if the user confirms, False if they cancel.
+        """
+        msg = (
+            f"A process is trying to connect to Maya on port {port}.\n\n"
+            f"  Host:  {os.environ.get('COMPUTERNAME', 'localhost')}\n"
+            f"  Port:  {port}\n"
+            f"  PID:   {os.getpid()}\n\n"
+            "Connecting may modify or reset the scene in that session "
+            "and any unsaved work could be lost.\n\n"
+            "Allow this connection?"
+        )
+        try:
+            from qtpy import QtWidgets
+
+            app = QtWidgets.QApplication.instance()
+            if app is None:
+                app = QtWidgets.QApplication([])
+
+            result = QtWidgets.QMessageBox.warning(
+                None,
+                "Connect to Existing Maya Session?",
+                msg,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,  # default to No — safer
+            )
+            return result == QtWidgets.QMessageBox.Yes
+        except Exception:
+            # Fallback: console prompt
+            try:
+                answer = (
+                    input(f"[MayaConnection] {msg}\nProceed? [y/N]: ").strip().lower()
+                )
+                return answer in ("y", "yes")
+            except (EOFError, OSError):
+                # Non-interactive environment with no Qt — deny by default
+                print(
+                    "[MayaConnection] No interactive prompt available. "
+                    "Connection to existing session denied for safety."
+                )
+                return False
 
     @staticmethod
     def _find_port_pair(
@@ -275,6 +325,7 @@ class MayaConnection:
         app_path: Optional[str] = None,
         force_new_instance: bool = True,
         launch_args: Optional[List[str]] = None,
+        confirm_existing: bool = True,
     ) -> bool:
         """
         Connect to Maya using the specified mode.
@@ -282,6 +333,11 @@ class MayaConnection:
         By default this launches a **new** Maya instance on an available port
         so that an existing session is never disturbed.  Pass
         ``force_new_instance=False`` to reuse an already-running instance.
+
+        When reusing an existing instance a confirmation dialog is shown by
+        default so the user can abort if they have unsaved work.  Pass
+        ``confirm_existing=False`` to suppress the dialog (e.g. in automated
+        scripts that knowingly reuse a session).
 
         Parameters:
             mode: Connection mode - "port", "standalone", "interactive", or "auto"
@@ -294,6 +350,9 @@ class MayaConnection:
                 instance regardless of existing ones.  This prevents accidentally modifying
                 a user's open scene.
             launch_args: Optional list of additional arguments to pass to Maya when launching (e.g. ['-noAutoloadPlugins']).
+            confirm_existing: If True (default), shows a confirmation dialog when
+                connecting to an existing Maya session (only applies when
+                ``force_new_instance=False``).  Set to False to skip the dialog.
 
         Returns:
             bool: True if connection successful
@@ -305,8 +364,13 @@ class MayaConnection:
                 f"[MayaConnection] Force new instance requested. Selected available port: {port}"
             )
         else:
-            # Warn loudly when reusing — callers should know the risk.
+            # An existing Maya session is on this port — require confirmation.
             if not self._is_port_free(port):
+                if confirm_existing and not self._confirm_existing_session(port):
+                    print(
+                        "[MayaConnection] Connection to existing session CANCELLED by user."
+                    )
+                    return False
                 print(
                     "[MayaConnection] WARNING: Connecting to an EXISTING Maya "
                     f"session on port {port}. Any unsaved work in that session "

@@ -475,12 +475,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         is_current_scene = norm_fp == current_scene
 
         if is_current_scene:
-            # Disable the item and set a tooltip
+            # Keep item enabled (for rename/delete/open) but not selectable
+            # (prevents accidental reference toggling via click-selection).
+            # handle_item_selection already filters out the current scene.
             item.setFlags(
-                item.flags()
-                & ~(
-                    self.sb.QtCore.Qt.ItemIsSelectable | self.sb.QtCore.Qt.ItemIsEnabled
-                )
+                (item.flags() | self.sb.QtCore.Qt.ItemIsEnabled)
+                & ~self.sb.QtCore.Qt.ItemIsSelectable
             )
             item.setToolTip(f"Current scene file - cannot be referenced\n{file_path}")
             # Apply current style (italic + orange) and mark as styled

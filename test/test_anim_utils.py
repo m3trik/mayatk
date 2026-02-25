@@ -15,6 +15,7 @@ Note: stagger_keys tests are in test_stagger_keys.py
 """
 import unittest
 import math
+import os
 
 # Initialize QApplication before importing mayatk to handle UI widgets created at module level
 try:
@@ -39,7 +40,7 @@ try:
 except AttributeError:
     from mayatk.anim_utils._anim_utils import AnimUtils
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, skipUnlessExtended
 
 
 class TestAnimUtils(MayaTkTestCase):
@@ -86,15 +87,43 @@ class TestAnimUtils(MayaTkTestCase):
         curves = AnimUtils.get_anim_curves([self.cube])
         self.assertEqual(len(curves), 2)
 
-    def test_get_static_curves(self):
-        """Test identifying static curves."""
-        # Create a static curve (same value at all keys)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
+    def test_get_static_curves_default_value(self):
+        """Test identifying static curves at their default value.
+
+        A curve holding the attribute's default value (e.g. translateZ=0)
+        is safe to delete because removing it leaves the attribute at the
+        same resting value.
+        """
+        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=0)
+        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=0)
 
         static_curves = AnimUtils.get_static_curves([self.cube])
         self.assertEqual(len(static_curves), 1)
         self.assertTrue("translateZ" in static_curves[0].name())
+
+    def test_get_static_curves_preserves_nondefault(self):
+        """Verify static curves holding non-default values are NOT returned.
+
+        Bug: get_static_curves deleted curves where all values were
+        identical, regardless of whether the constant value differed from
+        the attribute's default.  When combined with delete_inputs=True
+        in SmartBake, this caused baked-constraint positions to revert
+        to zero.
+        Fixed: 2026-02-24
+        """
+        # translateZ default is 0.0; constant 5.0 is non-default
+        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
+        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
+
+        static_curves = AnimUtils.get_static_curves([self.cube])
+        # Should NOT be flagged — deleting it would change the object's
+        # resting position from 5 back to 0.
+        tz_curves = [c for c in static_curves if "translateZ" in str(c)]
+        self.assertEqual(
+            len(tz_curves),
+            0,
+            "Static curve at non-default value should be preserved",
+        )
 
     def test_get_redundant_flat_keys(self):
         """Test identifying redundant flat keys."""
@@ -356,6 +385,197 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertNotIn(0.0, keys)
         self.assertNotIn(11.0, keys)
 
+    def test_tie_keyframes_preserves_stepped_tangents(self):
+        """Verify tie_keyframes preserves stepped tangent types on bookend keys.
+
+        Bug: cmds.setKeyframe() creates new keys with the default tangent type
+        (usually 'auto'), corrupting curves that are entirely stepped (e.g.
+        visibility, boolean attributes). After the fix, fully-stepped curves
+        have their bookend keys set back to 'step' (or 'stepnext').
+        Fixed: 2026-02-24
+        """
+        import maya.cmds as cmds
+
+        # Create a visibility-style curve: entirely stepped
+        pm.cutKey(self.cube, attribute="visibility", clear=True)
+        pm.setKeyframe(self.cube, attribute="visibility", time=3, value=1)
+        pm.setKeyframe(self.cube, attribute="visibility", time=5, value=0)
+        pm.setKeyframe(self.cube, attribute="visibility", time=8, value=1)
+        vis_curve = cmds.listConnections(
+            str(self.cube) + ".visibility",
+            type="animCurve",
+            source=True,
+            destination=False,
+        )
+        self.assertTrue(vis_curve, "No anim curve on visibility")
+        vis_curve = vis_curve[0]
+        cmds.keyTangent(vis_curve, outTangentType="step")
+
+        # Verify baseline: all out-tangents are step
+        out_before = cmds.keyTangent(vis_curve, q=True, outTangentType=True)
+        self.assertTrue(
+            all(t == "step" for t in out_before),
+            f"Baseline not all-stepped: {out_before}",
+        )
+
+        # Tie keyframes (playback range 1-10 => bookend at 1 and 10)
+        AnimUtils.tie_keyframes([self.cube])
+
+        # After tying, ALL out-tangent types on the vis curve must still be step
+        out_after = cmds.keyTangent(vis_curve, q=True, outTangentType=True)
+        self.assertTrue(
+            all(t == "step" for t in out_after),
+            f"Stepped tangents corrupted after tie_keyframes: {out_after}",
+        )
+
+    def test_optimize_keys_preserves_stepped_keys_in_flat_segments(self):
+        """Verify get_redundant_flat_keys removes interior flat keys and
+        restores stepped tangent types on the remaining boundary keys.
+
+        Bug: get_redundant_flat_keys either (a) refused to remove interior
+        stepped keys, disabling cleanup entirely on stepped curves, or
+        (b) removed them but let Maya auto-tangent change boundary keys
+        from 'step' to 'auto'/'fixed', corrupting the curve.
+        Fixed: 2026-02-25 (cleanup allowed, step_keys restores boundaries)
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+
+        # Flat segment: all values 0.0, all keys stepped
+        for t in [1, 3, 5, 7, 10]:
+            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0.0)
+        curve = (
+            cmds.listConnections(
+                f"{self.cube}.translateX", type="animCurve", source=True
+            )
+            or [None]
+        )[0]
+        self.assertIsNotNone(curve)
+
+        # Set all keys to stepped
+        cmds.keyTangent(curve, outTangentType="step")
+
+        keys_before = cmds.keyframe(curve, q=True, timeChange=True)
+
+        # Remove redundant flat keys
+        AnimUtils.get_redundant_flat_keys([self.cube], remove=True, as_strings=True)
+
+        keys_after = cmds.keyframe(curve, q=True, timeChange=True)
+        out_types = cmds.keyTangent(curve, q=True, outTangentType=True)
+
+        # Interior keys should be removed (cleanup works)
+        self.assertLess(
+            len(keys_after),
+            len(keys_before),
+            f"No keys were removed — cleanup is broken. "
+            f"Before: {keys_before}, After: {keys_after}",
+        )
+
+        # First and last boundary keys must remain
+        self.assertIn(1.0, keys_after, "First boundary key removed")
+        self.assertIn(10.0, keys_after, "Last boundary key removed")
+
+        # Remaining boundary keys must retain stepped tangent type
+        for t, ot in zip(keys_after, out_types):
+            if t != keys_after[-1]:  # Last key's out-tangent doesn't matter
+                self.assertEqual(
+                    ot,
+                    "step",
+                    f"Boundary key at t={t} lost step tangent: {ot}",
+                )
+
+    def test_snap_keys_to_frames_preserves_stepped_tangents(self):
+        """Verify snap_keys_to_frames preserves stepped tangent types.
+
+        Bug: When fractional keys were snapped to whole frames, their tangent
+        types could be corrupted — stepped tangents were replaced with
+        auto/fixed, causing the character to float between poses instead
+        of snapping.
+        Fixed: 2026-02-25
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+
+        # Keys at fractional times with stepped tangents
+        for t, v in [(1.0, 0.0), (3.7, 5.0), (6.3, 5.0), (10.0, 10.0)]:
+            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+        curve = (
+            cmds.listConnections(
+                f"{self.cube}.translateX", type="animCurve", source=True
+            )
+            or [None]
+        )[0]
+        self.assertIsNotNone(curve)
+        cmds.keyTangent(curve, outTangentType="step")
+
+        step_count_before = sum(
+            1
+            for ot in cmds.keyTangent(curve, q=True, outTangentType=True)
+            if ot == "step"
+        )
+
+        AnimUtils.snap_keys_to_frames([self.cube])
+
+        # All keys should be on whole frames
+        keys_after = cmds.keyframe(curve, q=True, timeChange=True)
+        for k in keys_after:
+            self.assertEqual(k, round(k), f"Key at {k} not on whole frame")
+
+        # All outTangents must still be stepped
+        out_after = cmds.keyTangent(curve, q=True, outTangentType=True)
+        step_count_after = sum(1 for ot in out_after if ot == "step")
+        self.assertEqual(
+            step_count_after,
+            step_count_before,
+            f"Stepped tangent count changed: {step_count_before} -> {step_count_after}. "
+            f"Types after snap: {out_after}",
+        )
+
+    def test_tie_keyframes_preserves_partial_stepped_tangents(self):
+        """Verify tie_keyframes preserves stepped tangents on partially-stepped curves.
+
+        When any key on a curve has a stepped tangent, tie_keyframes uses
+        step_keys to re-step ALL keys (including new bookend keys).  This
+        is safe because curves with even one stepped key are typically
+        intended to be fully stepped (visibility, boolean, enum attributes).
+        Fixed: 2026-02-25
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+
+        # Create curve with most keys stepped, but first and last are auto
+        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        for t in range(2, 10):
+            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=float(t))
+        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
+
+        curve = (
+            cmds.listConnections(
+                f"{self.cube}.translateX", type="animCurve", source=True
+            )
+            or [None]
+        )[0]
+        self.assertIsNotNone(curve)
+
+        # Set interior keys (2-9) to stepped, leave 1 and 10 as auto
+        for t in range(2, 10):
+            cmds.keyTangent(curve, time=(t, t), outTangentType="step")
+
+        # Tie keyframes — this adds bookend keys at playback range boundaries
+        AnimUtils.tie_keyframes([self.cube])
+
+        # After tying, step_keys re-steps entire curve since it had
+        # stepped keys.  ALL out-tangents should be 'step'.
+        out_after = cmds.keyTangent(curve, q=True, outTangentType=True)
+        self.assertTrue(
+            all(ot == "step" for ot in out_after),
+            f"Expected all out-tangents to be 'step' after tie_keyframes "
+            f"on curve with stepped keys: {out_after}",
+        )
+
     def test_snap_keys_to_frames(self):
         """Test snapping keys to whole frame values."""
         # Add a key at fractional time
@@ -434,11 +654,657 @@ class TestAnimUtils(MayaTkTestCase):
                 item, str, f"Expected string, got {type(item).__name__}"
             )
 
+    def test_flat_key_removal_pins_boundary_tangents(self):
+        """Verify flat key removal pins boundary tangents to prevent overshoot.
+
+        Bug: After removing interior keys from a flat segment, the
+        remaining boundary keys kept auto tangents.  Maya recalculated
+        their slopes based on new neighbors, creating overshoot at
+        flat-to-non-flat transitions.
+        Fixed: 2026-02-24
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+
+        # Build curve: hold at 0 for frames 1-10, rise to 10 at frame 20
+        for t in range(1, 11):
+            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=20, value=10)
+
+        curve_name = (
+            cmds.listConnections(
+                f"{self.cube}.translateX", type="animCurve", source=True
+            )
+            or [None]
+        )[0]
+        self.assertIsNotNone(curve_name, "No anim curve found on translateX")
+
+        # Remove redundant flat keys
+        AnimUtils.get_redundant_flat_keys([self.cube], remove=True, as_strings=True)
+
+        # After removal, only frames 1, 10, and 20 should remain
+        keys = cmds.keyframe(curve_name, query=True, timeChange=True)
+        self.assertIn(1.0, keys)
+        self.assertIn(10.0, keys)
+        self.assertIn(20.0, keys)
+
+        # Boundary tangents should be pinned to linear
+        out_type_1 = cmds.keyTangent(
+            curve_name, time=(1, 1), query=True, outTangentType=True
+        )
+        in_type_10 = cmds.keyTangent(
+            curve_name, time=(10, 10), query=True, inTangentType=True
+        )
+        self.assertEqual(out_type_1[0], "linear", "Boundary out-tangent not pinned")
+        self.assertEqual(in_type_10[0], "linear", "Boundary in-tangent not pinned")
+
+        # Evaluate mid-flat region - value must be exactly 0 (no overshoot)
+        val_at_5 = pm.getAttr(f"{self.cube}.translateX", time=5)
+        self.assertAlmostEqual(
+            val_at_5, 0.0, places=3, msg="Overshoot in flat region after key removal"
+        )
+
+    def test_optimize_keys_preserves_constraint_hold(self):
+        """Verify optimize_keys does not delete static curves at non-default values.
+
+        Bug: A constraint holding an object at translateX=5.0 produces a
+        baked curve where all values are identical (5.0).
+        remove_static_curves=True deleted the curve, losing the held position.
+        Fixed: 2026-02-24
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+
+        # Simulate baked constraint: constant value 5.0 over 10 frames
+        for t in range(1, 11):
+            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=5.0)
+
+        # Run full optimize (including remove_static_curves)
+        AnimUtils.optimize_keys(
+            [self.cube],
+            remove_static_curves=True,
+            remove_flat_keys=True,
+            recursive=False,
+        )
+
+        # The curve should still exist because 5.0 != default 0.0
+        curves = cmds.listConnections(
+            f"{self.cube}.translateX", type="animCurve", source=True
+        )
+        self.assertTrue(
+            curves,
+            "Static curve at non-default value was deleted by optimize_keys",
+        )
+
+        # Value should still be 5.0
+        val = pm.getAttr(f"{self.cube}.translateX", time=5)
+        self.assertAlmostEqual(val, 5.0, places=3)
+
+    def test_optimize_keys_deletes_static_at_default(self):
+        """Verify optimize_keys DOES delete static curves at default values.
+
+        Complementary to test_optimize_keys_preserves_constraint_hold:
+        curves at default value (e.g. translateZ=0) are safe to remove.
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateZ", clear=True)
+
+        # Static curve at default value 0.0
+        for t in range(1, 11):
+            pm.setKeyframe(self.cube, attribute="translateZ", time=t, value=0.0)
+
+        AnimUtils.optimize_keys(
+            [self.cube],
+            remove_static_curves=True,
+            remove_flat_keys=True,
+            recursive=False,
+        )
+
+        # Curve should be deleted since value matches default
+        curves = cmds.listConnections(
+            f"{self.cube}.translateZ", type="animCurve", source=True
+        )
+        self.assertFalse(
+            curves,
+            "Static curve at default value should have been deleted",
+        )
+
+    def test_smart_bake_preserves_constant_constraint(self):
+        """Verify SmartBake + optimize_keys preserves constant constraint positions.
+
+        End-to-end: create a point constraint holding an object at a fixed
+        position, smart-bake, and confirm the position is retained.
+
+        Bug: SmartBake deleted both the constraint and its baked static
+        curve, causing the object to snap to origin.
+        Fixed: 2026-02-24
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        # Create target (static locator) at position (7, 3, -2)
+        loc = pm.spaceLocator(name="constraint_target")
+        pm.setAttr(loc + ".translateX", 7)
+        pm.setAttr(loc + ".translateY", 3)
+        pm.setAttr(loc + ".translateZ", -2)
+
+        # Create driven object
+        driven = pm.polyCube(name="driven_cube")[0]
+
+        # Constrain driven to target
+        constraint = pm.pointConstraint(loc, driven, maintainOffset=False)
+
+        # Verify constraint is working
+        self.assertAlmostEqual(pm.getAttr(driven + ".translateX"), 7.0, places=2)
+        self.assertAlmostEqual(pm.getAttr(driven + ".translateY"), 3.0, places=2)
+        self.assertAlmostEqual(pm.getAttr(driven + ".translateZ"), -2.0, places=2)
+
+        # Smart bake with delete_inputs + optimize_keys
+        baker = SmartBake(
+            objects=[str(driven)],
+            sample_by=1,
+            preserve_outside_keys=True,
+            optimize_keys=True,
+            use_override_layer=False,
+            delete_inputs=True,
+        )
+
+        analysis = baker.analyze()
+        self.assertTrue(
+            any(a.requires_bake for a in analysis.values()),
+            "SmartBake should detect the constraint as requiring bake",
+        )
+
+        result = baker.bake(analysis)
+
+        # Constraint should be deleted
+        self.assertFalse(
+            cmds.objExists(str(constraint)),
+            "Constraint should be deleted after bake",
+        )
+
+        # Position must be preserved despite static curves + delete_inputs
+        self.assertAlmostEqual(
+            pm.getAttr(driven + ".translateX"),
+            7.0,
+            places=2,
+            msg="Held X position lost after SmartBake",
+        )
+        self.assertAlmostEqual(
+            pm.getAttr(driven + ".translateY"),
+            3.0,
+            places=2,
+            msg="Held Y position lost after SmartBake",
+        )
+        self.assertAlmostEqual(
+            pm.getAttr(driven + ".translateZ"),
+            -2.0,
+            places=2,
+            msg="Held Z position lost after SmartBake",
+        )
+
+        # Verify curves still exist for non-default channels
+        for attr in ("translateX", "translateY", "translateZ"):
+            curves = cmds.listConnections(
+                f"{driven}.{attr}", type="animCurve", source=True
+            )
+            self.assertTrue(
+                curves,
+                f"Anim curve for {attr} should be preserved (non-default hold value)",
+            )
+
     def test_set_current_frame(self):
         """Test setting current timeline frame."""
         frame = AnimUtils.set_current_frame(5.0)
         current = pm.currentTime(query=True)
         self.assertEqual(current, 5.0)
+
+    def test_smart_bake_preserves_sdk_curves_after_delete_inputs(self):
+        """Verify SmartBake doesn't delete baked SDK curves when delete_inputs=True.
+
+        Bug: bakeResults converts SDK curves (animCurveU*) to time-based
+        (animCurveT*) in-place, reusing the same node name. delete_inputs
+        then deleted those nodes because they were listed as source_nodes,
+        destroying all baked animation.
+        Fixed: 2026-02-25
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        pm.playbackOptions(minTime=1, maxTime=20)
+
+        # Create SDK driver
+        driver = pm.polyCube(name="sdk_driver")[0]
+        driven = pm.polyCube(name="sdk_driven")[0]
+
+        # Animate driver.translateX over time
+        pm.setKeyframe(driver, attribute="translateX", time=1, value=0)
+        pm.setKeyframe(driver, attribute="translateX", time=10, value=5)
+        pm.setKeyframe(driver, attribute="translateX", time=20, value=0)
+
+        # Create SDK: driver.tx drives driven.ty
+        pm.setDrivenKeyframe(
+            driven + ".translateY", currentDriver=driver + ".translateX",
+            driverValue=0, value=0
+        )
+        pm.setDrivenKeyframe(
+            driven + ".translateY", currentDriver=driver + ".translateX",
+            driverValue=5, value=10
+        )
+
+        # Verify SDK is working
+        pm.currentTime(10)
+        self.assertAlmostEqual(pm.getAttr(driven + ".translateY"), 10.0, places=1)
+
+        # Verify pre-bake curve type
+        curves = cmds.listConnections(
+            f"{driven}.translateY", type="animCurve", source=True, destination=False
+        ) or []
+        self.assertTrue(curves, "SDK curve should exist")
+        self.assertTrue(
+            cmds.nodeType(curves[0]).startswith("animCurveU"),
+            f"Pre-bake should be SDK type, got {cmds.nodeType(curves[0])}"
+        )
+
+        # SmartBake with delete_inputs=True (the bug scenario)
+        baker = SmartBake(
+            objects=[str(driven)],
+            sample_by=1,
+            optimize_keys=False,
+            delete_inputs=True,
+        )
+        result = baker.execute()
+
+        # Baked curve should still exist
+        curves_after = cmds.listConnections(
+            f"{driven}.translateY", type="animCurve", source=True, destination=False
+        ) or []
+        self.assertTrue(
+            curves_after,
+            "Baked curve was deleted by delete_inputs! "
+            "bakeResults converts SDK curves in-place."
+        )
+        self.assertTrue(
+            cmds.nodeType(curves_after[0]).startswith("animCurveT"),
+            f"Post-bake should be time-based, got {cmds.nodeType(curves_after[0])}"
+        )
+
+        # Baked curve should have time-based keys with varying values
+        keys = cmds.keyframe(curves_after[0], q=True, timeChange=True) or []
+        vals = cmds.keyframe(curves_after[0], q=True, valueChange=True) or []
+        self.assertGreater(len(keys), 1, "Baked curve should have keys")
+        self.assertGreater(
+            len(set(round(v, 4) for v in vals)), 1,
+            "Baked curve should have varying values"
+        )
+
+
+# =========================================================================
+# Real-World FBX Pipeline Tests (extended)
+# =========================================================================
+
+# Default path — override via MAYATK_TEST_FBX env var
+_DEFAULT_FBX = (
+    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
+    r"\_tests\audio_files\C130_FCR_Speedrun_Assembly_copy.fbx"
+)
+
+
+class TestAnimUtilsRealWorld(MayaTkTestCase):
+    """Real-world regression tests using production FBX files.
+
+    These tests import an actual animated FBX, run the same operations the
+    export pipeline uses (SmartBake, optimize_keys, snap_keys_to_frames,
+    tie_keyframes), and verify that no object positions or animation are
+    corrupted.
+
+    Gated behind ``--extended`` / ``MAYATK_EXTENDED_TESTS=1``.
+    Override the test file via ``MAYATK_TEST_FBX`` env var.
+
+    The FBX is imported **once** in setUpClass and saved as a temp .ma file.
+    Each test reopens that .ma (much faster than re-importing a 700 MB FBX).
+    """
+
+    fbx_path: str = ""
+    _cached_scene: str = ""
+    _animated_objects: list = []
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import maya.cmds as cmds
+        import random
+
+        cls.fbx_path = os.environ.get("MAYATK_TEST_FBX", _DEFAULT_FBX)
+        if not os.path.isfile(cls.fbx_path):
+            raise unittest.SkipTest(f"FBX not found: {cls.fbx_path}")
+
+        # Ensure FBX plugin is loaded
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            cmds.loadPlugin("fbxmaya")
+
+        # Import FBX once and cache as temp .ma
+        print(
+            f"[realworld] Importing FBX ({os.path.getsize(cls.fbx_path) // (1024*1024)} MB)..."
+        )
+        cmds.file(new=True, force=True)
+        cmds.file(
+            cls.fbx_path,
+            i=True,
+            type="FBX",
+            ignoreVersion=True,
+            mergeNamespacesOnClash=False,
+            options="fbx",
+        )
+        print("[realworld] FBX import complete.")
+
+        # Discover animated objects — use batch listConnections for speed
+        all_transforms = cmds.ls(type="transform", long=True) or []
+        all_joints = cmds.ls(type="joint", long=True) or []
+        candidates = all_transforms + all_joints
+
+        # Batch: check which candidates have anim curve connections
+        cls._all_animated = []
+        for obj in candidates:
+            curves = cmds.listConnections(obj, type="animCurve", source=True)
+            if curves:
+                cls._all_animated.append(obj)
+
+        # Cap the test sample to avoid hanging on huge scenes
+        MAX_SAMPLE = 200
+        if len(cls._all_animated) > MAX_SAMPLE:
+            random.seed(42)  # Reproducible sample
+            cls._animated_objects = sorted(random.sample(cls._all_animated, MAX_SAMPLE))
+        else:
+            cls._animated_objects = list(cls._all_animated)
+
+        # Save to a temp .ma for fast re-open
+        temp_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "temp_tests"
+        )
+        os.makedirs(temp_dir, exist_ok=True)
+        cls._cached_scene = os.path.join(temp_dir, "_cached_fbx_scene.ma")
+        cmds.file(rename=cls._cached_scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        print(f"[realworld] Cached scene: {cls._cached_scene}")
+        print(
+            f"[realworld] {len(cls._all_animated)} animated objects total, "
+            f"sampling {len(cls._animated_objects)} for tests"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up the cached scene file."""
+        try:
+            if cls._cached_scene and os.path.isfile(cls._cached_scene):
+                os.remove(cls._cached_scene)
+        except OSError:
+            pass
+        super().tearDownClass()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _reload_cached_scene(self):
+        """Re-open the cached scene (much faster than FBX import)."""
+        import maya.cmds as cmds
+
+        cmds.file(self._cached_scene, open=True, force=True)
+        return list(self._animated_objects)
+
+    def _snapshot_positions(self, objects, frames):
+        """Record world-space positions for objects at given frames.
+
+        Returns:
+            dict: {obj: {frame: (tx, ty, tz, rx, ry, rz)}}
+        """
+        import maya.cmds as cmds
+
+        attrs = ("tx", "ty", "tz", "rx", "ry", "rz")
+        snap = {obj: {} for obj in objects}
+        # Use getAttr(time=f) to query without changing currentTime —
+        # avoids expensive scene evaluation on every time change.
+        for obj in objects:
+            for f in frames:
+                try:
+                    vals = tuple(cmds.getAttr(f"{obj}.{a}", time=f) for a in attrs)
+                    snap[obj][f] = vals
+                except Exception:
+                    pass  # Some objects may not have all channels
+        return snap
+
+    def _compare_snapshots(self, before, after, tolerance=0.05, label=""):
+        """Assert two snapshots match within tolerance."""
+        drifted = []
+        for obj in before:
+            if obj not in after:
+                continue
+            for frame in before[obj]:
+                if frame not in after[obj]:
+                    continue
+                b = before[obj][frame]
+                a = after[obj][frame]
+                for i, (bv, av) in enumerate(zip(b, a)):
+                    if abs(bv - av) > tolerance:
+                        attr = ("tx", "ty", "tz", "rx", "ry", "rz")[i]
+                        drifted.append(
+                            f"{obj}.{attr} frame {frame}: {bv:.4f} -> {av:.4f} "
+                            f"(delta={abs(bv - av):.4f})"
+                        )
+        if drifted:
+            summary = "\n  ".join(drifted[:20])
+            extra = f"\n  ... and {len(drifted) - 20} more" if len(drifted) > 20 else ""
+            self.fail(
+                f"{label}Position drift detected ({len(drifted)} channels):\n"
+                f"  {summary}{extra}"
+            )
+
+    def _get_sample_frames(self, count=10):
+        """Return evenly spaced frames across the playback range."""
+        import maya.cmds as cmds
+
+        start = int(cmds.playbackOptions(q=True, minTime=True))
+        end = int(cmds.playbackOptions(q=True, maxTime=True))
+        if end <= start:
+            return [start]
+        step = max(1, (end - start) // (count - 1))
+        frames = list(range(start, end + 1, step))
+        if end not in frames:
+            frames.append(end)
+        return frames
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    @skipUnlessExtended
+    def test_realworld_optimize_keys_no_drift(self):
+        """optimize_keys must not alter evaluated positions on a real FBX.
+
+        Imports the FBX, snapshots positions at sample frames, runs
+        optimize_keys (static curve removal + flat key removal), and
+        verifies no position drift exceeds tolerance.
+        """
+        import maya.cmds as cmds
+
+        animated = self._reload_cached_scene()
+        self.assertTrue(animated, "No animated objects found in FBX")
+
+        frames = self._get_sample_frames(10)
+        before = self._snapshot_positions(animated, frames)
+
+        # Count curves before
+        all_curves_before = cmds.ls(type="animCurve") or []
+
+        AnimUtils.optimize_keys(
+            animated,
+            remove_static_curves=True,
+            remove_flat_keys=True,
+            simplify_keys=False,
+            recursive=False,
+            quiet=True,
+        )
+
+        all_curves_after = cmds.ls(type="animCurve") or []
+        print(
+            f"[realworld] optimize_keys: {len(all_curves_before)} curves -> "
+            f"{len(all_curves_after)} curves"
+        )
+
+        after = self._snapshot_positions(animated, frames)
+        self._compare_snapshots(before, after, tolerance=0.05, label="optimize_keys: ")
+
+    @skipUnlessExtended
+    def test_realworld_smart_bake_no_drift(self):
+        """SmartBake + optimize_keys must not alter positions on a real FBX.
+
+        End-to-end: imports FBX, smart-bakes constrained objects with
+        delete_inputs + optimize_keys, verifies no position drift.
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        animated = self._reload_cached_scene()
+        self.assertTrue(animated, "No animated objects found in FBX")
+
+        frames = self._get_sample_frames(10)
+        before = self._snapshot_positions(animated, frames)
+
+        baker = SmartBake(
+            objects=[str(o) for o in animated],
+            sample_by=1,
+            preserve_outside_keys=True,
+            optimize_keys=True,
+            use_override_layer=False,
+            delete_inputs=True,
+        )
+
+        analysis = baker.analyze()
+        needs_bake = [obj for obj, data in analysis.items() if data.requires_bake]
+        print(f"[realworld] SmartBake: {len(needs_bake)} objects require baking")
+
+        if needs_bake:
+            baker.bake(analysis)
+
+        after = self._snapshot_positions(animated, frames)
+        self._compare_snapshots(before, after, tolerance=0.05, label="SmartBake: ")
+
+    @skipUnlessExtended
+    def test_realworld_snap_and_tie_no_drift(self):
+        """snap_keys_to_frames + tie_keyframes must not break animation.
+
+        Imports FBX, snapshots positions, runs snap then tie, and
+        verifies positions remain within tolerance.
+        """
+        import maya.cmds as cmds
+
+        animated = self._reload_cached_scene()
+        self.assertTrue(animated, "No animated objects found in FBX")
+
+        frames = self._get_sample_frames(10)
+        before = self._snapshot_positions(animated, frames)
+
+        AnimUtils.snap_keys_to_frames(animated)
+
+        start = int(cmds.playbackOptions(q=True, minTime=True))
+        end = int(cmds.playbackOptions(q=True, maxTime=True))
+        AnimUtils.tie_keyframes(animated, custom_range=(start, end))
+
+        after = self._snapshot_positions(animated, frames)
+        # Slightly looser tolerance for snap+tie (sub-frame keys shift)
+        self._compare_snapshots(before, after, tolerance=0.1, label="snap+tie: ")
+
+    @skipUnlessExtended
+    def test_realworld_full_export_pipeline_no_drift(self):
+        """Full export pipeline (SmartBake → optimize → snap → tie) must preserve positions.
+
+        Runs the same task sequence as TaskManager in the real exporter.
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        animated = self._reload_cached_scene()
+        self.assertTrue(animated, "No animated objects found in FBX")
+
+        frames = self._get_sample_frames(15)
+        before = self._snapshot_positions(animated, frames)
+
+        obj_strs = [str(o) for o in animated]
+
+        # Step 1: SmartBake
+        baker = SmartBake(
+            objects=obj_strs,
+            sample_by=1,
+            preserve_outside_keys=True,
+            optimize_keys=True,
+            use_override_layer=False,
+            delete_inputs=True,
+        )
+        analysis = baker.analyze()
+        if any(d.requires_bake for d in analysis.values()):
+            baker.bake(analysis)
+
+        # Step 2: Snap keys to whole frames
+        AnimUtils.snap_keys_to_frames(obj_strs)
+
+        # Step 3: Tie keyframes
+        start = int(cmds.playbackOptions(q=True, minTime=True))
+        end = int(cmds.playbackOptions(q=True, maxTime=True))
+        AnimUtils.tie_keyframes(obj_strs, custom_range=(start, end))
+
+        after = self._snapshot_positions(animated, frames)
+        self._compare_snapshots(before, after, tolerance=0.1, label="full-pipeline: ")
+
+        # Also verify no sub-frame keys remain
+        for obj in obj_strs:
+            curves = cmds.listConnections(obj, type="animCurve", source=True) or []
+            for curve in curves:
+                keys = cmds.keyframe(curve, q=True, timeChange=True) or []
+                for k in keys:
+                    self.assertEqual(
+                        k,
+                        round(k),
+                        f"Sub-frame key at {k} on {curve} after full pipeline",
+                    )
+
+    @skipUnlessExtended
+    def test_realworld_curve_stats(self):
+        """Print scene statistics for the real FBX (informational, always passes).
+
+        Useful for verifying the file imported correctly and understanding
+        the complexity of the test scene.
+        """
+        import maya.cmds as cmds
+
+        animated = self._reload_cached_scene()
+
+        all_curves = cmds.ls(type="animCurve") or []
+        all_transforms = cmds.ls(type="transform", long=True) or []
+        all_joints = cmds.ls(type="joint", long=True) or []
+        constraints = cmds.ls(type="constraint") or []
+
+        start = cmds.playbackOptions(q=True, minTime=True)
+        end = cmds.playbackOptions(q=True, maxTime=True)
+
+        total_keys = 0
+        for curve in all_curves:
+            total_keys += cmds.keyframe(curve, q=True, keyframeCount=True) or 0
+
+        print(f"\n{'='*60}")
+        print(f"Real-World FBX Stats: {os.path.basename(self.fbx_path)}")
+        print(f"{'='*60}")
+        print(f"  Transforms:    {len(all_transforms)}")
+        print(f"  Joints:        {len(all_joints)}")
+        print(f"  Animated objs: {len(animated)}")
+        print(f"  Anim curves:   {len(all_curves)}")
+        print(f"  Total keys:    {total_keys}")
+        print(f"  Constraints:   {len(constraints)}")
+        print(f"  Frame range:   {start} - {end}")
+        print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":

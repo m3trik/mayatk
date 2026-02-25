@@ -674,18 +674,31 @@ class SmartBake:
                 # Mute drivers (set nodeState=2) - keeps them recoverable
                 result.muted_drivers = self._mute_driver_nodes(to_bake)
             elif self.delete_inputs and not self.use_override_layer:
-                # Delete drivers (destructive)
+                # Delete drivers (destructive).
+                # IMPORTANT: bakeResults converts SDK curves (animCurveU*)
+                # in-place to time-based curves (animCurveT*), reusing the
+                # same node.  We must NOT delete nodes that are now the
+                # baked result.  Check the current nodeType before deleting.
                 for obj, data in to_bake.items():
                     if obj not in result.baked:
                         continue
-                    for nodes in data.source_nodes.values():
+                    for source_type, nodes in data.source_nodes.items():
                         for node in nodes:
-                            if cmds.objExists(node):
-                                try:
-                                    cmds.delete(node)
-                                    result.deleted.append(node)
-                                except RuntimeError:
-                                    pass  # Node already deleted or protected
+                            if not cmds.objExists(node):
+                                continue
+                            # Skip SDK curves that bakeResults converted
+                            # in-place from animCurveU* to animCurveT*.
+                            if source_type == "driven_key":
+                                node_type = cmds.nodeType(node)
+                                if node_type.startswith("animCurveT"):
+                                    # bakeResults converted this SDK
+                                    # curve — it's now the baked result.
+                                    continue
+                            try:
+                                cmds.delete(node)
+                                result.deleted.append(node)
+                            except RuntimeError:
+                                pass  # Node already deleted or protected
 
         # Optimize keys if requested — only on baked channels, not the
         # entire object.  Passing whole objects would let optimize_keys

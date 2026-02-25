@@ -226,6 +226,7 @@ class AudioEventsSlots:
 
         grp = pm.PyNode(loc_name)
         pm.select(grp, replace=True)
+        self._audio_files.clear()
         self._current_target = grp
         self.ui.footer.setText(f"Created '{grp.name()}'.")
         logging.info("AudioEvents: created empty audio object '%s'", grp.name())
@@ -547,6 +548,44 @@ class AudioEventsSlots:
                 "The combo selection is updated to reflect the chosen event."
             ),
         )
+        chk_key_all = widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Key All",
+            setObjectName="chk_key_all",
+            setToolTip=(
+                "Key every loaded track sequentially starting from the\n"
+                "current frame. Each clip is placed end-to-end using\n"
+                "the clip length plus the stagger amount as spacing.\n"
+                "When Auto End None is disabled, the track length is\n"
+                "still used to calculate the stagger interval."
+            ),
+        )
+        spn_stagger = widget.option_box.menu.add(
+            "QSpinBox",
+            setText="Stagger",
+            setObjectName="spn_stagger",
+            setToolTip=(
+                "Extra frames added between each clip when Key All\n"
+                "is enabled.  The interval is: clip_length + stagger."
+            ),
+            setMinimum=0,
+            setMaximum=9999,
+            setValue=0,
+            setPrefix="Stagger: ",
+            setSuffix=" fr",
+        )
+        # Wire enable/disable: Key All toggles stagger on and next-event off.
+        def _on_key_all_toggled(checked):
+            spn_stagger.setEnabled(checked)
+            if checked:
+                widget.option_box.menu.chk_next_event.setChecked(False)
+            widget.option_box.menu.chk_next_event.setEnabled(not checked)
+
+        chk_key_all.toggled.connect(_on_key_all_toggled)
+
+        # Sync initial state — the checkbox may already be checked from
+        # a saved/restored UI state, so match the stagger widget to it.
+        spn_stagger.setEnabled(chk_key_all.isChecked())
 
     @CoreUtils.undoable
     def tb001(self, widget=None):
@@ -558,6 +597,9 @@ class AudioEventsSlots:
         3. Key the event at the current frame.
         4. If Auto End None is enabled, key "None" at clip end.
         5. Sync audio nodes to the timeline.
+
+        Key All mode keys every loaded track sequentially from the
+        current frame, spacing each by ``clip_length + stagger``.
         """
         if not self._audio_files:
             self.ui.footer.setText("Browse for audio files first.")
@@ -577,6 +619,14 @@ class AudioEventsSlots:
             category=self.CATEGORY,
         )
 
+        key_all = widget.option_box.menu.chk_key_all.isChecked()
+        auto_end = self.ui.tb001.option_box.menu.chk_auto_end_none.isChecked()
+
+        if key_all:
+            self._key_all_events(widget, target, events, auto_end)
+            return
+
+        # --- Single-event path ---
         # Resolve event label — auto-advance when "Next Event" is enabled.
         next_event = widget.option_box.menu.chk_next_event.isChecked()
         if next_event:
@@ -600,7 +650,6 @@ class AudioEventsSlots:
         # keying the new event.  This avoids the auto_clear "None at
         # time-1" problem and ensures no leftover None keys interrupt
         # playback.
-        auto_end = self.ui.tb001.option_box.menu.chk_auto_end_none.isChecked()
         if auto_end:
             self._prune_overlap_none_keys(target, current_frame)
 
@@ -647,6 +696,89 @@ class AudioEventsSlots:
                 end_info = " + end-None"
             self.ui.footer.setText(
                 f"Keyed '{event_label}' @ {int(current_frame)}{end_info}"
+                f" — {total} clip(s) synced."
+            )
+        finally:
+            if original_selection:
+                pm.select(original_selection, r=True)
+            else:
+                pm.select(clear=True)
+
+    def _key_all_events(self, widget, target, events, auto_end):
+        """Key every loaded track sequentially from the current frame.
+
+        Spacing between clips is ``clip_length + stagger``.
+        When *auto_end* is False the track length is still used to
+        calculate the stagger interval — only the explicit end-None
+        key is skipped.
+
+        Parameters:
+            widget: The tb001 widget (provides option-box access).
+            target: PyNode of the trigger object.
+            events: Ordered list of event labels (non-None).
+            auto_end: Whether to key "None" at each clip's end.
+        """
+        import math
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        stagger = widget.option_box.menu.spn_stagger.value()
+        current_frame = pm.currentTime(query=True)
+        cursor = float(current_frame)
+        keyed_count = 0
+
+        tracks = [e for e in events if e and e != "None"]
+        if not tracks:
+            self.ui.footer.setText("No audio tracks available.")
+            return
+
+        for event_label in tracks:
+            if auto_end:
+                self._prune_overlap_none_keys(target, cursor)
+
+            keyed = EventTriggers.set_key(
+                target,
+                event=event_label,
+                time=cursor,
+                auto_clear=False,
+                category=self.CATEGORY,
+            )
+            if not keyed:
+                continue
+            keyed_count += 1
+
+            # Determine clip length (used for both auto-end-none and spacing).
+            length_frames = 0.0
+            source = self._audio_files.get(event_label.lower())
+            if source:
+                length_frames = self._get_clip_length_frames(source)
+
+            # Key end-None when auto_end is enabled.
+            if auto_end and length_frames > 0:
+                end_frame = math.ceil(cursor + length_frames)
+                EventTriggers.set_key(
+                    target,
+                    event="None",
+                    time=end_frame,
+                    auto_clear=False,
+                    category=self.CATEGORY,
+                )
+
+            # Advance cursor: clip length + stagger (length used even
+            # when auto_end is off to keep clips from overlapping).
+            if length_frames > 0:
+                cursor = math.ceil(cursor + length_frames) + stagger
+            else:
+                # No clip length available — fall back to stagger only.
+                cursor += max(stagger, 1)
+
+        # Sync once after all keys are placed.
+        original_selection = [obj for obj in pm.selected() if pm.objExists(obj)]
+        try:
+            total = self._sync_and_refresh_target(target)
+            end_info = " + end-None" if auto_end else ""
+            stagger_info = f" stagger={stagger}" if stagger else ""
+            self.ui.footer.setText(
+                f"Key All: {keyed_count} track(s){end_info}{stagger_info}"
                 f" — {total} clip(s) synced."
             )
         finally:
@@ -1142,6 +1274,7 @@ class AudioEventsSlots:
                 cmds.setAttr(f"{shape}.{attr}", True)
         grp = pm.PyNode(loc_name)
         pm.select(grp, replace=True)
+        self._audio_files.clear()
         self._current_target = grp
         self.ui.footer.setText(f"Created '{grp.name()}' for audio triggers.")
         return grp
@@ -1491,6 +1624,18 @@ class AudioEventsSlots:
 
                 # -- 3. Non-trigger object selected ----------------------
                 short = first.name()
+                # If we have a valid cached target with trigger, keep it
+                if old_target and old_target != first:
+                    try:
+                        if pm.objExists(old_target) and cmds.attributeQuery(
+                            trigger_attr, node=str(old_target), exists=True
+                        ):
+                            self.ui.footer.setText(
+                                f"Selected '{short}' — keeping '{old_target.name()}'"
+                            )
+                            return
+                    except Exception:
+                        pass
                 if first != old_target:
                     self._audio_files.clear()
                 self._current_target = first
