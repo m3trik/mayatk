@@ -127,6 +127,64 @@ class TestGroupCombine(MayaTkTestCase):
 
         self.assertEqual(len(results), 2)
 
+    def test_combine_preserves_parent_group(self):
+        """Verify combined object is placed under the same parent group.
+
+        Bug: When all children of a group were combined, the group was
+        auto-deleted by Maya (became empty) before _finalize_reparent could
+        parent the result back. The temp-null was only created for single-child
+        parents, not when all children were consumed by the operation.
+        Fixed: 2026-02-26
+        """
+        grp = pm.group(em=True, n="container_grp")
+        c1 = pm.polyCube(n="child_a")[0]
+        c2 = pm.polyCube(n="child_b")[0]
+        pm.parent(c1, grp)
+        pm.parent(c2, grp)
+
+        combined = EditUtils.combine_objects([c1, c2])
+
+        self.assertTrue(
+            pm.objExists(grp),
+            "Parent group should still exist after combine",
+        )
+        self.assertTrue(
+            pm.objExists(combined),
+            "Combined mesh should exist",
+        )
+        result_parent = pm.listRelatives(combined, parent=True)
+        self.assertTrue(
+            result_parent and result_parent[0] == grp,
+            f"Combined mesh should be under '{grp}', got '{result_parent}'",
+        )
+
+    def test_combine_preserves_parent_with_extra_children(self):
+        """Verify combine works when parent has additional non-combined children.
+
+        The parent group has 3 children but only 2 are combined. The parent
+        should survive (it still has a remaining child) and the result should
+        be reparented under it.
+        """
+        grp = pm.group(em=True, n="mixed_grp")
+        c1 = pm.polyCube(n="combine_a")[0]
+        c2 = pm.polyCube(n="combine_b")[0]
+        c3 = pm.polyCube(n="keep_me")[0]
+        pm.parent(c1, grp)
+        pm.parent(c2, grp)
+        pm.parent(c3, grp)
+
+        combined = EditUtils.combine_objects([c1, c2])
+
+        self.assertTrue(pm.objExists(grp))
+        self.assertTrue(pm.objExists(combined))
+        result_parent = pm.listRelatives(combined, parent=True)
+        self.assertTrue(
+            result_parent and result_parent[0] == grp,
+            f"Combined mesh should be under '{grp}', got '{result_parent}'",
+        )
+        # The untouched child should still be there
+        self.assertTrue(pm.objExists("keep_me"))
+
 
 if __name__ == "__main__":
     import sys

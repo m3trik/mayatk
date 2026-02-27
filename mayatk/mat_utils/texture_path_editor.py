@@ -77,6 +77,21 @@ class TexturePathEditorSlots:
             setToolTip="Select all rows in the table where the texture file is missing.",
             setObjectName="lbl015",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Texture Path Editor — Inspect and fix texture file paths.\n\n"
+                "• View all scene texture nodes and their file paths in a table.\n"
+                "• Set Texture Directory to repath all file nodes at once.\n"
+                "• Find and Copy Textures from external directories\n"
+                "  into the project.\n"
+                "• Convert paths to relative (based on sourceimages directory).\n"
+                "• Select textures for selected objects or highlight broken paths."
+            ),
+        )
 
     def open_source_images(self):
         """Open the project's sourceimages directory."""

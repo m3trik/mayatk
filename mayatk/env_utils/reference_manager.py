@@ -475,12 +475,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         is_current_scene = norm_fp == current_scene
 
         if is_current_scene:
-            # Disable the item and set a tooltip
+            # Keep item enabled (for rename/delete/open) but not selectable
+            # (prevents accidental reference toggling via click-selection).
+            # handle_item_selection already filters out the current scene.
             item.setFlags(
-                item.flags()
-                & ~(
-                    self.sb.QtCore.Qt.ItemIsSelectable | self.sb.QtCore.Qt.ItemIsEnabled
-                )
+                (item.flags() | self.sb.QtCore.Qt.ItemIsEnabled)
+                & ~self.sb.QtCore.Qt.ItemIsSelectable
             )
             item.setToolTip(f"Current scene file - cannot be referenced\n{file_path}")
             # Apply current style (italic + orange) and mark as styled
@@ -1677,6 +1677,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setText="Un-Reference All",
             setObjectName="btn_unreference_all",
             setToolTip="Remove all references from the scene.",
+        )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Reference Manager — Manage scene references, workspace files,\n"
+                "and naming conventions from a single interface.\n\n"
+                "• Workspace file discovery with filtering by folder structure,\n"
+                "  suffix, and extension.\n"
+                "• Save scenes with configurable naming conventions\n"
+                "  (case style, suffix, folder structure).\n"
+                "• Bulk reference operations: Convert to Assembly,\n"
+                "  Unlink & Import, Un-Reference All.\n"
+                "• Right-click file rows for per-reference actions."
+            ),
         )
 
     def tbl000_init(self, widget):

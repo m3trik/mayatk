@@ -258,6 +258,23 @@ class SnapSlots:
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.snap
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Snap — Snap vertices to other vertices or surfaces.\n\n"
+                "• Snap to Closest Vertex: aligns selected verts\n"
+                "  to nearest target vertex.\n"
+                "• Snap to Surface: projects verts onto a target mesh.\n"
+                "• Configurable offset and distance threshold."
+            ),
+        )
+
     def b000_init(self, widget):
         """Initialize Snap to Surface button option box."""
         widget.option_box.menu.setTitle("Snap to Surface")

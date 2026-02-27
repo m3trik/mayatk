@@ -67,6 +67,23 @@ class CutOnAxisSlots:
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Cut on Axis — Cut, delete, or mirror geometry along an axis.\n\n"
+                "• Select axis (X, Y, Z) and pivot reference.\n"
+                "• Set number of cuts and cut offset.\n"
+                "• Delete one side or mirror across the axis.\n"
+                "• Enable Preview to iterate before committing."
+            ),
+        )
+
     def perform_operation(self, objects):
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
         pivot_index = self.ui.cmb000.currentIndex()

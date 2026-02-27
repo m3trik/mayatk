@@ -1034,6 +1034,20 @@ class AttributeManagerSlots:
         widget.menu.hdr_connection_editor.clicked.connect(
             lambda: mel.eval("ConnectionEditor")
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Attribute Manager — Inspect, edit, and manage Maya node attributes.\n\n"
+                "• Filter attributes by type: Custom, Keyable, Locked, Connected, etc.\n"
+                "• Edit attribute values, lock/unlock, and toggle keyable state.\n"
+                "• Create new custom attributes on selected objects.\n"
+                "• Select Shape or History nodes from the header menu.\n"
+                "• Open Maya's Channel Control or Connection Editor."
+            ),
+        )
 
     # --- Header action handlers ---
 

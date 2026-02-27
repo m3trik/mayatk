@@ -40,13 +40,19 @@ class _TaskDataMixin:
 
         t0 = time.time()
 
+        # Filter to objects that still exist (smart_bake may delete
+        # constraints/expressions, removing nodes from the scene).
+        existing = cmds.ls(self.objects, long=True) or []
+        if not existing:
+            return []
+
         # Optimization: Iterate curves instead of objects
         # cmds.keyframe(objects) is slow (5s for 200 objects).
         # Iterating curves is fast (0.02s for 200 curves).
 
         all_curves = (
             cmds.listConnections(
-                self.objects, type="animCurve", source=True, destination=False
+                existing, type="animCurve", source=True, destination=False
             )
             or []
         )
@@ -221,6 +227,10 @@ class _TaskActionsMixin(_TaskDataMixin):
             log_parts.append(f"{len(result.optimized)} objects optimized")
 
         self.logger.info(", ".join(log_parts) + ".")
+
+        # Refresh self.objects — smart_bake may have deleted constraints,
+        # expressions, or other nodes that were part of the original list.
+        self.objects = cmds.ls(self.objects, long=True) or []
 
         # Invalidate keyframe cache since we added new keys
         if hasattr(self, "_key_times"):
@@ -848,8 +858,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "delete_unused_materials",
         "convert_to_relative_paths",
         "delete_env_nodes",
-        # Phase 4 — Animation (bake THEN snap/tie THEN set range)
+        # Phase 4 — Animation (bake THEN optimize THEN snap/tie THEN set range)
         "smart_bake",
+        "optimize_keys",
         "snap_keys_to_frame",
         "tie_all_keyframes",
         "set_bake_animation_range",
@@ -954,7 +965,13 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "smart_bake": {
                 "widget_type": "QCheckBox",
                 "setText": "Smart Bake",
-                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.\nOptimizes baked keys by removing redundant/static keyframes.",
+                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.",
+                "setChecked": True,
+            },
+            "optimize_keys": {
+                "widget_type": "QCheckBox",
+                "setText": "Optimize Keys",
+                "setToolTip": "Remove static curves and redundant flat keys from all exported objects.\nPreserves stepped tangent types.",
                 "setChecked": True,
             },
             "tie_all_keyframes": {

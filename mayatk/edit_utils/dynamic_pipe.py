@@ -401,6 +401,22 @@ class DynamicPipeSlots:
 
         self.pipe = None
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Dynamic Pipe — Create pipe geometry from locators.\n\n"
+                "• Place locators to define the pipe path.\n"
+                "• Select locators in order, then press Create.\n"
+                "• Segments are lofted between circular cross-sections."
+            ),
+        )
+
     def b000(self):
         """Create Dynamic Pipe"""
         pm.undoInfo(openChunk=True)

@@ -481,6 +481,19 @@ class SceneExporterSlots(SceneExporter):
             setCurrentIndex=1,  # Default to INFO
             setToolTip="Set the log level.",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Scene Exporter — Batch-export scene objects to FBX.\n\n"
+                "• Configure export presets and output paths.\n"
+                "• Optionally generate a log file alongside each FBX.\n"
+                "• Set the log level (DEBUG / INFO / WARNING / ERROR)\n"
+                "  in Global Settings."
+            ),
+        )
 
     def cmb000_init(self, widget) -> None:
         """Init Preset"""
@@ -585,14 +598,6 @@ class SceneExporterSlots(SceneExporter):
             widget.setCurrentText(current_text)
             self.logger.debug(f"Restored preset selection by text: {current_text}")
 
-    def cmb004(self, index, widget) -> None:
-        """Update the output directory based on the selected recent directory."""
-        selected_dir = widget.items[index]
-        if selected_dir and os.path.exists(selected_dir):
-            self.ui.txt000.setText(selected_dir)
-        else:
-            self.logger.error(f"Selected directory does not exist: {selected_dir}")
-
     def txt000_init(self, widget) -> None:
         """Init Output Directory"""
         widget.option_box.menu.setTitle("Output Directory:")
@@ -609,19 +614,21 @@ class SceneExporterSlots(SceneExporter):
             setText="Open Output Directory",
             setObjectName="b006",
         )
-        # Add the ComboBox for recent output directories
-        widget.option_box.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setToolTip="Select from the last 10 output directories.",
-            setObjectName="cmb004",
+
+        # Recent output directories — option box button with history popup
+        from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
+
+        self._recent_dirs_option = RecentValuesOption(
+            wrapped_widget=widget,
+            settings_key="scene_exporter_output_dirs",
+            max_recent=10,
         )
-        # Load previously saved output directories
-        prev_output_dirs = self.get_recent_output_dirs()
-        # Add directories to ComboBox with a unified method
-        # Access via option_box.menu (not standalone menu)
-        self.ui.txt000.option_box.menu.cmb004.add(
-            prev_output_dirs, header="Recent Output Dirs:"
-        )
+        widget.option_box.add_option(self._recent_dirs_option)
+
+        # Seed from legacy QSettings if the plugin's store is empty
+        if not self._recent_dirs_option.recent_values:
+            for d in self._get_legacy_output_dirs():
+                self._recent_dirs_option.add_recent_value(d)
 
     def txt001_init(self, widget) -> None:
         """Init Output Name"""
@@ -894,42 +901,18 @@ class SceneExporterSlots(SceneExporter):
         # Defer launch to ensure initialization completes
         self.sb.defer_with_timer(_launch_editor, ms=200)
 
-    def get_recent_output_dirs(self) -> List[str]:
-        """Utility method to load recent output directories from QSettings"""
+    def _get_legacy_output_dirs(self) -> List[str]:
+        """Load recent output directories from legacy QSettings.
+
+        Used only for one-time migration into ``RecentValuesOption``.
+        """
         prev_output_dirs = self.ui.settings.value("prev_output_dirs", [])
-        # Filter out the root directory and return the last 10
         return [i for i in prev_output_dirs if not i == "/"][-10:]
 
     def save_output_dir(self, output_dir: str) -> None:
-        """Save the output directory to QSettings, ensuring no duplicates and normalized paths."""
-        if output_dir:
-            output_dir = ptk.format_path(output_dir)
-            prev_output_dirs = self.ui.settings.value("prev_output_dirs", [])
-            normalized_prev_dirs = ptk.format_path(prev_output_dirs)
-            # print(f"Saving output directory: {output_dir}")
-            # print(f"Previous directories: {normalized_prev_dirs}")
-            # Remove duplicates while preserving order
-            unique_dirs = []
-            seen = set()
-            for d in normalized_prev_dirs:
-                # print(f"Checking directory: {d}")
-                if d not in seen:
-                    # print(f"Adding unique directory: {d}")
-                    seen.add(d)
-                    unique_dirs.append(d)
-
-            if output_dir in unique_dirs:
-                unique_dirs.remove(output_dir)
-            unique_dirs.append(output_dir)
-            # print(f"Unique directories after adding: {unique_dirs}")
-            unique_dirs = unique_dirs[-10:]
-            self.ui.settings.setValue("prev_output_dirs", unique_dirs)
-
-            # Optionally update the ComboBox (access via option_box.menu)
-            self.ui.txt000.option_box.menu.cmb004.clear()
-            self.ui.txt000.option_box.menu.cmb004.add(
-                unique_dirs, header="Recent Output Dirs:"
-            )
+        """Record the output directory into the recent values plugin."""
+        if output_dir and hasattr(self, "_recent_dirs_option"):
+            self._recent_dirs_option.record(ptk.format_path(output_dir))
 
 
 # -----------------------------------------------------------------------------

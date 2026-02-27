@@ -284,19 +284,22 @@ class TestXformUtils(MayaTkTestCase):
         self.assertAlmostEqual(pos[0], 20.0)
 
     def test_reset_pivot_transforms(self):
-        """Test resetting pivots."""
+        """Test resetting pivots when objects are passed explicitly.
+
+        Bug: The method had a misplaced ``return`` inside the ``else`` branch,
+        causing it to exit immediately when the ``objects`` parameter was provided.
+        Fixed: 2026-02-27
+        """
         pm.move(self.cube1, 10, 0, 0)
-        # Move pivot
+        # Move pivot away from geometry center
         pm.xform(self.cube1, ws=True, rp=(0, 0, 0))
 
+        # Pass objects explicitly — before the fix this was a no-op
         XformUtils.reset_pivot_transforms(self.cube1)
 
-        # Pivot should be centered on object (10, 0, 0)
+        # Pivot should now be re-centred on the object's bounding box
         rp = pm.xform(self.cube1, q=True, ws=True, rp=True)
-        # Note: In batch mode, manipPivot might behave differently or centerPivots might not update immediately?
-        # Relaxing check or assuming it works if no error.
-        # self.assertAlmostEqual(rp[0], 10.0)
-        pass
+        self.assertAlmostEqual(rp[0], 10.0, delta=0.5)
 
     def test_transfer_pivot(self):
         """Test transferring pivot."""
@@ -335,6 +338,47 @@ class TestXformUtils(MayaTkTestCase):
 
         rot = pm.getAttr(self.cube1.rotate)
         self.assertNotEqual(rot, pm.dt.Vector(0, 0, 0))
+
+    def test_aim_object_at_point_multi_no_leak(self):
+        """Verify that aiming multiple objects cleans up all constraints.
+
+        Bug: Only the last aimConstraint was deleted; earlier constraints
+        leaked and the user's target object was accidentally deleted when
+        ``target_pos`` was an existing transform name.
+        Fixed: 2026-02-27
+        """
+        c1 = pm.polyCube(name="aim_test_a")[0]
+        c2 = pm.polyCube(name="aim_test_b")[0]
+        pm.move(c1, -5, 0, 0)
+        pm.move(c2, 5, 0, 0)
+
+        constraint_count_before = len(pm.ls(type="aimConstraint"))
+        XformUtils.aim_object_at_point([c1, c2], (0, 10, 0))
+        constraint_count_after = len(pm.ls(type="aimConstraint"))
+
+        # All constraints should be cleaned up
+        self.assertEqual(constraint_count_before, constraint_count_after)
+
+        # No leftover 'target_helper' node
+        self.assertFalse(pm.objExists("target_helper"))
+
+        pm.delete(c1, c2)
+
+    def test_aim_object_at_existing_target_not_deleted(self):
+        """Verify that aiming at an existing transform does not delete it.
+
+        Bug: ``pm.delete(const, target)`` unconditionally deleted the target
+        even when it was a user-supplied transform, not a temporary helper.
+        Fixed: 2026-02-27
+        """
+        target = pm.polySphere(name="aim_target_sphere")[0]
+        pm.move(target, 0, 10, 0)
+
+        XformUtils.aim_object_at_point(self.cube1, target)
+
+        # The user's target must still exist
+        self.assertTrue(pm.objExists("aim_target_sphere"))
+        pm.delete(target)
 
     def test_orient_to_vector(self):
         """Test orienting to vector."""
@@ -392,6 +436,78 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
         XformUtils.freeze_transforms(self.cube1, translate=True, force=True)
         self.assertEqual(self.cube1.translateX.get(), 0.0)
         self.assertTrue(self.cube1.translateX.isLocked())
+
+    def test_align_using_three_points_identity(self):
+        """Verify 3-point align maps source frame onto target frame.
+
+        Bug: Original implementation always rotated around the Z axis via
+        ``MEulerRotation(0, 0, angle)`` regardless of the actual rotation
+        axis, producing incorrect results for most configurations.
+        Fixed: 2026-02-27
+        """
+        # Source plane at origin, target plane at (10, 0, 0) with a 90-deg Y rotation
+        src = pm.polyPlane(name="src_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
+        tgt = pm.polyPlane(name="tgt_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
+        pm.move(tgt, 10, 0, 0)
+        pm.rotate(tgt, 0, 90, 0)
+
+        src_verts = pm.ls(f"{src}.vtx[0:2]", flatten=True)
+        tgt_verts = pm.ls(f"{tgt}.vtx[0:2]", flatten=True)
+
+        XformUtils.align_using_three_points(src_verts + tgt_verts)
+
+        # After alignment, the first 3 source vertices should be very close
+        # to the corresponding target vertices.
+        for sv, tv in zip(src_verts, tgt_verts):
+            sp = pm.pointPosition(sv, w=True)
+            tp = pm.pointPosition(tv, w=True)
+            for i in range(3):
+                self.assertAlmostEqual(sp[i], tp[i], places=3)
+
+        pm.delete(src, tgt)
+
+    def test_align_vertices_no_selection(self):
+        """Verify align_vertices doesn't crash when nothing is selected.
+
+        Bug: Selection validation happened after indexing into the reference
+        position list, causing IndexError when fewer than 2 vertices were
+        selected.
+        Fixed: 2026-02-27
+        """
+        pm.select(clear=True)
+        # Should return gracefully (inViewMessage), not IndexError
+        XformUtils.align_vertices(mode=3)
+
+    def test_align_vertices_single_selection(self):
+        """Verify align_vertices returns early with only a single vertex.
+
+        Bug: Same IndexError as test_align_vertices_no_selection — the guard
+        ran after the position was already accessed.
+        Fixed: 2026-02-27
+        """
+        cube = pm.polyCube(name="align_vert_test")[0]
+        pm.select(f"{cube}.vtx[0]")
+        # Should not raise
+        XformUtils.align_vertices(mode=3)
+        pm.delete(cube)
+
+    def test_align_vertices_mode_x(self):
+        """Verify align_vertices mode=3 (X) aligns X coords to last selected."""
+        cube = pm.polyCube(name="align_mode_test", sx=2, sy=2, sz=2)[0]
+        verts = pm.ls(f"{cube}.vtx[*]", flatten=True)
+
+        # Select 3 vertices — the last one's X will be the reference
+        pm.select([verts[0], verts[1], verts[2]])
+        ref_x = pm.xform(verts[2], q=True, t=True, ws=True)[0]
+
+        XformUtils.align_vertices(mode=3)  # align X
+
+        # All selected verts should now share the reference X
+        for v in [verts[0], verts[1], verts[2]]:
+            pos = pm.xform(v, q=True, t=True, ws=True)
+            self.assertAlmostEqual(pos[0], ref_x, places=4)
+
+        pm.delete(cube)
 
 
 if __name__ == "__main__":

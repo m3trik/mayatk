@@ -833,6 +833,23 @@ class ShadowRigSlots:
         self.ui.b000.clicked.connect(self.create_shadow)
         self.ui.b001.clicked.connect(self.b001)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Shadow Rig — Create a projected-shadow plane rig.\n\n"
+                "• Select target objects, then press Create.\n"
+                "• Configurable resolution, source name, and projection axis.\n"
+                "• Optionally combine multiple objects into one shadow.\n"
+                "• Exports cleanly for game engines like Unity."
+            ),
+        )
+
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()

@@ -718,7 +718,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
                 # Store raw/original key (full DAG path) for later matching
                 try:
-                    tree_item._raw_name = obj_info["short_name"]  # original short name, may contain namespace
+                    tree_item._raw_name = obj_info[
+                        "short_name"
+                    ]  # original short name, may contain namespace
                 except Exception:
                     pass
 
@@ -772,8 +774,12 @@ class HierarchyManagerController(ptk.LoggingMixin):
             tree_matcher = tree_utils.TreePathMatcher()
             self._redirect_logger(tree_matcher.logger)
 
-            cur_by_full, cur_by_clean, cur_by_last = tree_matcher.build_tree_index(tree001)
-            ref_by_full, ref_by_clean, ref_by_last = tree_matcher.build_tree_index(tree000)
+            cur_by_full, cur_by_clean, cur_by_last = tree_matcher.build_tree_index(
+                tree001
+            )
+            ref_by_full, ref_by_clean, ref_by_last = tree_matcher.build_tree_index(
+                tree000
+            )
 
             # Apply formatting to current scene tree
             self.format_tree_differences(
@@ -782,7 +788,12 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
             # Apply formatting to reference tree
             self.format_tree_differences(
-                tree000, "reference", tree_matcher, ref_by_full, ref_by_clean, ref_by_last
+                tree000,
+                "reference",
+                tree_matcher,
+                ref_by_full,
+                ref_by_clean,
+                ref_by_last,
             )
 
         except Exception as e:
@@ -810,7 +821,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
         "reparented": ("#A87EC8", "#2D1E3A"),  # muted purple
     }
 
-    def format_tree_differences(self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last):
+    def format_tree_differences(
+        self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last
+    ):
         """Format a specific tree widget based on differences.
 
         Uses TreePathMatcher indices for accurate path-based item lookup
@@ -822,7 +835,12 @@ class HierarchyManagerController(ptk.LoggingMixin):
         def _find_item(path):
             """Locate the best matching tree item for a diff path."""
             candidates, _ = tree_matcher.find_path_matches(
-                path, by_full, by_clean, by_last, prefer_cleaned=True, strict=False,
+                path,
+                by_full,
+                by_clean,
+                by_last,
+                prefer_cleaned=True,
+                strict=False,
             )
             return candidates[0] if candidates else None
 
@@ -1284,6 +1302,31 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setToolTip="Set the log level.",
         )
 
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Hierarchy Manager — Compare, diff, and synchronise scene\n"
+                "hierarchies against a reference file.\n\n"
+                "Workflow:\n"
+                "  1. Enter or browse to a reference scene (.ma / .mb).\n"
+                "  2. Press 'Diff' to compare the current scene against\n"
+                "     the reference. Differences are highlighted in the\n"
+                "     tree views and logged below.\n"
+                "  3. Select objects in the reference tree that you want\n"
+                "     to bring into the current scene.\n"
+                "  4. Press 'Pull' to import the selected objects.\n\n"
+                "Options:\n"
+                "  • Enable Dry Run in this menu to preview changes\n"
+                "    without modifying the scene.\n"
+                "  • Right-click either tree for additional actions\n"
+                "    (refresh, show differences, select in Maya).\n"
+                "  • Use the log-level combo to control output verbosity."
+            ),
+        )
+
     def tree000_init(self, widget):
         """Initialize the reference/imported hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
@@ -1403,23 +1446,21 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setObjectName="b003",
             setToolTip="Browse for a reference scene file.",
         )
-        widget.option_box.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb002",
-            setToolTip="Select from recent reference scenes.",
-        )
 
-        # Load recent reference scenes
-        recent_scenes = self.controller.get_recent_reference_scenes()
-        if recent_scenes:
-            self.ui.txt001.option_box.menu.cmb002.add(
-                recent_scenes, header="Recent Scenes:"
-            )
-        else:
-            # Add placeholder if no recent scenes
-            self.ui.txt001.option_box.menu.cmb002.add(
-                ["No recent scenes"], header="Recent Scenes:"
-            )
+        # Recent reference scenes — option box button with history popup
+        from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
+
+        self._recent_refs_option = RecentValuesOption(
+            wrapped_widget=widget,
+            settings_key="hierarchy_manager_recent_scenes",
+            max_recent=10,
+        )
+        widget.option_box.add_option(self._recent_refs_option)
+
+        # Seed from legacy QSettings if the plugin's store is empty
+        if not self._recent_refs_option.recent_values:
+            for scene in self.controller.get_recent_reference_scenes():
+                self._recent_refs_option.add_recent_value(scene)
 
         # Connect text change signal for auto-refresh
         widget.textChanged.connect(self.txt001_textChanged)
@@ -1858,17 +1899,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         if reference_file and len(reference_file) > 0:
             self.ui.txt001.setText(reference_file[0])
-            # Save to recent scenes
-            self.controller.save_recent_reference_scene(reference_file[0])
-
-    def b004(self):
-        """Load from recent reference scenes."""
-        recent_scenes = self.controller.get_recent_reference_scenes()
-        if recent_scenes:
-            self.ui.txt001.option_box.menu.cmb002.clear()
-            self.ui.txt001.option_box.menu.cmb002.add(
-                recent_scenes, header="Recent Scenes:"
-            )
+            # Record to recent scenes
+            if hasattr(self, "_recent_refs_option"):
+                self._recent_refs_option.record(reference_file[0])
 
     def b005(self):
         """Refresh current scene hierarchy tree."""
@@ -1943,17 +1976,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Refresh tree widgets with new analysis
             self.b000()
 
-            # Save reference path to recent list
-            self.controller.save_recent_reference_scene(reference_path)
-
-    def cmb002(self, index, widget):
-        """Handle recent reference scene selection."""
-        if index >= 0:
-            selected_scene = widget.items[index]
-            if selected_scene and os.path.exists(selected_scene):
-                self.ui.txt001.setText(selected_scene)
-            else:
-                self.logger.error(f"Selected scene does not exist: {selected_scene}")
+            # Record reference path to recent list
+            if hasattr(self, "_recent_refs_option"):
+                self._recent_refs_option.record(reference_path)
 
     def txt001_textChanged(self, text):
         """Handle reference path text changes for auto-refresh."""

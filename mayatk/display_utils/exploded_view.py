@@ -230,6 +230,23 @@ class ExplodedViewSlots(ExplodedView):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.exploded_view
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Exploded View — Spread objects outward from their shared center.\n\n"
+                "• Explode: pushes objects away from the group center.\n"
+                "• Un-Explode: returns selected objects to original positions.\n"
+                "• Un-Explode All: resets every exploded object in the scene.\n"
+                "• Toggle Explode: swap between exploded and normal views."
+            ),
+        )
+
     def b000(self):
         """Explode button"""
         self.explode()

@@ -187,9 +187,9 @@ class ColorManager(ColorUtils):
         apply_to_outliner: bool = False,
     ) -> None:
         """Applies color based on given criteria to objects."""
+        if color is None:
+            color = (random.random(), random.random(), random.random())
         for obj in pm.ls(objects, long=True):
-            if color is None:
-                color = (random.random(), random.random(), random.random())
             if apply_to_vertex:
                 cls.set_color_attribute(obj, color, attr_type="vertex", force=True)
             if apply_to_wireframe:
@@ -213,8 +213,11 @@ class ColorManager(ColorUtils):
         matching_objects = []
 
         for obj in pm.ls(geometry=True, type="transform", long=True):
-            if check_material_color:
+            matched = False
+            if check_material_color and not matched:
                 for shading_engine in obj.listConnections(type="shadingEngine"):
+                    if matched:
+                        break
                     for material in shading_engine.listConnections():
                         if material.hasAttr("color"):
                             material_color = material.color.get()
@@ -222,23 +225,31 @@ class ColorManager(ColorUtils):
                                 cls.get_color_difference(material_color, target_color)
                                 <= threshold
                             ):
-                                matching_objects.append(obj)
-                                continue
+                                matched = True
+                                break
             if (
                 check_wireframe_color
+                and not matched
+                and obj.hasAttr("overrideEnabled")
                 and obj.overrideEnabled.get()
+                and obj.hasAttr("overrideRGBColors")
                 and obj.overrideRGBColors.get()
+                and obj.hasAttr("overrideColorRGB")
             ):
                 wireframe_color = obj.overrideColorRGB.get()
                 if cls.get_color_difference(wireframe_color, target_color) <= threshold:
-                    matching_objects.append(obj)
-                    continue
-            if check_outliner_color and obj.useOutlinerColor.get():
+                    matched = True
+            if (
+                check_outliner_color
+                and not matched
+                and obj.hasAttr("useOutlinerColor")
+                and obj.useOutlinerColor.get()
+                and obj.hasAttr("outlinerColor")
+            ):
                 outliner_color = obj.outlinerColor.get()
                 if cls.get_color_difference(outliner_color, target_color) <= threshold:
-                    matching_objects.append(obj)
-                    continue
-            if check_vertex_color:
+                    matched = True
+            if check_vertex_color and not matched:
                 vtx_colors = pm.polyColorPerVertex(
                     obj, query=True, allVertices=True, rgb=True
                 )
@@ -250,7 +261,9 @@ class ColorManager(ColorUtils):
                         cls.get_color_difference(average_vtx_color, target_color)
                         <= threshold
                     ):
-                        matching_objects.append(obj)
+                        matched = True
+            if matched:
+                matching_objects.append(obj)
 
         return matching_objects
 
@@ -271,7 +284,7 @@ class ColorManager(ColorUtils):
                 else:
                     pm.warning(f"{obj} has no attribute 'useOutlinerColor'.")
 
-            if reset_wireframe or reset_vertex:
+            if reset_wireframe:
                 if obj.hasAttr("overrideEnabled"):
                     obj.attr("overrideEnabled").set(0)
                 else:
@@ -305,6 +318,22 @@ class ColorManager(ColorUtils):
                     except RuntimeError as e:
                         print(f"Error removing vertex colors from {shape}: {e}")
 
+    # Desaturated defaults so swatches aren't all white on first launch.
+    DEFAULT_SWATCH_COLORS = [
+        (180, 120, 120),  # muted red
+        (180, 150, 120),  # muted orange
+        (180, 180, 120),  # muted yellow
+        (120, 180, 120),  # muted green
+        (120, 180, 160),  # muted teal
+        (120, 180, 180),  # muted cyan
+        (120, 150, 180),  # muted blue
+        (120, 120, 180),  # muted indigo
+        (150, 120, 180),  # muted purple
+        (180, 120, 180),  # muted magenta
+        (180, 120, 150),  # muted pink
+        (160, 160, 160),  # muted gray
+    ]
+
 
 class ColorManagerSlots(ColorManager):
     def __init__(self, switchboard):
@@ -312,9 +341,33 @@ class ColorManagerSlots(ColorManager):
         self.ui = self.sb.loaded_ui.color_manager
 
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
-        for button in self.button_grp.buttons():
+        buttons = self.button_grp.buttons()
+        for i, button in enumerate(buttons):
+            button._initialColor = self.sb.QtGui.QColor(
+                *ColorManager.DEFAULT_SWATCH_COLORS[
+                    i % len(ColorManager.DEFAULT_SWATCH_COLORS)
+                ]
+            )
             button.settings = self.ui.settings
         self.ui.chk000.setChecked(True)
+
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Color Manager — Assign colors via materials, outliner,\n"
+                "wireframe, or vertex coloring.\n\n"
+                "• Pick a color from the palette buttons.\n"
+                "• Apply as material color, outliner tint, wireframe\n"
+                "  override, or vertex color on selected objects.\n"
+                "• Remove vertex colors when no longer needed."
+            ),
+        )
 
     @property
     def selected_objects(self) -> List[object]:
@@ -374,16 +427,23 @@ class ColorManagerSlots(ColorManager):
             return
 
         found_objects = self.get_objects_by_color(
-            self.target_color, check_wireframe_color=True, check_outliner_color=True
+            self.target_color,
+            check_wireframe_color=self.ui.chk012.isChecked(),
+            check_vertex_color=self.ui.chk015.isChecked(),
+            check_outliner_color=self.ui.chk013.isChecked(),
+            check_material_color=self.ui.chk014.isChecked(),
         )
         pm.select(found_objects)
 
     def b003(self) -> None:
-        if len(self.selected_objects) > 1:
+        objects = self.selected_objects
+        if not objects:
+            return
+        if len(objects) > 1:
             self.sb.message_box("Please select exactly one object.")
             return
 
-        selected_object = self.selected_objects[0]
+        selected_object = objects[0]
         wireframe_color = self.get_wireframe_color(selected_object)
         if wireframe_color is None:
             print("Failed to retrieve wireframe color.")

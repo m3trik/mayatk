@@ -17,6 +17,7 @@ if scripts_dir not in sys.path:
 
 try:
     import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(f"Warning: {error}")
 
@@ -87,18 +88,18 @@ class MayaTkTestCase(unittest.TestCase):
 
     def create_test_cube(self, name: str = "test_cube"):
         """Create a test cube for testing."""
-        cube = pm.polyCube(name=name)[0]
-        return cube
+        cube_name = cmds.polyCube(name=name)[0]
+        return pm.PyNode(cube_name)
 
     def create_test_sphere(self, name: str = "test_sphere"):
         """Create a test sphere for testing."""
-        sphere = pm.polySphere(name=name)[0]
-        return sphere
+        sphere_name = cmds.polySphere(name=name)[0]
+        return pm.PyNode(sphere_name)
 
     def create_test_cylinder(self, name: str = "test_cylinder"):
         """Create a test cylinder for testing."""
-        cylinder = pm.polyCylinder(name=name)[0]
-        return cylinder
+        cylinder_name = cmds.polyCylinder(name=name)[0]
+        return pm.PyNode(cylinder_name)
 
     def get_test_callback(self):
         """Get a test callback function that captures messages."""

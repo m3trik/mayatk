@@ -29,6 +29,22 @@ class MirrorSlots(ptk.LoggingMixin):
         )
         self.sb.connect_multi(self.ui, "chk001-5", "clicked", self.preview.refresh)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Mirror — Mirror selected geometry across an axis.\n\n"
+                "• Choose axis (X, Y, Z) and pivot reference.\n"
+                "• Merge border vertices option.\n"
+                "• Enable Preview for non-destructive iteration."
+            ),
+        )
+
     def perform_operation(self, objects):
         # Read values from UI
         axis = self.sb.get_axis_from_checkboxes(

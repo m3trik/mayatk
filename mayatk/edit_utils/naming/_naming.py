@@ -130,15 +130,32 @@ class Naming(ptk.HelpMixin):
             # Optionally retain suffix from oldName
             if retain_suffix:
                 # Suffix is defined as everything after the last underscore, including the underscore
-                suffix = ""
+                old_suffix = ""
+                old_suffix_base = ""
                 if "_" in oldName:
-                    suffix = oldName[oldName.rfind("_") :]
-                    # If valid_suffixes is provided, only retain if suffix is in the list
-                    if valid_suffixes is not None and suffix not in valid_suffixes:
-                        suffix = ""
-                    # Avoid duplicate suffix
-                    if suffix and not newName.endswith(suffix):
-                        newName += suffix
+                    old_suffix = oldName[oldName.rfind("_") :]
+                    # Strip trailing digits to get the base suffix (e.g. _GRP1 -> _GRP)
+                    old_suffix_base = old_suffix.rstrip("0123456789")
+                    # If valid_suffixes is provided, only retain if base suffix is in the list
+                    if (
+                        valid_suffixes is not None
+                        and old_suffix_base not in valid_suffixes
+                    ):
+                        old_suffix_base = ""
+
+                if old_suffix_base and not newName.endswith(old_suffix_base):
+                    # Strip newName's own suffix before appending oldName's,
+                    # but only if that suffix is a recognized type
+                    if "_" in newName:
+                        new_suffix = newName[newName.rfind("_") :]
+                        # Strip trailing digits from new suffix too for comparison
+                        new_suffix_base = new_suffix.rstrip("0123456789")
+                        is_valid_new_suffix = (
+                            valid_suffixes is None or new_suffix_base in valid_suffixes
+                        )
+                        if is_valid_new_suffix:
+                            newName = newName[: newName.rfind("_")]
+                    newName += old_suffix_base
 
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)

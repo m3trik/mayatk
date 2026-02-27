@@ -203,6 +203,23 @@ class DuplicateLinearSlots:
         # Initialize the UI state
         self.toggle_weight_ui()
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Duplicate Linear — Duplicate objects along a linear path.\n\n"
+                "• Set number of copies and end transforms.\n"
+                "• Interpolation modes: Linear, Ease In/Out, Weighted, etc.\n"
+                "• Choose pivot point for transformations.\n"
+                "• Enable Preview to iterate before committing."
+            ),
+        )
+
     def toggle_weight_ui(self):
         """Disable weight UI components if the current calculation mode doesn't use them."""
         # Modes that don't typically use bias/curve parameters

@@ -35,6 +35,11 @@
 > This means every call **launches a fresh Maya instance on an unused port** so an
 > existing user session is **never** disturbed.
 >
+> When `force_new_instance=False` is used and an existing Maya session is detected,
+> a **confirmation dialog** is shown by default (via `confirm_existing=True`).
+> The user must click "Yes" before the connection proceeds.  Pass
+> `confirm_existing=False` only in automated scripts that knowingly reuse a session.
+>
 > - **`run_tests.py` also defaults to `force_new_instance=True`** (launches a new Maya).
 >   Only `--reuse` overrides this to attach to an existing session.
 > - To reuse an already-running instance, pass `force_new_instance=False` (or `--reuse`
@@ -45,6 +50,7 @@
 > **AI AGENT RULE**: When running tests, **NEVER** pass `force_new_instance=False`
 > or `--reuse`. Always let the runner launch its own Maya instance. Connecting to
 > an existing session risks destroying the user's scene and hours of unsaved work.
+> **NEVER** kill Maya processes you did not launch.
 >
 > `_launch_maya_gui()` delegates to `pythontk.AppLauncher` internally — do **not**
 > bypass it with raw `subprocess` calls.
@@ -125,3 +131,4 @@ Requires Maya running with `cmds.commandPort(name=":7002", sourceType="python")`
 - [x] **Adjust Key Spacing Tangent Preservation** — Rewrote `adjust_key_spacing` to MOVE keys via `pm.keyframe(edit=True, timeChange=...)` instead of recreating them, which natively preserves all tangent data. Added `set_tangent_info` helper that applies angles/weights in a separate call from types to prevent Maya from overriding stepped→fixed tangents. Updated `transfer_keyframes` to use `set_tangent_info`. Verified with 7 in-Maya tests (stepped, flat, mixed, negative spacing, preserve_keys).
 - [x] **MayaConnection Safe Defaults** — Changed `MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` so callers always get a fresh Maya instance by default, protecting existing user sessions. Updated `run_tests.py` and `test_maya_connection.py` to pass `force_new_instance=False` where needed. `_launch_maya_gui()` already delegates to `pythontk.AppLauncher` internally.
 - [x] **run_tests.py Session Safety** — Fixed `run_tests.py` to default to `force_new_instance=True` (was `False`, which hijacked the user's open Maya). Added `--reuse` CLI flag as the only opt-in to existing sessions. Added warning banners in both `run_tests.py` and `MayaConnection.connect()` when reuse is active. Updated copilot-instructions with explicit AI agent rule to never pass `--reuse`.
+- [x] **Audio Events Test Locator Fix** — Stabilized `test_audio_events.py` by removing invalid `pm.spaceLocator(...)[0]` usage (which indexed node names into single characters and caused `MayaNodeError` during select/listRelatives). Verified with a fresh Maya test run: `test_audio_events` now passes (`89 tests, 0 failures, 0 errors`).
