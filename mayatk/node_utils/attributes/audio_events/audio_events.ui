@@ -104,7 +104,7 @@ clip on the time slider waveform.</string>
          </property>
          <property name="maximumSize">
           <size>
-           <width>60</width>
+           <width>40</width>
            <height>20</height>
           </size>
          </property>
@@ -193,32 +193,6 @@ auto-key 'None' at clip end (if enabled), and sync.</string>
        <property name="bottomMargin">
         <number>1</number>
        </property>
-       <item>
-        <widget class="PushButton" name="tb000">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Create audio nodes at keyed event positions.
-Rebuilds synced nodes and the composite WAV
-from the current track map and keyframes.
-Activates the composite on the time slider
-for scrub playback.</string>
-         </property>
-         <property name="text">
-          <string>Sync Audio to Timeline</string>
-         </property>
-        </widget>
-       </item>
        <item>
         <widget class="QPushButton" name="b005">
          <property name="minimumSize">

@@ -201,6 +201,153 @@ class TestAnimUtils(MayaTkTestCase):
         AnimUtils.set_keys_for_attributes([self.sphere], target_times=[5], **data)
         self.assertEqual(pm.getAttr(self.sphere + ".translateY", time=5), 8.0)
 
+    def test_set_keys_for_attributes_preserves_stepped_tangents(self):
+        """Verify set_keys_for_attributes doesn't break existing stepped tangents.
+
+        Bug: pm.setKeyframe resets tangent types to the scene default,
+        overwriting stepped tangents when pasting values onto existing keys.
+        Fixed: 2026-02-26
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # The cube already has keys at 1 and 10 from setUp.
+        # Set them to stepped tangents.
+        cmds.keyTangent(plug, time=(1, 1), edit=True, outTangentType="step")
+        cmds.keyTangent(plug, time=(10, 10), edit=True, outTangentType="step")
+
+        # Overwrite the value at frame 1 via set_keys_for_attributes
+        AnimUtils.set_keys_for_attributes(
+            [self.cube], target_times=[1], translateX=99
+        )
+
+        # The value must be updated
+        self.assertAlmostEqual(pm.getAttr(plug, time=1), 99, places=3)
+
+        # Stepped out-tangent must still be "step"
+        ott = cmds.keyTangent(plug, query=True, time=(1, 1), outTangentType=True)
+        self.assertEqual(ott[0], "step", "Stepped tangent was overwritten by set_keys_for_attributes")
+
+    def test_copy_keys_channel_box(self):
+        """Test copy_keys with channel_box mode captures selected CB attributes."""
+        import maya.cmds as cmds
+
+        # Select the cube and highlight an attribute in the channel box
+        pm.select(self.cube)
+        # Channel box mode requires attributes to be selected in the CB;
+        # when nothing is highlighted the result should be empty.
+        result = AnimUtils.copy_keys(mode="channel_box")
+        # Without a live channel box selection this should be empty
+        self.assertIsInstance(result, dict)
+
+    def test_copy_keys_current_frame(self):
+        """Test copy_keys with current_frame mode reads animated values at the current time."""
+        import maya.cmds as cmds
+
+        pm.select(self.cube)
+        cmds.currentTime(1)
+        result = AnimUtils.copy_keys(mode="current_frame")
+        self.assertIn(str(self.cube), result)
+        obj_data = result[str(self.cube)]
+        self.assertAlmostEqual(obj_data["translateX"], 0.0, places=3)
+
+        cmds.currentTime(10)
+        result = AnimUtils.copy_keys(mode="current_frame")
+        obj_data = result[str(self.cube)]
+        self.assertAlmostEqual(obj_data["translateX"], 10.0, places=3)
+
+    def test_paste_keys_basic(self):
+        """Test paste_keys sets values at the current time."""
+        import maya.cmds as cmds
+
+        pm.select(self.sphere)
+        # Give sphere a key so the attribute exists on the curve
+        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+
+        copied = {str(self.sphere): {"translateX": 42.0}}
+        cmds.currentTime(5)
+        count = AnimUtils.paste_keys(
+            objects=[self.sphere], copied_data=copied
+        )
+        self.assertEqual(count, 1)
+        self.assertAlmostEqual(
+            pm.getAttr(f"{self.sphere}.translateX", time=5), 42.0, places=3
+        )
+
+    def test_paste_keys_preserves_existing_stepped_tangent(self):
+        """Verify paste_keys does not overwrite existing stepped tangent types.
+
+        Bug: pm.setKeyframe resets tangent types to scene default, destroying
+        stepped tangents when pasting onto an existing key.
+        Fixed: 2026-02-26
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Set frame 1 out-tangent to stepped
+        cmds.keyTangent(plug, time=(1, 1), edit=True, outTangentType="step")
+
+        # Paste a new value onto the existing key at frame 1
+        copied = {str(self.cube): {"translateX": 77.0}}
+        AnimUtils.paste_keys(
+            objects=[self.cube], copied_data=copied, target_time=1
+        )
+
+        # Value should be updated
+        self.assertAlmostEqual(pm.getAttr(plug, time=1), 77.0, places=3)
+
+        # Stepped tangent must survive
+        ott = cmds.keyTangent(plug, query=True, time=(1, 1), outTangentType=True)
+        self.assertEqual(ott[0], "step", "Stepped tangent was overwritten by paste_keys")
+
+    def test_paste_keys_inherits_stepped_tangent_for_new_key(self):
+        """Verify paste_keys inherits tangent type from the preceding key when inserting new keys.
+
+        When no key exists at the target time, the tangent type should be
+        inherited from the nearest preceding key so that stepped curves
+        stay stepped.
+        Fixed: 2026-02-26
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Set both existing keys (1, 10) to stepped
+        cmds.keyTangent(plug, edit=True, outTangentType="step")
+        cmds.keyTangent(plug, edit=True, inTangentType="step")
+
+        # Paste at frame 5, where no key exists yet
+        copied = {str(self.cube): {"translateX": 55.0}}
+        AnimUtils.paste_keys(
+            objects=[self.cube], copied_data=copied, target_time=5
+        )
+
+        # New key must exist
+        keys_at_5 = cmds.keyframe(plug, query=True, time=(5, 5), timeChange=True)
+        self.assertTrue(keys_at_5, "Key was not created at frame 5")
+
+        # Tangent types should be inherited as stepped
+        ott = cmds.keyTangent(plug, query=True, time=(5, 5), outTangentType=True)
+        itt = cmds.keyTangent(plug, query=True, time=(5, 5), inTangentType=True)
+        self.assertEqual(ott[0], "step", "Out-tangent not inherited as stepped")
+        self.assertEqual(itt[0], "step", "In-tangent not inherited as stepped")
+
+    def test_paste_keys_name_matching(self):
+        """Verify paste_keys matches objects by short name when long path differs."""
+        import maya.cmds as cmds
+
+        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+
+        # Store using short name
+        copied = {self.sphere.nodeName(): {"translateX": 33.0}}
+        cmds.currentTime(1)
+        count = AnimUtils.paste_keys(
+            objects=[self.sphere], copied_data=copied
+        )
+        self.assertEqual(count, 1)
+        self.assertAlmostEqual(
+            pm.getAttr(f"{self.sphere}.translateX", time=1), 33.0, places=3
+        )
+
     def test_move_keys_to_frame(self):
         """Test moving keys to a specific frame."""
         # Move keys from frame 1 to frame 5
@@ -222,6 +369,58 @@ class TestAnimUtils(MayaTkTestCase):
             ),
             0,
         )
+
+    def test_move_keys_to_frame_align_end(self):
+        """Test moving keys so the last key aligns to the target frame.
+
+        setUp creates keys at frame 1 and 10 on translateX.
+        With align='end', the key at frame 10 should land on the target
+        frame (20) and the key at frame 1 should shift to 11.
+        """
+        AnimUtils.move_keys_to_frame(
+            objects=[self.cube], frame=20, align="end"
+        )
+        # Last key (was 10) should now be at 20
+        keys_at_20 = pm.keyframe(
+            self.cube, attribute="translateX", query=True, time=(20, 20), valueChange=True
+        )
+        self.assertTrue(keys_at_20, "Last key was not moved to frame 20")
+        self.assertAlmostEqual(keys_at_20[0], 10.0, places=3)
+
+        # First key (was 1) should now be at 11 (offset = 20 - 10 = +10)
+        keys_at_11 = pm.keyframe(
+            self.cube, attribute="translateX", query=True, time=(11, 11), valueChange=True
+        )
+        self.assertTrue(keys_at_11, "First key was not moved to frame 11")
+        self.assertAlmostEqual(keys_at_11[0], 0.0, places=3)
+
+        # Original positions should be empty
+        self.assertFalse(
+            pm.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1)),
+            "Original key at frame 1 still exists",
+        )
+        self.assertFalse(
+            pm.keyframe(self.cube, attribute="translateX", query=True, time=(10, 10)),
+            "Original key at frame 10 still exists",
+        )
+
+    def test_move_keys_to_frame_align_start_default(self):
+        """Verify default align='start' moves the first key to the target frame."""
+        AnimUtils.move_keys_to_frame(
+            objects=[self.cube], frame=20
+        )
+        # First key (was 1) should now be at 20
+        keys_at_20 = pm.keyframe(
+            self.cube, attribute="translateX", query=True, time=(20, 20), valueChange=True
+        )
+        self.assertTrue(keys_at_20, "First key was not moved to frame 20")
+        self.assertAlmostEqual(keys_at_20[0], 0.0, places=3)
+
+        # Last key (was 10) should now be at 29 (offset = 20 - 1 = +19)
+        keys_at_29 = pm.keyframe(
+            self.cube, attribute="translateX", query=True, time=(29, 29), valueChange=True
+        )
+        self.assertTrue(keys_at_29, "Last key was not moved to frame 29")
 
     def test_delete_keys(self):
         """Test deleting keys."""
@@ -351,11 +550,19 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertTrue(len(keys) > 0)
 
     def test_insert_keyframe_gap(self):
-        """Test inserting a gap."""
-        # Keys at 1 and 10. Insert gap of 6 frames at frame 5.
-        # Key at 10 should move to 11 (5+6).
+        """Test inserting an exact gap using adjust_key_spacing with exact_gap=True.
+
+        Keys at 1 and 10. Insert exact gap of 6 frames at frame 5.
+        The first key after 5 is at 10. With exact_gap, it should move to 5+6=11.
+        """
         pm.currentTime(5)
-        AnimUtils.insert_keyframe_gap(duration=6, objects=[self.cube])
+        AnimUtils.adjust_key_spacing(
+            [self.cube],
+            spacing=6,
+            time=None,  # Auto = current time = 5
+            relative=False,
+            exact_gap=True,
+        )
 
         keys = pm.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(11.0, keys)
@@ -887,12 +1094,16 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Create SDK: driver.tx drives driven.ty
         pm.setDrivenKeyframe(
-            driven + ".translateY", currentDriver=driver + ".translateX",
-            driverValue=0, value=0
+            driven + ".translateY",
+            currentDriver=driver + ".translateX",
+            driverValue=0,
+            value=0,
         )
         pm.setDrivenKeyframe(
-            driven + ".translateY", currentDriver=driver + ".translateX",
-            driverValue=5, value=10
+            driven + ".translateY",
+            currentDriver=driver + ".translateX",
+            driverValue=5,
+            value=10,
         )
 
         # Verify SDK is working
@@ -900,13 +1111,16 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertAlmostEqual(pm.getAttr(driven + ".translateY"), 10.0, places=1)
 
         # Verify pre-bake curve type
-        curves = cmds.listConnections(
-            f"{driven}.translateY", type="animCurve", source=True, destination=False
-        ) or []
+        curves = (
+            cmds.listConnections(
+                f"{driven}.translateY", type="animCurve", source=True, destination=False
+            )
+            or []
+        )
         self.assertTrue(curves, "SDK curve should exist")
         self.assertTrue(
             cmds.nodeType(curves[0]).startswith("animCurveU"),
-            f"Pre-bake should be SDK type, got {cmds.nodeType(curves[0])}"
+            f"Pre-bake should be SDK type, got {cmds.nodeType(curves[0])}",
         )
 
         # SmartBake with delete_inputs=True (the bug scenario)
@@ -919,17 +1133,20 @@ class TestAnimUtils(MayaTkTestCase):
         result = baker.execute()
 
         # Baked curve should still exist
-        curves_after = cmds.listConnections(
-            f"{driven}.translateY", type="animCurve", source=True, destination=False
-        ) or []
+        curves_after = (
+            cmds.listConnections(
+                f"{driven}.translateY", type="animCurve", source=True, destination=False
+            )
+            or []
+        )
         self.assertTrue(
             curves_after,
             "Baked curve was deleted by delete_inputs! "
-            "bakeResults converts SDK curves in-place."
+            "bakeResults converts SDK curves in-place.",
         )
         self.assertTrue(
             cmds.nodeType(curves_after[0]).startswith("animCurveT"),
-            f"Post-bake should be time-based, got {cmds.nodeType(curves_after[0])}"
+            f"Post-bake should be time-based, got {cmds.nodeType(curves_after[0])}",
         )
 
         # Baked curve should have time-based keys with varying values
@@ -937,8 +1154,9 @@ class TestAnimUtils(MayaTkTestCase):
         vals = cmds.keyframe(curves_after[0], q=True, valueChange=True) or []
         self.assertGreater(len(keys), 1, "Baked curve should have keys")
         self.assertGreater(
-            len(set(round(v, 4) for v in vals)), 1,
-            "Baked curve should have varying values"
+            len(set(round(v, 4) for v in vals)),
+            1,
+            "Baked curve should have varying values",
         )
 
 

@@ -102,6 +102,22 @@ class HdrManagerSlots(HdrManager):
             rotation = node.rotateY.get()
             self.ui.slider000.setSliderPosition(rotation)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "HDR Manager — Manage Arnold HDR environment lighting.\n\n"
+                "• Lists .exr and .hdr files from sourceimages.\n"
+                "• Select an HDR map to apply as a skydome light.\n"
+                "• Rotate the environment with the slider."
+            ),
+        )
+
     @property
     def hdr_map(self) -> str:
         """Get the hdr map filepath from the comboBoxes current text.

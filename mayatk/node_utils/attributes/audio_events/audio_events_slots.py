@@ -92,6 +92,16 @@ class AudioEventsSlots:
             ),
         )
         btn_export.clicked.connect(self._export_composite)
+        widget.menu.add(
+            "QCheckBox",
+            setText="Trim Silence",
+            setObjectName="chk_trim_silence",
+            setToolTip=(
+                "When enabled, leading and trailing silence is removed\n"
+                "from the exported composite WAV."
+            ),
+            setChecked=True,
+        )
 
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
@@ -113,8 +123,9 @@ class AudioEventsSlots:
                 "       a None marker at the clip's end frame.\n"
                 "     • Enable 'Next Event' to auto-advance through tracks.\n"
                 "  5. Repeat steps 2–4 for each audio cue.\n"
-                "  6. Press 'Sync Audio to Timeline' to rebuild synced\n"
-                "     nodes and the composite WAV for scrub playback.\n\n"
+                "  6. Click the refresh (↻) button on the Key Audio\n"
+                "     Event option box to sync audio to the timeline\n"
+                "     and rebuild the composite WAV for scrub playback.\n\n"
                 "Note: Adding or replacing tracks when events are already\n"
                 "keyed triggers an automatic sync so the composite WAV\n"
                 "reflects the updated audio immediately."
@@ -146,11 +157,18 @@ class AudioEventsSlots:
             )
             return
 
+        # Navigate up from the cache directory so the save dialog opens
+        # in the project's audio folder, not the internal cache.
+        export_dir = os.path.dirname(comp_path)
+        _CACHE_DIRS = {"_audio_cache", "_maya_audio_cache"}
+        while os.path.basename(export_dir) in _CACHE_DIRS:
+            export_dir = os.path.dirname(export_dir)
+
         dest = self.sb.save_file_dialog(
             file_types=["*.wav"],
             title="Export Composite WAV",
             start_dir=os.path.join(
-                os.path.dirname(comp_path),
+                export_dir,
                 f"{self.CATEGORY}_composite.wav",
             ),
             filter_description="WAV Files",
@@ -160,11 +178,27 @@ class AudioEventsSlots:
 
         try:
             shutil.copy2(comp_path, dest)
+
+            # Optionally trim leading/trailing silence
+            trim = getattr(self.ui.header.menu, "chk_trim_silence", None)
+            if trim and trim.isChecked():
+                try:
+                    ptk.AudioUtils.trim_silence(dest)
+                except Exception as exc:
+                    logging.warning("AudioEvents: trim failed: %s", exc)
+
             self.ui.footer.setText(f"Exported composite → {os.path.basename(dest)}")
             logging.info("AudioEvents: exported composite to '%s'", dest)
         except OSError as exc:
             self.ui.footer.setText(f"Export failed: {exc}")
             logging.warning("AudioEvents: export failed: %s", exc)
+
+    def _sync_from_menu(self):
+        """Sync audio to timeline — header-menu entry point.
+
+        Wraps the same logic as the former tb000 toolbar button.
+        """
+        self.tb000()
 
     def _create_new_audio_object(self):
         """Prompt for a name, then create an empty audio-trigger locator.
@@ -236,7 +270,7 @@ class AudioEventsSlots:
     # ------------------------------------------------------------------
 
     def cmb000_init(self, widget):
-        """Init track combo — ensure the selection-sync job is running."""
+        """Init track combo and selection-sync job."""
         self._ensure_sync_job()
 
     def b000(self):
@@ -525,6 +559,11 @@ class AudioEventsSlots:
 
     def tb001_init(self, widget):
         """Init Key Audio Event option-box menu."""
+        widget.option_box.set_action(
+            self._sync_from_menu,
+            icon="refresh",
+            tooltip="Sync audio to timeline.\nRebuilds synced nodes and the composite WAV\nfrom the current track map and keyframes.",
+        )
         widget.option_box.menu.setTitle("Key Audio Event")
         widget.option_box.menu.add(
             "QCheckBox",
@@ -574,6 +613,7 @@ class AudioEventsSlots:
             setPrefix="Stagger: ",
             setSuffix=" fr",
         )
+
         # Wire enable/disable: Key All toggles stagger on and next-event off.
         def _on_key_all_toggled(checked):
             spn_stagger.setEnabled(checked)

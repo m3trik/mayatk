@@ -22,19 +22,38 @@ class _CoreUtilsInternal(object):
     def _prepare_reparent(
         nodes: List[object],
     ) -> Tuple[Optional[object], Optional[object]]:
-        """Prepare reparenting by using a temporary null if needed."""
+        """Prepare reparenting by using a temporary null if needed.
+
+        Creates a temporary null under any parent that would become childless
+        after the operation consumes the given nodes (e.g. polyUnite deletes
+        all children of a group, causing Maya to auto-delete the group).
+        """
         parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
         temp_null = None
 
-        # Determine if any of the nodes are the only child of their parent
+        node_set = set(str(n) for n in nodes)
+
+        # Check each unique parent to see if all its children are in the
+        # node list.  If so the parent would be auto-deleted after the
+        # operation, so we keep it alive with a temporary null.
+        seen_parents = set()
         for node in nodes:
             node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
-            if node_parent:
-                children = pm.listRelatives(node_parent, children=True) or []
-                if len(children) == 1:
-                    temp_null = pm.createNode("transform", n="tempTempNull")
-                    pm.parent(temp_null, node_parent)
-                    break
+            if not node_parent:
+                continue
+            parent_key = str(node_parent[0])
+            if parent_key in seen_parents:
+                continue
+            seen_parents.add(parent_key)
+
+            children = pm.listRelatives(node_parent[0], children=True) or []
+            # A temp null is needed when every child of this parent is
+            # part of the operation (the parent would end up empty).
+            remaining = [c for c in children if str(c) not in node_set]
+            if not remaining:
+                temp_null = pm.createNode("transform", n="tempTempNull")
+                pm.parent(temp_null, node_parent[0])
+                break  # Only the first-node's parent matters for reparenting
 
         return parent, temp_null
 
@@ -46,8 +65,12 @@ class _CoreUtilsInternal(object):
     ) -> None:
         """Clean up reparenting, handling the parent and temporary null."""
         if parent and new_node:
+            # parent comes from pm.listRelatives which returns a list
+            target = parent[0] if isinstance(parent, (list, tuple)) else parent
             try:
-                pm.parent(new_node, parent)
+                nodes = new_node if isinstance(new_node, (list, tuple)) else [new_node]
+                for n in nodes:
+                    pm.parent(n, target)
             except pm.general.MayaNodeError as e:
                 pm.warning(f"Failed to re-parent combined mesh: {e}")
         if temp_null:

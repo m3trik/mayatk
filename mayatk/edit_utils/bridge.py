@@ -95,6 +95,23 @@ class BridgeSlots:
         self.sb.connect_multi(self.ui, "s000-4", "valueChanged", self.preview.refresh)
         self.sb.connect_multi(self.ui, "chk001", "toggled", self.preview.refresh)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Bridge — Connect edge borders with new polygon faces.\n\n"
+                "• Choose curve type and segment count.\n"
+                "• Twist, taper, and smooth options.\n"
+                "• Enable Preview to iterate before applying.\n"
+                "• Optionally cleans up intermediate curves."
+            ),
+        )
+
     def perform_operation(self, objects):
         kwargs = {
             "curveType": self.ui.cmb000.currentIndex(),

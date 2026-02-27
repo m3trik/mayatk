@@ -330,6 +330,23 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         )
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Duplicate Radial — Duplicate objects in a radial pattern.\n\n"
+                "• Set copy count, start/end angle, and rotation axis.\n"
+                "• Weight bias and curve for non-uniform distribution.\n"
+                "• Instance, keep original, or combine copies.\n"
+                "• Enable Preview to check the pattern before finalizing."
+            ),
+        )
+
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()

@@ -181,6 +181,23 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         # Connect Signals
         self.ui.btn_build.clicked.connect(self.build_rig)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Telescope Rig — Build a telescoping segment rig.\n\n"
+                "• Select: Base Locator ▸ Segments (min 2) ▸ End Locator.\n"
+                "• Press Build to create driven-key animation on each segment.\n"
+                "• Segments extend/retract between the base and end locators.\n"
+                "• Results are logged in the text panel below."
+            ),
+        )
+
     @CoreUtils.undoable
     def build_rig(self):
         self.logger.log_divider()

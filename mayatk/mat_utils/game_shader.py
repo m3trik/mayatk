@@ -1481,6 +1481,20 @@ class GameShaderSlots(GameShader):
             setText="Open in Editor",
             setToolTip="Graph the material in the Hypershade.",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Game Shader — Create PBR shader networks from texture maps.\n\n"
+                "• Supports Arnold StandardSurface and Stingray PBS.\n"
+                "• Auto-detects texture map types (Base Color, Normal,\n"
+                "  Roughness, Metallic, etc.).\n"
+                "• Browse a texture folder to build complete shader networks.\n"
+                "• Open the result in Maya's Hypershade via the menu."
+            ),
+        )
 
     def lbl_graph_material(self):
         """Graph the material in the Hypershade."""

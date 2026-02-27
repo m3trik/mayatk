@@ -714,6 +714,22 @@ class MatUpdaterSlots(MatUpdater):
             setPlaceholderText="Archive To (Optional)",
             setToolTip="Optional: Folder to move original files to.",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Material Updater — Batch-process and update material textures.\n\n"
+                "• Process selected materials or all scene materials.\n"
+                "• Convert texture formats, enforce max resolution,\n"
+                "  and scale mask maps.\n"
+                "• Generate packed maps (ORM, MSAO) with force\n"
+                "  and fallback options.\n"
+                "• Copy/move processed textures to an output folder.\n"
+                "• Dry Run mode to preview changes without modifying files."
+            ),
+        )
 
     @property
     def selection_mode(self):

@@ -123,6 +123,23 @@ class CalculatorSlots:
         # Connect display return pressed to evaluate
         self.ui.txt_display.returnPressed.connect(self.on_equal)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Calculator — Math calculator with Maya time and unit conversion.\n\n"
+                "• Type expressions and press Enter or '=' to evaluate.\n"
+                "• Supports math functions (sin, cos, sqrt, etc.).\n"
+                "• Convert units (mm, cm, m, in, ft, etc.).\n"
+                "• Maya-specific: frames to seconds, get current time."
+            ),
+        )
+
     def _init_units(self):
         units = ["mm", "cm", "m", "km", "in", "ft", "yd", "mi"]
         self.ui.cmb_unit_from.addItems(units)

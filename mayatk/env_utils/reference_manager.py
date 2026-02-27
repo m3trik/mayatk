@@ -1678,6 +1678,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="btn_unreference_all",
             setToolTip="Remove all references from the scene.",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Reference Manager — Manage scene references, workspace files,\n"
+                "and naming conventions from a single interface.\n\n"
+                "• Workspace file discovery with filtering by folder structure,\n"
+                "  suffix, and extension.\n"
+                "• Save scenes with configurable naming conventions\n"
+                "  (case style, suffix, folder structure).\n"
+                "• Bulk reference operations: Convert to Assembly,\n"
+                "  Unlink & Import, Un-Reference All.\n"
+                "• Right-click file rows for per-reference actions."
+            ),
+        )
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:

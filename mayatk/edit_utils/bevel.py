@@ -85,6 +85,21 @@ class BevelSlots:
 
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Bevel — Add chamfer bevels to selected edges.\n\n"
+                "• Adjust bevel width and segment count.\n"
+                "• Enable Preview to see results before committing."
+            ),
+        )
+
     def perform_operation(self, objects):
         width = self.ui.s000.value()
         segments = self.ui.s001.value()

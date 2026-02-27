@@ -508,110 +508,59 @@ class AudioEvents(ptk.LoggingMixin):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    _CACHE_DIR_NAME = "_maya_audio_cache"
+    """Sub-directory name used for converted audio caches."""
+
+    @classmethod
+    def _cache_dir_for(cls, source_path: str) -> str:
+        """Return the cache directory path for a given source audio file."""
+        return os.path.join(os.path.dirname(source_path), cls._CACHE_DIR_NAME).replace(
+            "\\", "/"
+        )
+
     @classmethod
     def _build_audio_map(cls, search_dir: str) -> Dict[str, str]:
         """Recursively scan a directory for audio files.
 
-        Parameters:
-            search_dir: Root directory to scan.
-
-        Returns:
-            Dict mapping lowercase filename stem to full path.
-            First file found wins; collisions emit a warning.
+        Delegates to ``ptk.AudioUtils.build_audio_map``.
         """
-        audio_map: Dict[str, str] = {}
-
-        for root, _, files in os.walk(search_dir):
-            for file in files:
-                name, ext = os.path.splitext(file)
-                if ext.lower() not in cls.SOURCE_EXTENSIONS:
-                    continue
-                key = name.lower()
-                full_path = os.path.join(root, file).replace("\\", "/")
-                playable_path = cls._resolve_playable_path(full_path)
-                if not playable_path:
-                    continue
-                if key in audio_map:
-                    cls.logger.warning(
-                        f"Duplicate audio stem '{name}': keeping "
-                        f"'{audio_map[key]}', ignoring '{playable_path}'"
-                    )
-                else:
-                    audio_map[key] = playable_path
-
-        return audio_map
+        return ptk.AudioUtils.build_audio_map(
+            search_dir,
+            cache_dir=cls._cache_dir_for(os.path.join(search_dir, "_")),
+            logger=cls.logger,
+        )
 
     @classmethod
     def _build_audio_map_from_file_map(cls, file_map: Dict[str, str]) -> Dict[str, str]:
-        """Build an audio map from an ``{stem: path}`` dict.
+        """Build an audio map from a ``{stem: path}`` dict.
 
-        Unlike ``_build_audio_map_from_files``, the provided *stems*
-        are used as dictionary keys (lowered) instead of re-extracting
-        them from file paths.  This guarantees that the keys match the
-        event labels derived from the same stems.
-
-        Parameters:
-            file_map: ``{stem: original_path}`` mapping.
-
-        Returns:
-            Dict mapping lowercase stem -> resolved playable path.
+        Delegates to ``ptk.AudioUtils.build_audio_map_from_file_map``.
         """
-        audio_map: Dict[str, str] = {}
-        for stem, path in file_map.items():
-            full = path.replace("\\", "/")
-            playable_path = cls._resolve_playable_path(full)
-            if not playable_path:
-                continue
-            key = stem.lower()
-            if key not in audio_map:
-                audio_map[key] = playable_path
-        return audio_map
+        first_path = next(iter(file_map.values()), None)
+        cache_dir = cls._cache_dir_for(first_path) if first_path else None
+        return ptk.AudioUtils.build_audio_map_from_file_map(
+            file_map, cache_dir=cache_dir, logger=cls.logger
+        )
 
     @classmethod
     def _build_audio_map_from_files(cls, audio_files: List[str]) -> Dict[str, str]:
         """Build an audio map from an explicit list of file paths.
 
-        Parameters:
-            audio_files: Absolute paths to audio files.
-
-        Returns:
-            Dict mapping lowercase filename stem to the normalized path.
+        Delegates to ``ptk.AudioUtils.build_audio_map_from_files``.
         """
-        audio_map: Dict[str, str] = {}
-        for path in audio_files:
-            full = path.replace("\\", "/")
-            playable_path = cls._resolve_playable_path(full)
-            if not playable_path:
-                continue
-            stem = os.path.splitext(os.path.basename(full))[0].lower()
-            if stem in audio_map:
-                cls.logger.warning(
-                    f"Duplicate audio stem '{stem}': keeping "
-                    f"'{audio_map[stem]}', ignoring '{playable_path}'"
-                )
-            else:
-                audio_map[stem] = playable_path
-        return audio_map
+        cache_dir = cls._cache_dir_for(audio_files[0]) if audio_files else None
+        return ptk.AudioUtils.build_audio_map_from_files(
+            audio_files, cache_dir=cache_dir, logger=cls.logger
+        )
 
     @classmethod
     def _resolve_playable_path(cls, audio_path: str) -> Optional[str]:
         """Return a Maya-playable path, converting to WAV when required."""
-        source = audio_path.replace("\\", "/")
-        cache_dir = os.path.join(os.path.dirname(source), "_maya_audio_cache").replace(
-            "\\", "/"
+        return ptk.AudioUtils.resolve_playable_path(
+            audio_path,
+            cache_dir=cls._cache_dir_for(audio_path),
+            logger=cls.logger,
         )
-
-        try:
-            resolved = ptk.AudioUtils.ensure_playable_path(
-                source,
-                cache_dir=cache_dir,
-            )
-            if resolved != source:
-                cls.logger.debug(f"Converted '{source}' -> '{resolved}'")
-            return resolved
-        except Exception as exc:
-            cls.logger.warning(f"Cannot import '{source}': {exc}")
-            return None
 
     @classmethod
     def _stamp_event_attrs(cls, node_name: str, stem: str, node_type: str) -> None:

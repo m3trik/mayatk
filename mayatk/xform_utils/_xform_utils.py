@@ -146,6 +146,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             return axis  # Always returns a string unless to_integer is True
 
     @classmethod
+    @CoreUtils.undoable
     def move_to(cls, source, target, group_move=False):
         """Move source object(s) to align with the target object(s).
 
@@ -209,7 +210,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             wsPivot = pm.xform(obj, q=True, rotatePivot=1, worldSpace=1)
 
             pm.xform(obj, centerPivots=1)  # center pivot
-            plane = pm.polyPlane(name="temp#")
+            plane = pm.polyPlane(name="temp#")[0]
 
             if not origin:
                 # Move the object to the pivot location
@@ -1347,14 +1348,18 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def align_pivot_to_selection(align_from=[], align_to=[], translate=True):
-        """Align one objects pivot point to another using 3 point align.
+    def align_pivot_to_selection(align_from=None, align_to=None, translate=True):
+        """Align one object's pivot point to another using 3-point alignment.
 
         Parameters:
-            align_from (list): At minimum; 1 object, 1 Face, 2 Edges, or 3 Vertices.
-            align_to (list): The object to align with.
-            translate (bool): Move the object with it's pivot.
+            align_from (str/obj/list): At minimum; 1 object, 1 Face, 2 Edges, or 3 Vertices.
+            align_to (str/obj/list): The object/components to align with (needs at least 3 vertices).
+            translate (bool): Move the object with its pivot.
         """
+        if align_from is None:
+            align_from = []
+        if align_to is None:
+            align_to = []
         pos = pm.xform(align_to, q=1, translation=True, worldSpace=True)
         center_pos = [  # Get center by averaging of all x,y,z points.
             sum(pos[0::3]) / len(pos[0::3]),
@@ -1408,8 +1413,6 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             objs = pm.ls(sl=True, type="transform", flatten=True)
         else:
             objs = pm.ls(objects, type="transform", flatten=True)
-
-            return
 
         for obj in objs:
             pm.xform(obj, centerPivots=True)
@@ -1691,25 +1694,32 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
         Parameters:
             objects (str/obj/list): Transform node(s) of the objects to orient.
-            target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
+            target_pos (tuple/str/obj): A point as (x, y, z), or a transform node
+                at which to aim the other given 'objects'.
             aim_vect (tuple): The vector in local coordinates that points at the target.
             up_vect (tuple): The vector in local coordinates that aligns with the world up vector.
 
         Example:
             aim_object_at_point(['cube1', 'cube2'], (0, 15, 15))
         """
+        created_target = False
         if isinstance(target_pos, (tuple, set, list)):
             target = pm.createNode("transform", name="target_helper")
             pm.xform(target, translation=target_pos, absolute=True)
+            created_target = True
         else:
             target = target_pos  # Assume it's an existing object's name
 
+        constraints = []
         for obj in ptk.make_iterable(objects):
             const = pm.aimConstraint(
                 target, obj, aim=aim_vect, worldUpVector=up_vect, worldUpType="vector"
             )
+            constraints.append(const)
 
-        pm.delete(const, target)
+        pm.delete(constraints)
+        if created_target:
+            pm.delete(target)
 
     @staticmethod
     def orient_to_vector(
@@ -1968,40 +1978,98 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         return [obj for v, obj in sorted_]
 
     @staticmethod
+    @CoreUtils.undoable
     def align_using_three_points(vertices):
         """Move and align the object defined by the first 3 points to the last 3 points.
 
+        Builds a coordinate frame from each set of 3 points and computes the
+        rigid-body transformation (rotation + translation) that maps the source
+        frame onto the target frame.
+
         Parameters:
-            vertices (list): The first 3 points must be on the same object (i.e. it is the
-                    object to be transformed). The second set of points define
-                    the position and plane to transform to.
+            vertices (list): Exactly 6 vertices. The first 3 must be on the same
+                object (the object to be transformed). The second 3 define
+                the target position and orientation.
         """
         import maya.api.OpenMaya as om
 
         vertices = pm.ls(vertices, flatten=True)
-        objectToMove = pm.ls(vertices[:3], objectsOnly=True)
+        if len(vertices) < 6:
+            pm.warning("align_using_three_points requires exactly 6 vertices.")
+            return
 
-        p0, p1, p2 = [om.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[0:3]]
-        p3, p4, p5 = [om.MPoint(*pm.pointPosition(v, w=True)) for v in vertices[3:6]]
+        object_to_move = pm.ls(vertices[:3], objectsOnly=True)
+        if not object_to_move:
+            pm.warning("First 3 vertices must belong to a transform node.")
+            return
 
-        # Translate
-        pm.move(*(p3 - p0), objectToMove, r=True, ws=True)
+        # Source and target points
+        p0, p1, p2 = [om.MVector(*pm.pointPosition(v, w=True)) for v in vertices[0:3]]
+        p3, p4, p5 = [om.MVector(*pm.pointPosition(v, w=True)) for v in vertices[3:6]]
 
-        # First rotation
-        axis1 = (p1 - p0).normal()
-        axis2 = (p4 - p3).normal()
-        # cross_product = axis1 ^ axis2
-        angle = axis1.angle(axis2)
-        rotation = om.MEulerRotation(0, 0, angle).asVector()
-        pm.rotate(*rotation, objectToMove, p=p3, r=True, os=True)
+        def _build_frame(a, b, c):
+            """Build an orthonormal frame from 3 points."""
+            x_axis = (b - a).normal()
+            temp = (c - a).normal()
+            z_axis = (x_axis ^ temp).normal()  # cross product
+            y_axis = (z_axis ^ x_axis).normal()
+            return x_axis, y_axis, z_axis
 
-        # Second rotation
-        axis3 = (p2 - p0).normal()
-        axis4 = (p5 - p3).normal()
-        # cross_product = axis3 ^ axis4
-        angle = axis3.angle(axis4)
-        rotation = om.MEulerRotation(0, 0, angle).asVector()
-        pm.rotate(*rotation, objectToMove, p=p4, r=True, os=True)
+        src_x, src_y, src_z = _build_frame(p0, p1, p2)
+        tgt_x, tgt_y, tgt_z = _build_frame(p3, p4, p5)
+
+        # Build 4x4 matrices from the frames (column-major for Maya)
+        # Source matrix (rows = axes, 4th row = origin)
+        src_mat = om.MMatrix(
+            [
+                src_x.x,
+                src_x.y,
+                src_x.z,
+                0,
+                src_y.x,
+                src_y.y,
+                src_y.z,
+                0,
+                src_z.x,
+                src_z.y,
+                src_z.z,
+                0,
+                p0.x,
+                p0.y,
+                p0.z,
+                1,
+            ]
+        )
+        tgt_mat = om.MMatrix(
+            [
+                tgt_x.x,
+                tgt_x.y,
+                tgt_x.z,
+                0,
+                tgt_y.x,
+                tgt_y.y,
+                tgt_y.z,
+                0,
+                tgt_z.x,
+                tgt_z.y,
+                tgt_z.z,
+                0,
+                p3.x,
+                p3.y,
+                p3.z,
+                1,
+            ]
+        )
+
+        # Transform = src_inverse * target  (maps source space to target space)
+        delta = src_mat.inverse() * tgt_mat
+
+        # Apply: multiply the object's current world matrix by the delta
+        current_mat = om.MMatrix(
+            pm.xform(object_to_move[0], q=True, matrix=True, worldSpace=True)
+        )
+        new_mat = current_mat * delta
+        pm.xform(object_to_move[0], matrix=list(new_mat), worldSpace=True)
 
     @staticmethod
     def is_overlapping(a, b, tolerance=0.001):
@@ -2216,12 +2284,24 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def align_vertices(mode, average=False, edgeloop=False):
-        """Align vertices.
+        """Align selected vertices along one or more axes.
+
+        Vertices are aligned to either the last selected vertex's position or
+        the average position of all selected vertices.
 
         Parameters:
-            mode (int): possible values are align: 0-YZ, 1-XZ, 2-XY, 3-X, 4-Y, 5-Z, 6-XYZ
-            average (bool): align to average of all selected vertices. else, align to last selected
-            edgeloop (bool): align vertices in edgeloop from a selected edge
+            mode (int): Which axes to flatten/align:
+                0 - Align YZ (vertices share the same Y and Z as the reference)
+                1 - Align XZ (vertices share the same X and Z)
+                2 - Align XY (vertices share the same X and Y)
+                3 - Align X  (vertices share the same X only)
+                4 - Align Y  (vertices share the same Y only)
+                5 - Align Z  (vertices share the same Z only)
+                6 - Align XYZ (snap all vertices to the same point)
+            average (bool): If True, align to the average position of all selected
+                vertices.  If False, align to the last selected vertex.
+            edgeloop (bool): If True, expand the current edge selection to a full
+                edge loop before converting to vertices.
 
         Example:
             align_vertices(mode=3, average=True, edgeloop=True)
@@ -2234,6 +2314,20 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         pm.mel.PolySelectConvert(3)  # convert to vertices
 
         selection = pm.ls(sl=True, flatten=1)
+
+        if len(selection) < 2:
+            if len(selection) == 0:
+                return pm.inViewMessage(
+                    statusMessage="<hl>No vertices selected.</hl>",
+                    pos="topCenter",
+                    fade=True,
+                )
+            return pm.inViewMessage(
+                statusMessage="<hl>Selection must contain at least two vertices.</hl>",
+                pos="topCenter",
+                fade=True,
+            )
+
         lastSelected = pm.ls(tail=1, sl=True, flatten=1)
         align_to = pm.xform(lastSelected, q=True, translation=1, worldSpace=1)
         alignX = align_to[0]
@@ -2248,19 +2342,6 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             alignX = float(sum(x)) / (len(xyz) / 3)
             alignY = float(sum(y)) / (len(xyz) / 3)
             alignZ = float(sum(z)) / (len(xyz) / 3)
-
-        if len(selection) < 2:
-            if len(selection) == 0:
-                return pm.inViewMessage(
-                    statusMessage="<hl>No vertices selected.</hl>",
-                    pos="topCenter",
-                    fade=True,
-                )
-            return pm.inViewMessage(
-                statusMessage="<hl>Selection must contain at least two vertices.</hl>",
-                pos="topCenter",
-                fade=True,
-            )
 
         for vertex in selection:
             vertexXYZ = pm.xform(vertex, q=True, translation=1, worldSpace=1)

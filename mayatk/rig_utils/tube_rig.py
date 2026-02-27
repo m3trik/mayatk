@@ -1731,6 +1731,24 @@ class TubeRigSlots:
         if len(RIG_MODES) > 0:
             self.apply_mode(0)
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Tube Rig — Generate joint rigs along tube-shaped meshes.\n\n"
+                "• Select a tube mesh and press Build.\n"
+                "• Auto-detects the tube's centerline via edge loops\n"
+                "  or surface normals.\n"
+                "• Set joint count (or use Auto to derive from edge loops).\n"
+                "• Multiple rig modes available via the Mode preset combo."
+            ),
+        )
+
     def apply_mode(self, index: int):
         """Apply mode values and constraints to UI widgets."""
         mode = self.ui.cmb_preset.itemData(index)

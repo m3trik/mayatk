@@ -244,6 +244,23 @@ class DuplicateGridSlots(ptk.LoggingMixin):
             self.preview.refresh,
         )
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Duplicate Grid — Duplicate objects in a 3D grid pattern.\n\n"
+                "• Set counts for X, Y, Z grid dimensions.\n"
+                "• Adjust spacing between copies.\n"
+                "• Instance or group copies.\n"
+                "• Enable Preview to visualize the grid before finalizing."
+            ),
+        )
+
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()

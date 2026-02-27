@@ -18,6 +18,39 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.naming
 
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+
+    def header_init(self, widget):
+        """Configure header menu with tool description and workflow instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.setTitle("Naming:")
+
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Naming — Batch find, rename, and suffix scene objects.\n\n"
+                "Features:\n"
+                "  • Find: Select objects by name pattern (wildcards or regex).\n"
+                "  • Rename: Replace matched names with a new pattern.\n"
+                "    – Option: Retain existing type suffix during rename.\n"
+                "  • Convert Case: Change selected names to upper, lower,\n"
+                "    title, capitalize, or swapcase.\n"
+                "  • Suffix by Location: Auto-number objects by distance\n"
+                "    from a reference point (alphabetical or integer).\n"
+                "  • Strip Chars: Remove leading or trailing characters.\n"
+                "  • Suffix by Type: Append type-based suffixes (_GEO,\n"
+                "    _GRP, _JNT, etc.) with configurable suffix strings.\n\n"
+                "Tip: Use the option box (▸) on each button for settings.\n"
+                "Operations apply to the selection, or all objects when\n"
+                "nothing is selected."
+            ),
+        )
+
     @property
     def valid_suffixes(self):
         """Get current valid suffixes from tb003 widget fields."""
@@ -326,6 +359,10 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             setText="_LYR",
             setObjectName="tb003_txt007",
             setToolTip="Suffix for display layers.",
+        )
+        widget.option_box.menu.add(
+            "Separator",
+            setTitle="Suffix Options",
         )
         widget.option_box.menu.add(
             "QCheckBox",

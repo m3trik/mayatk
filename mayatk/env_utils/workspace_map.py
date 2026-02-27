@@ -376,6 +376,23 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
         self.logger.debug("WorkspaceMapSlots initialized.")
 
+    def header_init(self, widget):
+        """Configure header menu with tool instructions."""
+        widget.config_buttons("menu", "pin")
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Workspace Map — Browse and manage Maya workspaces.\n\n"
+                "• Enter or browse to a root directory.\n"
+                "• The tree displays discovered workspace folders.\n"
+                "• Click a workspace to navigate to it.\n"
+                "• Refresh to rescan the directory structure."
+            ),
+        )
+
     def txt000_init(self, widget):
         """Initialize the directory input widget."""
         self.logger.debug(

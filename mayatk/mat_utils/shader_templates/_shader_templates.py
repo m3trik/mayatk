@@ -463,6 +463,19 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             setText="Graph Material",
             setToolTip="Graph the selected material in the Hypershade.",
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Shader Templates — Save and restore shader presets.\n\n"
+                "• Save the current shader network as a reusable template.\n"
+                "• Browse and restore templates from the templates directory.\n"
+                "• Open the templates directory or graph the restored material\n"
+                "  in Maya's Hypershade via the header menu."
+            ),
+        )
 
     def lbl_graph_material(self):
         """Graph the last restored material in the Hypershade."""

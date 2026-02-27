@@ -61,6 +61,88 @@ class TestNaming(MayaTkTestCase):
         Naming.rename([cube], "NewObject", retain_suffix=True)
         self.assertEqual(cube.nodeName(), "NewObject_GEO")
 
+    def test_rename_suffix_retention_replaces_new_suffix(self):
+        """Verify retain_suffix replaces newName's suffix with each object's original suffix.
+
+        Bug: Renaming S00B6_TAG_GRP, S00B6_TAG_LOC, S00B6_TAG_GEO with
+        to='S00B8_TAG_LOC' and retain_suffix=True produced S00B8_TAG_LOC_GRP
+        instead of S00B8_TAG_GRP because the old suffix was appended without
+        first stripping the new name's suffix.
+        Fixed: 2026-02-26
+        """
+        grp = pm.group(n="S00B6_TAG_GRP", em=True)
+        loc = pm.spaceLocator(n="S00B6_TAG_LOC")
+        geo = pm.polyCube(n="S00B6_TAG_GEO")[0]
+
+        valid_suffixes = ["_GRP", "_LOC", "_GEO"]
+        Naming.rename(
+            [grp, loc, geo],
+            "S00B8_TAG_LOC",
+            retain_suffix=True,
+            valid_suffixes=valid_suffixes,
+        )
+
+        self.assertEqual(grp.nodeName(), "S00B8_TAG_GRP")
+        self.assertEqual(loc.nodeName(), "S00B8_TAG_LOC")
+        self.assertEqual(geo.nodeName(), "S00B8_TAG_GEO")
+
+    def test_rename_suffix_retention_no_valid_suffixes(self):
+        """Verify retain_suffix with valid_suffixes=None treats any _XXX as a suffix."""
+        grp = pm.group(n="Foo_GRP", em=True)
+        geo = pm.polyCube(n="Foo_GEO")[0]
+
+        Naming.rename(
+            [grp, geo],
+            "Bar_GEO",
+            retain_suffix=True,
+            valid_suffixes=None,
+        )
+
+        self.assertEqual(grp.nodeName(), "Bar_GRP")
+        self.assertEqual(geo.nodeName(), "Bar_GEO")
+
+    def test_rename_suffix_retention_strips_trailing_digits(self):
+        """Verify trailing digits are stripped when matching suffixes.
+
+        Objects with numbered suffixes like _GRP1, _GRP2 should match
+        the base suffix _GRP and be retained without the digits.
+        """
+        grp1 = pm.group(n="Asset_GRP1", em=True)
+        grp2 = pm.group(n="Asset_GRP2", em=True)
+        loc = pm.spaceLocator(n="Asset_LOC3")
+
+        valid_suffixes = ["_GRP", "_LOC", "_GEO"]
+        Naming.rename(
+            [grp1, grp2, loc],
+            "NewAsset_LOC",
+            retain_suffix=True,
+            valid_suffixes=valid_suffixes,
+        )
+
+        # Trailing digits should be stripped: _GRP1 -> _GRP, _LOC3 -> _LOC
+        self.assertEqual(grp1.nodeName(), "NewAsset_GRP")
+        self.assertEqual(grp2.nodeName(), "NewAsset_GRP")
+        self.assertEqual(loc.nodeName(), "NewAsset_LOC")
+
+    def test_rename_suffix_retention_unknown_new_suffix_not_stripped(self):
+        """Verify newName's suffix is NOT stripped if not in valid_suffixes.
+
+        Prevents corrupting names where the tail segment is meaningful
+        (e.g. 'HIGH' in 'Detail_HIGH').
+        """
+        geo = pm.polyCube(n="Part_GEO")[0]
+
+        Naming.rename(
+            [geo],
+            "Detail_HIGH",
+            retain_suffix=True,
+            valid_suffixes=["_GRP", "_LOC", "_GEO"],
+        )
+
+        # _HIGH is not in valid_suffixes so it should NOT be stripped.
+        # _GEO from oldName gets appended instead.
+        self.assertEqual(geo.nodeName(), "Detail_HIGH_GEO")
+
     def test_append_location_based_suffix_basic(self):
         """Test append_location_based_suffix basic functionality."""
         # Create 3 cubes at different X locations

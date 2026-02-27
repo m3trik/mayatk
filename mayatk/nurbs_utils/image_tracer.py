@@ -432,6 +432,18 @@ class ImageTracerSlots:
             setToolTip="Open the Blue Pencil tool in Maya.",
             clicked=lambda: pm.mel.OpenBluePencil(),
         )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Image Tracer — Convert raster images to NURBS curves.\n\n"
+                "• Load an image file or use Blue Pencil strokes as input.\n"
+                "• Traces image contours and generates editable NURBS curves.\n"
+                "• Adjust tracing parameters for detail and smoothness."
+            ),
+        )
 
     def txt000_init(self, widget):
         # Configure option box for file dialog
