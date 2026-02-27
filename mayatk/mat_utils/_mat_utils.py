@@ -752,12 +752,14 @@ class MatUtils(MatUtilsInternals):
         file_to_shader_name = {}
         if needs_shader:
             # OPTIMIZATION: Build mapping by traversing from shading engines once
-            # Instead of calling listHistory for every shader, we:
             # 1. Get all shading engines
-            # 2. For each, get the connected shader
-            # 3. Get upstream file nodes via listHistory (one call per shader, not per file node)
+            # 2. For each, get the connected shader (deduplicate to avoid repeat work)
+            # 3. Get upstream file nodes via listHistory (one call per unique shader)
+            # 4. Use cmds.ls(history, type="file") for batch filtering instead of
+            #    per-node cmds.nodeType() calls
             shading_engines = cmds.ls(type="shadingEngine") or []
             shader_attrs = ["surfaceShader", "volumeShader", "displacementShader"]
+            processed_shaders = set()
 
             for sg in shading_engines:
                 for attr_name in shader_attrs:
@@ -767,15 +769,21 @@ class MatUtils(MatUtilsInternals):
                         )
                         if connections:
                             shader_name = connections[0]
+                            # Skip shaders we've already processed
+                            if shader_name in processed_shaders:
+                                continue
+                            processed_shaders.add(shader_name)
                             # Get all file nodes in this shader's history
                             history = (
                                 cmds.listHistory(shader_name, pruneDagObjects=True)
                                 or []
                             )
-                            for node in history:
-                                if cmds.nodeType(node) == "file":
-                                    if node not in file_to_shader_name:
-                                        file_to_shader_name[node] = shader_name
+                            # Batch filter for file nodes (single cmds.ls call
+                            # instead of per-node cmds.nodeType())
+                            file_nodes_in_history = cmds.ls(history, type="file") or []
+                            for node in file_nodes_in_history:
+                                if node not in file_to_shader_name:
+                                    file_to_shader_name[node] = shader_name
                     except Exception:
                         pass
 

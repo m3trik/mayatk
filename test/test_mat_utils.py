@@ -334,18 +334,170 @@ class TestMatUtils(MayaTkTestCase):
 
         mat = cmds.shadingNode("lambert", asShader=True, name="cc_test_mat")
 
-        # File -> colorCorrect -> material.color
+        # File -> gammaCorrect -> material.color
+        # (gammaCorrect is universally available; colorCorrect may lack
+        # the expected attribute name across Maya versions)
         cc_file = cmds.shadingNode("file", asTexture=True, name="cc_file")
         cmds.setAttr(f"{cc_file}.fileTextureName", "diffuse_cc.png", type="string")
-        cc = cmds.shadingNode("colorCorrect", asUtility=True, name="test_cc")
-        cmds.connectAttr(f"{cc_file}.outColor", f"{cc}.inColor", force=True)
-        cmds.connectAttr(f"{cc}.outColor", f"{mat}.color", force=True)
+        gc = cmds.shadingNode("gammaCorrect", asUtility=True, name="test_gc")
+        cmds.connectAttr(f"{cc_file}.outColor", f"{gc}.value", force=True)
+        cmds.connectAttr(f"{gc}.outValue", f"{mat}.color", force=True)
 
         result = MatUtils._resolve_texture_targets(materials=[mat], as_strings=True)
         self.assertIn(
             "cc_file",
             result["file_nodes"],
             "File node behind colorCorrect should be found",
+        )
+
+    # -------------------------------------------------------------------------
+    # Regression: get_file_nodes shader deduplication optimization
+    # -------------------------------------------------------------------------
+
+    def test_get_file_nodes_shared_shader_across_shading_engines(self):
+        """Verify get_file_nodes returns correct results when a shader is
+        connected to multiple shading engines.
+
+        Bug: get_file_nodes called listHistory for every shading engine
+        connection, causing redundant work when the same shader appeared
+        in multiple SGs. With the deduplication fix, each unique shader
+        is traversed only once.
+        Fixed: 2026-02-27
+        """
+        from maya import cmds
+
+        # Create a shader with a file node
+        shared_mat = cmds.shadingNode("lambert", asShader=True, name="shared_mat")
+        shared_file = cmds.shadingNode("file", asTexture=True, name="shared_file")
+        cmds.setAttr(f"{shared_file}.fileTextureName", "shared_tex.png", type="string")
+        cmds.connectAttr(f"{shared_file}.outColor", f"{shared_mat}.color", force=True)
+
+        # Connect the same shader to TWO shading engines
+        sg1 = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="shared_sg1"
+        )
+        cmds.connectAttr(f"{shared_mat}.outColor", f"{sg1}.surfaceShader", force=True)
+        sg2 = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="shared_sg2"
+        )
+        cmds.connectAttr(f"{shared_mat}.outColor", f"{sg2}.surfaceShader", force=True)
+
+        # Query file nodes — shared_file should appear exactly once
+        result = MatUtils.get_file_nodes(
+            materials=[shared_mat], return_type="shaderName|fileNodeName"
+        )
+        file_node_names = [row[1] for row in result]
+        self.assertIn(
+            "shared_file",
+            file_node_names,
+            "File node connected to shared shader must be found",
+        )
+        self.assertEqual(
+            file_node_names.count("shared_file"),
+            1,
+            "File node should appear exactly once despite shader in multiple SGs",
+        )
+
+    def test_get_file_nodes_batch_type_filter(self):
+        """Verify get_file_nodes correctly filters file nodes using batch
+        cmds.ls(type='file') instead of per-node cmds.nodeType() calls.
+
+        Bug: Per-node nodeType calls were O(N) in the shader history size
+        and added massive overhead in heavy scenes. Replaced with batch
+        cmds.ls(history, type='file').
+        Fixed: 2026-02-27
+        """
+        from maya import cmds
+
+        # Create a shader with a file node AND a non-file utility node
+        mat = cmds.shadingNode("lambert", asShader=True, name="batch_mat")
+        file_node = cmds.shadingNode("file", asTexture=True, name="batch_file")
+        cmds.setAttr(f"{file_node}.fileTextureName", "batch_tex.png", type="string")
+        # Insert a bump2d between file and material
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="batch_bump")
+        cmds.connectAttr(f"{file_node}.outAlpha", f"{bump}.bumpValue", force=True)
+        cmds.connectAttr(f"{bump}.outNormal", f"{mat}.normalCamera", force=True)
+
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="batch_sg"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+
+        # get_file_nodes should find the file node through utility chain
+        result = MatUtils.get_file_nodes(
+            materials=[mat], return_type="shaderName|fileNodeName"
+        )
+        file_node_names = [row[1] for row in result]
+        self.assertIn(
+            "batch_file",
+            file_node_names,
+            "File node behind utility node must be found via batch ls filter",
+        )
+
+    def test_get_file_nodes_multiple_files_per_shader(self):
+        """Verify get_file_nodes returns all file nodes when a single shader
+        has multiple file textures (e.g. diffuse + bump).
+
+        Ensures the deduplication optimization doesn't accidentally skip
+        file nodes that share the same parent shader.
+        Fixed: 2026-02-27
+        """
+        from maya import cmds
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="multi_mat")
+
+        # Diffuse file node
+        diff_file = cmds.shadingNode("file", asTexture=True, name="multi_diffuse")
+        cmds.setAttr(f"{diff_file}.fileTextureName", "diffuse.png", type="string")
+        cmds.connectAttr(f"{diff_file}.outColor", f"{mat}.color", force=True)
+
+        # Bump file node (through bump2d)
+        bump_file = cmds.shadingNode("file", asTexture=True, name="multi_bump")
+        cmds.setAttr(f"{bump_file}.fileTextureName", "bump.png", type="string")
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="multi_bump2d")
+        cmds.connectAttr(f"{bump_file}.outAlpha", f"{bump}.bumpValue", force=True)
+        cmds.connectAttr(f"{bump}.outNormal", f"{mat}.normalCamera", force=True)
+
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="multi_sg"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+
+        result = MatUtils.get_file_nodes(materials=[mat], return_type="fileNodeName")
+        self.assertIn("multi_diffuse", result, "Diffuse file node must be found")
+        self.assertIn("multi_bump", result, "Bump file node must be found")
+        self.assertEqual(len(result), 2, "Exactly two file nodes expected")
+
+    def test_get_file_nodes_no_duplicates_in_scene_scan(self):
+        """Verify a full scene scan (no material filter) returns each file
+        node exactly once, even when the same file is reachable through
+        multiple shading engines.
+
+        Fixed: 2026-02-27
+        """
+        from maya import cmds
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="dedup_mat")
+        fn = cmds.shadingNode("file", asTexture=True, name="dedup_file")
+        cmds.setAttr(f"{fn}.fileTextureName", "dedup.png", type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.color", force=True)
+
+        for i in range(3):
+            sg = cmds.sets(
+                renderable=True,
+                noSurfaceShader=True,
+                empty=True,
+                name=f"dedup_sg{i}",
+            )
+            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+
+        # Full scene scan
+        result = MatUtils.get_file_nodes(return_type="shaderName|fileNodeName")
+        dedup_rows = [r for r in result if r[1] == "dedup_file"]
+        self.assertEqual(
+            len(dedup_rows),
+            1,
+            "File node connected via 3 SGs should appear exactly once",
         )
 
 
