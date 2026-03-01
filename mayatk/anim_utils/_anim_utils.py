@@ -1966,8 +1966,16 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if mode == "aggressive":
                 mode = "aggressive_preferred"
 
+            # Invert swaps directional modes (floor ↔ ceil)
+            if invert_snap:
+                if mode == "floor":
+                    mode = "ceil"
+                elif mode == "ceil":
+                    mode = "floor"
+
             target_time = ptk.MathUtils.round_value(
-                target_time, mode=mode, invert=invert_snap
+                target_time,
+                mode=mode,
             )
 
         pm.currentTime(target_time, edit=True, update=update)
