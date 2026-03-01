@@ -38,6 +38,7 @@ class RenderOpacitySlots:
 
         # Selection-changed job to enable/disable fade controls
         self._sel_job_id = None
+        self._is_updating = False  # Reentrancy guard
         try:
             cmds.evalDeferred(self._create_selection_job)
         except Exception:
@@ -178,36 +179,42 @@ class RenderOpacitySlots:
         else:
             start, end = current, current + frames
 
-        keyed = []
-        for obj in objects:
-            if not obj.hasAttr("opacity"):
-                continue
+        # Suppress the SelectionChanged callback while we modify the DG
+        # to prevent reentrant evaluation (which can crash Maya).
+        self._kill_selection_job()
+        try:
+            keyed = []
+            for obj in objects:
+                if not obj.hasAttr("opacity"):
+                    continue
 
-            # Resolve fade direction per object
-            if direction_mode == "auto":
-                fade_in = self._resolve_auto_fade(obj, current)
-            else:
-                fade_in = direction_mode == "in"
+                # Resolve fade direction per object
+                if direction_mode == "auto":
+                    fade_in = self._resolve_auto_fade(obj, current)
+                else:
+                    fade_in = direction_mode == "in"
 
-            start_val, end_val = (0, 1) if fade_in else (1, 0)
+                start_val, end_val = (0, 1) if fade_in else (1, 0)
 
-            pm.setKeyframe(
-                obj,
-                attribute="opacity",
-                time=start,
-                value=start_val,
-                inTangentType="linear",
-                outTangentType="linear",
-            )
-            pm.setKeyframe(
-                obj,
-                attribute="opacity",
-                time=end,
-                value=end_val,
-                inTangentType="linear",
-                outTangentType="linear",
-            )
-            keyed.append((obj.name(), fade_in))
+                pm.setKeyframe(
+                    obj,
+                    attribute="opacity",
+                    time=start,
+                    value=start_val,
+                    inTangentType="linear",
+                    outTangentType="linear",
+                )
+                pm.setKeyframe(
+                    obj,
+                    attribute="opacity",
+                    time=end,
+                    value=end_val,
+                    inTangentType="linear",
+                    outTangentType="linear",
+                )
+                keyed.append((obj.name(), fade_in))
+        finally:
+            self._create_selection_job()
 
         if keyed:
             dirs = {"Fade In" if fi else "Fade Out" for _, fi in keyed}
@@ -313,6 +320,11 @@ class RenderOpacitySlots:
         (e.g. after a Duplicate operation) so the user always operates
         on a healthy object.
         """
+        # Reentrancy guard — ensure_connections modifies the DG, which
+        # can fire additional callbacks and crash Maya.
+        if self._is_updating:
+            return
+        self._is_updating = True
         try:
             # Guard: skip if the UI has been destroyed (prevents crash
             # when the callback fires after the widget is garbage-collected).
@@ -325,8 +337,11 @@ class RenderOpacitySlots:
                     item.setEnabled(False)
                 return
 
-            # Repair any broken opacity wiring (cheap & idempotent).
-            mtk.RenderOpacity.ensure_connections(selected)
+            # Defer scene-modifying work out of the SelectionChanged
+            # callback context to prevent reentrant DG evaluation.
+            cmds.evalDeferred(
+                lambda sel=list(selected): mtk.RenderOpacity.ensure_connections(sel)
+            )
 
             has_opacity = any(obj.hasAttr("opacity") for obj in selected)
             for item in self.ui.tb000.option_box.menu.get_items():
@@ -337,3 +352,5 @@ class RenderOpacitySlots:
             logging.getLogger(__name__).debug(
                 "_update_fade_enabled error", exc_info=True
             )
+        finally:
+            self._is_updating = False

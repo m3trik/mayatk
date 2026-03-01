@@ -1040,19 +1040,61 @@ class EditUtils(ptk.HelpMixin):
                 if shapes and cmds.nodeType(shapes[0]) == "mesh":
                     scene_objs.append(obj)
 
-        # Fingerprint by bounding box min/max (rounded) and topology
+        # Fingerprint by bounding box min/max (rounded), topology, and
+        # sampled vertex positions.  Bbox + poly-count alone can match
+        # objects that are geometrically different (same counts, same
+        # extents but different shapes), producing false positives.
+        _R = 5  # Rounding precision for all spatial comparisons
         obj_fingerprints = {}
         for obj in scene_objs:
             bbox = cmds.xform(obj, query=True, ws=True, bb=True)
             if not bbox:
                 continue
 
-            bbox_min = (round(bbox[0], 6), round(bbox[1], 6), round(bbox[2], 6))
-            bbox_max = (round(bbox[3], 6), round(bbox[4], 6), round(bbox[5], 6))
+            bbox_min = (round(bbox[0], _R), round(bbox[1], _R), round(bbox[2], _R))
+            bbox_max = (round(bbox[3], _R), round(bbox[4], _R), round(bbox[5], _R))
 
-            # polyEvaluate returns dict, we convert to string for hashing
-            topo = str(cmds.polyEvaluate(obj))
-            obj_fingerprints[obj] = (bbox_min, bbox_max, topo)
+            # Single polyEvaluate call — reuse for both topo hash and vtx count
+            poly_eval = cmds.polyEvaluate(obj)
+            topo = str(poly_eval)
+
+            # Sample vertex positions for a stronger fingerprint.
+            vtx_sample = ()
+            try:
+                vtx_count = (
+                    poly_eval.get("vertex", 0) if isinstance(poly_eval, dict) else 0
+                )
+                if vtx_count > 0:
+                    # Pick up to 8 evenly-spaced vertex indices
+                    sample_count = min(8, vtx_count)
+                    step = max(1, vtx_count // sample_count)
+                    components = [f"{obj}.vtx[{i * step}]" for i in range(sample_count)]
+                    # Batch query — single Maya round-trip for all vertices
+                    flat = (
+                        cmds.xform(
+                            components,
+                            query=True,
+                            worldSpace=True,
+                            translation=True,
+                        )
+                        or []
+                    )
+                    vtx_sample = tuple(
+                        (
+                            round(flat[i], _R),
+                            round(flat[i + 1], _R),
+                            round(flat[i + 2], _R),
+                        )
+                        for i in range(0, len(flat), 3)
+                    )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).debug(
+                    "Vertex sampling failed for %s: %s", obj, exc
+                )
+
+            obj_fingerprints[obj] = (bbox_min, bbox_max, topo, vtx_sample)
 
         if objects is None:
             selected_set = set(

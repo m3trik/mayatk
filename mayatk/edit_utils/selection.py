@@ -37,32 +37,33 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Particles": lambda objs: pm.listTransforms(objs, type="particle"),
             "Rigid Bodies": lambda objs: pm.listTransforms(objs, type="rigidBody"),
             "Rigid Constraints": lambda objs: pm.ls(objs, type="rigidConstraint"),
-            "Sculpt Objects": lambda objs: pm.listTransforms(
+            "Sculpts": lambda objs: pm.listTransforms(
                 objs, type=["implicitSphere", "sculpt"]
             ),
             "Strokes": lambda objs: pm.listTransforms(objs, type="stroke"),
             "Wires": lambda objs: pm.ls(objs, type="wire"),
         },
         "Geometry": {
-            "Geometry": lambda objs: Selection._select_geometry(objs),
-            "Geometry (Hidden)": lambda objs: Selection._select_hidden_geometry(objs),
-            "Geometry (Polygon)": lambda objs: pm.listTransforms(objs, type="mesh"),
-            "Geometry (Single Instance)": lambda objs: Selection._select_single_instance_geometry(
+            "All Geometry": lambda objs: Selection._select_geometry(objs),
+            "Hidden Geometry": lambda objs: Selection._select_hidden_geometry(objs),
+            "Non-Selectable Geometry": lambda objs: Selection._select_unselectable_geometry(
                 objs
             ),
-            "Geometry (Templated)": lambda objs: Selection._select_templated_geometry(
+            "NURBS Curves": lambda objs: pm.listTransforms(objs, type="nurbsCurve"),
+            "NURBS Surfaces": lambda objs: pm.ls(objs, type="nurbsSurface"),
+            "Polygon Meshes": lambda objs: pm.listTransforms(objs, type="mesh"),
+            "Single-Instance Geometry": lambda objs: Selection._select_single_instance_geometry(
                 objs
             ),
-            "Geometry (Un-Selectable)": lambda objs: Selection._select_unselectable_geometry(
+            "Templated Geometry": lambda objs: Selection._select_templated_geometry(
                 objs
             ),
-            "NURBS (Curves)": lambda objs: pm.listTransforms(objs, type="nurbsCurve"),
-            "NURBS (Surfaces)": lambda objs: pm.ls(objs, type="nurbsSurface"),
         },
         "Hierarchy": {
+            "Ancestors": lambda objs: Selection.select_hierarchy_above(objs),
+            "Children": lambda objs: Selection.select_children(objs),
+            "Descendants": lambda objs: Selection.select_hierarchy_below(objs),
             "Groups": lambda objs: [obj for obj in objs if NodeUtils.is_group(obj)],
-            "Hierarchy (above)": lambda objs: Selection.select_hierarchy_above(objs),
-            "Hierarchy (below)": lambda objs: Selection.select_hierarchy_below(objs),
         },
         "Scene": {
             "Assets": lambda objs: pm.ls(objs, type=["container", "dagContainer"]),
@@ -70,7 +71,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Image Planes": lambda objs: pm.ls(objs, type="imagePlane"),
             "Lights": lambda objs: pm.listTransforms(objs, lights=1),
             "Locators": lambda objs: Selection._select_locators(objs),
-            "Locators (Keyed)": lambda objs: Selection._select_keyed_locators(objs),
+            "Keyed Locators": lambda objs: Selection._select_keyed_locators(objs),
             "Transforms": lambda objs: pm.ls(objs, type="transform"),
         },
     }
@@ -129,6 +130,26 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         return list(result) if isinstance(result, set) else result
 
     @staticmethod
+    def select_children(objects: List[Union[str, object]]) -> Set[object]:
+        """Select the immediate children of the given objects.
+
+        Unlike ``select_hierarchy_below`` which returns *all* descendants,
+        this method returns only the direct children one level below.
+
+        Parameters:
+            objects (List[Union[str, object]]): Parent objects to get children from.
+
+        Returns:
+            Set[object]: Immediate child transforms.
+        """
+        result = set()
+        for obj in objects:
+            children = pm.listRelatives(obj, children=True, type="transform")
+            if children:
+                result.update(children)
+        return result
+
+    @staticmethod
     def select_hierarchy_above(objects: List[Union[str, object]]) -> Set[object]:
         """Select all parent objects in the hierarchy above the given objects.
 
@@ -185,53 +206,42 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
     def _select_keyed_locators(objects: List[Union[str, object]]) -> Set[object]:
         """Select locators that have animation keys."""
         shapes = pm.ls(objects, exactType="locator")
-        return set(
-            [
-                obj.getParent()
-                for obj in shapes
-                if pm.keyframe(obj.getParent(), query=True, keyframeCount=True) > 0
-            ]
-        )
+        return {
+            obj.getParent()
+            for obj in shapes
+            if pm.keyframe(obj.getParent(), query=True, keyframeCount=True) > 0
+        }
 
     @staticmethod
     def _select_hidden_geometry(objects: List[Union[str, object]]) -> Set[object]:
         """Select hidden geometry."""
         geometry = pm.ls(objects, geometry=True)
-        return set(
-            [
-                geo.getParent()
-                for geo in geometry
-                if not geo.getParent().visibility.get()
-            ]
-        )
+        return {
+            geo.getParent() for geo in geometry if not geo.getParent().visibility.get()
+        }
 
     @staticmethod
     def _select_templated_geometry(objects: List[Union[str, object]]) -> Set[object]:
         """Select templated geometry."""
         geometry = pm.ls(objects, geometry=True)
-        return set(
-            [
-                geo.getParent()
-                for geo in geometry
-                if hasattr(geo.getParent(), "template")
-                and geo.getParent().template.get()
-            ]
-        )
+        return {
+            geo.getParent()
+            for geo in geometry
+            if hasattr(geo.getParent(), "template") and geo.getParent().template.get()
+        }
 
     @staticmethod
     def _select_unselectable_geometry(
-        objects: List[Union[str, object]] = None,
+        objects: List[Union[str, object]],
     ) -> Set[object]:
         """Select unselectable geometry."""
-        geometry = pm.ls(geometry=True)
-        return set(
-            [
-                geo.getParent()
-                for geo in geometry
-                if geo.getParent().overrideEnabled.get()
-                and geo.getParent().overrideDisplayType.get() == 2
-            ]
-        )
+        geometry = pm.ls(objects, geometry=True)
+        return {
+            geo.getParent()
+            for geo in geometry
+            if geo.getParent().overrideEnabled.get()
+            and geo.getParent().overrideDisplayType.get() == 2
+        }
 
     @staticmethod
     def _select_single_instance_geometry(
@@ -245,13 +255,11 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
     def _select_animated_objects(objects: List[Union[str, object]]) -> Set[object]:
         """Select objects with animation keys."""
         transforms = pm.ls(objects, type="transform")
-        return set(
-            [
-                obj
-                for obj in transforms
-                if pm.keyframe(obj, query=True, keyframeCount=True) > 0
-            ]
-        )
+        return {
+            obj
+            for obj in transforms
+            if pm.keyframe(obj, query=True, keyframeCount=True) > 0
+        }
 
     @staticmethod
     def _apply_selection_mode(

@@ -48,6 +48,8 @@ class ImageToPlane(ptk.LoggingMixin):
         suffix: str = "_MAT",
         plane_height: float = 10.0,
         axis: Optional[List[float]] = None,
+        group: bool = False,
+        group_name: str = "imagePlanes_GRP",
     ) -> Dict[str, object]:
         """Create textured planes for one or more images.
 
@@ -61,6 +63,9 @@ class ImageToPlane(ptk.LoggingMixin):
                 derived from the image aspect ratio.
             axis: Plane normal axis as ``[x, y, z]``.  Defaults to
                 ``[0, 0, 1]`` (facing camera in front view).
+            group: If *True*, parent all created planes under a
+                single group node.
+            group_name: Name of the group node when *group* is True.
 
         Returns:
             dict: ``{image_stem: plane_transform, ...}``
@@ -90,6 +95,11 @@ class ImageToPlane(ptk.LoggingMixin):
                     path,
                     exc_info=True,
                 )
+
+        if group and results:
+            grp = pm.group(list(results.values()), name=group_name)
+            results["__group__"] = grp
+
         return results
 
     @classmethod

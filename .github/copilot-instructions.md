@@ -47,10 +47,22 @@
 > - Unit tests in `test_maya_connection.py` pass `force_new_instance=False`
 >   only because they use mocks — never in a real Maya context.
 >
-> **AI AGENT RULE**: When running tests, **NEVER** pass `force_new_instance=False`
-> or `--reuse`. Always let the runner launch its own Maya instance. Connecting to
-> an existing session risks destroying the user's scene and hours of unsaved work.
-> **NEVER** kill Maya processes you did not launch.
+> **AI AGENT RULE — HARD BLOCK**:
+> When running tests, **NEVER** pass `force_new_instance=False` or `--reuse`.
+> Always let the runner launch its own Maya instance.
+>
+> **This rule has NO exceptions for convenience, speed, or retry attempts.**
+> If a prior test run's results are slow to appear, **wait longer or re-run
+> without `--reuse`** — do NOT switch to `--reuse` to save time.
+>
+> Connecting to an existing session risks destroying the user's scene and
+> hours of unsaved work. **NEVER** kill Maya processes you did not launch.
+>
+> **FORBIDDEN COMMANDS** (grep yourself before executing):
+> ```
+> --reuse                        # NEVER
+> force_new_instance=False        # NEVER (except in mock-only unit tests)
+> ```
 >
 > `_launch_maya_gui()` delegates to `pythontk.AppLauncher` internally — do **not**
 > bypass it with raw `subprocess` calls.

@@ -94,6 +94,11 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             setObjectName="chk007",
             setToolTip="Limit the search to locator objects only.",
         )
+        widget.option_box.set_action(
+            callback=widget.returnPressed.emit,
+            icon="search",
+            tooltip="Find matching objects (same as pressing Enter).",
+        )
 
     @Signals("returnPressed")
     def txt000(self, widget):
@@ -150,6 +155,11 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             setText="Ignore Find",
             setObjectName="chk008",
             setToolTip="Ignore the find field and rename all matched objects.",
+        )
+        widget.option_box.set_action(
+            callback=widget.returnPressed.emit,
+            icon="edit",
+            tooltip="Rename matched objects (same as pressing Enter).",
         )
 
     # The LineEdit text parameter is not emitted on `returnPressed`
