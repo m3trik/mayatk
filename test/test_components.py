@@ -345,6 +345,52 @@ class TestComponents(MayaTkTestCase):
         Components.average_normals(self.cube)
         pass
 
+    def test_transfer_normals_basic(self):
+        """Test transferring normals from source to target mesh.
+
+        Bug: pm.ls(objects, type='mesh') filtered out transform nodes,
+        so the function always raised ValueError. Also, polySoftEdge at
+        the end overwrote the transferred normals and the tentacle call
+        site passed args incorrectly.
+        Fixed: 2026-02-27
+        """
+        # Create two cubes at the same position (same topology)
+        source = pm.polyCube(name="src_cube")[0]
+        target = pm.polyCube(name="tgt_cube")[0]
+
+        # Rotate source so its normals differ from target
+        pm.rotate(source, 45, 0, 0)
+        pm.makeIdentity(source, apply=True, t=1, r=1, s=1, n=0)
+
+        # Get target normals before transfer
+        before = [
+            pm.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
+            for i in range(target.numVertices())
+        ]
+
+        # Transfer normals using transform nodes (the typical user workflow)
+        Components.transfer_normals([source, target])
+
+        # Get target normals after transfer
+        after = [
+            pm.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
+            for i in range(target.numVertices())
+        ]
+
+        # Normals should have changed
+        changed = any(
+            any(abs(a - b) > 0.01 for a, b in zip(bv, av))
+            for bv, av in zip(before, after)
+        )
+        self.assertTrue(changed, "Normals did not change after transfer")
+
+    def test_transfer_normals_rejects_non_mesh(self):
+        """Test that transfer_normals raises for non-mesh objects."""
+        grp1 = pm.group(empty=True, name="empty_grp1")
+        grp2 = pm.group(empty=True, name="empty_grp2")
+        with self.assertRaises(ValueError):
+            Components.transfer_normals([grp1, grp2])
+
     # -------------------------------------------------------------------------
     # Topology
     # -------------------------------------------------------------------------

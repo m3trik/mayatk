@@ -179,6 +179,11 @@ class TaskFactory:
                     check_results, checks_only, failed_checks
                 )
 
+        # Store counts so the caller (SceneExporter) can include them
+        # in a single consolidated summary after the file is written.
+        self._last_task_count = len(tasks_only)
+        self._last_check_count = len(checks_only)
+
         self._log_execution_summary(
             failed_checks, all_checks_passed, len(tasks_only), len(checks_only)
         )
@@ -235,29 +240,22 @@ class TaskFactory:
             )
             self.logger.error("Export aborted due to failed checks.")
         else:
-            self._log_success_summary(tasks_count, checks_count, len(failed_checks))
+            self._log_checks_passed(tasks_count, checks_count, len(failed_checks))
 
-    def _log_success_summary(
+    def _log_checks_passed(
         self, tasks_count: int, checks_count: int, failed_checks_count: int
     ) -> None:
-        """Log a simple success summary box."""
-        summary_lines = []
+        """Log a lightweight confirmation that tasks/checks finished.
 
-        # Export status
+        The real EXPORT SUCCESSFUL banner is emitted by SceneExporter
+        after the file is written to disk.
+        """
+        parts = [f"{tasks_count} task(s)"]
         if checks_count > 0:
-            summary_lines.append("✓ All tasks and checks completed successfully")
-        else:
-            summary_lines.append("✓ All tasks completed successfully")
-
-        summary_lines.append("")  # Empty line for spacing
-
-        # Simple counts in x/y format
-        summary_lines.append(f"Tasks Executed: {tasks_count}/{tasks_count}")
-        if checks_count > 0:
-            checks_passed = checks_count - failed_checks_count
-            summary_lines.append(f"Checks Passed: {checks_passed}/{checks_count}")
-
-        self.logger.log_box("EXPORT SUCCESSFUL", summary_lines, level="SUCCESS")
+            parts.append(
+                f"{checks_count - failed_checks_count}/{checks_count} check(s)"
+            )
+        self.logger.info(f"Pre-export pipeline complete: {', '.join(parts)} passed.")
 
     def _log_check_failed(self, task_name: str, log_messages: list):
         """Log the 'CHECK FAILED' box after task fails."""

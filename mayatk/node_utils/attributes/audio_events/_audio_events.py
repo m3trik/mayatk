@@ -30,6 +30,7 @@ Typical workflow::
     # 4. Cleanup
     AudioEvents.remove(category="audio")
 """
+import logging
 import os
 from typing import Dict, List, Optional
 
@@ -685,3 +686,6 @@ class AudioEvents(ptk.LoggingMixin):
                 cmds.timeControl(slider, e=True, sound="", displaySound=False)
         except Exception:
             pass
+
+
+AudioEvents.set_log_level(logging.INFO)

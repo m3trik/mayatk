@@ -49,6 +49,14 @@ class ImageToPlaneSlots:
         widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Image to Plane:")
 
+        widget.menu.add(
+            "QCheckBox",
+            setText="Group Result",
+            setObjectName="chk_group_result",
+            setChecked=False,
+            setToolTip="Parent all created planes under a single group node.",
+        )
+
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",
@@ -119,12 +127,15 @@ class ImageToPlaneSlots:
         suffix = self.ui.txt_suffix.text() or "_MAT"
         plane_height = self.ui.spn_height.value()
 
+        group = self.ui.header.menu.chk_group_result.isChecked()
+
         try:
             results = mtk.ImageToPlane.create(
                 image_paths,
                 mat_type=mat_type,
                 suffix=suffix,
                 plane_height=plane_height,
+                group=group,
             )
         except Exception as e:
             self.ui.footer.setText(f"Error: {e}")
@@ -137,8 +148,11 @@ class ImageToPlaneSlots:
 
         self.ui.footer.setText(f"Created {len(results)} plane(s): {label}")
 
-        # Select the newly created planes
-        pm.select(list(results.values()), replace=True)
+        # Select the group (if created) or the individual planes
+        if group and "__group__" in results:
+            pm.select(results["__group__"], replace=True)
+        else:
+            pm.select(list(results.values()), replace=True)
 
     # ------------------------------------------------------------------
     # Manage

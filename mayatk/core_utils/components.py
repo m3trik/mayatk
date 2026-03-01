@@ -1494,7 +1494,14 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             raise ValueError(f"space parameter must be one of: {valid_spaces}")
 
         # Filter objects to ensure only polygonal meshes are included
-        objs = pm.ls(objects, type="mesh")
+        objs = []
+        for obj in pm.ls(objects):
+            if isinstance(obj, pm.nt.Mesh):
+                objs.append(obj.getParent())
+            elif isinstance(obj, pm.nt.Transform):
+                shape = obj.getShape()
+                if shape and isinstance(shape, pm.nt.Mesh):
+                    objs.append(obj)
         if len(objs) < 2:
             raise ValueError(
                 "At least one source and one target mesh must be polygonal meshes."
@@ -1522,11 +1529,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 colorBorders=1,
             )
 
-            # Ensure normals are unfrozen and correct
-            pm.polyNormalPerVertex(target_mesh, unFreezeNormal=True)
-
-            # Soften edges to ensure a smooth appearance
-            pm.polySoftEdge(target_mesh, angle=180)
+            # Bake the transferred normals by deleting construction history
+            pm.delete(target_mesh, constructionHistory=True)
 
     @classmethod
     def filter_components_by_connection_count(

@@ -171,8 +171,29 @@ class SceneExporter(ptk.LoggingMixin):
                     type=file_format,
                     exportSelected=True,
                 )
-                self.logger.info(f"File exported: {self.export_path}")
                 export_succeeded = True
+                elapsed = time.time() - start_time
+
+                # Build the single, consolidated success banner.
+                export_info_lines = [
+                    f"✓ File written successfully",
+                    "",
+                    f"Path: {self.export_path}",
+                    f"Duration: {elapsed:.1f}s",
+                ]
+                # Include task/check counts from the pipeline phase
+                tm = self.task_manager
+                t_cnt = getattr(tm, "_last_task_count", 0)
+                c_cnt = getattr(tm, "_last_check_count", 0)
+                if t_cnt or c_cnt:
+                    export_info_lines.append("")
+                    export_info_lines.append(f"Tasks Executed: {t_cnt}")
+                    if c_cnt:
+                        export_info_lines.append(f"Checks Passed: {c_cnt}/{c_cnt}")
+
+                self.logger.log_box(
+                    "EXPORT SUCCESSFUL", export_info_lines, level="SUCCESS"
+                )
             except Exception as e:
                 self.logger.error(f"Failed to export objects: {e}")
                 raise RuntimeError(f"Failed to export objects: {e}")
