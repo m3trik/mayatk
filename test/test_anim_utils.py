@@ -469,6 +469,104 @@ class TestAnimUtils(MayaTkTestCase):
         count = AnimUtils.paste_keys(objects=[self.cube], copied_data=copied)
         self.assertEqual(count, 0)
 
+    def test_copy_keys_selected_stores_all_keys(self):
+        """copy_keys 'selected' mode stores ALL selected keys, not just the last.
+
+        Bug: Previously only the last selected key's value was stored,
+        discarding earlier keys.  Multi-key selection must preserve all
+        time/value/tangent data.
+        Fixed: 2026-03-01
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Select both keys (frames 1 and 10)
+        cmds.selectKey(plug, time=(1, 10), add=True)
+
+        copied = AnimUtils.copy_keys(objects=[self.cube], mode="selected")
+        self.assertTrue(copied, "copy_keys returned empty dict")
+
+        obj_data = list(copied.values())[0]
+        attr_data = obj_data.get("translateX")
+        self.assertIsInstance(
+            attr_data, list, "selected mode should return list of key dicts"
+        )
+        self.assertEqual(len(attr_data), 2, "Should have copied 2 selected keys")
+        # Check both keys are present
+        self.assertAlmostEqual(attr_data[0]["time"], 1.0)
+        self.assertAlmostEqual(attr_data[1]["time"], 10.0)
+        # Check tangent types are stored
+        self.assertIn("inTangentType", attr_data[0])
+        self.assertIn("outTangentType", attr_data[0])
+
+    def test_paste_keys_multi_key_with_time_offset(self):
+        """Pasting multi-key data offsets all keys relative to target_time.
+
+        Bug: Previously only one key was pasted because copy_keys only
+        stored a single scalar value per attribute.
+        Fixed: 2026-03-01
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Make keys stepped
+        cmds.keyTangent(
+            plug, edit=True, outTangentType="step", inTangentType="stepnext"
+        )
+
+        # Select both keys and copy
+        cmds.selectKey(plug, time=(1, 10), add=True)
+        copied = AnimUtils.copy_keys(objects=[self.cube], mode="selected")
+
+        # Paste at frame 20 — keys should appear at 20 and 29 (offset=19)
+        count = AnimUtils.paste_keys(
+            objects=[self.cube],
+            copied_data=copied,
+            target_time=20,
+            refresh_channel_box=False,
+        )
+        self.assertEqual(count, 1)
+
+        all_times = cmds.keyframe(plug, q=True, timeChange=True)
+        self.assertIn(20.0, all_times, "First pasted key should be at frame 20")
+        self.assertIn(29.0, all_times, "Second pasted key should be at frame 29")
+
+    def test_paste_keys_multi_key_preserves_tangent_types(self):
+        """Pasting multi-key data preserves stepped tangent types.
+
+        Bug: Pasted keys lost their tangent types and appeared with auto/
+        smooth interpolation instead of stepped.
+        Fixed: 2026-03-01
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Make keys stepped
+        cmds.keyTangent(
+            plug, edit=True, outTangentType="step", inTangentType="stepnext"
+        )
+
+        # Select both keys and copy
+        cmds.selectKey(plug, time=(1, 10), add=True)
+        copied = AnimUtils.copy_keys(objects=[self.cube], mode="selected")
+
+        # Paste at frame 30
+        AnimUtils.paste_keys(
+            objects=[self.cube],
+            copied_data=copied,
+            target_time=30,
+            refresh_channel_box=False,
+        )
+
+        # Check tangent types on pasted keys
+        for t in (30.0, 39.0):
+            ott = cmds.keyTangent(plug, q=True, time=(t, t), outTangentType=True)
+            itt = cmds.keyTangent(plug, q=True, time=(t, t), inTangentType=True)
+            self.assertEqual(ott[0], "step", f"Out tangent at {t} should be step")
+            self.assertEqual(
+                itt[0], "stepnext", f"In tangent at {t} should be stepnext"
+            )
+
     def test_move_keys_to_frame(self):
         """Test moving keys to a specific frame."""
         # Move keys from frame 1 to frame 5
@@ -706,7 +804,10 @@ class TestAnimUtils(MayaTkTestCase):
         pm.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
         # Now keys at 1, 5, 10
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()], spacing=-5, time=6, relative=False,
+            [self.cube.name()],
+            spacing=-5,
+            time=6,
+            relative=False,
             prevent_collisions=True,
         )
         # Key at 10 should NOT have moved because collision with 5
@@ -724,7 +825,10 @@ class TestAnimUtils(MayaTkTestCase):
         pm.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
         # Keys at 1, 5, 10
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()], spacing=-5, time=6, relative=False,
+            [self.cube.name()],
+            spacing=-5,
+            time=6,
+            relative=False,
             prevent_collisions=False,
         )
         keys = pm.keyframe(self.cube, attribute="translateX", query=True)
@@ -741,7 +845,10 @@ class TestAnimUtils(MayaTkTestCase):
         Key at 10 → 13.  Key at 1 is stationary but dest 13 ≠ 1.  No collision.
         """
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()], spacing=3, time=5, relative=False,
+            [self.cube.name()],
+            spacing=3,
+            time=5,
+            relative=False,
             prevent_collisions=True,
         )
         keys = pm.keyframe(self.cube, attribute="translateX", query=True)
@@ -902,7 +1009,8 @@ class TestAnimUtils(MayaTkTestCase):
             itt = cmds.keyTangent(plug, q=True, time=(t, t), inTangentType=True)
             self.assertEqual(ott[0], "step", f"Out-tangent at {t} should be step")
             self.assertEqual(
-                itt[0], "auto",
+                itt[0],
+                "auto",
                 f"In-tangent at {t} should remain 'auto', got '{itt[0]}'",
             )
 
@@ -918,9 +1026,12 @@ class TestAnimUtils(MayaTkTestCase):
         for t in (1, 10):
             itt = cmds.keyTangent(plug, q=True, time=(t, t), inTangentType=True)
             ott = cmds.keyTangent(plug, q=True, time=(t, t), outTangentType=True)
-            self.assertEqual(itt[0], "stepnext", f"In-tangent at {t} should be stepnext")
             self.assertEqual(
-                ott[0], "auto",
+                itt[0], "stepnext", f"In-tangent at {t} should be stepnext"
+            )
+            self.assertEqual(
+                ott[0],
+                "auto",
                 f"Out-tangent at {t} should remain 'auto', got '{ott[0]}'",
             )
 
@@ -934,14 +1045,17 @@ class TestAnimUtils(MayaTkTestCase):
         import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
-        cmds.keyTangent(plug, edit=True, outTangentType="spline", inTangentType="spline")
+        cmds.keyTangent(
+            plug, edit=True, outTangentType="spline", inTangentType="spline"
+        )
 
         AnimUtils.step_keys(objects=[self.cube], keys=None, tangent="in")
 
         for t in (1, 10):
             ott = cmds.keyTangent(plug, q=True, time=(t, t), outTangentType=True)
             self.assertEqual(
-                ott[0], "spline",
+                ott[0],
+                "spline",
                 f"Out-tangent at {t} should remain 'spline', got '{ott[0]}'",
             )
 
@@ -959,6 +1073,68 @@ class TestAnimUtils(MayaTkTestCase):
             itt = cmds.keyTangent(plug, q=True, time=(t, t), inTangentType=True)
             self.assertEqual(ott[0], "step")
             self.assertEqual(itt[0], "stepnext")
+
+    def test_step_keys_both_steps_predecessor(self):
+        """tangent='both' on specific keys also steps the predecessor's out-tangent.
+
+        Bug: inTangentType='stepnext' alone does NOT produce step interpolation.
+        The predecessor key's outTangentType must be 'step' for the incoming
+        segment to hold flat. Without this, the segment between an unmodified
+        predecessor and the first selected key would interpolate smoothly.
+        Fixed: 2026-03-01
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Reset all to auto
+        cmds.keyTangent(plug, edit=True, outTangentType="auto", inTangentType="auto")
+
+        # Get curve name and step only key at frame 10 with tangent="both"
+        curves = cmds.keyframe(plug, q=True, name=True)
+        curve = curves[0]
+        all_times = cmds.keyframe(curve, q=True, timeChange=True)
+        # Pick a key that is NOT the first key
+        target_t = all_times[-1]  # last key
+        prev_t = all_times[-2]  # predecessor
+
+        AnimUtils.step_keys(keys={curve: [target_t]}, tangent="both")
+
+        # Target key should have step/stepnext
+        ott = cmds.keyTangent(
+            plug, q=True, time=(target_t, target_t), outTangentType=True
+        )
+        itt = cmds.keyTangent(
+            plug, q=True, time=(target_t, target_t), inTangentType=True
+        )
+        self.assertEqual(ott[0], "step")
+        self.assertEqual(itt[0], "stepnext")
+
+        # Predecessor key should have out=step (set by predecessor fix)
+        ott_prev = cmds.keyTangent(
+            plug, q=True, time=(prev_t, prev_t), outTangentType=True
+        )
+        self.assertEqual(ott_prev[0], "step", "Predecessor out-tangent should be step")
+
+        # Predecessor's in-tangent should be preserved (NOT changed to step)
+        itt_prev = cmds.keyTangent(
+            plug, q=True, time=(prev_t, prev_t), inTangentType=True
+        )
+        self.assertNotEqual(
+            itt_prev[0], "step", "Predecessor in-tangent should be preserved"
+        )
+
+        # Verify evaluated value at midpoint is stepped (holds predecessor's value)
+        mid_t = (prev_t + target_t) / 2
+        val = cmds.keyframe(
+            plug, q=True, time=(mid_t, mid_t), eval=True, valueChange=True
+        )
+        prev_val = cmds.keyframe(plug, q=True, time=(prev_t, prev_t), valueChange=True)
+        self.assertAlmostEqual(
+            val[0],
+            prev_val[0],
+            places=3,
+            msg="Segment between predecessor and target should be stepped (hold predecessor value)",
+        )
 
     # =========================================================================
     # Special Features

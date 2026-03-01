@@ -1747,15 +1747,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             """Apply tangent kwargs to *curve*, optionally at *time_arg*."""
             if _one_side and time_arg is not None:
                 # Per-key: snapshot the opposite side, apply, restore.
-                _apply_one_side(curve, time_arg)
+                _apply_one_side(curve, time_arg, tangent)
                 return
             if _one_side and time_arg is None:
                 # Whole-curve: iterate every key individually.
                 all_times = cmds.keyframe(curve, q=True, timeChange=True) or []
                 for t in all_times:
-                    _apply_one_side(curve, (t, t))
+                    _apply_one_side(curve, (t, t), tangent)
                 return
-            # "both" — straightforward, no preservation needed.
+            # "both" — set out=step + in=stepnext on current key.
             kw = dict(edit=True, **tan_kw)
             if time_arg is not None:
                 kw["time"] = time_arg
@@ -1763,9 +1763,32 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 cmds.keyTangent(curve, **kw)
             except RuntimeError:
                 pass
+            # For "both" with a specific time, also set out=step on
+            # the predecessor key so the incoming segment is stepped.
+            # inTangentType="stepnext" alone does NOT produce step
+            # interpolation — the predecessor's out-tangent must be
+            # "step" for the segment to hold flat.
+            if tangent == "both" and time_arg is not None:
+                all_times = cmds.keyframe(curve, q=True, timeChange=True) or []
+                t = time_arg[0]
+                prev_times = [pt for pt in all_times if pt < t]
+                if prev_times:
+                    prev_t = max(prev_times)
+                    ott = cmds.keyTangent(
+                        curve,
+                        q=True,
+                        time=(prev_t, prev_t),
+                        outTangentType=True,
+                    )
+                    if not (ott and ott[0] == "step"):
+                        _apply_one_side(curve, (prev_t, prev_t), "out")
 
-        def _apply_one_side(curve: str, time_arg):
+        def _apply_one_side(curve: str, time_arg, side: str):
             """Set one tangent side while preserving the other side completely.
+
+            Parameters:
+                side: ``"in"`` to set inTangentType=stepnext (preserving out),
+                      ``"out"`` to set outTangentType=step (preserving in).
 
             Angle and weight are only restored when the original tangent type
             is ``"fixed"`` — the only type where those values are user-defined.
@@ -1775,40 +1798,74 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             convert it to ``"fixed"``, breaking auto-computation.
             """
             try:
-                if tangent == "in":
+                if side == "in":
                     # Preserve out-tangent
-                    ott = cmds.keyTangent(curve, q=True, time=time_arg, outTangentType=True)
+                    ott = cmds.keyTangent(
+                        curve, q=True, time=time_arg, outTangentType=True
+                    )
                     restore_geometry = ott and ott[0] == "fixed"
                     if restore_geometry:
-                        oa = cmds.keyTangent(curve, q=True, time=time_arg, outAngle=True)
-                        ow = cmds.keyTangent(curve, q=True, time=time_arg, outWeight=True)
-                    cmds.keyTangent(curve, edit=True, time=time_arg, lock=False, inTangentType="stepnext")
+                        oa = cmds.keyTangent(
+                            curve, q=True, time=time_arg, outAngle=True
+                        )
+                        ow = cmds.keyTangent(
+                            curve, q=True, time=time_arg, outWeight=True
+                        )
+                    cmds.keyTangent(
+                        curve,
+                        edit=True,
+                        time=time_arg,
+                        lock=False,
+                        inTangentType="stepnext",
+                    )
                     # Restore out-tangent type (always)
                     if ott:
-                        cmds.keyTangent(curve, edit=True, time=time_arg, outTangentType=ott[0])
+                        cmds.keyTangent(
+                            curve, edit=True, time=time_arg, outTangentType=ott[0]
+                        )
                     # Restore angle/weight only for "fixed" tangents
                     if restore_geometry:
                         if oa is not None:
-                            cmds.keyTangent(curve, edit=True, time=time_arg, outAngle=oa[0])
+                            cmds.keyTangent(
+                                curve, edit=True, time=time_arg, outAngle=oa[0]
+                            )
                         if ow is not None:
-                            cmds.keyTangent(curve, edit=True, time=time_arg, outWeight=ow[0])
-                else:  # tangent == "out"
+                            cmds.keyTangent(
+                                curve, edit=True, time=time_arg, outWeight=ow[0]
+                            )
+                else:  # side == "out"
                     # Preserve in-tangent
-                    itt = cmds.keyTangent(curve, q=True, time=time_arg, inTangentType=True)
+                    itt = cmds.keyTangent(
+                        curve, q=True, time=time_arg, inTangentType=True
+                    )
                     restore_geometry = itt and itt[0] == "fixed"
                     if restore_geometry:
                         ia = cmds.keyTangent(curve, q=True, time=time_arg, inAngle=True)
-                        iw = cmds.keyTangent(curve, q=True, time=time_arg, inWeight=True)
-                    cmds.keyTangent(curve, edit=True, time=time_arg, lock=False, outTangentType="step")
+                        iw = cmds.keyTangent(
+                            curve, q=True, time=time_arg, inWeight=True
+                        )
+                    cmds.keyTangent(
+                        curve,
+                        edit=True,
+                        time=time_arg,
+                        lock=False,
+                        outTangentType="step",
+                    )
                     # Restore in-tangent type (always)
                     if itt:
-                        cmds.keyTangent(curve, edit=True, time=time_arg, inTangentType=itt[0])
+                        cmds.keyTangent(
+                            curve, edit=True, time=time_arg, inTangentType=itt[0]
+                        )
                     # Restore angle/weight only for "fixed" tangents
                     if restore_geometry:
                         if ia is not None:
-                            cmds.keyTangent(curve, edit=True, time=time_arg, inAngle=ia[0])
+                            cmds.keyTangent(
+                                curve, edit=True, time=time_arg, inAngle=ia[0]
+                            )
                         if iw is not None:
-                            cmds.keyTangent(curve, edit=True, time=time_arg, inWeight=iw[0])
+                            cmds.keyTangent(
+                                curve, edit=True, time=time_arg, inWeight=iw[0]
+                            )
             except RuntimeError:
                 pass
 
@@ -4710,7 +4767,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     def copy_keys(
         objects=None,
         mode: str = "auto",
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> Dict[str, Dict[str, Any]]:
         """Copy attribute values from objects for later pasting as keys.
 
         Parameters:
@@ -4728,7 +4785,16 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                   the Channel Box.
 
         Returns:
-            Nested dict ``{object_name: {attr: value, ...}, ...}``.
+            Nested dict ``{object_name: {attr: data, ...}, ...}``.
+
+            For ``"current_frame"`` and ``"channel_box"`` modes, *data* is a
+            single ``float``.
+
+            For ``"selected"`` mode, *data* is a list of key dicts::
+
+                [{"time": float, "value": float,
+                  "inTangentType": str, "outTangentType": str}, ...]
+
             Empty dict when nothing could be copied.
         """
         import maya.cmds as cmds
@@ -4793,7 +4859,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 obj_name, attr = parts[0], parts[1] if len(parts) > 1 else ""
                 if not attr:
                     continue
-                # Get selected key values on this curve
+                # Apply CB filter if set
+                if cb_filter is not None and attr.lower() not in cb_filter:
+                    continue
+                # Get ALL selected key times and values on this curve
                 times = (
                     cmds.keyframe(crv, query=True, selected=True, timeChange=True) or []
                 )
@@ -4802,9 +4871,23 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     or []
                 )
                 if times and values:
-                    # Store the last selected key value (most recent)
-                    if cb_filter is None or attr.lower() in cb_filter:
-                        result.setdefault(obj_name, {})[attr] = values[-1]
+                    key_list = []
+                    for t, v in zip(times, values):
+                        itt = cmds.keyTangent(
+                            crv, q=True, time=(t, t), inTangentType=True
+                        )
+                        ott = cmds.keyTangent(
+                            crv, q=True, time=(t, t), outTangentType=True
+                        )
+                        key_list.append(
+                            {
+                                "time": t,
+                                "value": v,
+                                "inTangentType": itt[0] if itt else "auto",
+                                "outTangentType": ott[0] if ott else "auto",
+                            }
+                        )
+                    result.setdefault(obj_name, {})[attr] = key_list
 
         else:  # channel_box (default)
             channel_box = pm.melGlobals["gChannelBoxName"]
@@ -4827,24 +4910,28 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     @CoreUtils.undoable
     def paste_keys(
         objects=None,
-        copied_data: Optional[Dict[str, Dict[str, float]]] = None,
+        copied_data: Optional[Dict[str, Dict[str, Any]]] = None,
         target_time=None,
         refresh_channel_box: bool = True,
         **kwargs,
     ) -> int:
         """Paste previously copied attribute values as keyframes.
 
-        Existing tangent types are preserved — if a key already exists at
-        the target time its in/out tangent types are snapshotted before the
-        value is overwritten and restored afterwards.  If no key exists yet,
-        the tangent type of the nearest preceding key on that curve is
-        applied so that stepped (or other non-default) tangent styles are
-        not lost.
+        Supports two data formats produced by :meth:`copy_keys`:
+
+        * **Scalar** (``current_frame`` / ``channel_box``): a single float
+          per attribute is keyed at *target_time*.
+        * **Multi-key** (``selected``): a list of key dicts with time,
+          value and tangent types.  Keys are offset so the earliest
+          copied time aligns with *target_time* and tangent types are
+          applied exactly as stored.
 
         Parameters:
             objects: Objects to paste onto. Defaults to selection.
             copied_data: Nested dict from :meth:`copy_keys`.
-            target_time: Frame(s) to key at. Defaults to current time.
+            target_time: Frame at which to paste.  Defaults to current time.
+                For multi-key data the earliest copied key aligns here;
+                later keys are offset accordingly.
             refresh_channel_box: Update the Channel Box after keying.
             **kwargs: Extra flags forwarded to ``pm.setKeyframe``
                 (e.g. ``breakdown``, ``hierarchy``, ``shape``,
@@ -4853,6 +4940,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Returns:
             Number of objects that received keys.
         """
+        import maya.cmds as cmds
+
         if not copied_data:
             pm.warning("No copied data to paste.")
             return 0
@@ -4867,11 +4956,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         if target_time is None:
             target_time = pm.currentTime(query=True)
 
-        times = (
-            [target_time]
-            if not isinstance(target_time, (list, tuple))
-            else list(target_time)
-        )
         keys_set = 0
 
         for obj in objects:
@@ -4889,10 +4973,53 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                         break
 
             if obj_attrs:
-                for attr, value in obj_attrs.items():
+                for attr, data in obj_attrs.items():
                     plug = f"{obj}.{attr}"
-                    for t in times:
-                        AnimUtils._set_key_preserving_tangents(plug, t, value, **kwargs)
+                    if isinstance(data, list):
+                        # --- Multi-key paste (selected mode) ---
+                        if not data:
+                            continue
+                        base_time = data[0]["time"]
+                        offset = float(target_time) - base_time
+                        for kd in data:
+                            t = kd["time"] + offset
+                            v = kd["value"]
+                            itt = kd.get("inTangentType", "auto")
+                            ott = kd.get("outTangentType", "auto")
+                            # Maya rejects "step" as inTangentType
+                            if itt == "step":
+                                itt = "stepnext"
+                            kw = dict(
+                                time=t,
+                                value=v,
+                                inTangentType=itt,
+                                outTangentType=ott,
+                            )
+                            kw.update(kwargs)
+                            pm.setKeyframe(plug, **kw)
+                            # Belt-and-suspenders: re-apply tangent
+                            # types in case setKeyframe overrode them.
+                            try:
+                                cmds.keyTangent(
+                                    plug,
+                                    edit=True,
+                                    time=(t, t),
+                                    inTangentType=itt,
+                                    outTangentType=ott,
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        # --- Scalar paste (current_frame / channel_box) ---
+                        times = (
+                            [target_time]
+                            if not isinstance(target_time, (list, tuple))
+                            else list(target_time)
+                        )
+                        for t in times:
+                            AnimUtils._set_key_preserving_tangents(
+                                plug, t, data, **kwargs
+                            )
                 keys_set += 1
 
         if refresh_channel_box:
