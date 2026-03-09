@@ -158,6 +158,9 @@ class TaskFactory:
         failed_checks = []
         all_checks_passed = True
 
+        # Forward optimize_keys state so smart_bake can read it
+        self._optimize_keys_enabled = bool(tasks_only.get("optimize_keys", False))
+
         # Run tasks first
         if tasks_only:
             ordered_tasks = self._order_tasks(tasks_only)
@@ -212,13 +215,6 @@ class TaskFactory:
             if not success:
                 failed_checks.append(check_name)
                 all_checks_passed = False
-            elif messages:
-                self.logger.log_box(
-                    f"CHECK INFO: {check_name}", messages, level="WARNING"
-                )
-                self.logger.warning(
-                    f"{progress} Check passed (see info above): {check_name}"
-                )
             else:
                 self.logger.success(f"{progress} Check passed: {check_name}")
 

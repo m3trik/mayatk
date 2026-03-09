@@ -3,6 +3,7 @@
 import os
 import re
 import time
+import base64
 import ctypes
 import shutil
 import logging
@@ -134,12 +135,6 @@ class SceneExporter(ptk.LoggingMixin):
         if self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
 
-        # Wrap destructive tasks + export in an undo chunk so the
-        # original scene can be restored after the FBX is written.
-        # Tasks like smart_bake (override layers, muted drivers),
-        # material deletion, path conversion, and key modifications
-        # are all reverted automatically by the undo.
-        cmds.undoInfo(openChunk=True, chunkName="scene_export")
         export_succeeded = False
         try:
             # Run tasks and checks
@@ -201,12 +196,16 @@ class SceneExporter(ptk.LoggingMixin):
                 if self.create_log_file:
                     self.close_file_handlers()
         finally:
-            cmds.undoInfo(closeChunk=True)
-            # Undo the entire chunk to restore the scene to its
-            # pre-export state (reverts smart_bake layers, muted
-            # drivers, deleted materials, path changes, etc.).
-            cmds.undo()
-            self.logger.info("Scene restored to pre-export state.")
+            # Clean up the override animation layer created by smart_bake.
+            # Deleting the layer restores the original scene state
+            # non-destructively (constraints resume, undo history intact).
+            _layer = getattr(self.task_manager, "_bake_override_layer", None)
+            if _layer and cmds.objExists(_layer):
+                cmds.delete(_layer)
+                self.logger.info(
+                    f"Deleted bake override layer '{_layer}' — scene restored."
+                )
+                self.task_manager._bake_override_layer = None
 
         if not export_succeeded:
             return False
@@ -486,7 +485,12 @@ class SceneExporterSlots(SceneExporter):
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        # Add a button to open the hypershade editor.
+        # Enable whole-window presets on the header menu
+        widget.menu.add_presets = True
+        widget.menu.presets.preset_dir = "~/.mayatk/presets/scene_exporter"
+        widget.menu.presets.metadata_provider = self._fbx_preset_metadata_provider
+        widget.menu.presets.on_metadata_loaded = self._on_fbx_preset_metadata_loaded
+
         widget.menu.setTitle("Global Settings:")
         widget.menu.add(
             "QCheckBox",
@@ -643,6 +647,12 @@ class SceneExporterSlots(SceneExporter):
             wrapped_widget=widget,
             settings_key="scene_exporter_output_dirs",
             max_recent=10,
+            display_format=lambda p: (
+                "\u2026/" + "/".join(ptk.format_path(p).split("/")[-3:])
+                if len(ptk.format_path(p).split("/")) > 3
+                else str(p)
+            ),
+            text_align="left",
         )
         widget.option_box.add_option(self._recent_dirs_option)
 
@@ -934,6 +944,36 @@ class SceneExporterSlots(SceneExporter):
         """Record the output directory into the recent values plugin."""
         if output_dir and hasattr(self, "_recent_dirs_option"):
             self._recent_dirs_option.record(ptk.format_path(output_dir))
+
+    def _fbx_preset_metadata_provider(self) -> dict:
+        """Return the currently selected FBX preset as embeddable metadata."""
+        path = self.ui.cmb000.currentData()
+        if not path or not os.path.isfile(path):
+            return {}
+        with open(path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "fbx_preset_name": os.path.splitext(os.path.basename(path))[0],
+            "fbx_preset_data": encoded,
+        }
+
+    def _on_fbx_preset_metadata_loaded(self, meta: dict) -> None:
+        """Restore an embedded FBX preset to disk if it doesn't exist locally."""
+        name = meta.get("fbx_preset_name")
+        data = meta.get("fbx_preset_data")
+        if not name or not data:
+            return
+        preset_dir = self._get_preset_dir()
+        if not preset_dir:
+            return
+        target = os.path.join(preset_dir, f"{name}.fbxexportpreset")
+        if os.path.exists(target):
+            return  # Local copy is authoritative
+        os.makedirs(preset_dir, exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(base64.b64decode(data))
+        self.logger.info(f"Restored embedded FBX preset: {target}")
+        self.ui.cmb000.init_slot()  # Refresh FBX preset combo
 
 
 # -----------------------------------------------------------------------------

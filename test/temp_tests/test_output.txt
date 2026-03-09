@@ -1,1 +1,56 @@
-SUCCESS: All tests passed.
+======================================================================
+EXPORT PIPELINE TEST - Override Layer + Non-Destructive Bake
+======================================================================
+Scene: C130_FCR_Speedrun_Assembly_copy.ma
+Size: 167.0 MB
+Scene loaded in 11.1s
+
+Pre-export scene stats:
+  Transforms:    1249
+  Constraints:   1
+  Expressions:   0
+  Anim curves:   111
+  Anim layers:   0
+
+-- Test 1: SmartBake with override layer --
+  Objects to process: 1042
+  Objects needing bake: 5
+  Analysis took 0.3s
+  Driver types found: ['constraint', 'driven_key']
+  Bake completed in 44.0s
+  Objects baked: 5
+  Time range: (500, 26600)
+  Override layer: SmartBake_Override_20260308_082739
+  Optimized: 5 objects
+  Deleted drivers: 0
+  PASS: Override layer created
+  Layer curves: 14
+  PASS: All constraints preserved
+  PASS: All expressions preserved
+
+-- Test 2: optimize_keys --
+  Curves before: 125, Keys: 880
+  Curves after:  116, Keys: 802
+  Keys removed:  78
+  Optimize took: 0.1s
+
+-- Test 3: tie_keyframes --
+  tie_keyframes completed in 6.1s
+  PASS
+
+-- Test 4: snap_keys_to_frames --
+  snap_keys_to_frames completed in 0.1s
+  PASS
+
+-- Test 5: Override layer cleanup --
+  Deleted layer: SmartBake_Override_20260308_082739
+  PASS: Constraints still intact after cleanup
+  WARN: Layer count: 0 -> 1
+
+-- Test 6: Undo history preserved --
+  Last undo: 
+  PASS: Undo system intact (no file reload)
+
+======================================================================
+TEST COMPLETE
+======================================================================

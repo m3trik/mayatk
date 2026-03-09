@@ -591,6 +591,88 @@ class TestSmartBake(unittest.TestCase):
         # Should have optimized field populated
         self.assertTrue(len(result.optimized) > 0 or cube in result.optimized)
 
+    def test_optimize_keys_with_override_layer(self):
+        """Verify optimize_keys finds and optimizes curves on an override layer.
+
+        Bug: listConnections(plug, type='animCurve') doesn't traverse
+        animBlendNode intermediaries, so baked curves on override layers
+        were silently skipped.
+        Fixed: 2026-03-07 — uses cmds.animLayer(layer, q=True, animCurves=True).
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        cube = cmds.polyCube(name="layer_opt_cube")[0]
+        locator = cmds.spaceLocator(name="layer_opt_loc")[0]
+        cmds.pointConstraint(locator, cube)
+
+        # Create static animation on locator (stays at same position)
+        # This will bake to constant keys → optimize should remove them
+        cmds.setKeyframe(locator, attribute="tx", time=1, value=5)
+        cmds.setKeyframe(locator, attribute="tx", time=10, value=5)
+
+        baker = SmartBake(
+            objects=[cube],
+            optimize_keys=True,
+            use_override_layer=True,
+            delete_inputs=False,
+        )
+        result = baker.execute()
+
+        # Should have created an override layer
+        self.assertIsNotNone(result.override_layer)
+        self.assertTrue(cmds.objExists(result.override_layer))
+
+        # Should have optimized the baked curves
+        self.assertTrue(len(result.optimized) > 0)
+
+        # Constraint should still exist (not deleted)
+        constraints = cmds.ls(type="pointConstraint")
+        self.assertTrue(len(constraints) > 0)
+
+        # Clean up the layer
+        cmds.delete(result.override_layer)
+
+    def test_override_layer_cleanup_restores_scene(self):
+        """Verify deleting the override layer restores the scene state."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake import SmartBake
+
+        cube = cmds.polyCube(name="restore_cube")[0]
+        locator = cmds.spaceLocator(name="restore_loc")[0]
+        cmds.pointConstraint(locator, cube)
+
+        # Animate locator
+        cmds.setKeyframe(locator, attribute="tx", time=1, value=0)
+        cmds.setKeyframe(locator, attribute="tx", time=10, value=10)
+
+        # Get pre-bake value at frame 5
+        cmds.currentTime(5)
+        pre_bake_val = cmds.getAttr(f"{cube}.tx")
+
+        baker = SmartBake(
+            objects=[cube],
+            use_override_layer=True,
+            delete_inputs=False,
+        )
+        result = baker.execute()
+
+        # Value should be the same (override layer reproduces constraint)
+        cmds.currentTime(5)
+        during_layer_val = cmds.getAttr(f"{cube}.tx")
+        self.assertAlmostEqual(pre_bake_val, during_layer_val, places=2)
+
+        # Delete the layer — scene should return to constraint-driven state
+        cmds.delete(result.override_layer)
+
+        # Constraint should still exist and drive the object
+        constraints = cmds.ls(type="pointConstraint")
+        self.assertTrue(len(constraints) > 0)
+
+        cmds.currentTime(5)
+        post_delete_val = cmds.getAttr(f"{cube}.tx")
+        self.assertAlmostEqual(pre_bake_val, post_delete_val, places=2)
+
     def test_classmethod_run(self):
         """Verify SmartBake.run() classmethod works correctly."""
         from maya import cmds

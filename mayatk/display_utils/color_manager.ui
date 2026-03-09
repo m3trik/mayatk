@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>273</height>
+    <height>271</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -403,13 +403,13 @@
            <property name="minimumSize">
             <size>
              <width>0</width>
-             <height>20</height>
+             <height>28</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
              <width>16777215</width>
-             <height>20</height>
+             <height>28</height>
             </size>
            </property>
            <property name="toolTip">

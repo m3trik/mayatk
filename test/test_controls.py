@@ -3,7 +3,7 @@
 """Tests for mayatk.rig_utils.controls
 
 Covers:
-- Dynamic preset access (Controls.circle, etc.)
+- Dynamic preset access (Controls.diamond, etc.)
 - Grouping behavior
 - Matching to objects
 - Preset registration
@@ -40,16 +40,16 @@ class TestControls(MayaTkTestCase):
                 pass
         super().tearDown()
 
-    def test_dynamic_preset_circle(self):
-        ctrl = mtk.Controls.circle(name="testCircle", size=2.0, axis="y")
-        self.assertNodeExists("testCircle_CTRL")
-        self.assertNodeExists("testCircle_CTRL_GRP")
+    def test_dynamic_preset_diamond(self):
+        ctrl = mtk.Controls.diamond(name="testDiamond", size=2.0, axis="y")
+        self.assertNodeExists("testDiamond_CTRL")
+        self.assertNodeExists("testDiamond_CTRL_GRP")
         self.assertNodeType(ctrl, "transform")
 
-    def test_dynamic_preset_square_no_group(self):
-        ctrl = mtk.Controls.square(name="testSquare", offset_group=False)
-        self.assertNodeExists("testSquare_CTRL")
-        self.assertFalse(pm.objExists("testSquare_CTRL_GRP"))
+    def test_dynamic_preset_box_no_group(self):
+        ctrl = mtk.Controls.box(name="testBox", offset_group=False)
+        self.assertNodeExists("testBox_CTRL")
+        self.assertFalse(pm.objExists("testBox_CTRL_GRP"))
         self.assertNodeType(ctrl, "transform")
 
     def test_match_to_object(self):
@@ -57,7 +57,7 @@ class TestControls(MayaTkTestCase):
         pm.xform(cube, ws=True, t=(5, 6, 7), ro=(10, 20, 30))
 
         nodes = mtk.Controls.create(
-            "circle",
+            "diamond",
             name="matchMe",
             match=cube,
             return_nodes=True,
@@ -118,17 +118,20 @@ class TestControls(MayaTkTestCase):
 
     def test_all_builtin_styles_smoke(self):
         presets = [
-            ("circle", {}),
-            ("square", {}),
             ("diamond", {}),
             ("arrow", {}),
             ("two_way_arrow", {}),
             ("four_way_arrow", {}),
             ("target", {}),
-            ("secondary", {}),
             ("box", {}),
+            ("beveled_cube", {}),
             ("ball", {}),
             ("chevron", {}),
+            ("torus", {}),
+            ("helix", {}),
+            ("geosphere", {}),
+            ("pyramid", {}),
+            ("star", {}),
             ("text", {"text": "X"}),
         ]
 
@@ -160,16 +163,14 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_create_with_color_int(self):
         """Test creating a control with an integer color index."""
-        # Color index 17 is usually yellow
-        ctrl = mtk.Controls.circle(name="testColorInt", color=17)
+        ctrl = mtk.Controls.diamond(name="testColorInt", color=17)
         self.assertTrue(ctrl.overrideEnabled.get())
         self.assertEqual(ctrl.overrideColor.get(), 17)
 
     def test_create_with_color_tuple(self):
         """Test creating a control with an RGB tuple color."""
-        # Red color
         color = (1.0, 0.0, 0.0)
-        ctrl = mtk.Controls.circle(name="testColorTuple", color=color)
+        ctrl = mtk.Controls.diamond(name="testColorTuple", color=color)
 
         # RGB colors use overrideRGBColors=True (Maya 2016+)
         self.assertTrue(ctrl.overrideEnabled.get())
@@ -183,15 +184,9 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_create_with_axis(self):
         """Test creating controls with different axes."""
-        # Default is Y-up (normal=(0,1,0))
-        # Z-up should be rotated 90 deg on X
-        ctrl_z = mtk.Controls.circle(name="testAxisZ", axis="z")
+        ctrl_z = mtk.Controls.diamond(name="testAxisZ", axis="z")
 
-        # Check rotation values after creation (assuming freeze=True by default)
-        # If freeze=True, rotation should be 0, but the shape points should be modified.
-        # If we want to verify orientation, we might check without freeze or check shape points.
-        # Let's check with freeze=False to verify the rotation logic.
-        ctrl_x_nofreeze = mtk.Controls.circle(name="testAxisX", axis="x", freeze=False)
+        ctrl_x_nofreeze = mtk.Controls.diamond(name="testAxisX", axis="x", freeze=False)
         rot = ctrl_x_nofreeze.getRotation()
         # X axis usually means -90 on Z or similar depending on implementation
         # Implementation: x -> (0, 0, -90)
@@ -199,8 +194,7 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_create_with_size(self):
         """Test creating a control with a specific size."""
-        # Size 2.0
-        ctrl = mtk.Controls.circle(name="testSize", size=2.0, freeze=False)
+        ctrl = mtk.Controls.diamond(name="testSize", size=2.0, freeze=False)
         # Scale should be 2.0 if not frozen
         self.assertAlmostEqual(ctrl.sx.get(), 2.0)
         self.assertAlmostEqual(ctrl.sy.get(), 2.0)
@@ -211,26 +205,26 @@ class TestControlsExtended(MayaTkTestCase):
         parent_node = pm.group(em=True, n="testParent")
 
         # Case 1: With offset group (default)
-        ctrl = mtk.Controls.circle(name="testChild", parent=parent_node)
+        ctrl = mtk.Controls.diamond(name="testChild", parent=parent_node)
         # ctrl is the control, its parent is the group, group's parent is parent_node
         grp = ctrl.getParent()
         self.assertEqual(grp.getParent(), parent_node)
 
         # Case 2: Without offset group
-        ctrl2 = mtk.Controls.circle(
+        ctrl2 = mtk.Controls.diamond(
             name="testChild2", parent=parent_node, offset_group=False
         )
         self.assertEqual(ctrl2.getParent(), parent_node)
 
     def test_create_no_freeze(self):
         """Test creating a control without freezing transforms."""
-        ctrl = mtk.Controls.circle(name="testNoFreeze", size=2.0, freeze=False)
+        ctrl = mtk.Controls.diamond(name="testNoFreeze", size=2.0, freeze=False)
         self.assertNotAlmostEqual(ctrl.sx.get(), 1.0)
         self.assertAlmostEqual(ctrl.sx.get(), 2.0)
 
     def test_return_nodes_dataclass(self):
         """Verify return_nodes=True returns a ControlNodes object."""
-        result = mtk.Controls.circle(name="testReturnNodes", return_nodes=True)
+        result = mtk.Controls.diamond(name="testReturnNodes", return_nodes=True)
 
         # Check type (it's a dataclass, so we check fields)
         self.assertTrue(hasattr(result, "control"))
@@ -242,8 +236,8 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_combine_controls(self):
         """Test combining multiple controls into one."""
-        c1 = mtk.Controls.circle(name="c1", offset_group=False)
-        c2 = mtk.Controls.square(name="c2", offset_group=False)
+        c1 = mtk.Controls.diamond(name="c1", offset_group=False)
+        c2 = mtk.Controls.arrow(name="c2", offset_group=False)
 
         # Move c2 so we can distinguish shapes if needed
         pm.move(c2, 2, 0, 0)
@@ -262,7 +256,7 @@ class TestControlsExtended(MayaTkTestCase):
     def test_invalid_axis_raises_error(self):
         """Verify invalid axis raises ValueError."""
         with self.assertRaises(ValueError):
-            mtk.Controls.circle(name="testInvalidAxis", axis="invalid")
+            mtk.Controls.diamond(name="testInvalidAxis", axis="invalid")
 
     def test_empty_text_raises_error(self):
         """Verify empty text raises ValueError."""

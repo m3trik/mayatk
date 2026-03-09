@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import pythontk as ptk
 
 try:
@@ -44,11 +44,27 @@ class RenderOpacity(ptk.LoggingMixin):
     # ------------------------------------------------------------------
 
     @classmethod
+    def objects_with_visibility_keys(cls, objects) -> List:
+        """Return the subset of *objects* that have keyframes on visibility."""
+        result = []
+        for obj in objects:
+            try:
+                keys = pm.keyframe(
+                    obj, attribute="visibility", query=True, timeChange=True
+                )
+                if keys:
+                    result.append(obj)
+            except Exception:
+                pass
+        return result
+
+    @classmethod
     @CoreUtils.undoable
     def create(
         cls,
         objects=None,
         mode: str = "attribute",
+        delete_visibility_keys: bool = False,
     ) -> Dict[str, Dict]:
         """Create the opacity mechanism (Attribute, Material graph, or Remove).
 
@@ -60,15 +76,41 @@ class RenderOpacity(ptk.LoggingMixin):
             mode: ``"attribute"`` — Adds ``opacity`` attribute (Game Engine friendly).
                   ``"material"`` — Prepares StingrayPBS material for transparency.
                   ``"remove"``   — Removes all opacity artifacts from the objects.
+            delete_visibility_keys: If ``True``, existing visibility keyframes
+                are deleted before creating the opacity setup.  If ``False``
+                (default), objects that have visibility keys are skipped and
+                a warning is logged.
 
         Returns:
             dict: Results of the operation per object.
+
+        Raises:
+            RuntimeError: When *delete_visibility_keys* is ``False`` and one
+                or more objects have visibility keyframes.
         """
         if objects is None:
             objects = pm.selected()
         if not objects:
             cls.logger.warning("No objects selected.")
             return {}
+
+        # --- Handle existing visibility keys --------------------------
+        vis_keyed = cls.objects_with_visibility_keys(objects)
+        if vis_keyed:
+            names = [o.name() for o in vis_keyed]
+            if delete_visibility_keys:
+                for obj in vis_keyed:
+                    pm.cutKey(obj, attribute="visibility", clear=True)
+                    # Reset visibility to on after removing keys
+                    obj.visibility.set(True)
+                cls.logger.info("Deleted visibility keys on: %s", ", ".join(names))
+            else:
+                msg = (
+                    f"Visibility keys found on: {', '.join(names)}. "
+                    "Enable 'Delete Visibility Keys' or remove them "
+                    "manually before applying opacity."
+                )
+                raise RuntimeError(msg)
 
         # Always clean existing state first.  Material mode must be
         # removed before attribute mode because the proxy disconnect

@@ -25,7 +25,7 @@ class ControlNodes:
 
 class _ControlsMeta(type):
     def __getattr__(cls, name: str):
-        # Allow dynamic preset access: Controls.circle(...), Controls.arrow(...), etc.
+        # Allow dynamic preset access: Controls.diamond(...), Controls.arrow(...), etc.
         if not name or name.startswith("_"):
             raise AttributeError(name)
 
@@ -57,7 +57,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     """Factory for creating NURBS animation controls.
 
     Goals:
-        - Preset-driven creation ("circle", "square", etc.)
+        - Preset-driven creation ("diamond", "box", "beveled_cube", etc.)
         - Parameter-driven behavior (size, axis, match, color, grouping)
         - Easy extension via `register_preset()`
 
@@ -66,45 +66,6 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     """
 
     _PRESETS: ClassVar[Dict[str, Callable[..., "pm.nt.Transform"]]] = {}
-
-    @classmethod
-    def _build_dashed_ring(
-        cls,
-        *,
-        name: str,
-        radius: float = 1.0,
-        segments: int = 8,
-        gap_ratio: float = 0.35,
-        sections: int = 8,
-    ) -> "pm.nt.Transform":
-        """Create a dashed ring as a single transform (multiple arc segments merged)."""
-
-        segs = max(3, int(segments))
-        gap = max(0.0, min(float(gap_ratio), 0.9))
-        arc_angle = (360.0 / float(segs)) * (1.0 - gap)
-
-        # Create one arc segment in XZ plane and duplicate/rotate.
-        # Maya circle command supports sweep via `sw` (sweep angle in degrees).
-        base = pm.circle(
-            name=name,
-            ch=False,
-            r=float(radius),
-            s=int(sections),
-            nr=(0, 1, 0),
-            sw=float(arc_angle),
-        )[0]
-
-        arcs: List[pm.nt.Transform] = []
-        step = 360.0 / float(segs)
-        for i in range(1, segs):
-            dup = pm.duplicate(base, rr=True)[0]
-            pm.rotate(dup, (0.0, step * i, 0.0), r=True, os=True)
-            cls._safe_freeze(dup)
-            arcs.append(dup)
-
-        cls._merge_curve_shapes(base, arcs, delete_sources=True)
-        pm.rename(base, name)
-        return base
 
     @staticmethod
     def _merge_curve_shapes(
@@ -129,6 +90,38 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                     pm.delete(src)
                 except Exception:
                     pass
+
+    @classmethod
+    def _curves_from_poly(
+        cls,
+        poly_transform: "pm.nt.Transform",
+        name: str,
+    ) -> "pm.nt.Transform":
+        """Extract wireframe curves from a polygon mesh, delete it,
+        and return a single transform containing all edge curves.
+        """
+        mesh_shapes = pm.listRelatives(poly_transform, shapes=True, type="mesh") or []
+        if not mesh_shapes:
+            raise RuntimeError(
+                f"Controls._curves_from_poly: no mesh under {poly_transform}"
+            )
+        mesh = mesh_shapes[0]
+        num_edges = mesh.numEdges()
+
+        curves: List[pm.nt.Transform] = []
+        for edge_idx in range(num_edges):
+            verts = pm.polyListComponentConversion(
+                f"{mesh}.e[{edge_idx}]", fromEdge=True, toVertex=True
+            )
+            verts = pm.ls(verts, flatten=True)
+            positions = [pm.pointPosition(v, world=True) for v in verts]
+            if len(positions) >= 2:
+                curves.append(pm.curve(p=positions, d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        pm.delete(poly_transform)
+        return base
 
     @staticmethod
     def _safe_freeze(node: "pm.nt.Transform") -> None:
@@ -284,7 +277,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     @CoreUtils.undoable
     def create(
         cls,
-        preset: str = "circle",
+        preset: str = "diamond",
         name: Optional[str] = None,
         *,
         size: float = 1.0,
@@ -296,13 +289,14 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         group_suffix: str = "_GRP",
         ctrl_suffix: str = "_CTRL",
         freeze: bool = True,
+        tag_as_controller: bool = True,
         return_nodes: bool = False,
         **kwargs,
     ) -> Union["pm.nt.Transform", ControlNodes]:
         """Create a NURBS control.
 
         Parameters:
-            preset: Preset name (e.g. "circle", "square", "box", "ball").
+            preset: Preset name (e.g. "diamond", "box", "ball", "beveled_cube").
             name: Base name. If it doesn't end with `ctrl_suffix`, it will be appended.
             size: Uniform scale multiplier.
             axis: Primary control normal axis (x/y/z or signed variants). Ignored by some presets.
@@ -312,6 +306,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             offset_group: If True, create an offset group above the control.
             group_suffix/ctrl_suffix: Naming suffixes.
             freeze: If True, freeze control transforms after creation/orientation/scaling.
+            tag_as_controller: If True, tag the control as a Maya animation controller
+                (enables pick-walking, controller filter in outliner, etc.).
             return_nodes: If True, return ControlNodes(control, group).
             **kwargs: Forwarded to the preset builder (preset-specific parameters).
 
@@ -321,7 +317,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if not cls._PRESETS:
             cls._register_builtin_presets()
 
-        preset_norm = (preset or "circle").lower()
+        preset_norm = (preset or "diamond").lower()
         if preset_norm not in cls._PRESETS:
             raise ValueError(
                 f"Unknown control preset '{preset}'. Available: {sorted(cls._PRESETS.keys())}"
@@ -363,6 +359,12 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 pm.parent(top, parent)
 
         cls._apply_wire_color(ctrl, color)
+
+        if tag_as_controller:
+            try:
+                pm.controller(ctrl)
+            except Exception:
+                pass
 
         if return_nodes:
             return ControlNodes(control=ctrl, group=grp)
@@ -447,110 +449,130 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if cls._PRESETS:
             return
 
-        cls.register_preset("circle", cls._build_circle)
-        cls.register_preset("square", cls._build_square)
         cls.register_preset("diamond", cls._build_diamond)
         cls.register_preset("arrow", cls._build_arrow)
         cls.register_preset("two_way_arrow", cls._build_two_way_arrow)
         cls.register_preset("four_way_arrow", cls._build_four_way_arrow)
-
-        # Icon-style presets
         cls.register_preset("chevron", cls._build_chevron)
 
-        # Fancy animator-friendly defaults
+        # 3D primitives
         cls.register_preset("target", cls._build_target)
-        cls.register_preset("secondary", cls._build_secondary)
         cls.register_preset("box", cls._build_box)
+        cls.register_preset("beveled_cube", cls._build_beveled_cube)
         cls.register_preset("ball", cls._build_ball)
         cls.register_preset("sphere", cls._build_ball)
+        cls.register_preset("torus", cls._build_torus)
+        cls.register_preset("helix", cls._build_helix)
+        cls.register_preset("geosphere", cls._build_geosphere)
+
+        # 3D solids
+        cls.register_preset("pyramid", cls._build_pyramid)
+        cls.register_preset("star", cls._build_star)
 
         # Standalone text
         cls.register_preset("text", cls._build_text)
 
-    @staticmethod
-    def _build_circle(
-        *, name: str, axis: str = "y", sections: int = 16, **_
+    @classmethod
+    def _build_diamond(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """3D octahedron — two four-sided pyramids joined at the equator."""
+        r = 1.0  # equatorial radius
+        h = 1.25  # half-height (top/bottom apex)
+
+        top = (0.0, h, 0.0)
+        bot = (0.0, -h, 0.0)
+        eq = [
+            (r, 0.0, 0.0),
+            (0.0, 0.0, r),
+            (-r, 0.0, 0.0),
+            (0.0, 0.0, -r),
+        ]
+
+        curves: List[pm.nt.Transform] = []
+        # Equatorial ring
+        curves.append(pm.curve(p=eq + [eq[0]], d=1))
+        # Ribs from top to equator and bottom to equator
+        for pt in eq:
+            curves.append(pm.curve(p=[top, pt, bot], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
+
+    @classmethod
+    def _build_arrow(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """3D arrow with depth — reads well from any camera angle."""
+        # Flat arrow outline
+        y = 0.0
+        outline = [
+            (-1.25, y, -0.4),
+            (0.15, y, -0.4),
+            (0.15, y, -1.0),
+            (1.5, y, 0.0),
+            (0.15, y, 1.0),
+            (0.15, y, 0.4),
+            (-1.25, y, 0.4),
+            (-1.25, y, -0.4),
+        ]
+        # Build top and bottom planes offset slight in Y for 3D depth
+        d = 0.15  # depth half-height
+        top_pts = [(x, d, z) for (x, _, z) in outline]
+        bot_pts = [(x, -d, z) for (x, _, z) in outline]
+
+        curves: List[pm.nt.Transform] = []
+        curves.append(pm.curve(p=top_pts, d=1))
+        curves.append(pm.curve(p=bot_pts, d=1))
+        # Vertical struts at key vertices (skip redundant ones for cleanliness)
+        for i in (0, 2, 3, 4, 6):
+            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
+
+    @classmethod
+    def _build_two_way_arrow(
+        cls, *, name: str, axis: str = "y", **_
     ) -> "pm.nt.Transform":
-        ctrl = pm.circle(
-            name=name,
-            ch=False,
-            r=1.0,
-            s=int(sections),
-            nr=(0, 1, 0),
-        )[0]
-        return ctrl
-
-    @staticmethod
-    def _build_square(*, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        points = [
-            (-1.0, 0.0, -1.0),
-            (-1.0, 0.0, 1.0),
-            (1.0, 0.0, 1.0),
-            (1.0, 0.0, -1.0),
-            (-1.0, 0.0, -1.0),
-        ]
-        return pm.curve(name=name, p=points, d=1)
-
-    @staticmethod
-    def _build_diamond(*, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        points = [
-            (0.0, 0.0, -1.25),
-            (-1.25, 0.0, 0.0),
-            (0.0, 0.0, 1.25),
-            (1.25, 0.0, 0.0),
-            (0.0, 0.0, -1.25),
-        ]
-        return pm.curve(name=name, p=points, d=1)
-
-    @staticmethod
-    def _build_arrow(*, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        points = [
-            (-1.25, 0.0, -0.5),
-            (0.0, 0.0, -0.5),
-            (0.0, 0.0, -1.25),
-            (1.5, 0.0, 0.0),
-            (0.0, 0.0, 1.25),
-            (0.0, 0.0, 0.5),
-            (-1.25, 0.0, 0.5),
-            (-1.25, 0.0, -0.5),
-        ]
-        return pm.curve(name=name, p=points, d=1)
-
-    @staticmethod
-    def _build_two_way_arrow(*, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        # Built in XZ plane, centered at origin.
-        points = [
+        """3D two-way arrow with depth."""
+        outline = [
             (-1.6, 0.0, 0.0),
-            (-1.1, 0.0, 0.6),
-            (-1.1, 0.0, 0.25),
-            (1.1, 0.0, 0.25),
-            (1.1, 0.0, 0.6),
+            (-1.1, 0.0, 0.55),
+            (-1.1, 0.0, 0.22),
+            (1.1, 0.0, 0.22),
+            (1.1, 0.0, 0.55),
             (1.6, 0.0, 0.0),
-            (1.1, 0.0, -0.6),
-            (1.1, 0.0, -0.25),
-            (-1.1, 0.0, -0.25),
-            (-1.1, 0.0, -0.6),
+            (1.1, 0.0, -0.55),
+            (1.1, 0.0, -0.22),
+            (-1.1, 0.0, -0.22),
+            (-1.1, 0.0, -0.55),
             (-1.6, 0.0, 0.0),
         ]
-        return pm.curve(name=name, p=points, d=1)
+        d = 0.12
+        top_pts = [(x, d, z) for (x, _, z) in outline]
+        bot_pts = [(x, -d, z) for (x, _, z) in outline]
+
+        curves: List[pm.nt.Transform] = []
+        curves.append(pm.curve(p=top_pts, d=1))
+        curves.append(pm.curve(p=bot_pts, d=1))
+        # Vertical struts at arrow-tip and shaft corners
+        for i in (0, 1, 4, 5, 6, 9):
+            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
 
     @classmethod
     def _build_four_way_arrow(
         cls, *, name: str, axis: str = "y", **_
     ) -> "pm.nt.Transform":
-        # Single clean outline (no overlapping inner lines).
-        length = 1.6
+        """3D four-way arrow with depth."""
+        L = 1.6
         head_len = 0.5
-        head_width = 0.6
-        shaft_half = 0.25
+        hw = 0.55
+        c = 0.22
+        neck = L - head_len
 
-        neck = float(length) - float(head_len)
-        L = float(length)
-        hw = float(head_width)
-        c = float(shaft_half)
-
-        # Points are in XZ plane (Y=0). This is a closed border around a plus-shaped
-        # 4-way arrow with arrowheads at +Z, +X, -Z, -X.
         pts_xz = [
             (0.0, L),
             (hw, neck),
@@ -579,137 +601,108 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (0.0, L),
         ]
 
-        points = [(x, 0.0, z) for (x, z) in pts_xz]
-        return pm.curve(name=name, p=points, d=1)
+        d = 0.12
+        top_pts = [(x, d, z) for (x, z) in pts_xz]
+        bot_pts = [(x, -d, z) for (x, z) in pts_xz]
+
+        curves: List[pm.nt.Transform] = []
+        curves.append(pm.curve(p=top_pts, d=1))
+        curves.append(pm.curve(p=bot_pts, d=1))
+        # Struts at all four arrow tips and the inner elbow corners
+        for i in (0, 1, 5, 6, 7, 11, 12, 13, 17, 18, 19, 23):
+            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
 
     @classmethod
     def _build_target(
         cls, *, name: str, axis: str = "y", sections: int = 24, **_
     ) -> "pm.nt.Transform":
-        # Outer ring
-        outer = pm.circle(name=name, ch=False, r=1.0, s=int(sections), nr=(0, 1, 0))[0]
-        # Inner ring
-        inner = pm.circle(
-            name=f"{name}_inner", ch=False, r=0.65, s=int(sections), nr=(0, 1, 0)
+        """3D target — three orthogonal circles (gimbal/gyroscope)."""
+        xy = pm.circle(name=name, ch=False, r=1.0, s=int(sections), nr=(0, 0, 1))[0]
+        xz = pm.circle(
+            name=f"{name}_xz", ch=False, r=1.0, s=int(sections), nr=(0, 1, 0)
         )[0]
-        # Cardinal ticks
-        tick_len = 0.25
-        tick_out = 1.15
-        ticks: List[pm.nt.Transform] = []
-        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            pts = [
-                (dx * (tick_out - tick_len), 0.0, dz * (tick_out - tick_len)),
-                (dx * tick_out, 0.0, dz * tick_out),
-            ]
-            ticks.append(pm.curve(name=f"{name}_tick", p=pts, d=1))
+        yz = pm.circle(
+            name=f"{name}_yz", ch=False, r=1.0, s=int(sections), nr=(1, 0, 0)
+        )[0]
 
-        cls._merge_curve_shapes(outer, [inner] + ticks, delete_sources=True)
-        return outer
+        cls._merge_curve_shapes(xy, [xz, yz], delete_sources=True)
+        return xy
 
     @classmethod
-    def _build_secondary(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        # Dashed ring icon (secondary/alt). Very readable and clearly not the "main" solid ring.
-        return cls._build_dashed_ring(
-            name=name,
-            radius=1.0,
-            segments=8,
-            gap_ratio=0.38,
-            sections=6,
-        )
-
-    @staticmethod
     def _build_chevron(
+        cls,
         *,
         name: str,
         axis: str = "y",
-        width: float = 1.25,
-        height: float = 1.0,
-        direction: str = "forward",
         **_,
     ) -> "pm.nt.Transform":
-        """Single chevron icon.
-
-        direction:
-            - "forward" (default): points in +Z
-            - "back": points in -Z
-            - "up": points in +Y (after axis orientation)
-            - "down": points in -Y
-        """
-        w = float(width) / 2.0
-        h = float(height)
-
-        pts = [(-w, 0.0, 0.0), (0.0, 0.0, h), (w, 0.0, 0.0)]
-        crv = pm.curve(name=name, p=pts, d=1)
-
-        d = (direction or "forward").lower()
-        if d in ("back", "backward"):
-            pm.rotate(crv, (0.0, 180.0, 0.0), r=True, os=True)
-        elif d == "left":
-            pm.rotate(crv, (0.0, -90.0, 0.0), r=True, os=True)
-        elif d == "right":
-            pm.rotate(crv, (0.0, 90.0, 0.0), r=True, os=True)
-        elif d == "up":
-            pm.rotate(crv, (-90.0, 0.0, 0.0), r=True, os=True)
-        elif d == "down":
-            pm.rotate(crv, (90.0, 0.0, 0.0), r=True, os=True)
-
-        return crv
+        """3D chevron — triangular prism pointing in +Z."""
+        prism = pm.polyPrism(l=0.35, w=1.6, ns=3, sh=1, sc=0, ax=(0, 1, 0), ch=False)[0]
+        # Flatten Y and stretch Z for a chevron silhouette
+        pm.scale(prism, 1.0, 0.5, 1.2, r=True)
+        pm.makeIdentity(prism, apply=True, t=True, r=True, s=True, pn=True)
+        return cls._curves_from_poly(prism, name)
 
     @classmethod
     def _build_box(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
-        # 3D box (cube wireframe) with beveled corners for a cleaner control.
+        """Simple cube wireframe — 12 edges, no bevels."""
         p = 1.0
-        b = 0.25  # Bevel inset
+        verts = [
+            (-p, -p, -p),
+            (-p, -p, p),
+            (p, -p, p),
+            (p, -p, -p),
+            (-p, p, -p),
+            (-p, p, p),
+            (p, p, p),
+            (p, p, -p),
+        ]
+        edges = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),  # bottom
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),  # top
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),  # verticals
+        ]
 
-        # 8 corners, each corner has 3 verts (one per adjacent edge)
-        # Corner naming: TFL = Top-Front-Left, BBR = Bottom-Back-Right, etc.
-        # Front = +Z, Back = -Z, Left = -X, Right = +X, Top = +Y, Bottom = -Y
-
-        # Bottom face corners (Y = -p)
-        BFL = [(-p + b, -p, p), (-p, -p, p - b), (-p, -p + b, p)]  # Bottom-Front-Left
-        BFR = [(p, -p + b, p), (p, -p, p - b), (p - b, -p, p)]  # Bottom-Front-Right
-        BBL = [(-p, -p + b, -p), (-p, -p, -p + b), (-p + b, -p, -p)]  # Bottom-Back-Left
-        BBR = [(p - b, -p, -p), (p, -p, -p + b), (p, -p + b, -p)]  # Bottom-Back-Right
-
-        # Top face corners (Y = +p)
-        TFL = [(-p, p - b, p), (-p, p, p - b), (-p + b, p, p)]  # Top-Front-Left
-        TFR = [(p - b, p, p), (p, p, p - b), (p, p - b, p)]  # Top-Front-Right
-        TBL = [(-p + b, p, -p), (-p, p, -p + b), (-p, p - b, -p)]  # Top-Back-Left
-        TBR = [(p, p - b, -p), (p, p, -p + b), (p - b, p, -p)]  # Top-Back-Right
-
-        curves = []
-
-        # Corner triangles (beveled corners)
-        for pts in [BFL, BFR, BBL, BBR, TFL, TFR, TBL, TBR]:
-            curves.append(pm.curve(p=pts + [pts[0]], d=1))
-
-        # Edges connecting corners (12 edges of the cube)
-        # Bottom face edges
-        curves.append(pm.curve(p=[BFL[0], BFR[2]], d=1))  # Front bottom
-        curves.append(pm.curve(p=[BBL[2], BBR[0]], d=1))  # Back bottom
-        curves.append(pm.curve(p=[BFL[1], BBL[1]], d=1))  # Left bottom
-        curves.append(pm.curve(p=[BFR[1], BBR[1]], d=1))  # Right bottom
-
-        # Top face edges
-        curves.append(pm.curve(p=[TFL[2], TFR[0]], d=1))  # Front top
-        curves.append(pm.curve(p=[TBL[0], TBR[2]], d=1))  # Back top
-        curves.append(pm.curve(p=[TFL[1], TBL[1]], d=1))  # Left top
-        curves.append(pm.curve(p=[TFR[1], TBR[1]], d=1))  # Right top
-
-        # Vertical edges
-        curves.append(pm.curve(p=[BFL[2], TFL[0]], d=1))  # Front-Left
-        curves.append(pm.curve(p=[BFR[0], TFR[2]], d=1))  # Front-Right
-        curves.append(pm.curve(p=[BBL[0], TBL[2]], d=1))  # Back-Left
-        curves.append(pm.curve(p=[BBR[2], TBR[0]], d=1))  # Back-Right
+        curves: List[pm.nt.Transform] = []
+        for i, j in edges:
+            curves.append(pm.curve(p=[verts[i], verts[j]], d=1))
 
         base = pm.group(em=True, n=name)
-        for c in curves:
-            shapes = pm.listRelatives(c, s=True, path=True) or []
-            for s in shapes:
-                pm.parent(s, base, r=True, s=True)
-            pm.delete(c)
-
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
+
+    @classmethod
+    def _build_beveled_cube(
+        cls, *, name: str, axis: str = "y", **_
+    ) -> "pm.nt.Transform":
+        """Beveled cube — polyCube with all edges beveled at 50%,
+        converted to NURBS curves via edge extraction.
+        """
+        cube = pm.polyCube(w=2, h=2, d=2, sx=1, sy=1, sz=1, ch=True)[0]
+        pm.polyBevel3(
+            cube.e[:],
+            offset=0.5,
+            offsetAsFraction=True,
+            segments=1,
+            depth=1,
+            chamfer=True,
+            ch=True,
+        )
+        pm.delete(cube, ch=True)
+        return cls._curves_from_poly(cube, name)
 
     @classmethod
     def _build_ball(
@@ -772,17 +765,106 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (9, 11),
         ]
 
-        curves = []
+        curves: List[pm.nt.Transform] = []
         for i, j in edges:
             curves.append(pm.curve(p=[verts[i], verts[j]], d=1))
 
         base = pm.group(em=True, n=name)
-        for c in curves:
-            shapes = pm.listRelatives(c, s=True, path=True) or []
-            for s in shapes:
-                pm.parent(s, base, r=True, s=True)
-            pm.delete(c)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
 
+    @classmethod
+    def _build_torus(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """Torus — polyTorus converted to NURBS curves."""
+        torus = pm.polyTorus(r=0.8, sr=0.25, tw=0, sx=12, sy=4, ax=(0, 1, 0), ch=False)[
+            0
+        ]
+        return cls._curves_from_poly(torus, name)
+
+    @classmethod
+    def _build_helix(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """Helix — polyHelix converted to NURBS curves."""
+        helix = pm.polyHelix(
+            c=2,
+            h=6,
+            w=5,
+            r=0.35,
+            sa=5,
+            sco=15,
+            sc=0,
+            rcap=False,
+            ax=(0, 1, 0),
+            ch=False,
+        )[0]
+        return cls._curves_from_poly(helix, name)
+
+    @classmethod
+    def _build_geosphere(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """Geosphere — icosahedron subdivided once to form a geodesic sphere."""
+        ico = pm.polyPlatonic(solidType=1, r=1.0, ch=True)[0]
+        pm.polySmooth(ico, divisions=1, ch=True)
+        pm.delete(ico, ch=True)
+        return cls._curves_from_poly(ico, name)
+
+    @classmethod
+    def _build_pyramid(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+        """3D four-sided pyramid — apex above a square base."""
+        apex = (0.0, 1.2, 0.0)
+        base_pts = [
+            (-0.8, 0.0, -0.8),
+            (0.8, 0.0, -0.8),
+            (0.8, 0.0, 0.8),
+            (-0.8, 0.0, 0.8),
+        ]
+
+        curves: List[pm.nt.Transform] = []
+        # Base square
+        curves.append(pm.curve(p=base_pts + [base_pts[0]], d=1))
+        # Ribs from apex to each base corner
+        for pt in base_pts:
+            curves.append(pm.curve(p=[apex, pt], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        return base
+
+    @classmethod
+    def _build_star(
+        cls, *, name: str, axis: str = "y", points: int = 6, **_
+    ) -> "pm.nt.Transform":
+        """3D star burst — outer and inner rings connected by radial spokes,
+        with a subtle Y-depth for viewport readability."""
+        import math
+
+        n = max(3, int(points))
+        outer_r = 1.0
+        inner_r = 0.5
+        d = 0.15  # depth half-height
+
+        star_pts: List[Tuple[float, float, float]] = []
+        for i in range(n):
+            angle_out = math.radians(i * 360.0 / n - 90.0)
+            angle_in = math.radians((i + 0.5) * 360.0 / n - 90.0)
+            star_pts.append(
+                (math.cos(angle_out) * outer_r, 0.0, math.sin(angle_out) * outer_r)
+            )
+            star_pts.append(
+                (math.cos(angle_in) * inner_r, 0.0, math.sin(angle_in) * inner_r)
+            )
+        star_pts.append(star_pts[0])  # close
+
+        top_pts = [(x, d, z) for (x, _, z) in star_pts]
+        bot_pts = [(x, -d, z) for (x, _, z) in star_pts]
+
+        curves: List[pm.nt.Transform] = []
+        curves.append(pm.curve(p=top_pts, d=1))
+        curves.append(pm.curve(p=bot_pts, d=1))
+        # Vertical struts at outer points only (every other vertex)
+        for i in range(0, len(star_pts) - 1, 2):
+            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+
+        base = pm.group(em=True, n=name)
+        cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod

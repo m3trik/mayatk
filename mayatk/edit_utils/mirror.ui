@@ -188,13 +188,23 @@
            </item>
           </layout>
          </item>
-         <item row="10" column="0" colspan="4">
+         <item row="10" column="0" colspan="2">
           <widget class="QCheckBox" name="chk005">
            <property name="toolTip">
             <string>Un-instance the object(s) before performing the operation.</string>
            </property>
            <property name="text">
             <string>Un-Instance</string>
+           </property>
+          </widget>
+         </item>
+         <item row="10" column="2" colspan="2">
+          <widget class="QCheckBox" name="chk006">
+           <property name="toolTip">
+            <string>Delete the original half after mirroring (only applies when Merge is OFF).</string>
+           </property>
+           <property name="text">
+            <string>Delete Original</string>
            </property>
           </widget>
          </item>

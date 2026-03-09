@@ -44,6 +44,15 @@ class HierarchyManagerController(ptk.LoggingMixin):
             []
         )  # Track current reference namespaces for filtering
 
+        # Per-tree ignored path sets
+        self._ignored_ref_paths = set()  # Ignored paths in reference tree (tree000)
+        self._ignored_cur_paths = set()  # Ignored paths in current tree (tree001)
+
+        # Cached reference import — avoids re-importing the same file for
+        # tree display + diff analysis within a single session.
+        # Structure: {"path": str, "sandbox": NamespaceSandbox, "transforms": list} or None
+        self._cached_reference_import = None
+
         self.logger.debug("HierarchyManagerController initialized.")
 
     def _redirect_logger(self, logger) -> None:
@@ -65,8 +74,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
     ) -> bool:
         """Analyze hierarchies and perform comparison.
 
-        This method creates a hierarchy comparison between the current scene and reference file.
-        It's separate from just displaying the hierarchies - this is for actual analysis.
+        Uses the cached reference import from ``_import_reference_cached()``
+        to avoid re-importing the file when the reference tree was already
+        populated with the same path.
 
         Args:
             reference_path: Path to the reference scene file
@@ -84,9 +94,6 @@ class HierarchyManagerController(ptk.LoggingMixin):
             self.logger.error(f"Reference scene does not exist: {reference_path}")
             return False
 
-        # Former cache reuse logic relied on hierarchy_manager.reference_file which no longer exists.
-        # Removed to avoid silently skipping fresh analyses.
-
         try:
             self.logger.progress(
                 f"Analyzing hierarchy differences with: {os.path.basename(reference_path)}"
@@ -95,8 +102,6 @@ class HierarchyManagerController(ptk.LoggingMixin):
             # Ensure we have a valid comparison setup
             selected = pm.selected(type="transform")
             if not selected:
-                # No selection - this means we want scene-wide comparison
-                # Don't select anything - let the analyzer handle scene-wide mode
                 self.logger.notice(
                     "No objects selected — performing full scene hierarchy comparison"
                 )
@@ -105,71 +110,42 @@ class HierarchyManagerController(ptk.LoggingMixin):
                     f"Using {len(selected)} pre-selected objects for hierarchy comparison"
                 )
 
-            # Import the reference scene temporarily for analysis
-            temp_import = NamespaceSandbox(dry_run=False)
-            self._redirect_logger(temp_import.logger)
-
-            import_info = temp_import.import_with_namespace(
-                reference_path, force_complete_import=True
+            # Reuse cached import or perform a fresh one.
+            non_default_camera_reference_transforms = (
+                self._import_reference_cached(reference_path)
             )
-            if not import_info or not import_info.get("transforms"):
+            if not non_default_camera_reference_transforms:
                 self.logger.error(
                     "Failed to import reference file or no transforms found"
                 )
                 return False
 
+            # Obtain the sandbox from the cache for the HierarchyManager.
+            cached_sandbox = (
+                self._cached_reference_import.get("sandbox")
+                if self._cached_reference_import
+                else None
+            )
+
             # Create hierarchy manager for comparison analysis
             self.hierarchy_manager = HierarchyManager(
-                import_manager=temp_import,
+                import_manager=cached_sandbox,
                 fuzzy_matching=fuzzy_matching,
                 dry_run=dry_run,
             )
 
             self._redirect_logger(self.hierarchy_manager.logger)
 
-            # Perform analysis - pass the imported reference objects
-            reference_transforms = import_info.get("transforms", [])
-
-            # Note: Camera cleanup is now handled automatically by NamespaceSandbox camera tracking
-            # We still filter out Maya default cameras from analysis to avoid namespace issues,
-            # but the cleanup is handled by the enhanced NamespaceSandbox.cleanup_all_namespaces()
-
-            # Filter out Maya default cameras from reference transforms
-            non_default_camera_reference_transforms = [
-                t for t in reference_transforms if not self._is_default_maya_camera(t)
-            ]
-
-            self.logger.debug(
-                f"Filtered reference objects: {len(reference_transforms)} total, "
-                f"{len(non_default_camera_reference_transforms)} for analysis"
-            )
-
-            # Extract reference namespaces for UI filtering (from all transforms, not just non-cameras)
-            if reference_transforms:
-                self._reference_namespaces = sorted(
-                    {
-                        t.nodeName().split(":")[0]
-                        for t in reference_transforms
-                        if ":" in t.nodeName()
-                    }
-                )
-                if self._reference_namespaces:
-                    self.logger.debug(
-                        f"Tracking reference namespaces for UI filtering: {', '.join(self._reference_namespaces)}"
-                    )
-            else:
-                self._reference_namespaces = []
-
             self._current_diff_result = self.hierarchy_manager.analyze_hierarchies(
                 current_tree_root="SCENE_WIDE_MODE",
-                reference_objects=non_default_camera_reference_transforms,  # Pass filtered transforms
+                reference_objects=non_default_camera_reference_transforms,
                 filter_meshes=True,
-                filter_cameras=False,  # No longer needed since we pre-filtered default cameras
+                filter_cameras=False,
                 filter_lights=False,
             )
 
-            # Clean up the imported reference data
-            temp_import.cleanup_all_namespaces()
+            # Do NOT clean up the cached import here — it may still be
+            # needed for tree display or subsequent operations.
 
             if not self._current_diff_result:
                 self.logger.warning("Analysis returned no results")
@@ -180,7 +156,6 @@ class HierarchyManagerController(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Error during hierarchy analysis: {e}")
 
-            # Provide more specific error information
             if "Failed to resolve source or target roots" in str(e):
                 self.logger.error(
                     "Analysis failed because no valid objects could be found for comparison."
@@ -197,7 +172,21 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self.hierarchy_manager = None
         self._current_diff_result = None
         self._reference_namespaces = []  # Clear reference namespace tracking
-        self.logger.debug("Analysis cache cleared")
+        self.clear_ignored_paths()
+        self._cleanup_cached_reference_import()
+        self.logger.debug("Analysis cache cleared (ignore paths also reset)")
+
+    def _cleanup_cached_reference_import(self):
+        """Clean up the cached reference import (namespace + transforms)."""
+        if self._cached_reference_import is not None:
+            sandbox = self._cached_reference_import.get("sandbox")
+            if sandbox is not None:
+                try:
+                    sandbox.cleanup_all_namespaces()
+                except Exception as e:
+                    self.logger.debug(f"Cached reference cleanup failed: {e}")
+            self._cached_reference_import = None
+            self._cleanup_temp_namespaces()
 
     def _cleanup_temp_namespaces(self):
         """Clean up any remaining temporary namespaces."""
@@ -310,6 +299,86 @@ class HierarchyManagerController(ptk.LoggingMixin):
             self.logger.error(f"Error pulling objects: {e}")
             return False
 
+    def repair_hierarchies(
+        self,
+        create_stubs: bool = True,
+        quarantine_extras: bool = True,
+        quarantine_group: str = "_QUARANTINE",
+        fix_reparented: bool = True,
+        dry_run: bool = True,
+    ) -> bool:
+        """Run repair operations on the current scene to match reference hierarchy.
+
+        Requires a prior successful diff analysis.  Ignored paths are
+        automatically excluded.
+
+        Args:
+            create_stubs: Create empty transforms for missing items.
+            quarantine_extras: Move extra items to a _QUARANTINE group.
+            quarantine_group: Name of the quarantine group.
+            fix_reparented: Move reparented nodes to reference position.
+            dry_run: Preview without changes.
+
+        Returns:
+            True if any repairs were applied (or would be in dry-run).
+        """
+        if not self.hierarchy_manager or not self._current_diff_result:
+            self.logger.error("Please run a diff analysis first.")
+            return False
+
+        effective = self._filter_ignored_from_diff()
+
+        # Temporarily set dry_run without leaking state
+        prev_dry_run = self.hierarchy_manager.dry_run
+        self.hierarchy_manager.dry_run = dry_run
+
+        results = {}
+        try:
+            if create_stubs and effective["missing"]:
+                self.logger.progress(
+                    f"Creating stubs for {len(effective['missing'])} missing items..."
+                )
+                results["stubs"] = self.hierarchy_manager.create_stubs(
+                    effective["missing"]
+                )
+
+            if quarantine_extras and effective["extra"]:
+                self.logger.progress(
+                    f"Quarantining {len(effective['extra'])} extra items..."
+                )
+                results["quarantined"] = self.hierarchy_manager.quarantine_extras(
+                    group=quarantine_group,
+                    paths=effective["extra"],
+                )
+
+            if fix_reparented and effective["reparented"]:
+                self.logger.progress(
+                    f"Fixing {len(effective['reparented'])} reparented items..."
+                )
+                results["reparented"] = self.hierarchy_manager.fix_reparented(
+                    effective["reparented"]
+                )
+        finally:
+            self.hierarchy_manager.dry_run = prev_dry_run
+
+        total = sum(len(v) for v in results.values())
+        if total == 0:
+            self.logger.notice("No repairs needed or no applicable items found.")
+            return False
+
+        mode = "DRY-RUN" if dry_run else "APPLIED"
+        parts = []
+        for key, items in results.items():
+            if items:
+                parts.append(f"{key}: {len(items)}")
+        self.logger.result(f"[{mode}] Repairs — {', '.join(parts)}")
+
+        # Invalidate stale cache after live changes
+        if not dry_run:
+            self._clear_analysis_cache()
+
+        return True
+
     def _is_default_maya_camera(self, transform):
         """Check if a transform is a Maya default camera that should be excluded."""
         try:
@@ -358,77 +427,6 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 self.logger.notice("Dry run - no actual changes made")
         else:
             self.logger.error("Pull operation failed — check logs for details")
-
-        self.logger.log_divider()
-
-    def _display_hierarchy_analysis_results(
-        self, reference_path: str, diff_result: dict
-    ):
-        """Display formatted hierarchy analysis results using log_table + log_box."""
-        missing = diff_result.get("missing", [])
-        extra = diff_result.get("extra", [])
-        reparented = diff_result.get("reparented", [])
-        fuzzy_matches = diff_result.get("fuzzy_matches", [])
-
-        self.logger.log_divider()
-
-        # Summary table
-        total_diffs = len(missing) + len(extra) + len(reparented)
-        status = "PERFECT MATCH" if total_diffs == 0 else f"{total_diffs} DIFFERENCES"
-
-        self.log_table(
-            data=[
-                ["Reference", Path(reference_path).name],
-                ["Missing", str(len(missing))],
-                ["Extra", str(len(extra))],
-                ["Reparented", str(len(reparented))],
-                ["Fuzzy Matches", str(len(fuzzy_matches))],
-                ["Status", status],
-            ],
-            headers=["Metric", "Value"],
-            title="HIERARCHY ANALYSIS",
-        )
-
-        # Display missing objects if any
-        if missing:
-            display_missing = [f"  - {m}" for m in missing[:10]]
-            if len(missing) > 10:
-                display_missing.append(f"  ... and {len(missing) - 10} more")
-            self.logger.log_box("MISSING OBJECTS", display_missing, level="WARNING")
-
-        # Display extra objects if any
-        if extra:
-            display_extra = [f"  + {e}" for e in extra[:10]]
-            if len(extra) > 10:
-                display_extra.append(f"  ... and {len(extra) - 10} more")
-            self.logger.log_box("EXTRA OBJECTS", display_extra, level="INFO")
-
-        # Display reparented objects if any
-        if reparented:
-            display_reparented = [f"  ~ {r}" for r in reparented[:10]]
-            if len(reparented) > 10:
-                display_reparented.append(f"  ... and {len(reparented) - 10} more")
-            self.logger.log_box(
-                "REPARENTED OBJECTS", display_reparented, level="WARNING"
-            )
-
-        # Display fuzzy matches if any
-        if fuzzy_matches:
-            fuzzy_items = []
-            for match in fuzzy_matches[:10]:
-                if (
-                    isinstance(match, dict)
-                    and "original" in match
-                    and "matched" in match
-                ):
-                    fuzzy_items.append(
-                        f"  '{match['original']}' -> '{match['matched']}'"
-                    )
-                else:
-                    fuzzy_items.append(f"  {match}")
-            if len(fuzzy_matches) > 10:
-                fuzzy_items.append(f"  ... and {len(fuzzy_matches) - 10} more")
-            self.logger.log_box("FUZZY MATCHES", fuzzy_items, level="NOTICE")
 
         self.logger.log_divider()
 
@@ -534,6 +532,88 @@ class HierarchyManagerController(ptk.LoggingMixin):
             tree_widget.setHeaderLabels(["Current Scene"])
             error_item = tree_widget.create_item([f"Error: {str(e)}"])
 
+    def _import_reference_cached(self, reference_path: str):
+        """Import a reference file, reusing a cached import when the path matches.
+
+        Returns the list of (non-default-camera) transforms, or ``None`` on
+        failure.  The import is kept alive in ``_cached_reference_import`` so
+        that subsequent operations (tree display, diff analysis) can reuse
+        the same transforms without re-importing the file.
+        """
+        resolved = str(Path(reference_path).resolve())
+
+        # Reuse cached import if the path hasn't changed and transforms are still valid.
+        if self._cached_reference_import is not None:
+            cached_path = self._cached_reference_import.get("path")
+            cached_transforms = self._cached_reference_import.get("transforms", [])
+            if cached_path == resolved and cached_transforms:
+                # Quick validity check — first node must still exist.
+                try:
+                    if cached_transforms[0].exists():
+                        self.logger.debug(
+                            f"Reusing cached reference import ({len(cached_transforms)} transforms)"
+                        )
+                        return cached_transforms
+                except Exception:
+                    pass
+                # Stale cache — fall through to fresh import.
+                self.logger.debug("Cached reference import is stale, re-importing")
+
+        # Clean up any previous cached import before creating a new one.
+        self._cleanup_cached_reference_import()
+
+        self.logger.progress(
+            f"Importing reference: {os.path.basename(reference_path)}"
+        )
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        self._redirect_logger(sandbox.logger)
+
+        import_info = sandbox.import_with_namespace(
+            reference_path, force_complete_import=True
+        )
+        if not import_info or not import_info.get("transforms"):
+            self.logger.error(
+                "Failed to import reference file or no transforms found"
+            )
+            return None
+
+        all_transforms = import_info.get("transforms", [])
+
+        # Filter out default Maya cameras.
+        filtered = [
+            t for t in all_transforms if not self._is_default_maya_camera(t)
+        ]
+        excluded_count = len(all_transforms) - len(filtered)
+
+        self.logger.result(
+            f"Imported {len(all_transforms)} transforms from reference "
+            f"({excluded_count} default cameras excluded)"
+        )
+
+        # Cache for reuse.
+        self._cached_reference_import = {
+            "path": resolved,
+            "sandbox": sandbox,
+            "transforms": filtered,
+        }
+
+        # Extract reference namespaces for UI filtering.
+        self._reference_namespaces = sorted(
+            {
+                t.nodeName().split(":")[0]
+                for t in all_transforms
+                if ":" in t.nodeName()
+            }
+        )
+        if self._reference_namespaces:
+            self.logger.debug(
+                f"Tracking reference namespaces for UI filtering: "
+                f"{', '.join(self._reference_namespaces)}"
+            )
+
+        return filtered
+
     def populate_reference_tree(
         self,
         tree_widget,
@@ -542,8 +622,18 @@ class HierarchyManagerController(ptk.LoggingMixin):
         dry_run: bool = True,
     ):
         """Populate the reference hierarchy tree."""
-        # Clear analysis cache when loading a new reference
-        self._clear_analysis_cache()
+        # Only invalidate the cache when the reference path actually changes.
+        if reference_path:
+            resolved = str(Path(reference_path).resolve())
+            cached_path = (
+                self._cached_reference_import.get("path")
+                if self._cached_reference_import
+                else None
+            )
+            if cached_path != resolved:
+                self._clear_analysis_cache()
+        else:
+            self._clear_analysis_cache()
 
         # Get reference scene name for header
         reference_name = "Reference Scene"
@@ -571,94 +661,33 @@ class HierarchyManagerController(ptk.LoggingMixin):
             # Set flag to prevent current scene tree refresh during import
             self._importing_reference = True
 
-            # Clear reference namespace tracking before loading new reference
-            # This prevents old namespace tracking from affecting current scene object detection
-            self._reference_namespaces = []
-
-            # Import the reference scene just for hierarchy display
-            self.logger.progress(
-                f"Loading reference hierarchy from: {os.path.basename(reference_path)}"
-            )
-
-            temp_import = NamespaceSandbox(dry_run=False)
-
-            self._redirect_logger(temp_import.logger)
-
-            import_info = temp_import.import_with_namespace(
-                reference_path, force_complete_import=True
-            )
-
-            if not import_info or not import_info.get("transforms"):
-                self.logger.error(
-                    "Failed to import reference file or no transforms found"
-                )
+            filtered_transforms = self._import_reference_cached(reference_path)
+            if not filtered_transforms:
                 tree_widget.clear()
                 error_item = tree_widget.create_item(["Failed to load reference"])
                 return
 
-            transforms = import_info.get("transforms", [])
-
-            # Filter out default Maya cameras from tree display
-            initial_count = len(transforms)
-            filtered_transforms = [
-                transform
-                for transform in transforms
-                if not self._is_default_maya_camera(transform)
-            ]
-            excluded_count = initial_count - len(filtered_transforms)
-
-            self.logger.result(
-                f"Imported {initial_count} transforms from reference "
-                f"({excluded_count} default cameras excluded)"
-            )
-
             # Debug: Log details about the imported transforms
-            if filtered_transforms:
-                # Show hierarchy structure details
-                root_count = 0
-                child_count = 0
-                max_depth = 0
-
-                for transform in filtered_transforms:
-                    parent = transform.getParent()
-                    if parent is None:
-                        root_count += 1
-                    else:
-                        child_count += 1
-
-                    # Calculate depth
-                    depth = 0
-                    current = transform
-                    while current.getParent():
-                        depth += 1
-                        current = current.getParent()
-                        if depth > 10:  # Safety break
-                            break
-                    max_depth = max(max_depth, depth)
-
-                self.logger.debug(
-                    f"Reference hierarchy structure: {root_count} roots, {child_count} children, max depth {max_depth}"
+            if self.logger.isEnabledFor(10):  # DEBUG level
+                root_count = sum(
+                    1 for t in filtered_transforms if t.getParent() is None
                 )
-
-                # Show some example transform names
+                child_count = len(filtered_transforms) - root_count
+                self.logger.debug(
+                    f"Reference hierarchy structure: {root_count} roots, "
+                    f"{child_count} children"
+                )
                 example_names = [t.nodeName() for t in filtered_transforms[:10]]
                 self.logger.debug(
-                    f"Example transforms: {example_names}{'...' if len(filtered_transforms) > 10 else ''}"
+                    f"Example transforms: {example_names}"
+                    f"{'...' if len(filtered_transforms) > 10 else ''}"
                 )
-            else:
-                self.logger.warning("No transforms remaining after filtering")
 
             # Clear and populate the tree
             tree_widget.clear()
             self.populate_tree_with_hierarchy(
                 tree_widget, filtered_transforms, "reference"
             )
-
-            # Clean up the imported data since this is just for display
-            temp_import.cleanup_all_namespaces()
-
-            # Additional cleanup to ensure no temp namespaces are left behind
-            self._cleanup_temp_namespaces()
 
             self.logger.debug("Reference tree populated successfully")
 
@@ -903,6 +932,126 @@ class HierarchyManagerController(ptk.LoggingMixin):
             item.setForeground(col, QtGui.QBrush(QtGui.QColor(fg_hex)))
             item.setBackground(col, QtGui.QBrush(QtGui.QColor(bg_hex)))
 
+    # ----------------------------- Ignore support ----------------------------- #
+
+    def _get_ignored_set(self, tree_widget):
+        """Return the ignored-path set associated with *tree_widget*."""
+        if tree_widget is self.ui.tree000:
+            return self._ignored_ref_paths
+        if tree_widget is self.ui.tree001:
+            return self._ignored_cur_paths
+        return set()
+
+    @staticmethod
+    def _build_item_path(item):
+        """Build a pipe-separated hierarchy path from a QTreeWidgetItem."""
+        parts = []
+        current = item
+        while current:
+            parts.insert(0, current.text(0))
+            current = current.parent()
+        return "|".join(parts)
+
+    def is_path_ignored(self, tree_widget, path):
+        """Check whether *path* (or any ancestor) is in the ignored set."""
+        ignored = self._get_ignored_set(tree_widget)
+        if path in ignored:
+            return True
+        return any(path.startswith(ip + "|") for ip in ignored)
+
+    def _apply_ignore_styling(self, tree_widget):
+        """Apply or remove strikethrough + dim styling for ignored items.
+
+        Directly-ignored items get strikethrough + dim ``#666666``.
+        Inherited-ignored items (ancestor is ignored) get italic + ``#888888``.
+        """
+        ignored = self._get_ignored_set(tree_widget)
+        if not ignored:
+            # Fast-path: nothing ignored — strip any leftover styling.
+            iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+            while iterator.value():
+                item = iterator.value()
+                font = item.font(0)
+                if font.strikeOut() or font.italic():
+                    font.setStrikeOut(False)
+                    font.setItalic(False)
+                    for col in range(tree_widget.columnCount()):
+                        item.setFont(col, font)
+                iterator += 1
+            return
+
+        direct_fg = QtGui.QColor("#666666")
+        inherited_fg = QtGui.QColor("#888888")
+        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            path = self._build_item_path(item)
+            font = item.font(0)
+            if path in ignored:
+                # Directly ignored: strikethrough + dim
+                if not font.strikeOut():
+                    font.setStrikeOut(True)
+                font.setItalic(False)
+                for col in range(tree_widget.columnCount()):
+                    item.setFont(col, font)
+                    item.setForeground(col, QtGui.QBrush(direct_fg))
+                    item.setBackground(col, QtGui.QBrush())
+            elif self.is_path_ignored(tree_widget, path):
+                # Inherited from an ignored ancestor: italic + lighter dim
+                font.setStrikeOut(False)
+                font.setItalic(True)
+                for col in range(tree_widget.columnCount()):
+                    item.setFont(col, font)
+                    item.setForeground(col, QtGui.QBrush(inherited_fg))
+                    item.setBackground(col, QtGui.QBrush())
+            else:
+                if font.strikeOut() or font.italic():
+                    font.setStrikeOut(False)
+                    font.setItalic(False)
+                    for col in range(tree_widget.columnCount()):
+                        item.setFont(col, font)
+            iterator += 1
+
+    def clear_ignored_paths(self):
+        """Clear all ignored paths for both trees."""
+        self._ignored_ref_paths.clear()
+        self._ignored_cur_paths.clear()
+
+    def _filter_ignored_from_diff(self):
+        """Return diff result with ignored items excluded."""
+        if not self._current_diff_result:
+            return {"missing": [], "extra": [], "reparented": [], "fuzzy_matches": []}
+
+        missing = [
+            p
+            for p in self._current_diff_result.get("missing", [])
+            if not self.is_path_ignored(self.ui.tree000, p)
+        ]
+        extra = [
+            p
+            for p in self._current_diff_result.get("extra", [])
+            if not self.is_path_ignored(self.ui.tree001, p)
+        ]
+        reparented = [
+            r
+            for r in self._current_diff_result.get("reparented", [])
+            if not self.is_path_ignored(self.ui.tree001, r.get("current_path", ""))
+            and not self.is_path_ignored(self.ui.tree000, r.get("reference_path", ""))
+        ]
+        fuzzy = [
+            f
+            for f in self._current_diff_result.get("fuzzy_matches", [])
+            if not self.is_path_ignored(self.ui.tree001, f.get("current_name", ""))
+            and not self.is_path_ignored(self.ui.tree000, f.get("target_name", ""))
+        ]
+
+        return {
+            "missing": missing,
+            "extra": extra,
+            "reparented": reparented,
+            "fuzzy_matches": fuzzy,
+        }
+
     def find_tree_item_by_name(self, tree_widget, object_name):
         """Find a tree item by object name (first column).
 
@@ -1087,6 +1236,10 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 "Refreshed trees (hierarchy may have changed — selection cleared)."
             )
 
+        # Re-apply ignore styling to newly-rebuilt tree items
+        self._apply_ignore_styling(self.ui.tree000)
+        self._apply_ignore_styling(self.ui.tree001)
+
     def log_diff_results(self):
         """Log detailed hierarchy difference analysis results using rich formatting."""
         if not self._current_diff_result:
@@ -1097,10 +1250,12 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         # NOTE: 'missing' = present in REFERENCE, absent in CURRENT
         #       'extra'   = present in CURRENT, absent in REFERENCE
-        missing = self._current_diff_result.get("missing", [])  # reference-only
-        extra = self._current_diff_result.get("extra", [])  # current-only
-        reparented = self._current_diff_result.get("reparented", [])
-        fuzzy_matches = self._current_diff_result.get("fuzzy_matches", [])
+        # Use filtered results that exclude ignored paths
+        effective = self._filter_ignored_from_diff()
+        missing = effective["missing"]
+        extra = effective["extra"]
+        reparented = effective["reparented"]
+        fuzzy_matches = effective["fuzzy_matches"]
 
         self.logger.log_divider()
 
@@ -1276,8 +1431,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             "<b>Workflow:</b><br>"
             "&nbsp;&nbsp;1. Browse or enter a reference scene path<br>"
             "&nbsp;&nbsp;2. <b>Diff</b> &mdash; compare current scene against reference<br>"
-            "&nbsp;&nbsp;3. Select objects in the reference tree<br>"
-            "&nbsp;&nbsp;4. <b>Pull</b> &mdash; import selected objects into current scene<br><br>"
+            "&nbsp;&nbsp;3. <b>Pull</b> &mdash; select objects in the reference tree and import<br>"
+            "&nbsp;&nbsp;4. <b>Fix</b> &mdash; auto-repair stubs, quarantine extras, fix reparented<br><br>"
             "Right-click trees for more options. "
             "Enable <i>Dry Run</i> in the header menu to preview without changes."
             "</span>",
@@ -1354,6 +1509,19 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 setObjectName="b011",
                 setToolTip="Highlight differences between hierarchies.",
             )
+            widget.menu.add("Separator")
+            widget.menu.add(
+                "QPushButton",
+                setText="Ignore Selected",
+                setObjectName="b013",
+                setToolTip="Mark selected items as ignored (skipped during auto-selection and dimmed).",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Unignore Selected",
+                setObjectName="b014",
+                setToolTip="Remove ignore mark from selected items.",
+            )
 
             # Open file browser when the placeholder item is clicked
             widget.itemClicked.connect(self._on_reference_tree_item_clicked)
@@ -1427,6 +1595,19 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 setText="Collapse All",
                 setObjectName="b008",
                 setToolTip="Collapse all hierarchy items.",
+            )
+            widget.menu.add("Separator")
+            widget.menu.add(
+                "QPushButton",
+                setText="Ignore Selected",
+                setObjectName="b015",
+                setToolTip="Mark selected items as ignored (skipped during auto-selection and dimmed).",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Unignore Selected",
+                setObjectName="b016",
+                setToolTip="Remove ignore mark from selected items.",
             )
 
             # Open file dialog when the placeholder item is clicked
@@ -1545,6 +1726,38 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setToolTip="Include all children when pulling objects. When enabled, complete hierarchies are pulled; when disabled, only the selected objects are pulled.",
         )
 
+    def tb003_init(self, widget):
+        """Initialize the fix/repair toggle button with options menu."""
+        widget.option_box.menu.setTitle("Repair Options:")
+
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Create Stubs (Missing)",
+            setObjectName="chk_fix_stubs",
+            setChecked=True,
+            setToolTip="Create empty transform placeholders for items missing from the current scene.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Quarantine Extras",
+            setObjectName="chk_fix_quarantine",
+            setChecked=True,
+            setToolTip="Move extra items (not in reference) to a quarantine group.",
+        )
+        widget.option_box.menu.add(
+            "QLineEdit",
+            setObjectName="txt_quarantine_name",
+            setPlaceholderText="_QUARANTINE",
+            setToolTip="Custom name for the quarantine group (leave blank for default).",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Fix Reparented",
+            setObjectName="chk_fix_reparented",
+            setChecked=True,
+            setToolTip="Move reparented nodes to match their reference hierarchy position.",
+        )
+
     def b000(self):
         """Refresh tree widgets with current hierarchy data."""
         self.controller.refresh_trees()
@@ -1652,6 +1865,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             self.controller.apply_difference_formatting(
                 self.ui.tree001, self.ui.tree000
             )
+            # Re-apply ignore styling on top of diff colors
+            self.controller._apply_ignore_styling(self.ui.tree000)
+            self.controller._apply_ignore_styling(self.ui.tree001)
 
         # Apply auto-select and expand options if trees are ready
         if auto_select or expand_diff:
@@ -1680,13 +1896,14 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Clean up any remaining temp namespaces after diff analysis
         self.controller._cleanup_temp_namespaces()
 
-        # Update footer with diff summary
+        # Update footer with diff summary (uses effective counts excluding ignored)
         if hasattr(self.ui, "footer") and self.ui.footer:
             diff = self.controller._current_diff_result
             if diff:
-                n_miss = len(diff.get("missing", []))
-                n_extra = len(diff.get("extra", []))
-                n_repar = len(diff.get("reparented", []))
+                effective = self.controller._filter_ignored_from_diff()
+                n_miss = len(effective["missing"])
+                n_extra = len(effective["extra"])
+                n_repar = len(effective["reparented"])
                 total = n_miss + n_extra + n_repar
                 if total == 0:
                     self.ui.footer.setText("Diff: hierarchies match.")
@@ -1706,6 +1923,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         # Validate that we have objects selected and a reference path
         object_names = self.controller.get_selected_object_names(self.ui.tree000)
+        # Filter out ignored items from selection
+        object_names = [
+            n
+            for n in object_names
+            if not self.controller.is_path_ignored(self.ui.tree000, n)
+        ]
         if not object_names:
             self.logger.error("Please select objects in the reference hierarchy tree.")
             return
@@ -1715,7 +1938,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             self.logger.error("Please specify a reference scene path.")
             return
 
-        reference_path = self.ui.txt001.text().strip()
         fuzzy_matching = True  # Default value
         dry_run = self.ui.chk002.isChecked()
 
@@ -1889,6 +2111,66 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 else:
                     self.ui.footer.setText(pull_summary)
 
+    def tb003(self, state=None):
+        """Toggle button for fix/repair operations."""
+        self.ui.txt003.clear()
+
+        if not self.controller._current_diff_result:
+            self.logger.error("Please run a diff analysis first (Diff button).")
+            return
+
+        dry_run = self.ui.chk002.isChecked()
+
+        # Get repair options from toggle button menu
+        do_stubs = True
+        do_quarantine = True
+        do_reparent = True
+        quarantine_name = "_QUARANTINE"
+
+        if hasattr(self.ui, "tb003") and hasattr(self.ui.tb003, "menu"):
+            if hasattr(self.ui.tb003.menu, "chk_fix_stubs"):
+                do_stubs = self.ui.tb003.option_box.menu.chk_fix_stubs.isChecked()
+            if hasattr(self.ui.tb003.menu, "chk_fix_quarantine"):
+                do_quarantine = (
+                    self.ui.tb003.option_box.menu.chk_fix_quarantine.isChecked()
+                )
+            if hasattr(self.ui.tb003.menu, "chk_fix_reparented"):
+                do_reparent = (
+                    self.ui.tb003.option_box.menu.chk_fix_reparented.isChecked()
+                )
+            if hasattr(self.ui.tb003.menu, "txt_quarantine_name"):
+                custom_name = (
+                    self.ui.tb003.option_box.menu.txt_quarantine_name.text().strip()
+                )
+                if custom_name:
+                    quarantine_name = custom_name
+
+        mode = "DRY-RUN" if dry_run else "LIVE"
+        self.logger.log_divider()
+        self.logger.progress(f"Running hierarchy repair ({mode})...")
+
+        success = self.controller.repair_hierarchies(
+            create_stubs=do_stubs,
+            quarantine_extras=do_quarantine,
+            quarantine_group=quarantine_name,
+            fix_reparented=do_reparent,
+            dry_run=dry_run,
+        )
+
+        if success and not dry_run:
+            # Refresh trees after live repairs
+            self.b000()
+            self.logger.info("Scene modified — re-run Diff to see updated differences.")
+
+        # Update footer
+        if hasattr(self.ui, "footer") and self.ui.footer:
+            if success:
+                self.ui.footer.setText(
+                    f"Fix: {mode} complete" if dry_run else "Fix: repairs applied"
+                )
+            else:
+                self.ui.footer.setText("Fix: nothing to repair")
+
     def b003(self):
         """Browse for reference scene file."""
         reference_file = self.sb.file_dialog(
@@ -1948,6 +2230,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             return
 
         self.controller.apply_difference_formatting(self.ui.tree001, self.ui.tree000)
+        self.controller._apply_ignore_styling(self.ui.tree000)
+        self.controller._apply_ignore_styling(self.ui.tree001)
         self.logger.debug("Applied difference highlighting to tree widgets.")
 
     def b012(self):
@@ -1979,6 +2263,82 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Record reference path to recent list
             if hasattr(self, "_recent_refs_option"):
                 self._recent_refs_option.record(reference_path)
+
+    def b013(self):
+        """Ignore selected items in the reference tree."""
+        self._ignore_selected(self.ui.tree000)
+
+    def b014(self):
+        """Unignore selected items in the reference tree."""
+        self._unignore_selected(self.ui.tree000)
+
+    def b015(self):
+        """Ignore selected items in the current scene tree."""
+        self._ignore_selected(self.ui.tree001)
+
+    def b016(self):
+        """Unignore selected items in the current scene tree."""
+        self._unignore_selected(self.ui.tree001)
+
+    def _ignore_selected(self, tree_widget):
+        """Mark selected tree items (and their descendants) as ignored."""
+        items = tree_widget.selectedItems()
+        if not items:
+            self.logger.warning("No items selected to ignore.")
+            return
+
+        ignored_set = self.controller._get_ignored_set(tree_widget)
+        added = 0
+        for item in items:
+            path = self.controller._build_item_path(item)
+            if path not in ignored_set:
+                ignored_set.add(path)
+                added += 1
+
+        self._refresh_tree_styling()
+        tree_widget.clearSelection()
+        self.logger.info(f"Ignored {added} items (descendants also ignored).")
+
+    def _unignore_selected(self, tree_widget):
+        """Remove ignore mark from selected tree items."""
+        items = tree_widget.selectedItems()
+        if not items:
+            self.logger.warning("No items selected to unignore.")
+            return
+
+        ignored_set = self.controller._get_ignored_set(tree_widget)
+        removed = 0
+        inherited_count = 0
+        for item in items:
+            path = self.controller._build_item_path(item)
+            if path in ignored_set:
+                ignored_set.discard(path)
+                # Also discard any explicitly-ignored descendants
+                to_remove = {p for p in ignored_set if p.startswith(path + "|")}
+                ignored_set -= to_remove
+                removed += 1 + len(to_remove)
+            elif self.controller.is_path_ignored(tree_widget, path):
+                inherited_count += 1
+
+        self._refresh_tree_styling()
+        if removed:
+            self.logger.info(f"Unignored {removed} items.")
+        if inherited_count:
+            self.logger.warning(
+                f"{inherited_count} item(s) ignored via a parent — unignore the parent to remove."
+            )
+
+    def _refresh_tree_styling(self):
+        """Re-apply diff colors then ignore styling to both trees."""
+        if self.controller._current_diff_result:
+            self.controller.apply_difference_formatting(
+                self.ui.tree001, self.ui.tree000
+            )
+        else:
+            self.controller._clear_tree_colors(self.ui.tree001)
+            self.controller._clear_tree_colors(self.ui.tree000)
+        self.controller._apply_ignore_styling(self.ui.tree000)
+        self.controller._apply_ignore_styling(self.ui.tree001)
 
     def txt001_textChanged(self, text):
         """Handle reference path text changes for auto-refresh."""
@@ -2176,6 +2536,20 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 if len(missing_list) != original_count:
                     self.logger.debug(
                         f"Filtered to leaf-only missing paths from {original_count} to {len(missing_list)} leaf paths"
+                    )
+
+            # Filter out ignored paths (reference tree)
+            if missing_list:
+                pre_ignore = len(missing_list)
+                missing_list = [
+                    p
+                    for p in missing_list
+                    if not self.controller.is_path_ignored(tree000, p)
+                ]
+                ignored_count = pre_ignore - len(missing_list)
+                if ignored_count:
+                    self.logger.debug(
+                        f"Filtered {ignored_count} ignored paths from missing list"
                     )
 
             mode_desc = (
@@ -2392,6 +2766,20 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         f"Filtered to leaf-only extra paths from {original_count} to {len(extra_list)} leaf paths"
                     )
 
+            # Filter out ignored paths (current tree)
+            if extra_list:
+                pre_ignore = len(extra_list)
+                extra_list = [
+                    p
+                    for p in extra_list
+                    if not self.controller.is_path_ignored(tree001, p)
+                ]
+                ignored_count = pre_ignore - len(extra_list)
+                if ignored_count:
+                    self.logger.debug(
+                        f"Filtered {ignored_count} ignored paths from extra list"
+                    )
+
             mode_desc = (
                 "(root-only)"
                 if select_root_only
@@ -2456,8 +2844,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             # Function to recursively select all children of a tree item
             def select_all_children(tree_item):
                 count = 0
+                tree_widget = tree_item.treeWidget()
                 for i in range(tree_item.childCount()):
                     child = tree_item.child(i)
+                    # Skip ignored children
+                    child_path = self.controller._build_item_path(child)
+                    if self.controller.is_path_ignored(tree_widget, child_path):
+                        continue
                     if not child.isSelected():
                         child.setSelected(True)
                         count += 1
@@ -2537,54 +2930,21 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 tree000.repaint()
                 tree001.repaint()
 
-                # Process any pending events before visual updates
+                # Flush pending events and repaint both trees
                 try:
                     self.sb.QtWidgets.QApplication.processEvents()
-                except:
+                except Exception:
                     pass
 
-                # ENHANCED FIX: Always ensure both trees get proper focus and updates
-                # This fixes the issue where leaf objects aren't visually selected
-                self.logger.debug(
-                    f"[FOCUS] Ensuring both trees are properly updated..."
-                )
+                for tree in (tree000, tree001):
+                    tree.viewport().update()
+                    tree.repaint()
 
-                # Update both trees regardless of selection counts
-                tree000.setFocus()
-                tree000.viewport().update()
-                tree000.repaint()
-                self.sb.QtWidgets.QApplication.processEvents()
-
-                tree001.setFocus()
-                tree001.viewport().update()
-                tree001.repaint()
-                self.sb.QtWidgets.QApplication.processEvents()
-
-                # Final focus on the tree with more selections, or current tree as default
+                # Set focus on the tree with more selections
                 if ref_selected_count >= cur_selected_count:
                     tree000.setFocus()
-                    self.logger.debug(
-                        f"[FOCUS] Final focus set to reference tree (ref:{ref_selected_count} >= cur:{cur_selected_count})"
-                    )
                 else:
                     tree001.setFocus()
-                    self.logger.debug(
-                        f"[FOCUS] Final focus set to current tree (cur:{cur_selected_count} > ref:{ref_selected_count})"
-                    )
-
-                # Ensure trees are visible and focused
-                if ref_selected_count > 0:
-                    tree000.setFocus()
-                    tree000.activateWindow()
-                    tree000.raise_()
-
-                # Multiple update methods to ensure visual refresh
-                for tree in [tree000, tree001]:
-                    tree.repaint()
-                    tree.updateGeometry()
-                    if hasattr(tree, "viewport") and tree.viewport():
-                        tree.viewport().update()
-                        tree.viewport().repaint()
 
             except Exception as verify_err:
                 self.logger.error(
@@ -2702,6 +3062,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
             # Expand reference-only (missing) paths in reference tree
             for missing_path in self.controller._current_diff_result.get("missing", []):
+                if self.controller.is_path_ignored(tree000, missing_path):
+                    continue
                 node_name = missing_path.split("|")[-1]
                 items = tree000.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                 for item in items:
@@ -2715,6 +3077,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
             # Expand current-only (extra) paths in current tree
             for extra_path in self.controller._current_diff_result.get("extra", []):
+                if self.controller.is_path_ignored(tree001, extra_path):
+                    continue
                 node_name = extra_path.split("|")[-1]
                 items = tree001.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                 for item in items:
@@ -2794,10 +3158,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 or item_path == full_path  # Direct match with namespace
                 or item_path.endswith(clean_full_path)  # Suffix match
                 or clean_full_path.endswith(item_path)  # Item is part of path
-                or item_path.split("|")[-1]
-                == clean_full_path.split("|")[-1]  # Last node matches
             )
-        except:
+        except Exception:
             return False
 
     def _matches_node_name(self, tree_item, target_name: str) -> bool:
@@ -2809,7 +3171,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 item_name.split(":")[-1] if ":" in item_name else item_name
             )
             return clean_item_name == target_name
-        except:
+        except Exception:
             return False
 
     def _ensure_trees_populated_for_diff(self, reference_path, fuzzy_matching, dry_run):
@@ -2818,30 +3180,21 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         Always repopulates both trees so that diff formatting and expansion
         reflect the latest scene state and reference file.
 
-        Saves and restores the analysis cache because populate_reference_tree
-        calls _clear_analysis_cache() internally.
+        Because ``populate_reference_tree`` now reuses the cached import
+        (instead of re-importing and clearing the analysis cache), the
+        previous save/restore workaround is no longer necessary.
         """
         try:
-            # Save analysis results — populate_reference_tree clears the cache
-            saved_diff = self.controller._current_diff_result
-            saved_hm = self.controller.hierarchy_manager
-            saved_ns = getattr(self.controller, "_reference_namespaces", [])
-
-            # Always repopulate current scene tree
+            # Repopulate current scene tree
             self.controller.populate_current_scene_tree(self.ui.tree001)
             self.logger.debug("Populated current scene tree for diff visualization")
 
-            # Always repopulate reference tree
+            # Repopulate reference tree (reuses cached import — no re-import)
             if reference_path:
                 self.controller.populate_reference_tree(
                     self.ui.tree000, reference_path, fuzzy_matching, dry_run
                 )
                 self.logger.debug("Populated reference tree for diff visualization")
-
-            # Restore analysis results so apply_difference_formatting can use them
-            self.controller._current_diff_result = saved_diff
-            self.controller.hierarchy_manager = saved_hm
-            self.controller._reference_namespaces = saved_ns
 
         except Exception as e:
             self.logger.debug(f"Error ensuring trees populated for diff: {e}")

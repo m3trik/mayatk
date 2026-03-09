@@ -211,6 +211,80 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         return patterns[0] if patterns else ""
 
     @staticmethod
+    def _text_matches_filter(
+        text: str, filter_patterns: list, ignore_case: bool = True
+    ) -> bool:
+        """Check if text matches ANY of the pre-split filter patterns via fnmatch.
+
+        Parameters:
+            text: The string to test (e.g. a filename).
+            filter_patterns: Already-split list of glob patterns.
+            ignore_case: Case-insensitive matching.
+
+        Returns:
+            True if the text matches at least one pattern.
+        """
+        from fnmatch import fnmatchcase
+
+        if not text or not filter_patterns:
+            return False
+        t = text.lower() if ignore_case else text
+        for pattern in filter_patterns:
+            p = pattern.lower() if ignore_case else pattern
+            if fnmatchcase(t, p):
+                return True
+        return False
+
+    @staticmethod
+    def _matches_notes_filter(
+        notes_text: str, filter_text: str, ignore_case: bool = True
+    ) -> bool:
+        """Check if notes/comments text matches the filter patterns.
+
+        Notes are often comma or semicolon-delimited (e.g. "CXAL, Speedrun"),
+        so the filter is checked against the full notes string as well as each
+        individual delimited segment.
+
+        Parameters:
+            notes_text: The notes/comments string from the file metadata.
+            filter_text: The filter string, possibly with wildcards and delimiters.
+            ignore_case: Whether to match case-insensitively.
+
+        Returns:
+            True if any filter pattern matches the notes text.
+        """
+        from fnmatch import fnmatchcase
+
+        if not notes_text or not filter_text:
+            return False
+
+        # Split filter_text into individual patterns (same delimiters as filter_list)
+        filter_patterns = [filter_text]
+        for delim in (",", ";"):
+            expanded = []
+            for p in filter_patterns:
+                expanded.extend(s.strip() for s in p.split(delim) if s.strip())
+            filter_patterns = expanded
+
+        # Split notes into individual segments for matching
+        note_segments = [notes_text]
+        for delim in (",", ";"):
+            expanded = []
+            for seg in note_segments:
+                expanded.extend(s.strip() for s in seg.split(delim) if s.strip())
+            note_segments = expanded
+
+        # Match: each filter pattern against the full notes string AND each segment
+        candidates = [notes_text] + note_segments
+        for pattern in filter_patterns:
+            p = pattern.lower() if ignore_case else pattern
+            for candidate in candidates:
+                c = candidate.lower() if ignore_case else candidate
+                if fnmatchcase(c, p):
+                    return True
+        return False
+
+    @staticmethod
     def sanitize_namespace(namespace: str) -> str:
         """Sanitize the namespace by replacing or removing illegal characters."""
         return EnvUtils.sanitize_namespace(namespace)
@@ -356,7 +430,45 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._editing_item = None  # Track which item is being edited
         self.last_unlink_time = 0  # Track last unlink time to prevent double-firing
         self._warned_scene_placeholder_typo = False
+        self._workspace_history_max = (
+            50  # Max entries in per-directory workspace memory
+        )
         self.logger.debug("ReferenceManagerController initialized.")
+
+    def _get_workspace_history(self) -> dict:
+        """Load the per-directory workspace selection history from settings."""
+        return self.ui.settings.value("workspace_history") or {}
+
+    def _save_workspace_selection(self, root_dir: str, workspace_name: str):
+        """Remember which workspace was last selected for a given root directory."""
+        history = self._get_workspace_history()
+        key = os.path.normcase(os.path.normpath(root_dir))
+        history[key] = workspace_name
+        # Trim to max size, keeping the most-recently-added entries
+        if len(history) > self._workspace_history_max:
+            history = dict(list(history.items())[-self._workspace_history_max :])
+        self.ui.settings.setValue("workspace_history", history)
+
+    def _restore_workspace_index(self, widget) -> bool:
+        """Try to set the combo box to the last-used workspace for the current directory.
+
+        Returns True if a saved selection was restored.
+        """
+        root_dir = self.ui.txt000.text().strip()
+        if not root_dir:
+            return False
+        key = os.path.normcase(os.path.normpath(root_dir))
+        history = self._get_workspace_history()
+        saved_name = history.get(key)
+        if saved_name:
+            for i in range(widget.count()):
+                if widget.itemText(i) == saved_name:
+                    widget.setCurrentIndex(i)
+                    self.logger.debug(
+                        f"_restore_workspace_index: Restored '{saved_name}' at index {i}"
+                    )
+                    return True
+        return False
 
     def _normalize_subfolder_structure_pattern(self, pattern: str) -> str:
         """Normalize and validate the user-entered folder structure pattern.
@@ -675,13 +787,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self._updating_directory = False
 
     def set_workspace(self, workspace_path: str, invalidate: bool = True) -> bool:
-        """Set the current workspace and optionally sync Maya's project workspace.
+        """Set the current workspace for browsing and refresh the file list.
 
-        This is the centralized method for changing workspaces. It handles:
-        - Updating current_working_dir
-        - Syncing Maya workspace (if chk_sync_workspace is enabled)
-        - Showing user notification
-        - Refreshing the file list
+        This manages the tool's internal state only.  Maya's scene workspace
+        is intentionally **not** changed here — that only happens on scene
+        open (see ``open_scene``).
 
         Parameters:
             workspace_path: Path to the workspace directory
@@ -705,101 +815,98 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         if not is_same_workspace:
             self.logger.debug(f"set_workspace: Setting workspace to: {workspace_path}")
             self.current_working_dir = workspace_path
-
-            # Check if we should sync the Maya scene workspace
-            chk_sync = getattr(
-                self.ui.cmb000.option_box.menu, "chk_sync_workspace", None
-            )
-            if chk_sync and chk_sync.isChecked():
-                try:
-                    pm.workspace(workspace_path, openWorkspace=True)
-                    self.logger.info(
-                        f"set_workspace: Synced Maya workspace to: {workspace_path}"
-                    )
-                    workspace_name = os.path.basename(workspace_path)
-                    self.sb.message_box(
-                        f"Workspace changed to:<br><b>{workspace_name}</b>"
-                    )
-                except Exception as e:
-                    self.logger.warning(
-                        f"set_workspace: Failed to sync Maya workspace: {e}"
-                    )
         else:
             self.logger.debug(
-                f"set_workspace: Workspace already set to {workspace_path} - skipping workspace sync"
+                f"set_workspace: Workspace already set to {workspace_path}"
             )
+
+        # Remember this selection for next time this directory is loaded
+        if not is_same_workspace:
+            root_dir = self.ui.txt000.text().strip()
+            if root_dir:
+                workspace_name = os.path.basename(workspace_path)
+                self._save_workspace_selection(root_dir, workspace_name)
 
         # Refresh file list
         self.refresh_file_list(invalidate=invalidate)
         return True
 
-    def _update_workspace_combo(self):
-        """Update the workspace combo box and refresh the file list."""
-        self.logger.debug("_update_workspace_combo: Updating workspace combo box")
+    def _update_workspace_combo(self, root_dir=None):
+        """Repopulate the workspace combo box and select the best match.
 
-        # Find workspaces in the current directory
-        workspaces = self.find_available_workspaces()
+        Selection priority:
+            1. In-memory previous selection (same combo path still present)
+            2. Persisted per-directory workspace history
+            3. First item
+
+        This is the single source of truth for populating cmb000.
+        """
+        root_dir = root_dir or self.current_working_dir
+        self.logger.debug(f"_update_workspace_combo: root_dir={root_dir}")
+
+        widget = self.ui.cmb000
+
+        if not root_dir or not os.path.isdir(root_dir):
+            widget.clear()
+            self.ui.tbl000.setRowCount(0)
+            return
+
+        workspaces = self.find_available_workspaces(root_dir)
 
         # Block signals to prevent cascading events
-        self.ui.cmb000.blockSignals(True)
+        widget.blockSignals(True)
         try:
-            # Store current selection if any
-            current_index = self.ui.cmb000.currentIndex()
+            # Capture current selection before clearing
+            current_index = widget.currentIndex()
             current_path = (
-                self.ui.cmb000.itemData(current_index) if current_index >= 0 else None
+                widget.itemData(current_index) if current_index >= 0 else None
             )
 
-            # Clear and repopulate
-            self.ui.cmb000.clear()
-            self.ui.cmb000.add(workspaces)
+            widget.clear()
+            widget.add(workspaces)
 
             if workspaces:
-                # Try to restore previous selection if it's still valid
                 restored = False
+                # 1. Try to keep the in-memory selection if it still exists
                 if current_path:
-                    for i in range(self.ui.cmb000.count()):
-                        if self.ui.cmb000.itemData(i) == current_path:
-                            self.ui.cmb000.setCurrentIndex(i)
+                    for i in range(widget.count()):
+                        if widget.itemData(i) == current_path:
+                            widget.setCurrentIndex(i)
                             self.logger.debug(
-                                f"_update_workspace_combo: Restored selection to index {i}"
+                                f"_update_workspace_combo: Restored in-memory selection at index {i}"
                             )
                             restored = True
                             break
 
-                # If we couldn't restore or there was no previous selection, select first
+                # 2. Try persisted per-directory history
                 if not restored:
-                    self.ui.cmb000.setCurrentIndex(0)
+                    restored = self._restore_workspace_index(widget)
+
+                # 3. Fall back to first item
+                if not restored:
+                    widget.setCurrentIndex(0)
                     self.logger.debug(
-                        "_update_workspace_combo: Set selection to first workspace"
+                        "_update_workspace_combo: Defaulted to first workspace"
                     )
 
                 self.logger.debug(
-                    f"_update_workspace_combo: Found {len(workspaces)} workspaces"
+                    f"_update_workspace_combo: {len(workspaces)} workspaces, selected index {widget.currentIndex()}"
                 )
             else:
                 self.logger.warning(
-                    f"_update_workspace_combo: No workspaces found in {self.current_working_dir}"
+                    f"_update_workspace_combo: No workspaces in {root_dir}"
                 )
-
         finally:
-            self.ui.cmb000.blockSignals(False)
+            widget.blockSignals(False)
 
-        # Always refresh the file list for the selected workspace after updating combo box
-        # Since signals were blocked, the normal cmb000 slot won't have been triggered
-        if self.ui.cmb000.count() > 0 and self.ui.cmb000.currentIndex() >= 0:
-            selected_workspace_path = self.ui.cmb000.itemData(
-                self.ui.cmb000.currentIndex()
-            )
+        # Signals were blocked, so trigger workspace load manually
+        if widget.count() > 0 and widget.currentIndex() >= 0:
+            selected_workspace_path = widget.itemData(widget.currentIndex())
             self.logger.debug(
                 f"_update_workspace_combo: Setting workspace to: {selected_workspace_path}"
             )
-            # Use centralized method - invalidate=True to pick up any file changes
             self.set_workspace(selected_workspace_path, invalidate=True)
         else:
-            # Clear the table if no workspaces
-            self.logger.debug(
-                "_update_workspace_combo: No workspaces available, clearing table"
-            )
             self.ui.tbl000.setRowCount(0)
 
     def refresh_file_list(self, invalidate=False):
@@ -944,16 +1051,19 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             ignore_case.isChecked() if ignore_case else True
         )  # Default to True if checkbox doesn't exist
 
-        if filter_text and filter_enabled:
-            self.logger.debug(f"Filtering file list with filter: {filter_text}")
-            file_list = ptk.filter_list(
-                file_list,
-                inc=filter_text,
-                basename_only=True,
-                delimiter=(",", ";"),
-                match_all=True,
-                ignore_case=ignore_case,
-            )
+        # Determine filter target from combobox
+        cmb_filter_target = getattr(self.ui, "cmb_filter_target", None)
+        filter_target = (
+            cmb_filter_target.currentText() if cmb_filter_target else "Filter: All"
+        )
+        include_files = filter_target in ("Filter: All", "Filter: Files")
+        include_notes = filter_target in ("Filter: All", "Filter: Comments")
+
+        # Store filter state for post-population row visibility in update_table
+        self._active_filter_text = filter_text if filter_enabled else ""
+        self._active_ignore_case = ignore_case
+        self._active_include_files = include_files
+        self._active_include_notes = include_notes
 
         # Identify and include external references
         current_refs = self.current_references
@@ -1122,6 +1232,62 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             # Apply table formatting
             t.apply_formatting()
+
+            # Post-population text filter: hide rows where neither filename
+            # nor notes match.  This runs AFTER metadata is fetched so notes
+            # are available for matching.
+            filter_text = getattr(self, "_active_filter_text", "")
+            ignore_case = getattr(self, "_active_ignore_case", True)
+            include_files = getattr(self, "_active_include_files", True)
+            include_notes = getattr(self, "_active_include_notes", True)
+            if filter_text:
+                self.logger.debug(
+                    f"Post-filter: applying '{filter_text}' to {t.rowCount()} rows"
+                    f" (include_files={include_files}, include_notes={include_notes})"
+                )
+                from fnmatch import fnmatchcase
+
+                # Split filter into individual patterns
+                filter_patterns = [filter_text]
+                for delim in (",", ";"):
+                    expanded = []
+                    for p in filter_patterns:
+                        expanded.extend(s.strip() for s in p.split(delim) if s.strip())
+                    filter_patterns = expanded
+
+                for row in range(t.rowCount()):
+                    item = t.item(row, 0)
+                    notes_item = t.item(row, 3)
+                    filename = (
+                        os.path.basename(item.data(self.sb.QtCore.Qt.UserRole) or "")
+                        if item
+                        else ""
+                    )
+                    notes_text = notes_item.text() if notes_item else ""
+
+                    name_match = (
+                        self._text_matches_filter(
+                            filename, filter_patterns, ignore_case
+                        )
+                        if include_files
+                        else False
+                    )
+                    notes_match = (
+                        self._matches_notes_filter(notes_text, filter_text, ignore_case)
+                        if include_notes
+                        else False
+                    )
+                    visible = name_match or notes_match
+                    t.setRowHidden(row, not visible)
+                    self.logger.debug(
+                        f"  Row {row}: file='{filename}' notes='{notes_text}' "
+                        f"name_match={name_match} notes_match={notes_match} "
+                        f"visible={visible}"
+                    )
+            else:
+                # No filter active — ensure all rows are visible
+                for row in range(t.rowCount()):
+                    t.setRowHidden(row, False)
         finally:
             t.setSortingEnabled(sorting_enabled)
             t.setUpdatesEnabled(True)  # Restore updates
@@ -1412,6 +1578,16 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             os.rename(old_path, new_path)
             self.logger.info(f"Renamed {old_path} to {new_path}")
 
+            # Rename sidecar metadata file if it exists
+            old_sidecar = old_path + ".metadata.json"
+            if os.path.exists(old_sidecar):
+                new_sidecar = new_path + ".metadata.json"
+                try:
+                    os.rename(old_sidecar, new_sidecar)
+                    self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to rename sidecar: {e}")
+
             # Handle folder rename if using {name} placeholder in structure
             if use_folder:
                 parent_dir_name = os.path.basename(old_dir)
@@ -1438,7 +1614,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                         f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
                     )
 
-            self.refresh_file_list()
+            self.refresh_file_list(invalidate=True)
 
         except Exception as e:
             self.sb.message_box(f"Rename failed: {e}")
@@ -1699,7 +1875,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def tbl000_init(self, widget):
         if not widget.is_initialized:
             widget.setColumnCount(4)
-            widget.setHorizontalHeaderLabels(["FILES:", "", "", "NOTES:"])
+            widget.setHorizontalHeaderLabels(["FILES:", "", "", "COMMENTS:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -1796,6 +1972,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setToolTip="Unlink and import the selected reference(s).",
             )
 
+            widget.menu.add(
+                "QPushButton",
+                setText="Open File Location",
+                setObjectName="btn_open_file_location",
+                setToolTip="Open the containing folder in the file explorer.",
+            )
+
             # Connect context menu actions
             widget.register_menu_action("btn_open_scene", self.btn_open_scene)
             widget.register_menu_action(
@@ -1808,6 +1991,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 "btn_toggle_reference", self.btn_toggle_reference
             )
             widget.register_menu_action("btn_unlink_import", self.btn_unlink_import)
+            widget.register_menu_action(
+                "btn_open_file_location", self.btn_open_file_location
+            )
 
             # Connect item delegate signals for rename functionality
             widget.itemChanged.connect(self.tbl000_item_changed)
@@ -1839,7 +2025,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             table.editItem(item)
 
     def tbl000_item_changed(self, item):
-        """Handle item changes when user renames a file."""
+        """Handle item changes when user renames a file via inline edit."""
         if item.column() == 0:  # Only handle the filename column (at index 0)
             # Only process if this item is being edited
             if not self.controller.is_item_being_edited(item):
@@ -1851,12 +2037,53 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self.controller.restore_item_display(item)
                 return
 
-            # For now, just update the display name
-            # In a real implementation, you might want to rename the actual file
-            self.logger.info(f"File renamed to: {new_name}")
+            old_path = item.data(self.sb.QtCore.Qt.UserRole)
+            if not old_path or not os.path.exists(old_path):
+                self.controller.restore_item_display(item)
+                return
 
-            # Update the stored display name
-            item.setData(self.sb.QtCore.Qt.UserRole + 2, new_name)
+            old_filename = os.path.basename(old_path)
+
+            # If name unchanged, just restore display
+            if new_name == old_filename:
+                self.controller.restore_item_display(item)
+                return
+
+            # Ensure the new name keeps the original extension if the user omitted it
+            _, old_ext = os.path.splitext(old_filename)
+            _, new_ext = os.path.splitext(new_name)
+            if not new_ext:
+                new_name += old_ext
+
+            new_path = os.path.join(os.path.dirname(old_path), new_name)
+
+            if os.path.exists(new_path):
+                self.sb.message_box(f"Target file already exists:<br>{new_name}")
+                self.controller.restore_item_display(item)
+                return
+
+            try:
+                os.rename(old_path, new_path)
+                self.logger.info(f"Inline renamed {old_path} to {new_path}")
+
+                # Rename sidecar metadata file if it exists
+                old_sidecar = old_path + ".metadata.json"
+                if os.path.exists(old_sidecar):
+                    new_sidecar = new_path + ".metadata.json"
+                    try:
+                        os.rename(old_sidecar, new_sidecar)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to rename sidecar: {e}")
+
+                # Clear editing state before refresh
+                self.controller._editing_item = None
+
+                # Refresh the table with invalidated cache
+                self.controller.refresh_file_list(invalidate=True)
+            except Exception as e:
+                self.logger.error(f"Inline rename failed: {e}")
+                self.sb.message_box(f"Rename failed:<br>{e}")
+                self.controller.restore_item_display(item)
 
         elif item.column() == 3:  # Notes column
             file_path = item.data(self.sb.QtCore.Qt.UserRole)
@@ -1869,6 +2096,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 ptk.Metadata.sidecar_only = True
                 ptk.Metadata.set(file_path, Comments=new_comments)
                 self.logger.info(f"Updated comments for {file_path}")
+            except PermissionError as e:
+                sidecar = file_path + ".metadata.json"
+                msg = (
+                    f"Cannot save notes — permission denied:\n{sidecar}\n\n"
+                    "The file or folder may be read-only (e.g. a Dropbox "
+                    "Team Folder with restricted permissions)."
+                )
+                try:
+                    pm.displayWarning(msg)
+                except Exception:
+                    pass
+                self.logger.warning(msg)
             except Exception as e:
                 self.logger.error(f"Failed to set metadata for {file_path}: {e}")
 
@@ -2000,6 +2239,43 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug(f"b008: Opening scene file: {file_path}")
         self.controller.open_scene(file_path)
 
+    def btn_open_file_location(self):
+        """Open the containing folder of the selected scene file in the file explorer."""
+        t = self.ui.tbl000
+
+        # Get currently selected rows or fall back to right-click context item
+        selected_rows = set(idx.row() for idx in t.selectedIndexes())
+        if not selected_rows:
+            current_item = t.currentItem()
+            if current_item:
+                selected_rows = {current_item.row()}
+            else:
+                self.sb.message_box("No scene file selected.")
+                return
+
+        row = next(iter(selected_rows))
+        item = t.item(row, 0)
+        if not item:
+            return
+
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if not file_path:
+            self.sb.message_box("Scene file path not found.")
+            return
+
+        import subprocess
+
+        target = os.path.normpath(file_path)
+        if os.path.exists(target):
+            subprocess.Popen(["explorer", "/select,", target])
+        else:
+            # File doesn't exist; open the parent directory instead
+            parent = os.path.dirname(target)
+            if os.path.isdir(parent):
+                os.startfile(parent)
+            else:
+                self.sb.message_box(f"Directory not found:<br>{parent}")
+
     def txt000_init(self, widget):
         """Initialize the text input for the current working directory with pin values."""
         self.logger.debug(
@@ -2070,6 +2346,16 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setChecked=True,
                 setToolTip="Ignore case when filtering.",
             )
+            widget.option_box.menu.add(
+                "QComboBox",
+                setObjectName="cmb_filter_target",
+                setToolTip="Choose what the filter text matches against.",
+                addItems=[
+                    "Filter: All",
+                    "Filter: Files",
+                    "Filter: Comments",
+                ],
+            )
 
             self.logger.debug(
                 "txt001 filter text input initialized with filter options."
@@ -2082,58 +2368,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller.refresh_file_list(invalidate=True)
 
     def cmb000_init(self, widget):
-        # Add option_box menu for workspace sync setting
-        if not widget.is_initialized:
-            widget.option_box.menu.add(
-                "QCheckBox",
-                setText="Sync Scene Workspace",
-                setObjectName="chk_sync_workspace",
-                setChecked=False,
-                setToolTip="Automatically update the Maya scene workspace to match the selected workspace.",
-            )
-            self.logger.debug(
-                "cmb000 option_box menu initialized with sync workspace option."
-            )
-
-        # Use the controller's current_working_dir for consistency
-        root_dir = self.controller.current_working_dir
-
-        self.logger.debug(f"cmb000_init called for root_dir: {root_dir}")
-
-        if not root_dir or not os.path.isdir(root_dir):
-            self.logger.debug(f"Invalid root directory for cmb000_init: {root_dir}")
-            widget.clear()
-            return
-
-        self.logger.debug(
-            f"cmb000_init searching workspaces in: {root_dir}, recursive: {self.controller.recursive_search}"
-        )
-
-        # Use the centralized workspace finding method
-        workspaces = self.controller.find_available_workspaces(root_dir)
-
-        # Block signals while we update the combobox to prevent unwanted events
-        widget.blockSignals(True)
-        try:
-            widget.clear()
-            widget.add(workspaces)
-
-            if workspaces:
-                # Set the current index to 0 and ensure it's properly selected
-                widget.setCurrentIndex(0)
-                self.logger.debug(
-                    f"cmb000_init: Set current index to 0, count={widget.count()}"
-                )
-            else:
-                self.logger.warning(
-                    f"No workspaces found in {root_dir} (recursive: {self.controller.recursive_search})"
-                )
-        finally:
-            widget.blockSignals(False)
-
-        self.logger.debug(
-            f"cmb000 combo box initialized with {len(workspaces)} workspaces, current index: {widget.currentIndex()}"
-        )
+        # Delegate to the single source of truth for populating cmb000
+        self.controller._update_workspace_combo()
 
     def cmb000(self, index, widget):
         """Handle workspace selection changes."""

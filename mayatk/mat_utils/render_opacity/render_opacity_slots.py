@@ -60,6 +60,30 @@ class RenderOpacitySlots:
         widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Render Opacity:")
 
+        widget.menu.add("Separator", setTitle="Options")
+        widget.menu.add(
+            "QCheckBox",
+            setText="Last Selected Only",
+            setObjectName="chk_last_selected",
+            setChecked=False,
+            setToolTip=(
+                "When checked, only the last selected object\n"
+                "is processed instead of all selected objects.\n"
+                "Applies to Create, Key, and Remove operations."
+            ),
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Delete Visibility Keys",
+            setObjectName="chk_delete_vis_keys",
+            setChecked=False,
+            setToolTip=(
+                "When checked, existing visibility keyframes are\n"
+                "automatically deleted before applying opacity.\n"
+                "When unchecked, objects with visibility keys are\n"
+                "skipped with a warning."
+            ),
+        )
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",
@@ -83,12 +107,23 @@ class RenderOpacitySlots:
     # Apply
     # ------------------------------------------------------------------
 
+    def _get_selected(self):
+        """Return the effective selection, respecting 'Last Selected Only'.
+
+        When the header checkbox is checked and the selection is non-empty,
+        only the last selected object is returned.
+        """
+        objects = pm.selected()
+        if objects and self.ui.header.menu.chk_last_selected.isChecked():
+            return objects[-1:]
+        return objects
+
     @mtk.CoreUtils.undoable
     def _apply_opacity(self):
         """Apply Render Opacity to selected objects (or create a polyCube first)."""
         mode = self.ui.cmb_mode.currentText().lower()
 
-        objects = pm.selected()
+        objects = self._get_selected()
         if not objects:
             cube = pm.polyCube(name="opacity_cube")[0]
             objects = [cube]
@@ -99,10 +134,14 @@ class RenderOpacitySlots:
         if len(names) > 5:
             label += f" … (+{len(names) - 5} more)"
 
+        delete_vis = self.ui.header.menu.chk_delete_vis_keys.isChecked()
+
         try:
-            results = mtk.RenderOpacity.create(objects, mode=mode)
+            results = mtk.RenderOpacity.create(
+                objects, mode=mode, delete_visibility_keys=delete_vis
+            )
         except Exception as e:
-            self.ui.footer.setText(f"Error: {e}")
+            self.sb.message_box(f"Error: {e}")
             return
         finally:
             pm.select(objects, replace=True)
@@ -158,6 +197,17 @@ class RenderOpacitySlots:
             ("Auto", "auto"),
         ]:
             cmb.addItem(text, data)
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Create if Missing",
+            setObjectName="chk_auto_create",
+            setChecked=True,
+            setToolTip=(
+                "When checked, automatically creates the opacity\n"
+                "attribute on selected objects that don't have one\n"
+                "(using the mode set in the Create section)."
+            ),
+        )
 
     @mtk.CoreUtils.undoable
     def tb000(self, widget):
@@ -167,10 +217,28 @@ class RenderOpacitySlots:
         cmb = widget.option_box.menu.cmb_direction
         direction_mode = cmb.currentData()
 
-        objects = pm.selected()
+        objects = self._get_selected()
         if not objects:
-            self.ui.footer.setText("Select objects with an opacity attribute.")
+            self.sb.message_box(
+                "<strong>Nothing selected</strong>.<br>"
+                "Select objects with an <hl>opacity</hl> attribute."
+            )
             return
+
+        # Auto-create opacity on objects that lack it, if the option is on.
+        auto_create = widget.option_box.menu.chk_auto_create.isChecked()
+        if auto_create:
+            missing = [o for o in objects if not o.hasAttr("opacity")]
+            if missing:
+                mode = self.ui.cmb_mode.currentText().lower()
+                delete_vis = self.ui.header.menu.chk_delete_vis_keys.isChecked()
+                try:
+                    mtk.RenderOpacity.create(
+                        missing, mode=mode, delete_visibility_keys=delete_vis
+                    )
+                except Exception as e:
+                    self.sb.message_box(f"Error: {e}")
+                    return
 
         current = pm.currentTime(query=True)
 
@@ -223,7 +291,10 @@ class RenderOpacitySlots:
                 f"{direction}: {len(keyed)} object(s), frames {int(start)}\u2013{int(end)}"
             )
         else:
-            self.ui.footer.setText("No objects have opacity attribute.")
+            self.sb.message_box(
+                "Warning: Selected objects have no <hl>opacity</hl> attribute.<br>"
+                "Use <b>Create</b> first."
+            )
 
     @staticmethod
     def _resolve_auto_fade(obj, current_time):
@@ -268,9 +339,12 @@ class RenderOpacitySlots:
     @mtk.CoreUtils.undoable
     def _remove_opacity(self):
         """Remove all opacity artifacts from selected objects."""
-        objects = pm.selected()
+        objects = self._get_selected()
         if not objects:
-            self.ui.footer.setText("Select objects to remove opacity from.")
+            self.sb.message_box(
+                "<strong>Nothing selected</strong>.<br>"
+                "Select objects to remove opacity from."
+            )
             return
 
         names = [o.name() for o in objects]
@@ -281,7 +355,7 @@ class RenderOpacitySlots:
         try:
             mtk.RenderOpacity.remove(objects)
         except Exception as e:
-            self.ui.footer.setText(f"Error: {e}")
+            self.sb.message_box(f"Error: {e}")
             return
         finally:
             pm.select(objects, replace=True)

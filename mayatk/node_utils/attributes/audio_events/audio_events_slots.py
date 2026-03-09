@@ -53,6 +53,8 @@ class AudioEventsSlots:
         self._attr_callback_ids = []  # OpenMaya attribute-changed callbacks
         self._syncing_combo = False  # Echo guard for combo ↔ attr sync
         self._last_enum_idx = None  # Cached enum index for timeChanged throttle
+        self._sync_fingerprints = {}  # {obj_name: fingerprint} after last sync
+        self._deferred_sync_pending = False  # Coalescing flag for deferred syncs
         # b002/b003/b004 are auto-connected by switchboard (name-matching),
         # same as b000.  No manual .clicked.connect() needed.
 
@@ -79,6 +81,22 @@ class AudioEventsSlots:
             setToolTip="Create a new empty audio-trigger locator and select it.",
         )
         btn_new.clicked.connect(self._create_new_audio_object)
+
+        widget.menu.add("Separator", setTitle="Import")
+        widget.menu.add(
+            "QCheckBox",
+            setText="Auto Convert",
+            setObjectName="chk_auto_convert",
+            setToolTip=(
+                "When enabled, non-Maya-playable audio formats\n"
+                "(MP3, OGG, M4A, FLAC, etc.) are automatically\n"
+                "converted to WAV on import via FFmpeg.\n\n"
+                "When disabled, only natively playable formats\n"
+                "(WAV, AIF, AIFF) are accepted — other formats\n"
+                "are silently skipped."
+            ),
+            setChecked=True,
+        )
 
         widget.menu.add("Separator", setTitle="Export")
         btn_export = widget.menu.add(
@@ -133,27 +151,48 @@ class AudioEventsSlots:
         )
 
     def _export_composite(self):
-        """Export the current composite WAV to a user-chosen file path.
+        """Export the current target's composite WAV to a user-chosen file path.
 
-        Locates the ``{cat}_composite`` audio node, reads its filename
-        attribute, and copies the WAV to the destination selected via a
-        Save-File dialog.
+        Auto-syncs the current target first so the composite is up to
+        date, then locates the ``{objName}_composite`` audio node,
+        reads its filename attribute, and copies the WAV to the
+        destination selected via a Save-File dialog.
         """
         import shutil
 
-        # Find the composite audio node
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self.ui.footer.setText("Select an audio-trigger object first.")
+            return
+
+        # Auto-sync so the composite reflects the latest keyframes
+        if self._audio_files:
+            self._sync_if_dirty(target)
+
+        # Find the per-object composite audio node — exact name match first,
+        # then fall back to the legacy global composite.
+        target_name = target.name()
         comp_path = None
-        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
-            if node_name.endswith("_composite"):
+        per_obj_name = f"{target_name}_composite"
+        legacy_name = f"{self.CATEGORY}_composite"
+
+        for candidate in (per_obj_name, legacy_name):
+            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                if node_name != candidate:
+                    continue
                 try:
                     comp_path = cmds.getAttr(f"{node_name}.filename") or ""
                 except Exception:
                     comp_path = ""
+                if comp_path and os.path.isfile(comp_path):
+                    break
+                comp_path = None
+            if comp_path:
                 break
 
         if not comp_path or not os.path.isfile(comp_path):
             self.ui.footer.setText(
-                "No composite WAV found — sync audio to timeline first."
+                "No composite WAV found — key events and sync first."
             )
             return
 
@@ -169,7 +208,7 @@ class AudioEventsSlots:
             title="Export Composite WAV",
             start_dir=os.path.join(
                 export_dir,
-                f"{self.CATEGORY}_composite.wav",
+                f"{target_name}_composite.wav",
             ),
             filter_description="WAV Files",
         )
@@ -180,14 +219,21 @@ class AudioEventsSlots:
             shutil.copy2(comp_path, dest)
 
             # Optionally trim leading/trailing silence
+            trimmed = False
             trim = getattr(self.ui.header.menu, "chk_trim_silence", None)
             if trim and trim.isChecked():
                 try:
                     ptk.AudioUtils.trim_silence(dest)
+                    trimmed = True
                 except Exception as exc:
                     logging.warning("AudioEvents: trim failed: %s", exc)
 
-            self.ui.footer.setText(f"Exported composite → {os.path.basename(dest)}")
+            suffix = ""
+            if trim and trim.isChecked() and not trimmed:
+                suffix = " (trim failed)"
+            self.ui.footer.setText(
+                f"Exported composite → {os.path.basename(dest)}{suffix}"
+            )
             logging.info("AudioEvents: exported composite to '%s'", dest)
         except OSError as exc:
             self.ui.footer.setText(f"Export failed: {exc}")
@@ -200,30 +246,22 @@ class AudioEventsSlots:
         """
         self.tb000()
 
-    def _create_new_audio_object(self):
-        """Prompt for a name, then create an empty audio-trigger locator.
+    @staticmethod
+    def _create_audio_locator(name="audio_events"):
+        """Create a hidden locator as a data-carrier for audio triggers.
 
         The locator's shape is hidden and all transform channels are
-        locked + hidden so it serves purely as a data carrier.  The new
-        object is selected after creation.
+        locked + hidden so it serves purely as a non-visual data carrier.
+
+        Parameters:
+            name: Desired Maya node name (spaces replaced with underscores).
+
+        Returns:
+            PyNode — the newly created locator transform.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
 
-        name = self.sb.input_dialog(
-            title="New Audio Object",
-            label="Object name:",
-            text="audio_events",
-            parent=self.ui,
-            placeholder="e.g. dialogue_triggers",
-            validate=lambda t: bool(t.strip()),
-            error_text="Name cannot be empty.",
-        )
-        if not name:
-            return
-
-        # Sanitise for Maya naming (replace spaces with underscores)
         name = name.replace(" ", "_")
-
         loc_name = cmds.spaceLocator(name=name)[0]
 
         # Lock and hide all transform attributes
@@ -243,7 +281,7 @@ class AudioEventsSlots:
                 f"{loc_name}.{attr}", lock=True, keyable=False, channelBox=False
             )
 
-        # Hide the locator shape in the viewport.
+        # Hide the locator shape in the viewport
         shape = (cmds.listRelatives(loc_name, shapes=True, fullPath=True) or [None])[0]
         if shape:
             cmds.setAttr(f"{shape}.visibility", 0)
@@ -253,12 +291,33 @@ class AudioEventsSlots:
             cmds.setAttr(f"{shape}.localScaleY", 0)
             cmds.setAttr(f"{shape}.localScaleZ", 0)
             # Stamp so _is_tool_created_carrier() can identify this locator.
-            attr = EventTriggers._LOCATOR_ATTR
-            if not cmds.attributeQuery(attr, node=shape, exists=True):
-                cmds.addAttr(shape, ln=attr, at="bool", dv=True)
-                cmds.setAttr(f"{shape}.{attr}", True)
+            stamp = EventTriggers._LOCATOR_ATTR
+            if not cmds.attributeQuery(stamp, node=shape, exists=True):
+                cmds.addAttr(shape, ln=stamp, at="bool", dv=True)
+                cmds.setAttr(f"{shape}.{stamp}", True)
 
-        grp = pm.PyNode(loc_name)
+        return pm.PyNode(loc_name)
+
+    def _create_new_audio_object(self):
+        """Prompt for a name, then create an empty audio-trigger locator.
+
+        The locator's shape is hidden and all transform channels are
+        locked + hidden so it serves purely as a data carrier.  The new
+        object is selected after creation.
+        """
+        name = self.sb.input_dialog(
+            title="New Audio Object",
+            label="Object name:",
+            text="audio_events",
+            parent=self.ui,
+            placeholder="e.g. dialogue_triggers",
+            validate=lambda t: bool(t.strip()),
+            error_text="Name cannot be empty.",
+        )
+        if not name:
+            return
+
+        grp = self._create_audio_locator(name)
         pm.select(grp, replace=True)
         self._audio_files.clear()
         self._current_target = grp
@@ -346,10 +405,13 @@ class AudioEventsSlots:
         # Persist file map on the target object
         self._save_file_map(target)
 
-        # If keyed events already exist, rebuild synced nodes and composite
-        # so edited tracks are reflected immediately.
+        # If keyed events already exist, realign stale None end-keys
+        # (durations may have changed when a file with the same stem was
+        # re-added) then rebuild synced nodes and the composite WAV.
         keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
         if keyed:
+            for ev in events:
+                self._realign_none_end_keys(target, ev)
             total = self._sync_and_refresh_target(target)
             self.ui.footer.setText(
                 f"Loaded {len(nodes)} track(s), synced {total} clip(s) "
@@ -387,22 +449,21 @@ class AudioEventsSlots:
             )
 
         if convertible:
-            choice = QMessageBox.question(
-                self.ui,
-                "Convert Audio",
-                "Selected files include non-Maya-playable formats "
-                "(e.g. MP3/OGG/M4A/FLAC).\n\n"
-                "Convert them to WAV on import?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes,
+            # Check the global Auto Convert header option.
+            auto_convert = getattr(
+                getattr(getattr(self.ui, "header", None), "menu", None),
+                "chk_auto_convert",
+                None,
+            )
+            allow_convert = (
+                auto_convert.isChecked() if auto_convert is not None else True
             )
 
-            if choice == QMessageBox.Cancel:
-                return []
-
-            if choice == QMessageBox.No:
+            if not allow_convert:
+                # Auto-convert disabled — silently skip non-playable files.
                 return playable
 
+            # Auto-convert enabled — convert without prompting.
             if not ptk.AudioUtils.resolve_ffmpeg(required=False):
                 QMessageBox.warning(
                     self.ui,
@@ -520,7 +581,12 @@ class AudioEventsSlots:
 
     @CoreUtils.undoable
     def tb000(self, widget=None):
-        """Sync Audio to Timeline."""
+        """Sync Audio to Timeline — rebuilds only when state has changed.
+
+        Compares a lightweight fingerprint of the current keyed-event
+        state against the last-synced snapshot.  If they match the
+        composite is already up to date and no work is done.
+        """
         if not self._audio_files:
             self.ui.footer.setText("Browse for audio files first.")
             return
@@ -541,10 +607,14 @@ class AudioEventsSlots:
                 events=events,
                 category=self.CATEGORY,
             )
-            total = self._sync_and_refresh_target(target)
+            total = self._sync_if_dirty(target)
 
-            if total:
+            if total > 0:
                 self.ui.footer.setText(f"Synced {total} clip(s) on {target.name()}.")
+            elif total == -1:
+                self.ui.footer.setText(
+                    f"Already synced — {target.name()} is up to date."
+                )
             else:
                 self.ui.footer.setText("No clips imported. Key events first.")
         finally:
@@ -686,6 +756,12 @@ class AudioEventsSlots:
 
         current_frame = pm.currentTime(query=True)
 
+        # Anchor the curve start with a None key at frame 0 when this
+        # is the very first event keyed on the object.  Prevents a
+        # "tie keyframe" script from binding the event value at the
+        # animation clip start.
+        self._ensure_start_anchor(target, current_frame)
+
         # Clean stale None keys from previous overlapping clips BEFORE
         # keying the new event.  This avoids the auto_clear "None at
         # time-1" problem and ensures no leftover None keys interrupt
@@ -770,6 +846,10 @@ class AudioEventsSlots:
         if not tracks:
             self.ui.footer.setText("No audio tracks available.")
             return
+
+        # Anchor the curve start with a None key at frame 0 when this
+        # is the very first event keyed on the object.
+        self._ensure_start_anchor(target, cursor)
 
         for event_label in tracks:
             if auto_end:
@@ -871,8 +951,20 @@ class AudioEventsSlots:
     def _sync_and_refresh_target(self, target):
         """Sync keyed events to audio nodes and persist UI/cache state.
 
-        Single source of truth for the shared post-key/post-sync flow used
-        by both ``tb000`` and ``tb001``.
+        **Single source of truth** for the shared post-key/post-sync flow
+        used by ``tb000``, ``tb001``, ``_key_all_events``,
+        ``_browse_audio_files``, ``b005`` (Replace), ``_export_composite``,
+        and ``_run_deferred_sync``.
+
+        After syncing audio nodes it:
+        1. Refreshes the combo UI.
+        2. Persists the file map on the target.
+        3. Stores a fingerprint for dirty-tracking.
+        4. **Activates the target's composite** — the sole place in the
+           codebase where ``_activate_composite_for`` is called after a
+           sync.  ``AudioEvents.sync()`` intentionally does *not* call
+           ``set_active`` so that the UI layer controls which object's
+           composite is heard.
         """
         results = AudioEvents.sync(
             objects=[target],
@@ -882,7 +974,174 @@ class AudioEventsSlots:
         total = sum(len(v) for v in results.values())
         self._refresh_combo_from_target()
         self._save_file_map(target)
+        # Record fingerprint so _sync_if_dirty can short-circuit next time.
+        self._sync_fingerprints[target.name()] = self._compute_sync_fingerprint(target)
+        # Activate the current target's composite — single source of truth.
+        self._activate_composite_for(target)
         return total
+
+    # ------------------------------------------------------------------
+    # Dirty tracking
+    # ------------------------------------------------------------------
+
+    def _compute_sync_fingerprint(self, target):
+        """Return a lightweight hash of the keyed-event state for *target*.
+
+        The fingerprint captures:
+
+        1. ``(frame, enum_index)`` pairs on the trigger attribute — a cheap
+           query that reads keyframe times and values without touching disk.
+        2. A sorted snapshot of ``_audio_files`` (stem → path).  This
+           ensures that replacing a track (same stem, different WAV) or
+           adding/removing files invalidates the fingerprint even when the
+           keyframes themselves haven't changed.
+
+        A changed fingerprint means the composite is stale and needs
+        rebuilding.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        attr_path = f"{target.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+
+        if not key_times:
+            key_part = "empty"
+        else:
+            key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+            pairs = [
+                (float(t), int(round(v))) for t, v in sorted(zip(key_times, key_values))
+            ]
+            key_part = str(pairs)
+
+        file_part = str(sorted(self._audio_files.items()))
+        return f"{key_part}|{file_part}"
+
+    def _sync_if_dirty(self, target):
+        """Sync only when the keyed-event state has changed since the last sync.
+
+        Returns:
+            -1 if already up to date (no sync performed),
+            otherwise the number of clips synced (may be 0 if no events keyed).
+        """
+        fp = self._compute_sync_fingerprint(target)
+        if fp == self._sync_fingerprints.get(target.name()):
+            return -1  # Already up to date
+        return self._sync_and_refresh_target(target)
+
+    def _schedule_deferred_sync(self):
+        """Schedule a deferred dirty-check + sync.
+
+        Coalesces rapid-fire calls (e.g. from channel-box scrubbing) into a
+        single deferred evaluation.  Safe to call from inside OpenMaya
+        callbacks.
+        """
+        if self._deferred_sync_pending or self._syncing_combo:
+            return
+        self._deferred_sync_pending = True
+        try:
+            cmds.evalDeferred(self._run_deferred_sync)
+        except Exception:
+            self._deferred_sync_pending = False
+
+    def _run_deferred_sync(self):
+        """Execute the deferred dirty-check + sync.
+
+        Called by ``evalDeferred`` from ``_schedule_deferred_sync``.
+        """
+        self._deferred_sync_pending = False
+        try:
+            target = self._current_target
+            if not target or not pm.objExists(target):
+                return
+            if not self._audio_files:
+                return
+            result = self._sync_if_dirty(target)
+            if result > 0:
+                self.ui.footer.setText(
+                    f"Auto-synced {result} clip(s) on {target.name()}."
+                )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "_run_deferred_sync error", exc_info=True
+            )
+
+    def _activate_composite_for(self, target):
+        """Activate the per-object composite audio node for *target*.
+
+        Searches the category's audio set for a node named
+        ``{objName}_composite`` and, if found, sets it as the active
+        timeline sound.  Falls back to the legacy ``{cat}_composite``
+        if no per-object composite exists.
+
+        Safe to call when no composite exists (no-op).
+
+        Parameters:
+            target: PyNode of the trigger object.
+        """
+        if not target or not pm.objExists(target):
+            return
+
+        target_name = target.name()
+        per_obj = f"{target_name}_composite"
+        legacy = f"{self.CATEGORY}_composite"
+
+        fallback = None
+        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+            if node_name == per_obj:
+                AudioEvents.set_active(node_name)
+                return
+            if node_name == legacy and fallback is None:
+                fallback = node_name
+        if fallback:
+            AudioEvents.set_active(fallback)
+
+    def _ensure_start_anchor(self, target, event_frame):
+        """Key a ``None`` anchor at frame 0 when the first event is keyed.
+
+        Without an explicit None key before the first event, Maya's stepped
+        tangent holds the event value backward to the start of the timeline.
+        A "tie keyframe" script that evaluates the attribute at frame 0 would
+        then bind the event value, triggering unwanted audio at the animation
+        clip's start.
+
+        This method checks whether the trigger attribute already has any
+        keyframes.  If not (i.e. this is the very first event being keyed),
+        it inserts a ``None`` key at frame 0 — or one frame before the event
+        if the event itself is at frame 0 or 1.
+
+        Safe to call repeatedly — it is a no-op once keyframes exist.
+
+        Parameters:
+            target: PyNode of the trigger object.
+            event_frame: The frame where the first event is about to be keyed.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        attr_path = f"{target.name()}.{trigger_attr}"
+        existing_keys = cmds.keyframe(attr_path, query=True) or []
+        if existing_keys:
+            return  # Keyframes already exist — not the first event.
+
+        # Place the anchor at frame 0 unless the event is at frame 0,
+        # in which case place it one frame earlier.  Frame -1 is uncommon
+        # but valid in Maya timelines that start before 0.
+        anchor_frame = 0 if event_frame > 0 else event_frame - 1
+
+        EventTriggers.set_key(
+            target,
+            event="None",
+            time=anchor_frame,
+            auto_clear=False,
+            category=self.CATEGORY,
+        )
+        log = logging.getLogger(__name__)
+        log.debug(
+            "_ensure_start_anchor: keyed None at frame %d for %s",
+            anchor_frame,
+            target,
+        )
 
     def _prune_overlap_none_keys(self, target, start_frame):
         """Remove stale intermediate ``None`` keys after a new clip starts.
@@ -907,39 +1166,131 @@ class AudioEventsSlots:
         attr_path = f"{target.name()}.{trigger_attr}"
         key_times = cmds.keyframe(attr_path, query=True) or []
 
+        if not key_times:
+            return
+
+        # Bulk query: times and values in one call each
+        key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+        time_value_map = {
+            float(t): int(round(v)) for t, v in zip(key_times, key_values)
+        }
+
         # Find the next non-None key after start_frame
         next_non_none_time = None
-        for key_time in sorted(key_times):
-            key_time = float(key_time)
+        for key_time in sorted(time_value_map):
             if key_time > start_frame:
-                vals = cmds.keyframe(
-                    attr_path,
-                    query=True,
-                    time=(key_time, key_time),
-                    valueChange=True,
-                )
-                if vals and not any(int(round(v)) == none_index for v in vals):
+                if time_value_map[key_time] != none_index:
                     next_non_none_time = key_time
                     break
 
         # Remove all None keys from start_frame up to next_non_none_time
-        for key_time in sorted(key_times):
-            key_time = float(key_time)
+        for key_time in sorted(time_value_map):
             if key_time >= start_frame and (
                 next_non_none_time is None or key_time < next_non_none_time
             ):
-                vals = cmds.keyframe(
-                    attr_path,
-                    query=True,
-                    time=(key_time, key_time),
-                    valueChange=True,
-                )
-                if vals and any(int(round(v)) == none_index for v in vals):
+                if time_value_map[key_time] == none_index:
                     EventTriggers.clear_key(
                         target,
                         time=key_time,
                         category=self.CATEGORY,
                     )
+
+    def _realign_none_end_keys(self, target, event_label):
+        """Move ``None`` end-keys for *event_label* to match the current clip duration.
+
+        After an audio file is swapped (``b005``) or re-added via browse
+        (``_browse_audio_files``), the ``None`` keyframes that mark the
+        end of each occurrence of *event_label* may be stale — they were
+        placed using the old clip's duration.  This method recalculates
+        the correct end frame from the **current** file in
+        ``_audio_files`` and relocates each ``None`` end-key accordingly.
+
+        Rules:
+        - Only existing ``None`` end-keys are moved.  If an occurrence
+          has no ``None`` end-key (Auto End None was off), it is skipped.
+        - The new end frame is clamped so it never overshoots the start
+          of a subsequent non-None event on the timeline.
+        - If the ``None`` key is already at the correct frame, no edit
+          is made.
+
+        Parameters:
+            target: PyNode of the trigger object.
+            event_label: The event label whose end-keys should be fixed
+                (must match the **current** enum label, post-rename).
+        """
+        import math
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        source = self._audio_files.get(event_label.lower())
+        if not source:
+            return
+
+        new_length = self._get_clip_length_frames(source)
+        if new_length <= 0:
+            return
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        event_index = EventTriggers.event_index(
+            target, event_label, category=self.CATEGORY
+        )
+        none_index = EventTriggers.event_index(target, "None", category=self.CATEGORY)
+        if event_index < 0 or none_index < 0:
+            return
+
+        attr_path = f"{target.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+        if not key_times:
+            return
+
+        # Bulk query: times and values in one call each
+        key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+        timeline = [
+            (float(t), int(round(v))) for t, v in sorted(zip(key_times, key_values))
+        ]
+
+        # Walk the timeline and find each (event_start, none_end) pair.
+        moves = []  # [(old_none_frame, new_none_frame), ...]
+        for i, (frame, idx) in enumerate(timeline):
+            if idx != event_index:
+                continue
+
+            # Look ahead for the first None key that ends this event.
+            none_frame = None
+            next_event_frame = None
+            for j in range(i + 1, len(timeline)):
+                fj, ij = timeline[j]
+                if ij == none_index and none_frame is None:
+                    none_frame = fj
+                elif ij != none_index:
+                    next_event_frame = fj
+                    break
+
+            if none_frame is None:
+                # No None end-key for this occurrence — skip.
+                continue
+
+            new_end = math.ceil(frame + new_length)
+
+            # Clamp so the None key doesn't overshoot the next event.
+            if next_event_frame is not None and new_end > next_event_frame:
+                new_end = int(next_event_frame)
+
+            if int(none_frame) == new_end:
+                continue  # already correct
+
+            moves.append((none_frame, new_end))
+
+        # Apply moves (iterate in reverse so frame removals don't shift
+        # indices of earlier keys we haven't processed yet).
+        for old_frame, new_frame in reversed(moves):
+            EventTriggers.clear_key(target, time=old_frame, category=self.CATEGORY)
+            EventTriggers.set_key(
+                target,
+                event="None",
+                time=new_frame,
+                auto_clear=False,
+                category=self.CATEGORY,
+            )
 
     # ------------------------------------------------------------------
     # Manage
@@ -1007,72 +1358,35 @@ class AudioEventsSlots:
             self._audio_files[new_key] = new_path
 
             # Rename / re-stamp the preview audio node if it exists
-            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
-                if cmds.attributeQuery(
-                    AudioEvents.NODE_STEM_ATTR, node=node_name, exists=True
-                ):
-                    stem_val = (
-                        cmds.getAttr(f"{node_name}.{AudioEvents.NODE_STEM_ATTR}") or ""
-                    )
-                    if stem_val.lower() == old_key:
-                        ntype = ""
-                        if cmds.attributeQuery(
-                            AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
-                        ):
-                            ntype = (
-                                cmds.getAttr(
-                                    f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}"
-                                )
-                                or ""
-                            )
-                        if ntype == "preview":
-                            # Reconfigure with new file
-                            playable = AudioEvents._resolve_playable_path(new_path)
-                            if playable:
-                                AudioEvents._configure_audio_node(
-                                    node_name, playable, 0
-                                )
-                            AudioEvents._stamp_event_attrs(
-                                node_name, new_key, "preview"
-                            )
-                            # Rename the Maya node itself
-                            try:
-                                cmds.rename(node_name, new_stem)
-                            except Exception:
-                                pass
-                        break
+            preview_node = self._find_preview_node(old_key)
+            if preview_node:
+                playable = AudioEvents._resolve_playable_path(new_path)
+                if playable:
+                    AudioEvents._configure_audio_node(preview_node, playable, 0)
+                AudioEvents._stamp_event_attrs(preview_node, new_key, "preview")
+                try:
+                    cmds.rename(preview_node, new_stem)
+                except Exception:
+                    pass
         else:
             # Same stem, just updating the file path
-            playable = AudioEvents._resolve_playable_path(new_path)
             self._audio_files[new_key] = new_path
 
             # Update existing preview node
-            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
-                if cmds.attributeQuery(
-                    AudioEvents.NODE_STEM_ATTR, node=node_name, exists=True
-                ):
-                    stem_val = (
-                        cmds.getAttr(f"{node_name}.{AudioEvents.NODE_STEM_ATTR}") or ""
-                    )
-                    if stem_val.lower() == new_key:
-                        ntype = ""
-                        if cmds.attributeQuery(
-                            AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
-                        ):
-                            ntype = (
-                                cmds.getAttr(
-                                    f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}"
-                                )
-                                or ""
-                            )
-                        if ntype == "preview" and playable:
-                            AudioEvents._configure_audio_node(node_name, playable, 0)
-                        break
+            preview_node = self._find_preview_node(new_key)
+            if preview_node:
+                playable = AudioEvents._resolve_playable_path(new_path)
+                if playable:
+                    AudioEvents._configure_audio_node(preview_node, playable, 0)
 
-        # 4. Persist and re-sync
+        # 4. Persist, realign stale None end-keys, and re-sync
         self._save_file_map(target)
 
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        # The file map now points to the new audio file.  Relocate any
+        # None end-keys so they reflect the new clip's duration.
+        self._realign_none_end_keys(target, new_stem)
 
         keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
         if keyed:
@@ -1140,6 +1454,34 @@ class AudioEventsSlots:
             for s in shapes
         )
 
+    def _find_preview_node(self, stem_lower):
+        """Return the name of the preview audio node for *stem_lower*, or None.
+
+        Iterates the category's audio set and matches on the stamped
+        ``audio_event_stem`` attribute.
+
+        Parameters:
+            stem_lower: Lowercase event stem to match.
+
+        Returns:
+            str or None — node name if found.
+        """
+        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+            if not cmds.attributeQuery(
+                AudioEvents.NODE_STEM_ATTR, node=node_name, exists=True
+            ):
+                continue
+            stem_val = cmds.getAttr(f"{node_name}.{AudioEvents.NODE_STEM_ATTR}") or ""
+            if stem_val.lower() != stem_lower:
+                continue
+            if cmds.attributeQuery(
+                AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
+            ):
+                ntype = cmds.getAttr(f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}") or ""
+                if ntype == "preview":
+                    return node_name
+        return None
+
     def _get_clip_length_frames(self, audio_path):
         """Return clip duration in timeline frames for an audio file path.
 
@@ -1173,8 +1515,13 @@ class AudioEventsSlots:
         temp_node = None
         try:
             temp_node = cmds.sound(file=path, offset=0)
-            length = cmds.sound(temp_node, query=True, length=True)
-            return float(length)
+            length = float(cmds.sound(temp_node, query=True, length=True))
+            if length <= 0:
+                logging.getLogger(__name__).warning(
+                    "_get_clip_length_frames: zero-length clip '%s'",
+                    audio_path,
+                )
+            return length
         except Exception:
             return 0.0
         finally:
@@ -1296,23 +1643,7 @@ class AudioEventsSlots:
             return self._current_target
 
         # 4. Auto-create a dedicated data-carrier locator (hidden in viewport)
-        from mayatk.node_utils.attributes.event_triggers import EventTriggers
-
-        loc_name = cmds.spaceLocator(name="audio_events")[0]
-        shape = (cmds.listRelatives(loc_name, shapes=True, fullPath=True) or [None])[0]
-        if shape:
-            cmds.setAttr(f"{shape}.visibility", 0)
-            cmds.setAttr(f"{shape}.overrideEnabled", 1)
-            cmds.setAttr(f"{shape}.overrideDisplayType", 1)  # template
-            cmds.setAttr(f"{shape}.localScaleX", 0)
-            cmds.setAttr(f"{shape}.localScaleY", 0)
-            cmds.setAttr(f"{shape}.localScaleZ", 0)
-            # Stamp so _is_tool_created_carrier() can identify this locator.
-            attr = EventTriggers._LOCATOR_ATTR
-            if not cmds.attributeQuery(attr, node=shape, exists=True):
-                cmds.addAttr(shape, ln=attr, at="bool", dv=True)
-                cmds.setAttr(f"{shape}.{attr}", True)
-        grp = pm.PyNode(loc_name)
+        grp = self._create_audio_locator("audio_events")
         pm.select(grp, replace=True)
         self._audio_files.clear()
         self._current_target = grp
@@ -1541,6 +1872,10 @@ class AudioEventsSlots:
         # Volatile job IDs are invalid after killWithScene
         self._selection_sync_job_id = None
         self._time_changed_job_id = None
+
+        # Clear sync fingerprints — old keyframe state is invalid
+        self._sync_fingerprints.clear()
+        self._deferred_sync_pending = False
 
         # OpenMaya callbacks are also invalidated by scene change
         self._attr_callback_ids = []
@@ -1797,6 +2132,10 @@ class AudioEventsSlots:
                 "_hydrate_from_target: callback registration error", exc_info=True
             )
 
+        # Auto-switch to this object's composite audio node so the
+        # correct waveform/playback activates on selection change.
+        self._activate_composite_for(obj)
+
     # -- OpenMaya attribute-changed callback ------------------------------
 
     def _register_attr_change_callback(self, target):
@@ -1818,16 +2157,40 @@ class AudioEventsSlots:
             sel.add(str(target))
             mobj = sel.getDependNode(0)
 
+            # Message flags we care about:
+            #   kAttributeSet      — value changed (channel box, setKey,
+            #                        or re-evaluation after key deletion)
+            #   kConnectionBroken  — last keyframe deleted, animCurve
+            #                        disconnected from the attribute
+            #
+            # Note: kAttributeRemoved / kAttributeArrayRemoved do NOT fire
+            # for keyframe operations — those are for deleteAttr / multi-
+            # attribute element removal respectively.  Keyframes live on
+            # animCurve DG nodes, not as array elements on the transform.
+            _RELEVANT = (
+                om2.MNodeMessage.kAttributeSet | om2.MNodeMessage.kConnectionBroken
+            )
+
             def _on_attr_changed(msg, plug, other_plug, *args):
                 try:
                     if self._syncing_combo:
                         return
-                    if not (msg & om2.MNodeMessage.kAttributeSet):
+                    if not (msg & _RELEVANT):
                         return
                     # Guard: skip if UI has been destroyed
                     if not self.ui or not self.ui.isVisible():
                         return
-                    # Only react to the trigger attr
+
+                    # kConnectionBroken fires when the last keyframe is
+                    # deleted and the animCurve is disconnected.  The plug
+                    # may be the connection plug rather than the trigger
+                    # attr, so we just schedule a dirty-check without
+                    # trying to match the plug name.
+                    if msg & om2.MNodeMessage.kConnectionBroken:
+                        self._schedule_deferred_sync()
+                        return
+
+                    # kAttributeSet — only react to the trigger attr
                     from mayatk.node_utils.attributes.event_triggers import (
                         EventTriggers,
                     )
@@ -1835,6 +2198,7 @@ class AudioEventsSlots:
                     trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
                     if plug.partialName(useLongNames=True) == trigger_attr:
                         cmds.evalDeferred(self._sync_combo_to_enum)
+                        self._schedule_deferred_sync()
                 except RuntimeError:
                     pass  # Deleted C++ object — swallow to prevent Maya crash
                 except Exception:

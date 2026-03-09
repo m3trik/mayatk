@@ -438,10 +438,11 @@ class FKChainStrategy(TubeStrategy):
             scale = radius * 3
 
             # Create control at joint position/orient
-            nodes = Controls.circle(
+            nodes = Controls.create(
+                "diamond",
                 name=ctrl_name,
-                normal=(1, 0, 0),  # Aim down X
-                radius=scale,
+                size=scale,
+                axis="x",
                 color=(1, 1, 0),
                 return_nodes=True,
             )

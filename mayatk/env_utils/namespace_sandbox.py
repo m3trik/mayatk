@@ -316,32 +316,14 @@ class FBXImporter:
                     f"Moving ALL {len(new_transforms)} transforms to namespace {namespace}"
                 )
 
-                # Filter out any problematic transforms before moving to namespace
+                # Filter out any invalid transforms before moving to namespace
                 filtered_transforms = []
                 for transform in new_transforms:
                     try:
-                        # Skip objects with consecutive duplicate path elements.
-                        # These legitimately appear in Maya (e.g. parent and child
-                        # with the same name) but renaming them into a namespace
-                        # can cause issues because pm.rename() resolves the short
-                        # name ambiguously when parent already has the same
-                        # namespaced name.
-                        long_name = transform.longName()
-                        if "|" in long_name:
-                            path_parts = long_name.split("|")
-                            has_consecutive_dupes = any(
-                                path_parts[i] == path_parts[i + 1]
-                                for i in range(len(path_parts) - 1)
-                            )
-                            if has_consecutive_dupes:
-                                self.logger.debug(
-                                    f"Skipping object with consecutive duplicate path elements: {long_name}"
-                                )
-                                continue
-
                         # Verify object actually exists and is valid
                         # Use longName() for unambiguous lookup (short names
                         # can match multiple DAG objects at different levels).
+                        long_name = transform.longName()
                         if pm.objExists(long_name):
                             filtered_transforms.append(transform)
                         else:
@@ -774,7 +756,11 @@ class FBXImporter:
                     # WHEELS_GRP that legitimately appear at multiple hierarchy
                     # levels, corrupting the comparison paths.
                     original_name = obj_node.nodeName()
-                    new_name = f"{namespace}:{original_name}"
+                    # Strip any existing namespace prefix (e.g. FBX ControlData
+                    # namespace) to avoid creating nested namespaces that the
+                    # re-query (pm.ls("ns:*")) would miss.
+                    clean_name = original_name.split(":")[-1]
+                    new_name = f"{namespace}:{clean_name}"
 
                     obj_node.rename(new_name)
                     moved_count += 1

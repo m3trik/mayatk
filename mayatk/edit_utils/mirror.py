@@ -27,7 +27,7 @@ class MirrorSlots(ptk.LoggingMixin):
         self.sb.connect_multi(
             self.ui, "cmb000-1", "currentIndexChanged", self.preview.refresh
         )
-        self.sb.connect_multi(self.ui, "chk001-5", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
@@ -66,6 +66,7 @@ class MirrorSlots(ptk.LoggingMixin):
             "pivot": pivot,
             "mergeMode": mergeMode,
             "uninstance": self.ui.chk005.isChecked(),  # Uninstance objects before mirroring
+            "delete_original": self.ui.chk006.isChecked(),  # Delete original half
         }
 
         EditUtils.mirror(objects, **kwargs)

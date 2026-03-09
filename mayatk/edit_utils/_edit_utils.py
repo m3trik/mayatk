@@ -776,6 +776,7 @@ class EditUtils(ptk.HelpMixin):
         mergeMode: int = -1,
         uninstance: bool = False,
         use_object_axes: bool = True,
+        delete_original: bool = False,
         **kwargs,
     ):
         """Mirror geometry across a given axis.
@@ -794,6 +795,8 @@ class EditUtils(ptk.HelpMixin):
             uninstance (bool): If True, uninstances the object before mirroring.
             use_object_axes (bool): If True, computes the mirror pivot in object-local
                 space (relevant when the object is rotated and pivot is "object", "manip", or "baked").
+            delete_original (bool): If True, deletes the original half after mirroring
+                (only applies to ``mergeMode=-1``).
             kwargs: Additional arguments for polyMirrorFace.
 
         Returns:
@@ -874,16 +877,20 @@ class EditUtils(ptk.HelpMixin):
 
             # Custom separate: use separate_mirrored_mesh for proper separation
             if custom_separate:
-                new_obj = cls.separate_mirrored_mesh(mirror_node)
+                new_obj = cls.separate_mirrored_mesh(
+                    mirror_node, delete_original=delete_original
+                )
                 if new_obj is not None:
                     results.append(new_obj)
-                    # Also keep the original half
-                    if pm.objExists(obj):
+                    # Also keep the original half (unless delete was requested)
+                    if not delete_original and pm.objExists(obj):
                         results.append(obj)
                 else:
                     # Separation failed, return the combined object
                     results.append(obj)
             else:
+                # Conform normals to fix potential reversal from mirror
+                pm.polyNormal(obj, normalMode=2, ch=False)
                 results.append(obj)
 
         return ptk.format_return(results, objects)
@@ -892,6 +899,7 @@ class EditUtils(ptk.HelpMixin):
     def separate_mirrored_mesh(
         mirror_node: "pm.nt.PolyMirrorFace",
         preserve_pivot: bool = True,
+        delete_original: bool = False,
     ) -> Optional["pm.nt.Transform"]:
         """Separate mirrored geometry and clean up hierarchy, history, and parenting.
 
@@ -969,12 +977,29 @@ class EditUtils(ptk.HelpMixin):
             except Exception as e:
                 pm.warning(f"[Separate] Pivot handling failed for {new_obj}: {e}")
 
+            # Conform normals to fix potential reversal from mirror+separate
+            for node in [orig_obj, new_obj]:
+                try:
+                    pm.polyNormal(node, normalMode=2, ch=False)
+                except Exception:
+                    pass
+
             # Cleanup - only delete construction history, not the objects themselves
             for obj in [orig_obj, new_obj]:
                 try:
                     pm.delete(obj, constructionHistory=True)
                 except Exception as e:
                     pm.warning(f"Failed to delete construction history for {obj}: {e}")
+
+            # Capture original name before potential deletion
+            orig_name = orig_obj.nodeName()
+
+            # Delete original half if requested
+            if delete_original:
+                try:
+                    pm.delete(orig_obj)
+                except Exception as e:
+                    pm.warning(f"Failed to delete original object {orig_obj}: {e}")
 
             # Delete the temporary parent
             if temp_parent:
@@ -985,9 +1010,9 @@ class EditUtils(ptk.HelpMixin):
 
             # Rename to match original object
             try:
-                pm.rename(new_obj, orig_obj.nodeName())
+                pm.rename(new_obj, orig_name)
             except Exception as e:
-                pm.warning(f"Failed to rename {new_obj} to {orig_obj.nodeName()}: {e}")
+                pm.warning(f"Failed to rename {new_obj} to {orig_name}: {e}")
 
             return new_obj
 

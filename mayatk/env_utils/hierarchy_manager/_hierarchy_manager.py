@@ -70,13 +70,11 @@ def is_default_maya_camera(path: str, node) -> bool:
         base_name = path.split("|")[-1].split(":")[-1]
         if base_name not in MAYA_DEFAULT_CAMERAS:
             return False
-        shapes = node.getShapes()
+        long_path = node.fullPath() if hasattr(node, "fullPath") else str(node)
+        shapes = cmds.listRelatives(long_path, shapes=True, fullPath=True) or []
         for shape in shapes:
-            try:
-                if pm.nodeType(shape) == "camera":
-                    return True
-            except (RuntimeError, AttributeError):
-                continue
+            if cmds.nodeType(shape) == "camera":
+                return True
         return False
     except (RuntimeError, AttributeError):
         return False
@@ -85,10 +83,11 @@ def is_default_maya_camera(path: str, node) -> bool:
 def should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool:
     """Filter nodes by shape types."""
     try:
-        shapes = node.getShapes()
+        long_path = node.fullPath() if hasattr(node, "fullPath") else str(node)
+        shapes = cmds.listRelatives(long_path, shapes=True, fullPath=True) or []
         if not shapes:
             return True  # Keep transform-only nodes
-        shape_types = [shape.nodeType() for shape in shapes]
+        shape_types = [cmds.nodeType(s) for s in shapes]
         has_filtered_type = any(t in shape_types for t in node_types)
         return not has_filtered_type if exclude else has_filtered_type
     except (RuntimeError, AttributeError):
@@ -197,7 +196,8 @@ class HierarchyMapBuilder:
             strip_namespaces: if True, strip namespace prefixes from stored
                 component names.
         """
-        path_map: Dict[str, Any] = {}
+        # First pass: traverse with cmds (strings only — no PyMEL overhead).
+        key_to_long: Dict[str, str] = {}
         exclude_ns = exclude_namespace_prefixes or []
 
         def _should_exclude(short_name: str) -> bool:
@@ -212,7 +212,7 @@ class HierarchyMapBuilder:
                 return
             comp = format_component(short_name, strip_namespaces)
             current_key = f"{parent_key}|{comp}" if parent_key else comp
-            path_map[current_key] = pm.PyNode(long_path)
+            key_to_long[current_key] = long_path
             children = cmds.listRelatives(
                 long_path, children=True, fullPath=True, type="transform"
             )
@@ -227,6 +227,20 @@ class HierarchyMapBuilder:
                     _traverse(asm)
         else:
             _traverse(root.fullPath())
+
+        # Second pass: batch-convert long paths to PyMEL nodes in one call.
+        if not key_to_long:
+            return {}
+        long_paths = list(key_to_long.values())
+        pymel_nodes = pm.ls(long_paths)
+        long_to_pynode = {n.longName(): n for n in pymel_nodes}
+
+        path_map: Dict[str, Any] = {}
+        for key, long_path in key_to_long.items():
+            node = long_to_pynode.get(long_path)
+            if node is not None:
+                path_map[key] = node
+
         return path_map
 
     @staticmethod
@@ -236,31 +250,35 @@ class HierarchyMapBuilder:
         """Build a path map from an arbitrary list of PyMEL transform nodes.
 
         Root nodes are inferred as those whose parent is not in the set.
+        Uses cmds for traversal; values remain PyMEL nodes.
         """
         path_map: Dict[str, Any] = {}
-        # Build a set of full paths for fast membership checks
+        # Map long paths → PyMEL nodes for fast lookup
         node_paths = {n.fullPath(): n for n in nodes}
+        long_path_set = set(node_paths)
 
-        def _is_root(n) -> bool:
-            try:
-                p = n.getParent()
-            except (RuntimeError, AttributeError):
-                p = None
-            return (p is None) or (p.fullPath() not in node_paths)
+        def _is_root(long_path: str) -> bool:
+            parent = cmds.listRelatives(
+                long_path, parent=True, fullPath=True
+            )
+            return (not parent) or (parent[0] not in long_path_set)
 
-        def _traverse(node, path: str = ""):
-            node_name = node.nodeName()
-            comp = format_component(node_name, strip_namespaces)
+        def _traverse(long_path: str, path: str = ""):
+            short_name = long_path.rsplit("|", 1)[-1]
+            comp = format_component(short_name, strip_namespaces)
             current_path = f"{path}|{comp}" if path else comp
-            path_map[current_path] = node
-            children = node.getChildren(type="transform")
-            for child in children:
-                if child.fullPath() in node_paths:
-                    _traverse(child, current_path)
+            path_map[current_path] = node_paths[long_path]
+            children = cmds.listRelatives(
+                long_path, children=True, fullPath=True, type="transform"
+            )
+            if children:
+                for child_path in children:
+                    if child_path in long_path_set:
+                        _traverse(child_path, current_path)
 
-        for n in nodes:
-            if _is_root(n):
-                _traverse(n)
+        for lp in long_path_set:
+            if _is_root(lp):
+                _traverse(lp)
         return path_map
 
 
@@ -285,8 +303,14 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         found_objects: List[Any] = []
         fuzzy_match_map: Dict[Any, str] = {}
 
+        # Pre-build name → node index for O(1) exact lookups.
+        name_to_nodes: Dict[str, List[Any]] = {}
+        for node in imported_transforms:
+            clean = get_clean_node_name(node)
+            name_to_nodes.setdefault(clean, []).append(node)
+
         for target_name in target_objects:
-            exact_matches = self._find_exact_matches(target_name, imported_transforms)
+            exact_matches = name_to_nodes.get(target_name, [])
             if exact_matches:
                 found_objects.extend(exact_matches)
                 log_prefix = "[DRY-RUN] " if dry_run else ""
@@ -294,11 +318,11 @@ class MayaObjectMatcher(ptk.LoggingMixin):
                 continue
 
             # Log debug info about why exact match failed
-            self._log_debug_info(target_name, imported_transforms, dry_run)
+            self._log_debug_info(target_name, name_to_nodes, dry_run)
 
             if self.fuzzy_matching:
                 match_result = self._find_fuzzy_match(
-                    target_name, imported_transforms, dry_run
+                    target_name, name_to_nodes, dry_run
                 )
                 if match_result:
                     matching_node, fuzzy_target_name = match_result
@@ -316,17 +340,16 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         ]
 
     def _find_fuzzy_match(
-        self, target_name: str, imported_transforms: List, dry_run: bool = False
+        self, target_name: str, name_to_nodes: Dict[str, List[Any]], dry_run: bool = False
     ) -> Optional[Tuple[Any, str]]:
-        """Find fuzzy match for target object using consistent name extraction."""
+        """Find fuzzy match for target object using pre-built name index."""
         if pm.objExists(target_name):
             log_prefix = "[DRY-RUN] " if dry_run else ""
             self.logger.debug(
                 f"{log_prefix}Target '{target_name}' exists in current scene - will attempt fuzzy match for replacement"
             )
 
-        # Get clean names for fuzzy matching using consistent extraction
-        import_names = [get_clean_node_name(node) for node in imported_transforms]
+        import_names = list(name_to_nodes.keys())
 
         # Try fuzzy matching with standard threshold
         matches = ptk.FuzzyMatcher.find_all_matches(
@@ -340,23 +363,22 @@ class MayaObjectMatcher(ptk.LoggingMixin):
 
         if matches and target_name in matches:
             matched_name, score = matches[target_name]
-            for node in imported_transforms:
-                if get_clean_node_name(node) == matched_name:
-                    self.logger.notice(
-                        f"{log_prefix}Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
-                    )
-                    return node, target_name
+            nodes = name_to_nodes.get(matched_name)
+            if nodes:
+                self.logger.notice(
+                    f"{log_prefix}Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
+                )
+                return nodes[0], target_name
 
         return None
 
     def _log_debug_info(
-        self, target_name: str, imported_transforms: List, dry_run: bool = False
+        self, target_name: str, name_to_nodes: Dict[str, List[Any]], dry_run: bool = False
     ):
         """Log debug information for matching process."""
         log_prefix = "[DRY-RUN] " if dry_run else ""
-        import_names = [get_clean_node_name(node) for node in imported_transforms]
         self.logger.debug(
-            f"{log_prefix}No exact match for '{target_name}' in imported objects: {import_names}"
+            f"{log_prefix}No exact match for '{target_name}' in imported objects: {list(name_to_nodes.keys())}"
         )
 
 
@@ -380,6 +402,10 @@ class HierarchyManager(ptk.LoggingMixin):
         self.differences: Dict[str, Any] = {}
         self.missing_objects: List[str] = []
         self.extra_objects: List[str] = []
+
+        # Reverse mappings: cleaned_path → raw_path (populated by analyze_hierarchies)
+        self.clean_to_raw_current: Dict[str, str] = {}
+        self.clean_to_raw_reference: Dict[str, str] = {}
 
     def analyze_hierarchies(
         self,
@@ -440,40 +466,31 @@ class HierarchyManager(ptk.LoggingMixin):
                 f"Built reference path map: {len(self.reference_scene_path_map)} paths"
             )
 
-            # Filter out Maya default cameras from BOTH maps (current map is rebuilt scene-wide and may still contain them)
-            try:
-                self.current_scene_path_map = filter_path_map_by_cameras(
-                    self.current_scene_path_map
-                )
-                self.reference_scene_path_map = filter_path_map_by_cameras(
-                    self.reference_scene_path_map
-                )
-                self.logger.debug("Default camera filtering applied to both path maps")
-            except Exception as cam_filt_err:
-                self.logger.debug(f"Camera filtering skipped/failed: {cam_filt_err}")
-
-            # Apply other filters (meshes, lights etc.)
+            # Single-pass filtering: cameras + type filters in one iteration per map.
+            exclude_types: List[str] = []
             if filter_meshes:
-                self.current_scene_path_map = filter_path_map_by_types(
-                    self.current_scene_path_map, ["mesh"], exclude=True
-                )
-                self.reference_scene_path_map = filter_path_map_by_types(
-                    self.reference_scene_path_map, ["mesh"], exclude=True
-                )
+                exclude_types.append("mesh")
             if filter_cameras:
-                self.current_scene_path_map = filter_path_map_by_types(
-                    self.current_scene_path_map, ["camera"], exclude=True
-                )
-                self.reference_scene_path_map = filter_path_map_by_types(
-                    self.reference_scene_path_map, ["camera"], exclude=True
-                )
+                exclude_types.append("camera")
             if filter_lights:
-                self.current_scene_path_map = filter_path_map_by_types(
-                    self.current_scene_path_map, ["light"], exclude=True
-                )
-                self.reference_scene_path_map = filter_path_map_by_types(
-                    self.reference_scene_path_map, ["light"], exclude=True
-                )
+                exclude_types.append("light")
+
+            for attr in ("current_scene_path_map", "reference_scene_path_map"):
+                pmap = getattr(self, attr)
+                filtered: Dict[str, Any] = {}
+                for path, node in pmap.items():
+                    if is_default_maya_camera(path, node):
+                        continue
+                    if exclude_types:
+                        if not should_keep_node_by_type(node, exclude_types, exclude=True):
+                            continue
+                    filtered[path] = node
+                setattr(self, attr, filtered)
+
+            self.logger.debug(
+                f"Filtering done — current: {len(self.current_scene_path_map)}, "
+                f"reference: {len(self.reference_scene_path_map)}"
+            )
 
             # Prepare cleaned versions (strip namespaces per component) for comparison
             current_paths_raw = set(self.current_scene_path_map.keys())
@@ -594,13 +611,13 @@ class HierarchyManager(ptk.LoggingMixin):
             )
 
             # ── Build reverse mapping: cleaned_path → raw_path ──
-            clean_to_raw_current: Dict[str, str] = {}
+            self.clean_to_raw_current = {}
             for raw_path in current_paths_raw:
-                clean_to_raw_current[clean_hierarchy_path(raw_path)] = raw_path
+                self.clean_to_raw_current[clean_hierarchy_path(raw_path)] = raw_path
 
-            clean_to_raw_reference: Dict[str, str] = {}
+            self.clean_to_raw_reference = {}
             for raw_path in reference_paths_raw:
-                clean_to_raw_reference[clean_hierarchy_path(raw_path)] = raw_path
+                self.clean_to_raw_reference[clean_hierarchy_path(raw_path)] = raw_path
 
             # ── Detect reparented items ──
             # Same leaf name appears in both missing and extra but under different parents.
@@ -628,16 +645,20 @@ class HierarchyManager(ptk.LoggingMixin):
                     if len(missing_paths) == 1 and len(extra_paths) == 1:
                         ref_path = missing_paths[0]
                         cur_path = extra_paths[0]
-                        reparented.append({
-                            "leaf": leaf,
-                            "reference_path": ref_path,
-                            "current_path": cur_path,
-                        })
+                        reparented.append(
+                            {
+                                "leaf": leaf,
+                                "reference_path": ref_path,
+                                "current_path": cur_path,
+                            }
+                        )
                         matched_missing.add(ref_path)
                         matched_extra.add(cur_path)
 
                 # Remove reparented items from the missing/extra pools
-                remaining_missing = [p for p in remaining_missing if p not in matched_missing]
+                remaining_missing = [
+                    p for p in remaining_missing if p not in matched_missing
+                ]
                 remaining_extra = [p for p in remaining_extra if p not in matched_extra]
 
                 if reparented:
@@ -657,7 +678,9 @@ class HierarchyManager(ptk.LoggingMixin):
                     extra_leaves = [p.rsplit("|", 1)[-1] for p in remaining_extra]
 
                     raw_matches = ptk.FuzzyMatcher.find_all_matches(
-                        missing_leaves, extra_leaves, score_threshold=0.7,
+                        missing_leaves,
+                        extra_leaves,
+                        score_threshold=0.7,
                     )
                     # raw_matches: Dict[str, Tuple[str, float]]
                     matched_fm_missing = set()
@@ -665,25 +688,44 @@ class HierarchyManager(ptk.LoggingMixin):
                     for query_leaf, (best_leaf, score) in raw_matches.items():
                         # Map leaves back to full cleaned paths
                         ref_path = next(
-                            (p for p in remaining_missing if p.rsplit("|", 1)[-1] == query_leaf),
+                            (
+                                p
+                                for p in remaining_missing
+                                if p.rsplit("|", 1)[-1] == query_leaf
+                            ),
                             None,
                         )
                         cur_path = next(
-                            (p for p in remaining_extra if p.rsplit("|", 1)[-1] == best_leaf),
+                            (
+                                p
+                                for p in remaining_extra
+                                if p.rsplit("|", 1)[-1] == best_leaf
+                            ),
                             None,
                         )
-                        if ref_path and cur_path and ref_path not in matched_fm_missing and cur_path not in matched_fm_extra:
-                            fuzzy_matches.append({
-                                "target_name": ref_path,
-                                "current_name": cur_path,
-                                "score": score,
-                            })
+                        if (
+                            ref_path
+                            and cur_path
+                            and ref_path not in matched_fm_missing
+                            and cur_path not in matched_fm_extra
+                        ):
+                            fuzzy_matches.append(
+                                {
+                                    "target_name": ref_path,
+                                    "current_name": cur_path,
+                                    "score": score,
+                                }
+                            )
                             matched_fm_missing.add(ref_path)
                             matched_fm_extra.add(cur_path)
 
                     # Remove fuzzy-matched from the remaining pools
-                    remaining_missing = [p for p in remaining_missing if p not in matched_fm_missing]
-                    remaining_extra = [p for p in remaining_extra if p not in matched_fm_extra]
+                    remaining_missing = [
+                        p for p in remaining_missing if p not in matched_fm_missing
+                    ]
+                    remaining_extra = [
+                        p for p in remaining_extra if p not in matched_fm_extra
+                    ]
 
                     if fuzzy_matches:
                         self.logger.debug(
@@ -726,6 +768,283 @@ class HierarchyManager(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Failed to analyze hierarchies: {e}")
             return {}
+
+    # ------------------------------------------------------------------ #
+    # Hierarchy repair methods (operate on results from analyze_hierarchies)
+    # ------------------------------------------------------------------ #
+
+    def _resolve_node(self, cleaned_path: str, source: str = "current"):
+        """Resolve a cleaned diff path to a live PyMEL node.
+
+        Args:
+            cleaned_path: Namespace-stripped hierarchy path from the diff.
+            source: ``"current"`` or ``"reference"`` — which path map to look up.
+
+        Returns:
+            PyMEL transform node, or *None* if not found.
+        """
+        if source == "current":
+            raw = self.clean_to_raw_current.get(cleaned_path)
+            path_map = self.current_scene_path_map
+        else:
+            raw = self.clean_to_raw_reference.get(cleaned_path)
+            path_map = self.reference_scene_path_map
+
+        if raw and raw in path_map:
+            node = path_map[raw]
+            try:
+                if node.exists():
+                    return node
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _ensure_parent_chain(path: str):
+        """Create any missing intermediate transforms for *path* and return the
+        immediate parent node (or *None* for root-level items).
+
+        *path* is a pipe-separated cleaned hierarchy path, e.g.
+        ``GRP_A|GRP_B|LEAF``.  For this example the method ensures ``GRP_A``
+        and ``GRP_B`` exist and returns the PyMEL node for ``GRP_B``.
+
+        Uses parent-relative child lookups to correctly handle duplicate
+        names at different hierarchy levels (e.g. ``A|A|A``).
+        """
+        parts = path.split("|")
+        if len(parts) <= 1:
+            return None  # root-level, no parent needed
+
+        current_parent = None
+        for component in parts[:-1]:  # everything except the leaf
+            if current_parent is not None:
+                # Look for component as a direct child of current_parent
+                parent_long = current_parent.fullPath()
+                children = (
+                    cmds.listRelatives(
+                        parent_long,
+                        children=True,
+                        fullPath=True,
+                        type="transform",
+                    )
+                    or []
+                )
+                match = None
+                for c in children:
+                    if c.rsplit("|", 1)[-1] == component:
+                        match = c
+                        break
+                if match:
+                    current_parent = pm.PyNode(match)
+                else:
+                    new_grp = pm.createNode("transform", name=component)
+                    pm.parent(new_grp, current_parent)
+                    current_parent = new_grp
+            else:
+                # Root level — use leading pipe for unambiguous lookup
+                root_path = f"|{component}"
+                if cmds.objExists(root_path):
+                    current_parent = pm.PyNode(root_path)
+                else:
+                    current_parent = pm.createNode("transform", name=component)
+        return current_parent
+
+    def create_stubs(self, paths: Optional[List[str]] = None) -> List[str]:
+        """Create empty transform stubs for missing hierarchy paths.
+
+        This makes the current scene's skeleton match the reference without
+        importing actual geometry.  Each stub is an empty transform node
+        parented at the correct position in the hierarchy.
+
+        Args:
+            paths: Cleaned hierarchy paths to stub.  Defaults to
+                ``self.differences["missing"]``.
+
+        Returns:
+            List of created node names.
+        """
+        targets = paths if paths is not None else self.differences.get("missing", [])
+        if not targets:
+            self.logger.notice("No missing items to stub.")
+            return []
+
+        created: List[str] = []
+        for cleaned_path in targets:
+            leaf = cleaned_path.rsplit("|", 1)[-1]
+
+            if self.dry_run:
+                self.logger.info(f"[DRY-RUN] Would create stub: {cleaned_path}")
+                created.append(leaf)
+                continue
+
+            try:
+                parent = self._ensure_parent_chain(cleaned_path)
+                # Check if leaf already exists under this specific parent
+                if parent is not None:
+                    parent_long = parent.fullPath()
+                    children = (
+                        cmds.listRelatives(
+                            parent_long,
+                            children=True,
+                            fullPath=True,
+                            type="transform",
+                        )
+                        or []
+                    )
+                    if any(c.rsplit("|", 1)[-1] == leaf for c in children):
+                        self.logger.debug(
+                            f"Stub skipped (already exists): {cleaned_path}"
+                        )
+                        continue
+                else:
+                    if cmds.objExists(f"|{leaf}"):
+                        self.logger.debug(
+                            f"Stub skipped (already exists): {cleaned_path}"
+                        )
+                        continue
+
+                stub = pm.createNode("transform", name=leaf)
+                if parent:
+                    pm.parent(stub, parent)
+                created.append(stub.nodeName())
+                self.logger.debug(f"Created stub: {stub.fullPath()}")
+            except Exception as e:
+                self.logger.warning(f"Failed to create stub for {cleaned_path}: {e}")
+
+        self.logger.result(f"Created {len(created)} stub transform(s).")
+        return created
+
+    def quarantine_extras(
+        self,
+        group: str = "_QUARANTINE",
+        paths: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Move extra (scene-only) items to a root-level quarantine group.
+
+        Items that exist in the current scene but not in the reference are
+        reparented under *group* so they no longer pollute the matched
+        hierarchy.  A game engine will see them as new top-level content
+        rather than orphans breaking the expected structure.
+
+        Ancestor deduplication is applied: if ``GRP`` and ``GRP|CHILD`` are
+        both extra, only ``GRP`` is moved (``CHILD`` comes along for free).
+
+        Args:
+            group: Name of the root-level quarantine group.
+            paths: Cleaned hierarchy paths to quarantine.  Defaults to
+                ``self.differences["extra"]``.
+
+        Returns:
+            List of node names that were moved.
+        """
+        targets = paths if paths is not None else self.differences.get("extra", [])
+        if not targets:
+            self.logger.notice("No extra items to quarantine.")
+            return []
+
+        # ── Ancestor deduplication ──
+        targets_set = set(targets)
+        roots_only: List[str] = []
+        for p in sorted(targets, key=lambda x: x.count("|")):
+            # Keep only if no ancestor is also in the target set
+            parts = p.split("|")
+            if not any(
+                "|".join(parts[: i + 1]) in targets_set for i in range(len(parts) - 1)
+            ):
+                roots_only.append(p)
+
+        moved: List[str] = []
+
+        if self.dry_run:
+            for p in roots_only:
+                self.logger.info(f"[DRY-RUN] Would quarantine: {p}")
+                moved.append(p.rsplit("|", 1)[-1])
+            self.logger.result(f"[DRY-RUN] Would quarantine {len(moved)} item(s).")
+            return moved
+
+        # Ensure quarantine group exists
+        if pm.objExists(group):
+            quarantine_grp = pm.PyNode(group)
+        else:
+            quarantine_grp = pm.createNode("transform", name=group)
+
+        for cleaned_path in roots_only:
+            node = self._resolve_node(cleaned_path, source="current")
+            if not node:
+                self.logger.debug(
+                    f"Quarantine skipped (node not found): {cleaned_path}"
+                )
+                continue
+            try:
+                pm.parent(node, quarantine_grp)
+                moved.append(node.nodeName())
+                self.logger.debug(f"Quarantined: {node.fullPath()}")
+            except Exception as e:
+                self.logger.warning(f"Failed to quarantine {cleaned_path}: {e}")
+
+        self.logger.result(f"Quarantined {len(moved)} item(s) under '{group}'.")
+        return moved
+
+    def fix_reparented(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]:
+        """Move reparented nodes to match their reference hierarchy position.
+
+        Each item is a dict with ``current_path`` and ``reference_path``
+        keys (as produced by ``analyze_hierarchies``).
+
+        Args:
+            items: List of reparented-item dicts.  Defaults to
+                ``self.differences["reparented"]``.
+
+        Returns:
+            List of node names that were reparented.
+        """
+        targets = items if items is not None else self.differences.get("reparented", [])
+        if not targets:
+            self.logger.notice("No reparented items to fix.")
+            return []
+
+        fixed: List[str] = []
+        for entry in targets:
+            current_path = entry.get("current_path", "")
+            reference_path = entry.get("reference_path", "")
+            if not current_path or not reference_path:
+                continue
+
+            if self.dry_run:
+                self.logger.info(
+                    f"[DRY-RUN] Would reparent: {current_path} -> {reference_path}"
+                )
+                fixed.append(current_path.rsplit("|", 1)[-1])
+                continue
+
+            node = self._resolve_node(current_path, source="current")
+            if not node:
+                self.logger.debug(f"Reparent skipped (node not found): {current_path}")
+                continue
+
+            try:
+                old_parent = node.getParent()
+                target_parent = self._ensure_parent_chain(reference_path)
+                if target_parent:
+                    pm.parent(node, target_parent)
+                else:
+                    pm.parent(node, world=True)
+                fixed.append(node.nodeName())
+                self.logger.debug(f"Reparented: {node.nodeName()} -> {node.fullPath()}")
+
+                # Clean up now-empty source parent (avoids leftover shells)
+                if old_parent and old_parent.exists():
+                    children = old_parent.getChildren(type="transform")
+                    shapes = old_parent.getShapes()
+                    if not children and not shapes:
+                        old_name = old_parent.nodeName()
+                        pm.delete(old_parent)
+                        self.logger.debug(f"Deleted empty source parent: {old_name}")
+            except Exception as e:
+                self.logger.warning(f"Failed to reparent {current_path}: {e}")
+
+        self.logger.result(f"Fixed {len(fixed)} reparented item(s).")
+        return fixed
 
 
 class ObjectSwapper(ptk.LoggingMixin):

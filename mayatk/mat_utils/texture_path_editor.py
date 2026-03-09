@@ -123,7 +123,9 @@ class TexturePathEditorSlots:
 
     def lbl_find_copy(self):
         """Find and Copy Textures (Global)"""
-        all_file_nodes = pm.ls(type="file")
+        from maya import cmds
+
+        all_file_nodes = cmds.ls(type="file")
         if not all_file_nodes:
             pm.warning("No file nodes in the scene.")
             return
@@ -131,7 +133,16 @@ class TexturePathEditorSlots:
         self._find_and_copy_workflow(all_file_nodes)
 
     def _find_and_copy_workflow(self, file_nodes):
-        """Shared workflow for finding and copying textures."""
+        """Shared workflow for finding and copying textures.
+
+        Parameters:
+            file_nodes: List of file node names (strings) or PyNodes.
+        """
+        from maya import cmds
+
+        # Normalize to string names for performance (avoids PyNode overhead)
+        node_names = [n.name() if hasattr(n, "name") else str(n) for n in file_nodes]
+
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
             title="Select a root directory to recursively search for textures:",
@@ -141,7 +152,7 @@ class TexturePathEditorSlots:
             return
 
         found_textures = MatUtils.find_texture_files(
-            file_nodes=file_nodes, source_dir=source_dir, recursive=True
+            file_nodes=node_names, source_dir=source_dir, recursive=True
         )
         if not found_textures:
             pm.warning("No textures found.")
@@ -161,17 +172,16 @@ class TexturePathEditorSlots:
         # Filter file nodes to only remap ones that were successfully found and copied
         found_basenames = {os.path.basename(f).lower() for f in found_textures}
         nodes_to_remap = []
-        for node in file_nodes:
-            # Check if node's texture name matches one of the found ones
+        for node_name in node_names:
             try:
-                path = node.fileTextureName.get()
+                path = cmds.getAttr(f"{node_name}.fileTextureName")
                 if path and os.path.basename(path).lower() in found_basenames:
-                    nodes_to_remap.append(node)
+                    nodes_to_remap.append(node_name)
             except Exception:
                 continue
 
         if nodes_to_remap:
-            # We manualy remap here to ensure paths are flattened (matching the copy operation)
+            # We manually remap here to ensure paths are flattened (matching the copy operation)
             # using MatUtils.remap_texture_paths would attempt to preserve relative directory structure
             # which breaks if the file was moved from a subdirectory to the root of dest_dir.
             project_sourceimages = EnvUtils.get_env_info("sourceimages")
@@ -186,8 +196,8 @@ class TexturePathEditorSlots:
             pm.undoInfo(openChunk=True, chunkName="Remap Found Textures")
             try:
                 count = 0
-                for node in nodes_to_remap:
-                    path = node.fileTextureName.get()
+                for node_name in nodes_to_remap:
+                    path = cmds.getAttr(f"{node_name}.fileTextureName")
                     if not path:
                         continue
 
@@ -213,7 +223,9 @@ class TexturePathEditorSlots:
                         else:
                             final_path = rel
 
-                    node.fileTextureName.set(final_path)
+                    cmds.setAttr(
+                        f"{node_name}.fileTextureName", final_path, type="string"
+                    )
                     count += 1
                 pm.displayInfo(f"Remapped {count} file nodes.")
             finally:

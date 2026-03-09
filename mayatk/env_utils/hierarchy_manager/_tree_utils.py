@@ -219,21 +219,23 @@ def build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]
     Returns:
         Tuple of (object_items_dict, root_objects_list)
     """
+    import maya.cmds as cmds
+
     object_items: Dict[str, dict] = {}
     root_objects: List[str] = []
 
     for obj in objects:
         try:
-            obj_key = obj.fullPath()  # unique DAG path
-            obj_name = obj.nodeName()  # short display name
-            obj_type = obj.type()
-            parent = obj.getParent()
+            obj_key = obj.fullPath()  # unique DAG path (PyMEL — cached, fast)
+            obj_name = obj_key.rsplit("|", 1)[-1]  # short name from string
+            obj_type = cmds.nodeType(obj_key)
+            parent = cmds.listRelatives(obj_key, parent=True, fullPath=True)
 
             object_items[obj_key] = {
                 "object": obj,
                 "short_name": obj_name,
                 "type": obj_type,
-                "parent": parent.fullPath() if parent else None,
+                "parent": parent[0] if parent else None,
                 "item": None,
             }
 

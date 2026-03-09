@@ -134,6 +134,19 @@
           </property>
          </widget>
         </item>
+        <item row="5" column="0" colspan="2">
+         <widget class="PushButton" name="tb003">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Fix</string>
+          </property>
+         </widget>
+        </item>
         <item row="1" column="0" colspan="2">
          <widget class="PushButton" name="b000">
           <property name="minimumSize">

@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import re
 from typing import List, Tuple, Union, Dict, Any, Optional
 
 try:
@@ -1491,6 +1492,12 @@ class MatUtils(MatUtilsInternals):
     ) -> Dict[str, List[str]]:
         """Find duplicate materials based on their texture file names or full paths.
 
+        Two materials are only considered duplicates when they have the same
+        node type **and** the same set of ``(attribute, texture)`` pairs.
+        This prevents merging materials that happen to share texture file
+        names but use them on different attributes (e.g. baseColor vs
+        roughness).
+
         Parameters:
             materials (Optional[List[str]]): List of material nodes.
             strict (bool): Whether to compare using full paths (True) or just file names (False).
@@ -1499,11 +1506,30 @@ class MatUtils(MatUtilsInternals):
             Dict[str, List[str]]:
                 Each key is the original material, and each value is a list of duplicate materials.
         """
+        def _texture_id(path: str) -> str:
+            """Return a comparable texture identifier from *path*."""
+            if strict:
+                return path.lower()
+            return os.path.splitext(os.path.basename(path))[0].lower()
 
-        def get_texture_name(path: str) -> str:
-            """Extracts the core file name without the path or extension."""
-            filename = os.path.basename(path).lower()
-            return os.path.splitext(filename)[0]
+        def _parent_attr(plug: str) -> str:
+            """Normalize a plug to its top-level attribute name on the material.
+
+            ``mat.baseColorR`` → ``baseColor``,
+            ``mat.normalCamera`` → ``normalCamera``.
+            """
+            # plug looks like "materialName.attrName[.child…]"
+            parts = plug.split(".", 1)
+            if len(parts) < 2:
+                return plug
+            attr_path = parts[1]
+            # Strip array indices  e.g. input[0] → input
+            attr_path = re.sub(r"\[\d+\]", "", attr_path)
+            # Take first segment (top-level attribute)
+            root_attr = attr_path.split(".")[0]
+            # Strip single-char component suffixes (R/G/B/X/Y/Z/A)
+            root_attr = re.sub(r"[RGBXYZA]$", "", root_attr)
+            return root_attr or attr_path.split(".")[0]
 
         if materials is None:
             materials = cmds.ls(mat=True)
@@ -1511,72 +1537,97 @@ class MatUtils(MatUtilsInternals):
             materials = [m.name() if hasattr(m, "name") else m for m in materials]
             materials = cmds.ls(materials, mat=True)
 
-        # Dictionary to store relevant material data (texture names or paths)
+        # Build an attribute-aware fingerprint for each material:
+        #   (material_type, frozenset{(attr, texture_id), …})
         material_data = {}
         for material in materials:
-            # Collect file nodes connected to the material or its shading engine
-            file_nodes = (
-                cmds.listConnections(
-                    material, source=True, destination=False, type="file"
-                )
-                or []
+            mat_type = cmds.nodeType(material)
+
+            # Get ALL upstream file nodes through utility chains
+            history = (
+                cmds.listHistory(material, pruneDagObjects=True) or []
             )
-
-            # Check shading engine connections if no direct file nodes
+            file_nodes = cmds.ls(history, type="file") or []
             if not file_nodes:
-                shading_engines = (
-                    cmds.listConnections(material, type="shadingEngine") or []
-                )
-                for engine in shading_engines:
-                    engine_files = (
-                        cmds.listConnections(
-                            engine, source=True, destination=False, type="file"
-                        )
-                        or []
-                    )
-                    file_nodes.extend(engine_files)
-
-            if not file_nodes:  # Skip materials without file nodes
                 continue
 
-            # Collect texture paths or names based on 'strict' flag
-            texture_names = []
+            # Scope the forward-trace to nodes within the material's
+            # own history so the BFS doesn't wander into other materials'
+            # networks when file nodes are shared.
+            history_set = set(history)
+
+            # For each file node, find which material attribute it feeds
+            attr_texture_pairs = []
             for file_node in file_nodes:
-                if cmds.objExists(f"{file_node}.fileTextureName"):
-                    path = cmds.getAttr(f"{file_node}.fileTextureName")
-                    if path:
-                        if strict:
-                            texture_names.append(path.lower())
-                        else:
-                            texture_names.append(get_texture_name(path))
+                if not cmds.objExists(f"{file_node}.fileTextureName"):
+                    continue
+                path = cmds.getAttr(f"{file_node}.fileTextureName")
+                if not path:
+                    continue
+                tex_id = _texture_id(path)
 
-            if not texture_names:
+                # Trace forward from this file node to find which
+                # attribute(s) on *material* it ultimately connects to.
+                # Walk the destination chain until we hit the material.
+                visited = set()
+                frontier = [file_node]
+                mat_attrs = set()
+                while frontier:
+                    node = frontier.pop()
+                    if node in visited:
+                        continue
+                    visited.add(node)
+                    # Get destination plugs from this node
+                    dest_plugs = cmds.listConnections(
+                        node,
+                        source=False,
+                        destination=True,
+                        plugs=True,
+                    ) or []
+                    for plug in dest_plugs:
+                        plug_node = plug.split(".")[0]
+                        if plug_node == material:
+                            mat_attrs.add(_parent_attr(plug))
+                        elif (
+                            plug_node not in visited
+                            and plug_node in history_set
+                        ):
+                            frontier.append(plug_node)
+
+                if mat_attrs:
+                    for attr in mat_attrs:
+                        attr_texture_pairs.append((attr, tex_id))
+                else:
+                    # File node is upstream but we couldn't trace a
+                    # specific attribute — include it unkeyed so it
+                    # still participates in the fingerprint.
+                    attr_texture_pairs.append(("_unresolved", tex_id))
+
+            if not attr_texture_pairs:
                 continue
 
-            # Store the texture names or paths for duplicate checking
-            texture_set = frozenset(texture_names)
-            material_data[material] = texture_set
+            fingerprint = (mat_type, frozenset(attr_texture_pairs))
+            material_data[material] = fingerprint
 
-        # Identify duplicates by comparing texture sets
-        duplicates = {}
-        seen_materials = {}
-        for material, texture_set in material_data.items():
+        # Group materials with identical fingerprints
+        seen = {}
+        for material, fingerprint in material_data.items():
             match_found = False
-            for seen_texture_set, seen_material_list in seen_materials.items():
-                if texture_set == seen_texture_set:
-                    seen_material_list.append(material)
+            for seen_fp, seen_list in seen.items():
+                if fingerprint == seen_fp:
+                    seen_list.append(material)
                     match_found = True
                     break
             if not match_found:
-                seen_materials[texture_set] = [material]
+                seen[fingerprint] = [material]
 
-        # Process duplicates
-        for materials_list in seen_materials.values():
+        # Build result — only groups with >1 member are duplicates
+        duplicates = {}
+        for materials_list in seen.values():
             if len(materials_list) > 1:
-                # Sort by name length then name to prefer shorter names (often original)
                 materials_list.sort(key=lambda x: (len(x), x))
                 original = materials_list[0]
-                duplicates[original] = materials_list[1:]  # Always exclude the original
+                duplicates[original] = materials_list[1:]
 
         print(f"{len(duplicates)} Duplicate material groups found:")
         for original, dup_list in duplicates.items():
@@ -1755,21 +1806,27 @@ class MatUtils(MatUtilsInternals):
     ) -> None:
         """Move or copy found texture files to a new directory.
 
+        Uses parallel I/O (ThreadPoolExecutor) for significantly faster
+        copying, especially with large textures or network paths.
+
         Parameters:
             found_files (List): List of filepaths or (dir, filename) tuples.
             new_dir (str): Target directory to move/copy textures to.
             delete_old (bool): If True, delete original files after copying.
             create_dir (bool): If True, create the destination directory if it doesn't exist.
         """
+        import shutil
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         if not found_files:
             pm.warning("No texture files provided for moving.")
             return
 
-        if not ptk.is_valid(new_dir, "dir") and create_dir:
-            ptk.FileUtils.create_dir(new_dir)
+        if create_dir:
+            os.makedirs(new_dir, exist_ok=True)
 
-        copied_count = 0
-
+        # Resolve source paths upfront on the main thread
+        src_entries = []  # (src_path, filename)
         for entry in found_files:
             if isinstance(entry, tuple):
                 dir_path, filename = entry
@@ -1781,22 +1838,46 @@ class MatUtils(MatUtilsInternals):
             if not os.path.isfile(src_path):
                 pm.warning(f"Source file does not exist: {src_path}")
                 continue
+            src_entries.append((src_path, filename))
 
-            try:
-                copied_path = ptk.FileUtils.copy_file(
-                    src_path, destination=new_dir, overwrite=True, create_dir=create_dir
-                )
-                copied_count += 1
-                pm.displayInfo(f"// Copied: {src_path} -> {copied_path}")
+        if not src_entries:
+            return
 
-                if delete_old:
-                    os.remove(src_path)
-                    pm.displayInfo(f"// Deleted original: {src_path}")
+        def _copy_one(src_path, filename):
+            """Worker function — pure I/O, no Maya API calls."""
+            dst_path = os.path.join(new_dir, filename)
+            shutil.copy2(src_path, dst_path)
+            if delete_old:
+                os.remove(src_path)
+            return src_path, dst_path
 
-            except Exception as e:
-                pm.warning(f"// Failed to copy {src_path}: {e}")
+        # Use up to 8 workers (diminishing returns beyond that)
+        max_workers = min(8, len(src_entries))
+        copied = []
+        errors = []
 
-        pm.displayInfo(f"// Result: Copied {copied_count} texture(s).")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_copy_one, src, fn): src
+                for src, fn in src_entries
+            }
+            for future in as_completed(futures):
+                src = futures[future]
+                try:
+                    result = future.result()
+                    copied.append(result)
+                except Exception as e:
+                    errors.append((src, e))
+
+        # Log results on main thread (Maya API is not thread-safe)
+        for src_path, dst_path in copied:
+            pm.displayInfo(f"// Copied: {src_path} -> {dst_path}")
+            if delete_old:
+                pm.displayInfo(f"// Deleted original: {src_path}")
+        for src_path, err in errors:
+            pm.warning(f"// Failed to copy {src_path}: {err}")
+
+        pm.displayInfo(f"// Result: Copied {len(copied)} texture(s).")
 
     @classmethod
     def find_texture_files(
@@ -1826,18 +1907,26 @@ class MatUtils(MatUtilsInternals):
         """
         from maya import cmds
 
-        if not ptk.is_valid(source_dir, "dir"):
+        if not os.path.isdir(source_dir):
             pm.warning(f"Invalid source directory: {source_dir}")
             return []
 
-        scope = cls._resolve_texture_targets(
-            objects=objects,
-            materials=materials,
-            file_nodes=file_nodes,
-            fallback_to_scene=False,
-        )
+        # Fast path: when only file_nodes are provided (no objects/materials),
+        # skip _resolve_texture_targets which re-validates via cmds.ls(long=True).
+        if file_nodes and not objects and not materials:
+            texture_nodes = [
+                n.name() if hasattr(n, "name") else str(n) for n in file_nodes
+            ]
+        else:
+            scope = cls._resolve_texture_targets(
+                objects=objects,
+                materials=materials,
+                file_nodes=file_nodes,
+                fallback_to_scene=False,
+                as_strings=True,
+            )
+            texture_nodes = scope["file_nodes"]
 
-        texture_nodes = scope["file_nodes"]
         if not texture_nodes:
             pm.warning(
                 "No objects, materials, or file nodes provided to find textures."
@@ -1849,10 +1938,8 @@ class MatUtils(MatUtilsInternals):
 
         target_filenames = set()
         udim_patterns = []  # compiled regexes for UDIM-token filenames
-        for node in texture_nodes:
+        for node_name in texture_nodes:
             try:
-                # Handle both PyNodes and strings
-                node_name = node.name() if hasattr(node, "name") else str(node)
                 path = cmds.getAttr(f"{node_name}.fileTextureName")
                 if path:
                     filename = os.path.basename(path)
