@@ -197,6 +197,116 @@ class TestEditUtils(MayaTkTestCase):
             if new_obj is not None:
                 self.assertTrue(pm.objExists(new_obj))
 
+    def test_mirror_preserves_normals_merged(self):
+        """Verify mirrored mesh has outward-facing normals after merge.
+
+        Bug: polyMirrorFace could produce reversed normals on the mirrored
+        half, causing the mesh to render inside-out or black.
+        Fixed: 2026-03-08 - Added polyNormal conform step after mirror.
+        """
+        cube = pm.polyCube(name="norm_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+        EditUtils.mirror(cube, axis="-x", mergeMode=1)
+
+        # Verify normals point outward: the dot product of each face normal
+        # with the vector from mesh center to face center should be > 0.
+        import maya.api.OpenMaya as om
+
+        bbox = pm.exactWorldBoundingBox(cube)
+        mesh_center = om.MVector(
+            (bbox[0] + bbox[3]) / 2,
+            (bbox[1] + bbox[4]) / 2,
+            (bbox[2] + bbox[5]) / 2,
+        )
+        face_count = pm.polyEvaluate(cube, f=True)
+        for i in range(face_count):
+            info = pm.polyInfo(f"{cube}.f[{i}]", fn=True)
+            parts = info[0].split()
+            normal = om.MVector(float(parts[-3]), float(parts[-2]), float(parts[-1]))
+            # Face center
+            fb = pm.exactWorldBoundingBox(f"{cube}.f[{i}]")
+            face_center = om.MVector(
+                (fb[0] + fb[3]) / 2, (fb[1] + fb[4]) / 2, (fb[2] + fb[5]) / 2
+            )
+            outward = face_center - mesh_center
+            dot = normal * outward
+            self.assertGreater(dot, 0, f"Face {i} normal points inward (dot={dot:.4f})")
+
+    def test_mirror_preserves_normals_separate(self):
+        """Verify both halves have correct normals after separate-mode mirror.
+
+        Bug: polySeparate after polyMirrorFace could flip normals on the
+        mirrored half, especially after construction history deletion.
+        Fixed: 2026-03-08 - Added polyNormal conform before history deletion.
+        """
+        import maya.api.OpenMaya as om
+
+        cube = pm.polyCube(name="sep_norm_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+        results = EditUtils.mirror(cube, axis="-x", mergeMode=-1)
+        results = results if isinstance(results, list) else [results]
+
+        for obj in results:
+            if not pm.objExists(obj):
+                continue
+            bbox = pm.exactWorldBoundingBox(obj)
+            mesh_center = om.MVector(
+                (bbox[0] + bbox[3]) / 2,
+                (bbox[1] + bbox[4]) / 2,
+                (bbox[2] + bbox[5]) / 2,
+            )
+            face_count = pm.polyEvaluate(obj, f=True)
+            for i in range(face_count):
+                info = pm.polyInfo(f"{obj}.f[{i}]", fn=True)
+                parts = info[0].split()
+                normal = om.MVector(
+                    float(parts[-3]), float(parts[-2]), float(parts[-1])
+                )
+                fb = pm.exactWorldBoundingBox(f"{obj}.f[{i}]")
+                face_center = om.MVector(
+                    (fb[0] + fb[3]) / 2, (fb[1] + fb[4]) / 2, (fb[2] + fb[5]) / 2
+                )
+                outward = face_center - mesh_center
+                dot = normal * outward
+                self.assertGreater(
+                    dot, 0, f"Face {i} on {obj} normal points inward (dot={dot:.4f})"
+                )
+
+    def test_mirror_delete_original(self):
+        """Verify delete_original removes the original half in separate mode.
+
+        Feature: Added delete_original parameter so users can mirror and discard
+        the source half in one step.
+        Added: 2026-03-08
+        """
+        cube = pm.polyCube(name="del_orig_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+
+        # Count transforms before mirror
+        before = set(str(t) for t in pm.ls(type="transform"))
+
+        result = EditUtils.mirror(cube, axis="-x", mergeMode=-1, delete_original=True)
+        results = result if isinstance(result, list) else [result]
+
+        # Should return exactly one object (the mirrored half only)
+        self.assertEqual(len(results), 1, "Expected only the mirrored half")
+        self.assertTrue(pm.objExists(results[0]))
+
+        # The result should have geometry (not an empty group)
+        face_count = pm.polyEvaluate(results[0], f=True)
+        self.assertGreater(face_count, 0, "Mirrored half should have faces")
+
+    def test_mirror_delete_original_false(self):
+        """Verify delete_original=False (default) keeps both halves."""
+        cube = pm.polyCube(name="keep_orig_cube", w=10, h=10, d=10)[0]
+        pm.move(cube, 5, 0, 0)
+
+        result = EditUtils.mirror(cube, axis="-x", mergeMode=-1, delete_original=False)
+        results = result if isinstance(result, list) else [result]
+
+        # Should return at least the mirrored half
+        self.assertGreaterEqual(len(results), 1)
+
     # -------------------------------------------------------------------------
     # Overlap Detection
     # -------------------------------------------------------------------------

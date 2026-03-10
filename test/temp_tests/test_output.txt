@@ -1,1 +1,41 @@
-SUCCESS: All tests passed.
+00:00:00   499MB         | log started Mon Mar  9 14:07:23 2026
+00:00:00   499MB         | Arnold 7.3.4.1 [0bcd9b62] windows x86_64 clang-15.0.7 oiio-2.4.1 osl-1.13.0 vdb-11.0.0 adlsdk-8.0.7.50 clmhub-3.1.1.43 rlm-14.2.5 optix-8.0.0 2024/09/17 06:56:29
+00:00:00   499MB         | running on razer15, pid=6412
+00:00:00   499MB         |  1 x 12th Gen Intel(R) Core(TM) i7-12800H (20 cores, 20 logical) with 65219MB
+00:00:00   499MB         |  NVIDIA driver version 581.57
+00:00:00   499MB         |  GPU 0: NVIDIA GeForce RTX 3070 Ti Laptop GPU @ 1035MHz (compute 8.6) with 8191MB (226MB available) (NVLink:0)
+00:00:00   499MB         |  Windows 10 (version 10.0, build 22631)
+00:00:00   499MB         |  soft limit for open files changed from 512 to 2048
+00:00:00   499MB         |  
+00:00:00   499MB         | Installing system handler with mask 255
+00:00:02   680MB         | [metadata] loading metadata file: C:\Program Files\Autodesk\Arnold\maya2025\bin\arnold.mtd
+00:00:02   682MB         | loading plugins from C:\Program Files\Autodesk\Arnold\maya2025\bin\..\plugins ...
+00:00:02   683MB         |  alembic_proc.dll: alembic uses Arnold 7.3.4.1
+00:00:02   683MB         |  cryptomatte.dll: cryptomatte uses Arnold 7.3.4.1
+00:00:02   683MB         |  cryptomatte.dll: cryptomatte_filter uses Arnold 7.3.4.1
+00:00:02   683MB         |  cryptomatte.dll: cryptomatte_manifest_driver uses Arnold 7.3.4.1
+00:00:02   683MB         |  [metadata] loading metadata file: C:\Program Files\Autodesk\Arnold\maya2025\bin\..\plugins\cryptomatte.mtd
+00:00:02   701MB         |  usd_proc.dll: usd uses Arnold 7.3.4.1
+00:00:02   702MB         | loaded 5 plugins from 3 lib(s) in 0:00.11
+SUMMARY: Tests=81 Fail=1 Err=0 Skip=5
+FAIL: test_c130_fbx_vs_ma_diff_content (test_hierarchy_manager.TestHierarchyManager.test_c130_fbx_vs_ma_diff_content)
+Traceback (most recent call last):
+  File "O:\Cloud\Code\_scripts\mayatk\test\test_hierarchy_manager.py", line 1604, in test_c130_fbx_vs_ma_diff_content
+    self.assertEqual(
+AssertionError: 0 != 2 : Expected 2 missing, got 0: []
+
+00:00:37  1111MB         |  unloading 11 plugins
+00:00:37  1111MB         |   closing alembic_proc.dll ...
+00:00:37  1111MB         |   closing cryptomatte.dll ...
+00:00:37  1111MB         |   closing usd_proc.dll ...
+00:00:37  1111MB         |   closing hairPhysicalShader_shaders.dll ...
+00:00:37  1111MB         |   closing lookdevkit_shaders.dll ...
+00:00:37  1111MB         |   closing mtoa_shaders.dll ...
+00:00:37  1111MB         |   closing renderSetup_shaders.dll ...
+00:00:37  1111MB         |   closing xgenSpline_shaders.dll ...
+00:00:37  1111MB         |   closing mtoa_ParticleVolume_proc.dll ...
+00:00:37  1111MB         |   closing xgenSpline_procedural.dll ...
+00:00:37  1111MB         |   closing xgen_procedural.dll ...
+00:00:37  1111MB         |  unloading plugins done
+00:00:37  1111MB         | Arnold shutdown
+00:00:37  1111MB         | Installing system handler with mask 0

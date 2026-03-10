@@ -103,8 +103,13 @@ class _TaskActionsMixin(_TaskDataMixin):
                 self.logger.debug(
                     f"Changed workspace from {original_workspace} to {new_workspace}"
                 )
+            elif not new_workspace:
+                self.logger.warning(
+                    "No workspace.mel found in scene path hierarchy "
+                    f"\u2014 using current workspace: {original_workspace}"
+                )
             else:
-                self.logger.debug("Workspace change not needed or workspace not found")
+                self.logger.debug("Workspace already matches scene path.")
 
         return original_workspace
 
@@ -147,47 +152,91 @@ class _TaskActionsMixin(_TaskDataMixin):
         """Reassign duplicate materials in the scene."""
         self.logger.debug("Reassigning duplicate materials")
         materials = self._get_all_materials()
-        MatUtils.reassign_duplicate_materials(materials)
+        MatUtils.reassign_duplicate_materials(materials, delete=True)
+        # Invalidate the materials cache since duplicates were deleted
+        self._cached_materials = None
         self.logger.debug("Reassignment completed.")
 
-    def delete_unused_materials(self):
-        """Delete unused materials from the scene."""
-        self.logger.debug("Deleting unused materials")
-        pm.mel.hyperShadePanelMenuCommand("hyperShadePanel1", "deleteUnusedNodes")
-        self.logger.debug("Unused materials deleted.")
+    def resolve_invalid_texture_paths(self):
+        """Attempt to resolve missing texture paths using workspace and sourceimages lookup.
 
-    def delete_env_nodes(self) -> None:
-        """Delete environment file nodes based on filtered texture path patterns."""
-        env_keywords = ["diffuse_cube", "specular_cube", "ibl_brdf_lut"]
+        Scoped to materials assigned to the export objects. Uses
+        ``MatUtils.resolve_path`` which checks env-var expansion,
+        workspace-relative resolution, sourceimages directory, and
+        basename-in-sourceimages as fallbacks.
+        """
+        import os
 
-        # Use cmds for performance to avoid creating PyNodes for all file nodes
-        file_nodes = cmds.ls(type="file") or []
-        to_delete = []
+        materials = self._get_all_materials()
+        if not materials:
+            self.logger.debug("No materials found. Skipping texture path resolution.")
+            return
+
+        # Filter out materials that may have been deleted by earlier tasks
+        materials = [m for m in materials if cmds.objExists(m)]
+        if not materials:
+            self.logger.debug(
+                "No valid materials remain. Skipping texture path resolution."
+            )
+            return
+
+        # Traverse shading history to find file nodes for export materials
+        history = cmds.listHistory(materials, pruneDagObjects=True) or []
+        file_nodes = cmds.ls(history, type="file") or []
+        file_nodes = list(set(file_nodes))  # deduplicate
+
+        if not file_nodes:
+            self.logger.debug("No file nodes found. Skipping texture path resolution.")
+            return
+
+        resolved_count = 0
+        unresolved = []
 
         for node in file_nodes:
-            if cmds.attributeQuery("fileTextureName", node=node, exists=True):
-                texture_path = cmds.getAttr(f"{node}.fileTextureName")
-                if texture_path and any(
-                    keyword in texture_path.lower() for keyword in env_keywords
-                ):
-                    to_delete.append(node)
+            if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
+                continue
 
-        if to_delete:
-            cmds.delete(to_delete)
-            self.logger.info(f"Deleted {len(to_delete)} environment file nodes.")
-        else:
-            self.logger.info("No environment file nodes found.")
+            path = cmds.getAttr(f"{node}.fileTextureName")
+            if not path:
+                continue
+
+            expanded = os.path.expandvars(path)
+            # Handle UDIM patterns
+            check_path = (
+                expanded.replace("<UDIM>", "1001") if "<UDIM>" in expanded else expanded
+            )
+            if os.path.exists(check_path):
+                continue  # Path is already valid
+
+            resolved = MatUtils.resolve_path(path)
+            if resolved:
+                cmds.setAttr(f"{node}.fileTextureName", resolved, type="string")
+                resolved_count += 1
+                self.logger.info(f"Resolved texture: {node} -> {resolved}")
+            else:
+                unresolved.append(f"{node} -> {path}")
+
+        if resolved_count:
+            self.logger.info(f"Resolved {resolved_count} broken texture path(s).")
+        if unresolved:
+            self.logger.warning(
+                f"{len(unresolved)} texture path(s) could not be resolved:"
+            )
+            for entry in unresolved:
+                self.logger.warning(f"  {entry}")
+        if not resolved_count and not unresolved:
+            self.logger.debug("All texture paths are valid.")
 
     def smart_bake(self):
         """Pre-bake constrained and driven channels before export.
 
         Uses SmartBake to detect objects with constraints, driven keys,
         expressions, IK, motion paths, and blend shapes, then bakes only
-        those specific channels directly onto the base animation layer.
-        Driver nodes (constraints, expressions, etc.) are deleted after
-        baking so they don't interfere with FBX's own complex bake pass.
-        The perform_export undo chunk restores the scene after the FBX is
-        written, so these destructive operations are safe.
+        those specific channels onto an override animation layer.
+        FBX export with FBXExportBakeComplexAnimation samples the final
+        evaluated output, so the override layer produces correct results
+        without deleting driver nodes.  After export, the layer is deleted
+        to restore the original scene state non-destructively.
         """
         from mayatk.anim_utils.smart_bake import SmartBake
 
@@ -196,11 +245,9 @@ class _TaskActionsMixin(_TaskDataMixin):
             objects=self.objects,
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=True,  # Remove redundant keys after baking
-            use_override_layer=False,  # Bake to base layer for FBX compatibility
-            delete_inputs=True,  # Remove constraints/expressions after baking
-            # Scene is restored by the undo chunk in perform_export, so
-            # destructive operations here are safe.
+            optimize_keys=True,  # Optimize baked layer curves internally
+            use_override_layer=True,  # Non-destructive: bake to override layer
+            delete_inputs=False,  # Keep constraints — layer overrides them
         )
 
         analysis = baker.analyze()
@@ -216,20 +263,23 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         result = baker.bake(analysis)
 
+        # Store layer name for cleanup after export
+        if result.override_layer:
+            self._bake_override_layer = result.override_layer
+
         # Build detailed log message
         log_parts = [
             f"Smart bake completed: {result.baked_count} objects baked",
             f"range {result.time_range[0]}-{result.time_range[1]}",
         ]
-        if result.deleted:
-            log_parts.append(f"{len(result.deleted)} driver nodes deleted")
+        if result.override_layer:
+            log_parts.append(f"layer '{result.override_layer}'")
         if result.optimized:
             log_parts.append(f"{len(result.optimized)} objects optimized")
 
         self.logger.info(", ".join(log_parts) + ".")
 
-        # Refresh self.objects — smart_bake may have deleted constraints,
-        # expressions, or other nodes that were part of the original list.
+        # Refresh self.objects (no deletions expected, but re-validate)
         self.objects = cmds.ls(self.objects, long=True) or []
 
         # Invalidate keyframe cache since we added new keys
@@ -243,8 +293,8 @@ class _TaskActionsMixin(_TaskDataMixin):
             return
 
         self.logger.info("Optimizing baked animation keys...")
-        # Do NOT disable undo here — the perform_export undo chunk
-        # needs to capture these changes so the scene can be restored.
+        # Optimizes base-layer curves only.  Override-layer curves from
+        # smart_bake are optimized internally by SmartBake.optimize_keys.
         AnimUtils.optimize_keys(self.objects, recursive=True, quiet=True)
         self.logger.info("Optimization completed.")
 
@@ -588,11 +638,9 @@ class _TaskChecksMixin(_TaskDataMixin):
                 )
                 return False, log_messages  # Failed, log the mismatch
 
-            log_messages.append(
-                f"Framerate check passed: Scene framerate matches the target framerate ({target_framerate})."
-            )
+            pass  # Match confirmed; no message needed for a pass
 
-        return True, log_messages  # All checks passed
+        return True, []  # All checks passed
 
     def check_objects_below_floor(self, tolerance: float = 0.5) -> tuple:
         """Check if any object's geometry is below the floor plane (Y=0).
@@ -677,46 +725,6 @@ class _TaskChecksMixin(_TaskDataMixin):
         if hidden_objects:
             return False, [f"Hidden geometry detected: {obj}" for obj in hidden_objects]
         return True, []
-
-    def check_and_delete_visibility_keys(self) -> tuple:
-        """Check if there are any visibility keys on the specified objects and delete them."""
-        if not self._has_keyframes:
-            self.logger.debug("No keyframes found. Skipping visibility key check.")
-            return True, []
-
-        log_messages = []
-        visibility_keys_found = False
-
-        # Find objects with visibility keys using cmds
-        objs_with_vis_keys = (
-            cmds.keyframe(self.objects, attribute="visibility", query=True, name=True)
-            or []
-        )
-        # Remove duplicates
-        objs_with_vis_keys = list(set(objs_with_vis_keys))
-
-        for obj in objs_with_vis_keys:
-            visibility_keys_found = True
-
-            # Set visibility to true before deleting keys
-            cmds.setAttr(f"{obj}.visibility", True)
-
-            # Delete visibility keys
-            cmds.cutKey(obj, attribute="visibility")
-            log_messages.append(
-                f"Visibility set to true and keys deleted for object: {obj}"
-            )
-
-        if visibility_keys_found:
-            log_messages.append(
-                "check_and_delete_visibility_keys passed - visibility keys deleted."
-            )
-            return True, log_messages  # All checks passed, visibility keys deleted
-
-        log_messages.append(
-            "check_and_delete_visibility_keys passed - no visibility keys found."
-        )
-        return True, log_messages  # No visibility keys found, but passed
 
     def check_untied_keyframes(self) -> tuple:
         """Check if there are any untied keyframes on the specified objects."""
@@ -853,11 +861,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "set_linear_unit",
         # Phase 2 — Object filtering
         "ignore_groups",
-        # Phase 3 — Material cleanup (reassign THEN delete unused)
+        # Phase 3 — Material cleanup (reassign THEN resolve THEN convert)
         "reassign_duplicate_materials",
-        "delete_unused_materials",
+        "resolve_invalid_texture_paths",
         "convert_to_relative_paths",
-        "delete_env_nodes",
         # Phase 4 — Animation (bake THEN optimize THEN snap/tie THEN set range)
         "smart_bake",
         "optimize_keys",
@@ -930,12 +937,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "Separator",
                 "title": "Materials",
             },
-            "delete_unused_materials": {
-                "widget_type": "QCheckBox",
-                "setText": "Delete Unused Materials",
-                "setToolTip": "Delete unassigned material nodes.",
-                "setChecked": True,
-            },
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
                 "setText": "Reassign Duplicate Materials",
@@ -948,15 +949,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Convert absolute paths to relative paths.",
                 "setChecked": True,
             },
-            "sep_env": {
-                "widget_type": "Separator",
-                "title": "Environment",
-            },
-            "delete_env_nodes": {
+            "resolve_invalid_texture_paths": {
                 "widget_type": "QCheckBox",
-                "setText": "Delete Environment Nodes",
-                "setToolTip": "Delete environment file nodes.\nEnvironment nodes are defined as: 'diffuse_cube', 'specular_cube', 'ibl_brdf_lut'",
-                "setChecked": False,
+                "setText": "Resolve Invalid Texture Paths",
+                "setToolTip": "Attempt to resolve missing texture paths using workspace and sourceimages directory lookup.",
+                "setChecked": True,
             },
             "sep_anim": {
                 "widget_type": "Separator",
@@ -971,7 +968,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "optimize_keys": {
                 "widget_type": "QCheckBox",
                 "setText": "Optimize Keys",
-                "setToolTip": "Remove static curves and redundant flat keys from all exported objects.\nPreserves stepped tangent types.",
+                "setToolTip": "Remove static curves and redundant flat keys from all exported objects.\nAlso controls key optimization inside Smart Bake.\nPreserves stepped tangent types.",
                 "setChecked": True,
             },
             "tie_all_keyframes": {
@@ -985,12 +982,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Snap Keys To Frame",
                 "setToolTip": "Snap all keyframes to the nearest whole frame.",
                 "setChecked": False,
-            },
-            "check_and_delete_visibility_keys": {
-                "widget_type": "QCheckBox",
-                "setText": "Delete Visibility Keys",
-                "setToolTip": "Delete visibility keys from the exported objects.",
-                "setChecked": True,
             },
             "set_bake_animation_range": {
                 "widget_type": "QCheckBox",

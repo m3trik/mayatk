@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.10.19"
+__version__ = "0.10.24"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -35,6 +35,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
+    "anim_utils.sequencer._sequencer": ["Sequencer", "SceneBlock"],
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",

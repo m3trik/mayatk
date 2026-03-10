@@ -1,0 +1,235 @@
+Qt WebEngine seems to be initialized from a plugin. Please set Qt::AA_ShareOpenGLContexts using QCoreApplication::setAttribute and QSGRendererInterface::OpenGLRhi using QQuickWindow::setGraphicsApi before constructing QGuiApplication.
+pymel.core : INFO : Updating pymel with pre-loaded plugins: cacheEvaluator, renderSetup
+Warning: file: C:/Program Files/Autodesk/Maya2025/scripts/startup/initialStartup.mel line 184: Y-axis is already the Up-axis
+modelingToolkit
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 2    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 0    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 0    
+Reparented    | 0    
+Fuzzy renamed | 0    
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 6    
+Reference paths | 6    
+Missing         | 4    
+Extra           | 4    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 1    
+Reparented    | 1    
+Fuzzy renamed | 2    
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 3    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 1    
+Reparented    | 0    
+Fuzzy renamed | 0    
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 2    
+Reference paths | 2    
+Missing         | 1    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 0    
+Truly extra   | 0    
+Reparented    | 0    
+Fuzzy renamed | 1    
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 3    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 0    
+Truly extra   | 0    
+Reparented    | 1    
+Fuzzy renamed | 0    
+Initialized VP2.0 renderer {
+  Version : 2016.11.62.12. Feature Level 5.
+  Adapter : NVIDIA GeForce RTX 3070 Ti Laptop GPU/PCIe/SSE2
+  Vendor ID: 4318. Device ID : 18086
+  Driver : C:\WINDOWS\System32\DriverStore\FileRepository\nvrzsi.inf_amd64_854270b90e19f380\nvoglv64.dll.dll:32.0.15.8157.
+  API : OpenGL V.4.6.
+  Max texture size : 16384 * 16384.
+  Max texture coords : 32
+  Shader versions supported (Vertex: 5, Geometry: 5, Pixel 5).
+  Shader compiler profile : (Best card profile)
+  Active stereo support available : 0
+  GPU Memory Limit : 8192 MB.
+  CPU Memory Limit : 61958.4 MB.
+  MultiDraw consolidation : enabled
+}
+OpenCL evaluator is attempting to initialize OpenCL.
+Detected 2 OpenCL Platforms: 
+ 0: NVIDIA Corporation. NVIDIA CUDA. OpenCL 3.0 CUDA 13.0.97.
+ Supported extensions: cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_fp64 cl_khr_3d_image_writes cl_khr_byte_addressable_store cl_khr_icd cl_khr_gl_sharing cl_nv_compiler_options cl_nv_device_attribute_query cl_nv_pragma_unroll cl_nv_d3d10_sharing cl_khr_d3d10_sharing cl_nv_d3d11_sharing cl_nv_copy_opts cl_nv_create_buffer cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_device_uuid cl_khr_pci_bus_info cl_khr_external_semaphore cl_khr_external_memory cl_khr_external_semaphore_win32 cl_khr_external_memory_win32 cl_khr_semaphore 
+ Selected matching OpenCL Platform: NVIDIA Corporation NVIDIA CUDA OpenCL 3.0 CUDA 13.0.97.
+ 1: Intel(R) Corporation. Intel(R) OpenCL HD Graphics. OpenCL 3.0 .
+ Supported extensions: cl_khr_byte_addressable_store cl_khr_fp16 cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_icd cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_intel_command_queue_families cl_intel_subgroups cl_intel_required_subgroup_size cl_intel_subgroups_short cl_khr_spir cl_intel_accelerator cl_intel_driver_diagnostics cl_khr_priority_hints cl_khr_throttle_hints cl_khr_create_command_queue cl_intel_subgroups_char cl_intel_subgroups_long cl_khr_il_program cl_intel_mem_force_host_memory cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_intel_device_attribute_query cl_khr_suggested_local_work_size cl_intel_spirv_media_block_io cl_intel_spirv_subgroups cl_khr_spirv_no_integer_wrap_decoration cl_intel_unified_shared_memory_preview cl_khr_mipmap_image cl_khr_mipmap_image_writes cl_intel_planar_yuv cl_intel_packed_yuv cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_3d_image_writes cl_intel_media_block_io cl_khr_gl_sharing cl_khr_gl_depth_images cl_khr_gl_event cl_khr_gl_msaa_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_intel_d3d11_nv12_media_sharing cl_intel_sharing_format_query cl_khr_pci_bus_info cl_intel_subgroup_local_block_io cl_intel_simultaneous_sharing  
+OpenCL evaluator choosing OpenCL platform NVIDIA Corporation.
+OpenCL evaluator is unable to find a GPU device that can share VBOs with OpenGL.
+File read in  28 seconds.
+Logfile: "C:\Users\m3tri\Documents\maya\FBX\Logs\2020.3.6\maya2025imp.log"
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 682  
+Reference paths | 664  
+Missing         | 7    
+Extra           | 25   
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 2    
+Truly extra   | 20   
+Reparented    | 3    
+Fuzzy renamed | 2    
+[RESULT] Created 1 stub transform(s).
+[RESULT] Created 2 stub transform(s).
+[NOTICE] No missing items to stub.
+[RESULT] Created 2 stub transform(s).
+[RESULT] Created 0 stub transform(s).
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 3    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 1    
+Reparented    | 0    
+Fuzzy renamed | 0    
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 2    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 0    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 0    
+Reparented    | 0    
+Fuzzy renamed | 0    
+[RESULT] Fixed 1 reparented item(s).
+[RESULT] Fixed 1 reparented item(s).
+[NOTICE] No reparented items to fix.
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 3    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 0    
+Truly extra   | 0    
+Reparented    | 1    
+Fuzzy renamed | 0    
+[RESULT] Fixed 1 reparented item(s).
+[NOTICE] [DRY-RUN] Fuzzy match: 'my_object_v1' -> 'my_object_v2' (score: 0.90)
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.HierarchyManager: HM_TEST_MSG
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.ObjectSwapper: OS_TEST_MSG
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.MayaObjectMatcher: MM_TEST_MSG
+[INFO] mayatk.env_utils.namespace_sandbox.NamespaceSandbox: NS_TEST_MSG
+[RESULT] Quarantined 1 item(s) under '_QUARANTINE'.
+[RESULT] Quarantined 1 item(s) under 'MY_EXTRAS'.
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.HierarchyManager: [DRY-RUN] Would quarantine: extra_obj
+[RESULT] [DRY-RUN] Would quarantine 1 item(s).
+[NOTICE] No extra items to quarantine.
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 3    
+Reference paths | 2    
+Missing         | 0    
+Extra           | 1    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 0    
+Truly extra   | 1    
+Reparented    | 0    
+Fuzzy renamed | 0    
+[RESULT] Quarantined 1 item(s) under '_QUARANTINE'.
+PATH COMPARISON
+---------------
+Metric          | Count
+----------------+------
+Current paths   | 2    
+Reference paths | 3    
+Missing         | 1    
+Extra           | 0    
+DIFF CATEGORIES
+---------------
+Category      | Count
+--------------+------
+Truly missing | 1    
+Truly extra   | 0    
+Reparented    | 0    
+Fuzzy renamed | 0    
+[RESULT] Created 1 stub transform(s).
+[RESULT] [APPLIED] Repairs — stubs: 1
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.HierarchyManager: [DRY-RUN] Would create stub: grp|stub
+[RESULT] Created 1 stub transform(s).
+[RESULT] [DRY-RUN] Repairs — stubs: 1
+[ERROR] Please run a diff analysis first.
+[INFO] mayatk.env_utils.hierarchy_manager._hierarchy_manager.HierarchyManager: [DRY-RUN] Would create stub: grp|keep
+[RESULT] Created 1 stub transform(s).
+[RESULT] [DRY-RUN] Repairs — stubs: 1

@@ -97,6 +97,95 @@ class TestMatUtilsExtended(MayaTkTestCase):
         assigned = MatUtils.get_mats(cube)
         self.assertEqual(assigned[0], mat1.name())
 
+    def test_different_attr_same_texture_not_duplicate(self):
+        """Verify materials using the same texture on different attributes
+        are NOT flagged as duplicates.
+
+        Bug: find_materials_with_duplicate_textures compared only texture
+        filenames without tracking which attribute they connected to.
+        This caused protractor materials to be merged with yoke/brake
+        materials when they shared texture filenames on different channels.
+        Fixed: 2026-03-08
+        """
+        # mat_a: texture1 → color (diffuse)
+        mat_a, _ = self._create_textured_material("matA", self.tex1)
+        # mat_b: texture1 → transparency (different attribute, same file)
+        mat_b = pm.shadingNode("lambert", asShader=True, name="matB")
+        file_b = pm.shadingNode("file", asTexture=True, name="matB_file")
+        file_b.fileTextureName.set(self.tex1)
+        pm.connectAttr(file_b.outColor, mat_b.transparency)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures()
+
+        # They should NOT be detected as duplicates
+        for original, dup_list in duplicates.items():
+            combined = [original] + dup_list
+            self.assertFalse(
+                mat_a.name() in combined and mat_b.name() in combined,
+                "Materials with same texture on different attributes "
+                "should not be duplicates",
+            )
+
+    def test_different_material_type_not_duplicate(self):
+        """Verify materials of different shader types are never duplicates,
+        even when their textures and attributes match.
+
+        Fixed: 2026-03-08
+        """
+        # lambert with texture1 → color
+        mat_lam, _ = self._create_textured_material("matLambert", self.tex1)
+        # phong with texture1 → color
+        mat_phong = pm.shadingNode("phong", asShader=True, name="matPhong")
+        file_ph = pm.shadingNode("file", asTexture=True, name="matPhong_file")
+        file_ph.fileTextureName.set(self.tex1)
+        pm.connectAttr(file_ph.outColor, mat_phong.color)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures()
+
+        for original, dup_list in duplicates.items():
+            combined = [original] + dup_list
+            self.assertFalse(
+                mat_lam.name() in combined and mat_phong.name() in combined,
+                "Materials of different types should not be duplicates",
+            )
+
+    def test_different_textures_behind_utility_nodes_not_duplicate(self):
+        """Verify materials with different texture sets connected through
+        utility nodes (bump2d) are NOT flagged as duplicates.
+
+        Bug: The old algorithm used listConnections(material, type='file')
+        which only found directly-connected file nodes. When textures were
+        behind utility nodes (bump2d, colorCorrect, etc.), both materials
+        appeared to have zero or partial textures and could be falsely
+        merged. listHistory is now used to traverse the full upstream graph.
+        Fixed: 2026-03-08
+        """
+        # mat_x: texture1 → bump2d → normalCamera
+        mat_x = pm.shadingNode("lambert", asShader=True, name="matX")
+        file_x = pm.shadingNode("file", asTexture=True, name="matX_file")
+        file_x.fileTextureName.set(self.tex1)
+        bump_x = pm.shadingNode("bump2d", asUtility=True, name="matX_bump")
+        pm.connectAttr(file_x.outAlpha, bump_x.bumpValue)
+        pm.connectAttr(bump_x.outNormal, mat_x.normalCamera)
+
+        # mat_y: texture2 → bump2d → normalCamera (different texture)
+        mat_y = pm.shadingNode("lambert", asShader=True, name="matY")
+        file_y = pm.shadingNode("file", asTexture=True, name="matY_file")
+        file_y.fileTextureName.set(self.tex2)
+        bump_y = pm.shadingNode("bump2d", asUtility=True, name="matY_bump")
+        pm.connectAttr(file_y.outAlpha, bump_y.bumpValue)
+        pm.connectAttr(bump_y.outNormal, mat_y.normalCamera)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures()
+
+        for original, dup_list in duplicates.items():
+            combined = [original] + dup_list
+            self.assertFalse(
+                mat_x.name() in combined and mat_y.name() in combined,
+                "Materials with different textures behind utility nodes "
+                "should not be duplicates",
+            )
+
     # -------------------------------------------------------------------------
     # Texture Remapping Tests
     # -------------------------------------------------------------------------

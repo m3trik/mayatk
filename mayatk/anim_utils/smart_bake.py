@@ -708,18 +708,31 @@ class SmartBake:
             from mayatk.anim_utils._anim_utils import AnimUtils
 
             baked_curves = []
-            for obj, channels in result.baked.items():
-                for ch in channels:
-                    plug = f"{obj}.{ch}"
-                    curves = cmds.listConnections(
-                        plug, type="animCurve", source=True, destination=False
+            # When an override layer exists, query its curves directly.
+            # listConnections(plug) won't traverse animBlendNodes.
+            if override_layer and cmds.objExists(override_layer):
+                layer_curves = (
+                    cmds.animLayer(
+                        override_layer, query=True, animCurves=True
                     )
-                    if curves:
-                        baked_curves.extend(curves)
+                    or []
+                )
+                baked_curves = list(set(layer_curves))
+            else:
+                for obj, channels in result.baked.items():
+                    for ch in channels:
+                        plug = f"{obj}.{ch}"
+                        curves = cmds.listConnections(
+                            plug,
+                            type="animCurve",
+                            source=True,
+                            destination=False,
+                        )
+                        if curves:
+                            baked_curves.extend(curves)
+                baked_curves = list(set(baked_curves))
 
             if baked_curves:
-                # Deduplicate
-                baked_curves = list(set(baked_curves))
                 AnimUtils.optimize_keys(
                     baked_curves,
                     remove_flat_keys=True,

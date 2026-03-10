@@ -35,6 +35,8 @@ from base_test import MayaTkTestCase
 from mayatk.node_utils.attributes.event_triggers import EventTriggers
 from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
 
+import pythontk as ptk
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -91,6 +93,8 @@ def _make_slots_instance():
         slots._syncing_combo = False
         slots._last_enum_idx = None
         slots._trigger_attr_path = None
+        slots._sync_fingerprints = {}
+        slots._deferred_sync_pending = False
 
     return slots
 
@@ -842,13 +846,34 @@ class TestSceneReopenDetection(MayaTkTestCase):
         self.assertIsNone(self.slots._time_changed_job_id)
 
     def test_ensure_sync_job_creates_scene_opened_jobs(self):
-        """_ensure_sync_job registers persistent SceneOpened/NewSceneOpened jobs."""
+        """_ensure_sync_job registers persistent SceneOpened/NewSceneOpened jobs.
+
+        Bug: In standalone mayapy, cmds.scriptJob(event=["SceneOpened", ...])
+        silently fails (no GUI event loop), so the IDs stayed None and the
+        test failed.  Fixed by mocking cmds.scriptJob so the test verifies
+        the method's branching logic rather than Maya's event availability.
+        Fixed: 2026-03-03
+        """
         self.slots._scene_opened_job_id = None
         self.slots._new_scene_job_id = None
         self.slots._selection_sync_job_id = None
         self.slots._time_changed_job_id = None
 
-        with patch("maya.cmds.evalDeferred"):
+        _counter = [1000]
+
+        def _fake_script_job(**kwargs):
+            if "exists" in kwargs:
+                return False
+            if "kill" in kwargs:
+                return None
+            _counter[0] += 1
+            return _counter[0]
+
+        with (
+            patch("maya.cmds.scriptJob", side_effect=_fake_script_job),
+            patch("maya.cmds.evalDeferred"),
+            patch.object(self.slots, "_connect_cb_signal"),
+        ):
             self.slots._ensure_sync_job()
 
         # The persistent jobs should have been created (non-None IDs)
@@ -864,18 +889,14 @@ class TestSceneReopenDetection(MayaTkTestCase):
         self.assertIsNotNone(self.slots._selection_sync_job_id)
         self.assertIsNotNone(self.slots._time_changed_job_id)
 
-        # Clean up scriptJobs
-        for jid in [
+        # All four IDs should be distinct
+        ids = [
             self.slots._scene_opened_job_id,
             self.slots._new_scene_job_id,
             self.slots._selection_sync_job_id,
             self.slots._time_changed_job_id,
-        ]:
-            if jid is not None:
-                try:
-                    cmds.scriptJob(kill=jid, force=True)
-                except Exception:
-                    pass
+        ]
+        self.assertEqual(len(set(ids)), 4, "Each scriptJob should get a unique ID")
 
 
 # ===========================================================================
@@ -1264,6 +1285,217 @@ class TestBrowseTriggersCompositeRebuild(MayaTkTestCase):
 
 
 # ===========================================================================
+# Per-Object Composite Audio
+# ===========================================================================
+
+
+class TestPerObjectComposite(MayaTkTestCase):
+    """Verify per-object composite naming, auto-switch, and auto-sync export.
+
+    Each trigger object should get its own ``{objName}_composite`` audio
+    node and cached WAV, and selecting a different trigger object should
+    activate its composite for timeline playback.
+    Fixed: 2026-03-04
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.locA = pm.PyNode(cmds.spaceLocator(name="carrierA")[0])
+        self.locB = pm.PyNode(cmds.spaceLocator(name="carrierB")[0])
+        EventTriggers.create([self.locA], events=["FootstepA"], category="audio")
+        EventTriggers.create([self.locB], events=["FootstepB"], category="audio")
+        EventTriggers.set_key(
+            self.locA, "FootstepA", time=10, auto_clear=False, category="audio"
+        )
+        EventTriggers.set_key(
+            self.locB, "FootstepB", time=20, auto_clear=False, category="audio"
+        )
+
+    def test_sync_creates_per_object_composite_node(self):
+        """Syncing object A should create 'carrierA_composite', not 'audio_composite'."""
+        fake_map = {"footstepa": "/audio/FootstepA.wav"}
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierA.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            results = AudioEvents.sync(
+                objects=[self.locA],
+                audio_file_map=fake_map,
+                category="audio",
+            )
+        # Check that the per-object composite node was created
+        nodes = AudioEvents.list_nodes(category="audio")
+        comp_names = [n for n in nodes if n.endswith("_composite")]
+        self.assertIn(
+            "carrierA_composite",
+            comp_names,
+            "Per-object composite 'carrierA_composite' should exist.",
+        )
+        # Legacy global composite should NOT exist
+        self.assertNotIn(
+            "audio_composite",
+            comp_names,
+            "Legacy 'audio_composite' should not be created.",
+        )
+
+    def test_sync_two_objects_creates_separate_composites(self):
+        """Syncing A then B should produce two distinct composites."""
+        fake_map_a = {"footstepa": "/audio/FootstepA.wav"}
+        fake_map_b = {"footstepb": "/audio/FootstepB.wav"}
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map_a,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierA.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.locA],
+                audio_file_map=fake_map_a,
+                category="audio",
+            )
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map_b,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierB.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.locB],
+                audio_file_map=fake_map_b,
+                category="audio",
+            )
+        nodes = AudioEvents.list_nodes(category="audio")
+        comp_names = [n for n in nodes if n.endswith("_composite")]
+        self.assertIn("carrierA_composite", comp_names)
+        self.assertIn("carrierB_composite", comp_names)
+
+    def test_resyncing_object_replaces_only_its_composite(self):
+        """Re-syncing object A should not delete object B's composite."""
+        fake_map_a = {"footstepa": "/audio/FootstepA.wav"}
+        fake_map_b = {"footstepb": "/audio/FootstepB.wav"}
+        # First sync both
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map_a,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierA.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.locA],
+                audio_file_map=fake_map_a,
+                category="audio",
+            )
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map_b,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierB.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.locB],
+                audio_file_map=fake_map_b,
+                category="audio",
+            )
+        # Re-sync A
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map_a,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/cache/_composite_carrierA_v2.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.locA],
+                audio_file_map=fake_map_a,
+                category="audio",
+            )
+        nodes = AudioEvents.list_nodes(category="audio")
+        comp_names = [n for n in nodes if n.endswith("_composite")]
+        self.assertIn("carrierA_composite", comp_names)
+        self.assertIn(
+            "carrierB_composite",
+            comp_names,
+            "B's composite should survive A's re-sync.",
+        )
+
+    def test_activate_composite_for_switches_active_sound(self):
+        """_activate_composite_for should call set_active with the per-object node."""
+        # Create a fake composite node for carrierA
+        comp_node = cmds.createNode("audio", name="carrierA_composite", skipSelect=True)
+        AudioEvents._stamp_event_attrs(comp_node, "", "composite")
+        audio_set = AudioEvents._get_or_create_set("audio")
+        cmds.sets(comp_node, addElement=audio_set.name())
+
+        self.slots._current_target = self.locA
+        with patch.object(AudioEvents, "set_active") as mock_active:
+            self.slots._activate_composite_for(self.locA)
+            mock_active.assert_called_once_with("carrierA_composite")
+
+    def test_hydrate_activates_correct_composite(self):
+        """Switching to a target with a composite should activate it."""
+        # Create composites for both objects
+        for name in ["carrierA_composite", "carrierB_composite"]:
+            node = cmds.createNode("audio", name=name, skipSelect=True)
+            AudioEvents._stamp_event_attrs(node, "", "composite")
+            audio_set = AudioEvents._get_or_create_set("audio")
+            cmds.sets(node, addElement=audio_set.name())
+
+        with patch.object(AudioEvents, "set_active") as mock_active:
+            self.slots._hydrate_from_target(self.locB)
+            mock_active.assert_called_once_with("carrierB_composite")
+
+    def test_export_auto_syncs_before_finding_composite(self):
+        """_export_composite should call _sync_and_refresh_target before exporting."""
+        self.slots._current_target = self.locA
+        self.slots._audio_files = {"footstepa": "/audio/FootstepA.wav"}
+
+        with patch.object(
+            self.slots, "_sync_and_refresh_target", return_value=1
+        ) as mock_sync:
+            with patch.object(AudioEvents, "list_nodes", return_value=[]):
+                self.slots._export_composite()
+                mock_sync.assert_called_once_with(self.locA)
+
+
+# ===========================================================================
 # Cross-target hydration isolation (dead-space bug)
 # ===========================================================================
 
@@ -1483,6 +1715,107 @@ class TestCreateNewAudioObjectClearsFiles(MayaTkTestCase):
 
 
 # ===========================================================================
+# Prepare Selected Paths (Auto Convert)
+# ===========================================================================
+
+
+class TestPrepareSelectedPaths(MayaTkTestCase):
+    """Verify _prepare_selected_paths respects the Auto Convert header option.
+
+    The header checkbox controls whether non-playable formats (MP3, OGG,
+    etc.) are silently included for conversion or silently skipped — no
+    dialog prompt should appear in either case.
+
+    Added: 2026-03-03
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+
+    def _set_auto_convert(self, enabled):
+        """Wire the header.menu.chk_auto_convert mock to return *enabled*."""
+        chk = MagicMock()
+        chk.isChecked.return_value = enabled
+        self.slots.ui.header.menu.chk_auto_convert = chk
+
+    def test_auto_convert_enabled_includes_convertible(self):
+        """With Auto Convert on + FFmpeg available, convertible files are included."""
+        self._set_auto_convert(True)
+        with patch(
+            "pythontk.AudioUtils.resolve_ffmpeg", return_value="/usr/bin/ffmpeg"
+        ):
+            result = self.slots._prepare_selected_paths(["/a/clip.wav", "/a/track.mp3"])
+        self.assertIn("/a/clip.wav", result)
+        self.assertIn("/a/track.mp3", result)
+
+    def test_auto_convert_enabled_no_ffmpeg_skips_convertible(self):
+        """With Auto Convert on but no FFmpeg, convertible files are dropped."""
+        self._set_auto_convert(True)
+        with patch("pythontk.AudioUtils.resolve_ffmpeg", return_value=None):
+            with patch("qtpy.QtWidgets.QMessageBox.warning"):
+                result = self.slots._prepare_selected_paths(
+                    ["/a/clip.wav", "/a/track.mp3"]
+                )
+        self.assertEqual(result, ["/a/clip.wav"])
+
+    def test_auto_convert_disabled_skips_convertible_silently(self):
+        """With Auto Convert off, convertible files are silently dropped."""
+        self._set_auto_convert(False)
+        result = self.slots._prepare_selected_paths(["/a/clip.wav", "/a/track.mp3"])
+        self.assertEqual(result, ["/a/clip.wav"])
+
+    def test_auto_convert_disabled_no_dialog_shown(self):
+        """With Auto Convert off, no QMessageBox prompt should appear."""
+        self._set_auto_convert(False)
+        with patch("qtpy.QtWidgets.QMessageBox.question") as mock_q:
+            self.slots._prepare_selected_paths(["/a/clip.wav", "/a/track.ogg"])
+            mock_q.assert_not_called()
+
+    def test_auto_convert_enabled_no_dialog_shown(self):
+        """With Auto Convert on, no QMessageBox.question prompt should appear."""
+        self._set_auto_convert(True)
+        with patch(
+            "pythontk.AudioUtils.resolve_ffmpeg", return_value="/usr/bin/ffmpeg"
+        ):
+            with patch("qtpy.QtWidgets.QMessageBox.question") as mock_q:
+                self.slots._prepare_selected_paths(["/a/clip.wav", "/a/track.mp3"])
+                mock_q.assert_not_called()
+
+    def test_only_playable_files_returns_all(self):
+        """When all files are playable, no conversion logic runs."""
+        self._set_auto_convert(True)
+        result = self.slots._prepare_selected_paths(["/a/clip.wav", "/a/other.aif"])
+        self.assertEqual(result, ["/a/clip.wav", "/a/other.aif"])
+
+    def test_unsupported_formats_always_skipped(self):
+        """Files with unknown extensions are always dropped."""
+        self._set_auto_convert(True)
+        with patch("qtpy.QtWidgets.QMessageBox.warning"):
+            with patch(
+                "pythontk.AudioUtils.resolve_ffmpeg", return_value="/usr/bin/ffmpeg"
+            ):
+                result = self.slots._prepare_selected_paths(
+                    ["/a/clip.wav", "/a/data.xyz"]
+                )
+        self.assertEqual(result, ["/a/clip.wav"])
+
+    def test_mixed_playable_convertible_unsupported(self):
+        """Playable + convertible + unsupported: only playable + convertible returned."""
+        self._set_auto_convert(True)
+        with patch("qtpy.QtWidgets.QMessageBox.warning"):
+            with patch(
+                "pythontk.AudioUtils.resolve_ffmpeg", return_value="/usr/bin/ffmpeg"
+            ):
+                result = self.slots._prepare_selected_paths(
+                    ["/a/clip.wav", "/a/track.mp3", "/a/bad.xyz"]
+                )
+        self.assertIn("/a/clip.wav", result)
+        self.assertIn("/a/track.mp3", result)
+        self.assertNotIn("/a/bad.xyz", result)
+
+
+# ===========================================================================
 # Replace Selected Track (b005)
 # ===========================================================================
 
@@ -1668,6 +2001,266 @@ class TestReplaceSelectedTrack(MayaTkTestCase):
 
 
 # ===========================================================================
+# Start Anchor None Key
+# ===========================================================================
+
+
+class TestEnsureStartAnchor(MayaTkTestCase):
+    """Verify _ensure_start_anchor keys a None value at frame 0 when the
+    first audio event is keyed on an object.
+
+    Bug: Without an anchor key, Maya's stepped tangent holds the first
+    event value backward to frame 0.  A "tie keyframe" script evaluating
+    at frame 0 would then bind the event value, triggering unwanted
+    audio at the animation clip start.
+    Fixed: 2026-03-04
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        loc_name = cmds.spaceLocator(name="anchorCarrier")[0]
+        self.loc = pm.PyNode(loc_name)
+        EventTriggers.create([self.loc], events=["Footstep", "Jump"], category="audio")
+        self.slots._current_target = self.loc
+        self.slots._audio_files = {
+            "footstep": "/audio/Footstep.wav",
+            "jump": "/audio/Jump.wav",
+        }
+
+    def _get_key_at_frame(self, frame):
+        """Return the keyed enum index at the given frame, or None."""
+        trigger_attr, _ = EventTriggers.attr_names("audio")
+        attr_path = f"{self.loc.name()}.{trigger_attr}"
+        vals = cmds.keyframe(
+            attr_path, query=True, time=(frame, frame), valueChange=True
+        )
+        if vals:
+            return int(round(vals[0]))
+        return None
+
+    def _has_any_keys(self):
+        """Return True if the trigger attr has any keyframes."""
+        trigger_attr, _ = EventTriggers.attr_names("audio")
+        attr_path = f"{self.loc.name()}.{trigger_attr}"
+        return bool(cmds.keyframe(attr_path, query=True))
+
+    def test_anchor_keyed_at_frame_0_for_first_event(self):
+        """When no keyframes exist, anchors None at frame 0."""
+        self.assertFalse(self._has_any_keys())
+        self.slots._ensure_start_anchor(self.loc, event_frame=10)
+        val = self._get_key_at_frame(0)
+        none_idx = EventTriggers.event_index(self.loc, "None", category="audio")
+        self.assertEqual(val, none_idx, "None key should be anchored at frame 0.")
+
+    def test_noop_when_keys_already_exist(self):
+        """If keyframes already exist, no additional anchor is added."""
+        EventTriggers.set_key(
+            self.loc, "Footstep", time=10, auto_clear=False, category="audio"
+        )
+        key_count_before = len(
+            cmds.keyframe(f"{self.loc.name()}.audio_trigger", query=True)
+        )
+        self.slots._ensure_start_anchor(self.loc, event_frame=20)
+        key_count_after = len(
+            cmds.keyframe(f"{self.loc.name()}.audio_trigger", query=True)
+        )
+        self.assertEqual(
+            key_count_before,
+            key_count_after,
+            "No new key should be added when keys already exist.",
+        )
+
+    def test_anchor_at_frame_0_when_event_at_frame_1(self):
+        """Event at frame 1 should still anchor None at frame 0."""
+        self.slots._ensure_start_anchor(self.loc, event_frame=1)
+        val = self._get_key_at_frame(0)
+        none_idx = EventTriggers.event_index(self.loc, "None", category="audio")
+        self.assertEqual(val, none_idx)
+
+    def test_anchor_at_negative_one_when_event_at_frame_0(self):
+        """When the event is at frame 0, anchor should be placed at frame -1.
+
+        Bug: Previously the code clamped to max(event_frame - 1, 0) which
+        produced anchor_frame == 0 == event_frame, causing a silent no-op.
+        Fixed: 2026-03-05 — removed the max(0) clamp so frame -1 is used.
+        """
+        self.slots._ensure_start_anchor(self.loc, event_frame=0)
+        val = self._get_key_at_frame(-1)
+        none_idx = EventTriggers.event_index(self.loc, "None", category="audio")
+        self.assertEqual(
+            val,
+            none_idx,
+            "None key should be anchored at frame -1 when event is at frame 0.",
+        )
+
+    def test_idempotent_multiple_calls(self):
+        """Calling _ensure_start_anchor multiple times should not add extra keys."""
+        self.slots._ensure_start_anchor(self.loc, event_frame=10)
+        keys_after_first = cmds.keyframe(f"{self.loc.name()}.audio_trigger", query=True)
+        self.slots._ensure_start_anchor(self.loc, event_frame=20)
+        keys_after_second = cmds.keyframe(
+            f"{self.loc.name()}.audio_trigger", query=True
+        )
+        self.assertEqual(
+            len(keys_after_first),
+            len(keys_after_second),
+            "Second call should be a no-op (keys already exist).",
+        )
+
+
+# ===========================================================================
+# Realign None End-Keys After Track Swap
+# ===========================================================================
+
+
+class TestRealignNoneEndKeys(MayaTkTestCase):
+    """Verify _realign_none_end_keys relocates stale None end-keys
+    after an audio track is swapped to a file with a different duration.
+
+    Bug: When b005 (Replace) or _browse_audio_files (Add) swapped an
+    audio file, previously-keyed None end-markers stayed at the old
+    clip's end frame, causing premature cutoff or silent gaps.
+    Fixed: 2026-03-03
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        loc_name = cmds.spaceLocator(name="realignCarrier")[0]
+        self.loc = pm.PyNode(loc_name)
+        EventTriggers.create([self.loc], events=["ClipA", "ClipB"], category="audio")
+        self.slots._current_target = self.loc
+        self.slots._audio_files = {
+            "clipa": "/audio/ClipA.wav",
+            "clipb": "/audio/ClipB.wav",
+        }
+        self.slots._save_file_map(self.loc)
+
+    def _key_timeline(self, entries):
+        """Key a sequence of (frame, label) pairs on self.loc."""
+        for frame, label in entries:
+            EventTriggers.set_key(
+                self.loc,
+                event=label,
+                time=frame,
+                auto_clear=False,
+                category="audio",
+            )
+
+    def _get_none_key_times(self):
+        """Return sorted list of frames where a None key exists."""
+        trigger_attr, _ = EventTriggers.attr_names("audio")
+        none_idx = EventTriggers.event_index(self.loc, "None", category="audio")
+        attr_path = f"{self.loc.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+        result = []
+        for t in sorted(float(k) for k in key_times):
+            vals = cmds.keyframe(attr_path, query=True, time=(t, t), valueChange=True)
+            if vals and int(round(vals[0])) == none_idx:
+                result.append(int(t))
+        return result
+
+    def test_none_key_moves_to_new_duration(self):
+        """A None end-key at the old clip's end should move to the new
+        clip's end frame after realignment.
+
+        Setup: ClipA keyed at frame 10, None at frame 34 (24-frame clip).
+        Swap ClipA to a 48-frame clip -> None should move to frame 58.
+        """
+        self._key_timeline([(10, "ClipA"), (34, "None")])
+
+        # Simulate a swap: update file path and mock new duration.
+        self.slots._audio_files["clipa"] = "/audio/ClipA_long.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=48.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [58], "None key should be at frame 58.")
+
+    def test_clamps_before_next_event(self):
+        """If the new clip is longer than the gap to the next event,
+        the None key should be clamped to the next event's start frame.
+
+        Setup: ClipA at 10, None at 34, ClipB at 40.
+        Swap ClipA to a 60-frame clip -> None should clamp to frame 40.
+        """
+        self._key_timeline([(10, "ClipA"), (34, "None"), (40, "ClipB")])
+
+        self.slots._audio_files["clipa"] = "/audio/ClipA_verylong.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=60.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [40], "None key should be clamped to frame 40.")
+
+    def test_no_none_key_is_noop(self):
+        """When no None end-key exists (Auto End None was off), the method
+        should not add one — it only relocates existing None keys.
+        """
+        self._key_timeline([(10, "ClipA")])  # No None key placed.
+
+        self.slots._audio_files["clipa"] = "/audio/ClipA_long.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=48.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [], "No None key should be created.")
+
+    def test_already_correct_is_noop(self):
+        """When the None key is already at the correct frame, no keyframe
+        edits should occur (idempotent).
+        """
+        self._key_timeline([(10, "ClipA"), (58, "None")])
+
+        self.slots._audio_files["clipa"] = "/audio/ClipA.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=48.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [58], "None key should remain at frame 58.")
+
+    def test_multiple_occurrences_all_realigned(self):
+        """If the same event is keyed at multiple frames, each occurrence's
+        None end-key should be relocated independently.
+
+        Setup: ClipA at 10 (None at 34), ClipA at 100 (None at 124).
+        Swap to 48-frame clip -> None keys at 58 and 148.
+        """
+        self._key_timeline(
+            [
+                (10, "ClipA"),
+                (34, "None"),
+                (100, "ClipA"),
+                (124, "None"),
+            ]
+        )
+
+        self.slots._audio_files["clipa"] = "/audio/ClipA_long.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=48.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [58, 148], "Both None keys should be relocated.")
+
+    def test_shorter_clip_moves_none_earlier(self):
+        """Swapping to a shorter clip should move the None key to an
+        earlier frame.
+
+        Setup: ClipA at 10, None at 58 (48-frame clip).
+        Swap to 12-frame clip -> None should move to frame 22.
+        """
+        self._key_timeline([(10, "ClipA"), (58, "None")])
+
+        self.slots._audio_files["clipa"] = "/audio/ClipA_short.wav"
+        with patch.object(self.slots, "_get_clip_length_frames", return_value=12.0):
+            self.slots._realign_none_end_keys(self.loc, "ClipA")
+
+        none_times = self._get_none_key_times()
+        self.assertEqual(none_times, [22], "None key should move to frame 22.")
+
+
+# ===========================================================================
 # Key All + Stagger Tests
 # ===========================================================================
 
@@ -1844,6 +2437,407 @@ class TestKeyAllEvents(MayaTkTestCase):
 
         footer_text = self.slots.ui.footer.setText.call_args[0][0]
         self.assertIn("end-None", footer_text)
+
+
+# ===========================================================================
+# Dirty tracking / fingerprint-based sync
+# ===========================================================================
+
+
+class TestDirtyTracking(MayaTkTestCase):
+    """Verify fingerprint-based dirty tracking skips redundant syncs.
+
+    The ``_compute_sync_fingerprint`` / ``_sync_if_dirty`` mechanism lets
+    tb000 and the deferred attr-changed callback avoid rebuilding the
+    composite when the keyed-event state has not changed since the last
+    sync.
+    Fixed: 2026-06-23
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.loc = pm.PyNode(cmds.spaceLocator(name="fpLoc")[0])
+        EventTriggers.create([self.loc], events=["Walk", "Run"], category="audio")
+        self.slots._current_target = self.loc
+        self.slots._audio_files = {
+            "walk": "/audio/Walk.wav",
+            "run": "/audio/Run.wav",
+        }
+
+    # -- _compute_sync_fingerprint -------------------------------------------
+
+    def test_fingerprint_empty_when_no_keys(self):
+        """No keyframes → key portion of fingerprint is 'empty'."""
+        fp = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertTrue(fp.startswith("empty|"))
+
+    def test_fingerprint_changes_after_keying(self):
+        """Keying an event should produce a different fingerprint."""
+        fp_before = self.slots._compute_sync_fingerprint(self.loc)
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        fp_after = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertNotEqual(fp_before, fp_after)
+
+    def test_fingerprint_stable_without_changes(self):
+        """Same keyed state should always produce the same fingerprint."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        fp1 = self.slots._compute_sync_fingerprint(self.loc)
+        fp2 = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertEqual(fp1, fp2)
+
+    def test_fingerprint_differs_for_different_frames(self):
+        """Keying the same event at a different frame → different fingerprint."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        fp_10 = self.slots._compute_sync_fingerprint(self.loc)
+        EventTriggers.clear_key(self.loc, time=10, category="audio")
+        EventTriggers.set_key(
+            self.loc, "Walk", time=20, auto_clear=False, category="audio"
+        )
+        fp_20 = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertNotEqual(fp_10, fp_20)
+
+    # -- _sync_if_dirty -------------------------------------------------------
+
+    def test_sync_if_dirty_syncs_when_no_fingerprint(self):
+        """First sync should always proceed (no stored fingerprint)."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        with patch.object(
+            self.slots, "_sync_and_refresh_target", return_value=1
+        ) as mock_sync:
+            result = self.slots._sync_if_dirty(self.loc)
+            mock_sync.assert_called_once_with(self.loc)
+            self.assertEqual(result, 1)
+
+    def test_sync_if_dirty_skips_when_up_to_date(self):
+        """When fingerprint matches stored value, sync should be skipped."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        # Simulate a prior sync by storing the current fingerprint
+        self.slots._sync_fingerprints[self.loc.name()] = (
+            self.slots._compute_sync_fingerprint(self.loc)
+        )
+        with patch.object(
+            self.slots, "_sync_and_refresh_target", return_value=1
+        ) as mock_sync:
+            result = self.slots._sync_if_dirty(self.loc)
+            mock_sync.assert_not_called()
+            self.assertEqual(result, -1)
+
+    def test_sync_if_dirty_syncs_after_new_key(self):
+        """Adding a new key should invalidate the fingerprint."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        # Store fingerprint from prior sync
+        self.slots._sync_fingerprints[self.loc.name()] = (
+            self.slots._compute_sync_fingerprint(self.loc)
+        )
+        # Now add a new key — fingerprint should differ
+        EventTriggers.set_key(
+            self.loc, "Run", time=30, auto_clear=False, category="audio"
+        )
+        with patch.object(
+            self.slots, "_sync_and_refresh_target", return_value=2
+        ) as mock_sync:
+            result = self.slots._sync_if_dirty(self.loc)
+            mock_sync.assert_called_once_with(self.loc)
+            self.assertEqual(result, 2)
+
+    # -- _sync_and_refresh_target stores fingerprint -------------------------
+
+    def test_sync_stores_fingerprint(self):
+        """After a successful sync, the fingerprint should be cached."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        self.assertNotIn(self.loc.name(), self.slots._sync_fingerprints)
+
+        with patch.object(AudioEvents, "sync", return_value={"fpLoc": ["Walk_10"]}):
+            self.slots._sync_and_refresh_target(self.loc)
+
+        self.assertIn(self.loc.name(), self.slots._sync_fingerprints)
+        # Stored fingerprint should match the current state
+        expected_fp = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertEqual(self.slots._sync_fingerprints[self.loc.name()], expected_fp)
+
+    def test_sync_activates_target_composite(self):
+        """_sync_and_refresh_target should activate the synced target's composite."""
+        with (
+            patch.object(AudioEvents, "sync", return_value={"fpLoc": ["Walk_10"]}),
+            patch.object(self.slots, "_activate_composite_for") as mock_activate,
+        ):
+            self.slots._sync_and_refresh_target(self.loc)
+            mock_activate.assert_called_once_with(self.loc)
+
+    # -- tb000 smart sync ----------------------------------------------------
+
+    def test_tb000_reports_up_to_date(self):
+        """tb000 should report 'up to date' when fingerprint matches."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        # Store matching fingerprint
+        self.slots._sync_fingerprints[self.loc.name()] = (
+            self.slots._compute_sync_fingerprint(self.loc)
+        )
+
+        with patch.object(
+            self.slots,
+            "_event_names_from_files",
+            return_value=["Walk", "Run"],
+        ):
+            self.slots.tb000()
+
+        footer = self.slots.ui.footer.setText.call_args[0][0]
+        self.assertIn("up to date", footer.lower())
+
+    def test_tb000_syncs_when_dirty(self):
+        """tb000 should sync and report clip count when state is dirty."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        # No stored fingerprint → dirty
+        with (
+            patch.object(
+                self.slots,
+                "_event_names_from_files",
+                return_value=["Walk", "Run"],
+            ),
+            patch.object(
+                self.slots,
+                "_sync_and_refresh_target",
+                return_value=1,
+            ),
+        ):
+            self.slots.tb000()
+
+        footer = self.slots.ui.footer.setText.call_args[0][0]
+        self.assertIn("Synced", footer)
+        self.assertIn("1", footer)
+
+    # -- _schedule_deferred_sync coalescing -----------------------------------
+
+    def test_schedule_deferred_sync_coalesces(self):
+        """Rapid calls should result in only one evalDeferred."""
+        with patch("maya.cmds.evalDeferred") as mock_defer:
+            self.slots._schedule_deferred_sync()
+            self.slots._schedule_deferred_sync()
+            self.slots._schedule_deferred_sync()
+            # Only the first call goes through
+            mock_defer.assert_called_once()
+            self.assertTrue(self.slots._deferred_sync_pending)
+
+    def test_run_deferred_sync_clears_pending_flag(self):
+        """After _run_deferred_sync, the pending flag should be cleared."""
+        self.slots._deferred_sync_pending = True
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        with patch.object(self.slots, "_sync_and_refresh_target", return_value=1):
+            self.slots._run_deferred_sync()
+        self.assertFalse(self.slots._deferred_sync_pending)
+
+    # -- Scene open clears fingerprints --------------------------------------
+
+    def test_scene_open_clears_fingerprints(self):
+        """_on_scene_opened should clear the fingerprint cache."""
+        self.slots._sync_fingerprints["someObj"] = "old_fp"
+        self.slots._deferred_sync_pending = True
+
+        with patch("maya.cmds.scriptJob", return_value=999):
+            self.slots._on_scene_opened()
+
+        self.assertEqual(self.slots._sync_fingerprints, {})
+        self.assertFalse(self.slots._deferred_sync_pending)
+
+    # -- Audio-file changes invalidate fingerprint ---------------------------
+
+    def test_fingerprint_changes_after_track_replace(self):
+        """Replacing a track (same stem, different path) should dirty the fingerprint."""
+        EventTriggers.set_key(
+            self.loc, "Walk", time=10, auto_clear=False, category="audio"
+        )
+        fp_before = self.slots._compute_sync_fingerprint(self.loc)
+        # Replace the path for the "walk" stem
+        self.slots._audio_files["walk"] = "/audio/Walk_v2.wav"
+        fp_after = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertNotEqual(fp_before, fp_after)
+
+    def test_fingerprint_changes_after_adding_track(self):
+        """Adding a new track should dirty the fingerprint."""
+        fp_before = self.slots._compute_sync_fingerprint(self.loc)
+        self.slots._audio_files["jump"] = "/audio/Jump.wav"
+        fp_after = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertNotEqual(fp_before, fp_after)
+
+    def test_fingerprint_changes_after_removing_track(self):
+        """Removing a track should dirty the fingerprint."""
+        fp_before = self.slots._compute_sync_fingerprint(self.loc)
+        del self.slots._audio_files["run"]
+        fp_after = self.slots._compute_sync_fingerprint(self.loc)
+        self.assertNotEqual(fp_before, fp_after)
+
+    # -- _run_deferred_sync edge cases --------------------------------------
+
+    def test_run_deferred_sync_noop_when_target_deleted(self):
+        """_run_deferred_sync should silently no-op if target was deleted."""
+        self.slots._deferred_sync_pending = True
+        pm.delete(self.loc)
+        # Should not raise
+        self.slots._run_deferred_sync()
+        self.assertFalse(self.slots._deferred_sync_pending)
+
+    def test_run_deferred_sync_noop_when_no_audio_files(self):
+        """_run_deferred_sync should no-op if _audio_files is empty."""
+        self.slots._deferred_sync_pending = True
+        self.slots._audio_files = {}
+        with patch.object(self.slots, "_sync_and_refresh_target") as mock_sync:
+            self.slots._run_deferred_sync()
+            mock_sync.assert_not_called()
+        self.assertFalse(self.slots._deferred_sync_pending)
+
+    # -- _export_composite uses _sync_if_dirty -------------------------------
+
+    def test_export_uses_sync_if_dirty(self):
+        """_export_composite should use _sync_if_dirty, not unconditional sync."""
+        self.slots._current_target = self.loc
+        self.slots._audio_files = {"walk": "/audio/Walk.wav"}
+
+        with (
+            patch.object(self.slots, "_sync_if_dirty", return_value=-1) as mock_dirty,
+            patch.object(AudioEvents, "list_nodes", return_value=[]),
+        ):
+            self.slots._export_composite()
+            mock_dirty.assert_called_once_with(self.loc)
+
+    # -- _schedule_deferred_sync skips during combo writeback ----------------
+
+    def test_schedule_deferred_sync_skips_during_combo_writeback(self):
+        """_schedule_deferred_sync should be suppressed while _syncing_combo is True."""
+        self.slots._syncing_combo = True
+        with patch("maya.cmds.evalDeferred") as mock_defer:
+            self.slots._schedule_deferred_sync()
+            mock_defer.assert_not_called()
+        self.assertFalse(self.slots._deferred_sync_pending)
+
+    # -- _find_preview_node --------------------------------------------------
+
+    def test_find_preview_node_returns_matching_stem(self):
+        """_find_preview_node should find a preview node by its stamped stem."""
+        slots = _make_slots_instance()
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="walk_preview", skipSelect=True)
+        AudioEvents._stamp_event_attrs(node, "walk", "preview")
+        cmds.sets(node, addElement=audio_set.name())
+
+        result = slots._find_preview_node("walk")
+        self.assertEqual(result, node)
+
+    def test_find_preview_node_returns_none_for_synced(self):
+        """_find_preview_node should NOT return synced nodes, only preview."""
+        slots = _make_slots_instance()
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="walk_10", skipSelect=True)
+        AudioEvents._stamp_event_attrs(node, "walk", "synced")
+        cmds.sets(node, addElement=audio_set.name())
+
+        result = slots._find_preview_node("walk")
+        self.assertIsNone(result)
+
+    def test_find_preview_node_returns_none_when_missing(self):
+        """_find_preview_node should return None when no match exists."""
+        slots = _make_slots_instance()
+        AudioEvents._get_or_create_set("audio", clear=True)
+        result = slots._find_preview_node("nonexistent")
+        self.assertIsNone(result)
+
+    # -- _activate_composite_for single-pass ---------------------------------
+
+    def test_activate_composite_prefers_per_object(self):
+        """_activate_composite_for should prefer {objName}_composite over legacy."""
+        slots = _make_slots_instance()
+        loc = pm.PyNode(cmds.spaceLocator(name="compTestObj")[0])
+        slots._current_target = loc
+
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        legacy = cmds.createNode("audio", name="audio_composite", skipSelect=True)
+        cmds.sets(legacy, addElement=audio_set.name())
+        per_obj = cmds.createNode(
+            "audio", name="compTestObj_composite", skipSelect=True
+        )
+        cmds.sets(per_obj, addElement=audio_set.name())
+
+        with patch.object(AudioEvents, "set_active") as mock_active:
+            slots._activate_composite_for(loc)
+            mock_active.assert_called_once_with("compTestObj_composite")
+
+    def test_activate_composite_falls_back_to_legacy(self):
+        """_activate_composite_for should fall back to {cat}_composite."""
+        slots = _make_slots_instance()
+        loc = pm.PyNode(cmds.spaceLocator(name="fallbackObj")[0])
+        slots._current_target = loc
+
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        legacy = cmds.createNode("audio", name="audio_composite", skipSelect=True)
+        cmds.sets(legacy, addElement=audio_set.name())
+
+        with patch.object(AudioEvents, "set_active") as mock_active:
+            slots._activate_composite_for(loc)
+            mock_active.assert_called_once_with("audio_composite")
+
+    # -- Export trim failure message ------------------------------------------
+
+    def test_export_trim_failure_shows_in_footer(self):
+        """When trim_silence fails, the footer should indicate the failure."""
+        import tempfile
+
+        slots = _make_slots_instance()
+        loc = pm.PyNode(cmds.spaceLocator(name="trimTestObj")[0])
+        slots._current_target = loc
+        slots._audio_files = {"walk": "/audio/Walk.wav"}
+
+        # Create a composite node so the export path is found
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        comp = cmds.createNode("audio", name="trimTestObj_composite", skipSelect=True)
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.write(b"\x00" * 100)
+        tmp.close()
+        try:
+            cmds.setAttr(f"{comp}.filename", tmp.name, type="string")
+            cmds.sets(comp, addElement=audio_set.name())
+
+            # Mock trim to fail, save dialog to succeed, chk_trim_silence checked
+            chk = MagicMock()
+            chk.isChecked.return_value = True
+            slots.ui.header.menu.chk_trim_silence = chk
+            slots.sb.save_file_dialog.return_value = tmp.name
+
+            with (
+                patch.object(slots, "_sync_if_dirty", return_value=-1),
+                patch("shutil.copy2"),
+                patch.object(
+                    ptk.AudioUtils, "trim_silence", side_effect=RuntimeError("fail")
+                ),
+            ):
+                slots._export_composite()
+
+            footer = slots.ui.footer.setText.call_args[0][0]
+            self.assertIn("trim failed", footer)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

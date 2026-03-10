@@ -149,26 +149,36 @@ class AudioEvents(ptk.LoggingMixin):
         while os.path.basename(output_dir) in _CACHE_DIRS:
             output_dir = os.path.dirname(output_dir)
 
+        # Build the set of object names being synced so we only
+        # clean up composites and synced nodes belonging to *these*
+        # objects, leaving other objects' composites intact.
+        obj_names = {str(pm.PyNode(o).name()) for o in objects}
+        obj_composite_suffixes = {f"{n}_composite" for n in obj_names}
+
         # 2. Get or create the set — remove only previously-synced
         #    nodes (those with a digit suffix like ``label_42``) and
-        #    old composite nodes.  Preview nodes from ``load_tracks``
-        #    (plain stems at offset 0) are preserved.
+        #    composite nodes owned by the objects being synced.
+        #    Preview nodes from ``load_tracks`` (plain stems at offset 0)
+        #    and composites belonging to *other* objects are preserved.
         audio_set = cls._get_or_create_set(cat, clear=False)
         for member in list(audio_set.members()):
             name = str(member)
             if name.endswith("_composite"):
-                # Clean up old composite WAV from disk
-                fpath = cmds.getAttr(f"{name}.filename")
-                if (
-                    fpath
-                    and os.path.isfile(fpath)
-                    and "_composite_" in os.path.basename(fpath)
-                ):
-                    try:
-                        os.remove(fpath)
-                    except OSError:
-                        pass
-                pm.delete(member)
+                # Only remove composites belonging to the objects being synced
+                # (or the legacy global composite ``{cat}_composite``).
+                if name in obj_composite_suffixes or name == f"{cat}_composite":
+                    # Clean up old composite WAV from disk
+                    fpath = cmds.getAttr(f"{name}.filename")
+                    if (
+                        fpath
+                        and os.path.isfile(fpath)
+                        and "_composite_" in os.path.basename(fpath)
+                    ):
+                        try:
+                            os.remove(fpath)
+                        except OSError:
+                            pass
+                    pm.delete(member)
             else:
                 # Check stamped type attr first (new-style)
                 if cmds.attributeQuery(cls.NODE_TYPE_ATTR, node=name, exists=True):
@@ -189,11 +199,15 @@ class AudioEvents(ptk.LoggingMixin):
         # 3. Import individual audio nodes at keyed frames
         results: Dict[str, List[str]] = {}
         all_events: List[tuple] = []  # (frame, label) for composite
+        # Cache keyed events per object — avoids querying the anim curve
+        # twice (once for import, once for composite building).
+        keyed_cache: Dict[str, list] = {}
 
         for obj in pm.ls(objects):
             keyed = EventTriggers.iter_keyed_events(obj, category=category)
             if not keyed:
                 continue
+            keyed_cache[obj.name()] = keyed
 
             obj_nodes: List[str] = []
             prev_label = None
@@ -234,38 +248,51 @@ class AudioEvents(ptk.LoggingMixin):
         if total:
             cls.logger.info(f"Imported {total} audio clip(s) into '{audio_set.name()}'")
 
-            # 4. Build composite WAV so all clips play during scrub
+            # 4. Build per-object composite WAVs so each object's
+            #    audio plays independently during scrub.  Each object
+            #    gets its own ``{objName}_composite`` node and
+            #    ``_composite_{objName}.wav`` cache file.
             fps = mel.eval("currentTimeUnitToFPS")
             cache_dir = os.path.join(output_dir, "_maya_audio_cache").replace("\\", "/")
             os.makedirs(cache_dir, exist_ok=True)
-            comp_path = ptk.AudioUtils.build_composite_wav(
-                events=all_events,
-                audio_map=audio_map,
-                fps=fps,
-                output_path=os.path.join(cache_dir, f"_composite_{cat}.wav"),
-                logger=cls.logger,
-            )
-            if comp_path:
-                comp_node = cmds.createNode(
-                    "audio", name=f"{cat}_composite", skipSelect=True
+
+            for obj in pm.ls(objects):
+                obj_name = obj.name()
+                if obj_name not in results:
+                    continue  # This object had no keyed events
+
+                # Reuse cached keyed events for this object
+                obj_keyed = keyed_cache.get(obj_name, [])
+                obj_events = []
+                prev_label = None
+                for t, label in obj_keyed:
+                    if label == prev_label:
+                        prev_label = label
+                        continue
+                    prev_label = label
+                    if audio_map.get(label.lower()):
+                        obj_events.append((t, label))
+
+                if not obj_events:
+                    continue
+
+                comp_path = ptk.AudioUtils.build_composite_wav(
+                    events=obj_events,
+                    audio_map=audio_map,
+                    fps=fps,
+                    output_path=os.path.join(cache_dir, f"_composite_{obj_name}.wav"),
+                    logger=cls.logger,
                 )
-                cmds.setAttr(f"{comp_node}.filename", comp_path, type="string")
-                cmds.setAttr(f"{comp_node}.offset", 0)
-                cls._stamp_event_attrs(comp_node, "", "composite")
-                cmds.sets(comp_node, addElement=audio_set.name())
-                cls.set_active(comp_node)
-                cls.logger.debug(
-                    f"Composite '{comp_node}' set as active timeline sound"
-                )
-            else:
-                # Composite unavailable (e.g. MP3 sources) — activate
-                # the first synced clip so the user at least gets
-                # waveform display and playback for that clip.
-                first = list(results.values())[0][0]
-                cls.set_active(first)
-                cls.logger.debug(
-                    f"No composite — '{first}' set as active timeline sound"
-                )
+                if comp_path:
+                    comp_node_name = f"{obj_name}_composite"
+                    comp_node = cmds.createNode(
+                        "audio", name=comp_node_name, skipSelect=True
+                    )
+                    cmds.setAttr(f"{comp_node}.filename", comp_path, type="string")
+                    cmds.setAttr(f"{comp_node}.offset", 0)
+                    cls._stamp_event_attrs(comp_node, "", "composite")
+                    cmds.sets(comp_node, addElement=audio_set.name())
+                    cls.logger.debug(f"Composite '{comp_node}' built for {obj_name}")
 
         return results
 

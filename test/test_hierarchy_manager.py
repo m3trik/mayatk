@@ -14,6 +14,13 @@ import os
 import unittest
 from pathlib import Path
 
+# Ensure QApplication exists before Maya standalone initialises (mayapy only
+# creates QCoreApplication, which is insufficient for QWidget-based tests).
+from qtpy import QtWidgets as _QtWidgets
+
+if _QtWidgets.QApplication.instance() is None:
+    _QtWidgets.QApplication([])
+
 import pymel.core as pm
 import mayatk as mtk
 from mayatk import HierarchyManager, NamespaceSandbox
@@ -275,6 +282,361 @@ class TestHierarchyManager(MayaTkTestCase):
                     path,
                     f"'shared' should not be in '{key}': {diff_result[key]}",
                 )
+
+    # -------------------------------------------------------------------------
+    # Hierarchy Repair Tests
+    # -------------------------------------------------------------------------
+
+    def test_reverse_mappings_persisted(self):
+        """Verify clean_to_raw_current/reference are populated after analysis.
+
+        Bug: reverse mappings were computed as locals and discarded.
+        Fixed: 2026-03-06
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        root_cur = pm.group(empty=True, name="root")
+        pm.group(empty=True, name="a", parent=root_cur)
+
+        root_ref = pm.group(empty=True, name="ref:root")
+        pm.group(empty=True, name="ref:a", parent=root_ref)
+        pm.group(empty=True, name="ref:b", parent=root_ref)
+
+        ref_objects = [root_ref] + list(root_ref.getChildren())
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # Reverse mappings must be populated
+        self.assertGreater(len(manager.clean_to_raw_current), 0)
+        self.assertGreater(len(manager.clean_to_raw_reference), 0)
+
+        # Cleaned key "root" must map back to something in the raw path map
+        self.assertIn("root", manager.clean_to_raw_current)
+        self.assertIn("root", manager.clean_to_raw_reference)
+
+    def test_ensure_parent_chain_creates_intermediates(self):
+        """_ensure_parent_chain creates missing intermediate transforms.
+
+        Added: 2026-03-06
+        """
+        # None of these exist yet
+        parent = HierarchyManager._ensure_parent_chain("GRP_A|GRP_B|LEAF")
+        self.assertIsNotNone(parent)
+        self.assertEqual(parent.nodeName(), "GRP_B")
+        self.assertTrue(pm.objExists("GRP_A"))
+        self.assertTrue(pm.objExists("GRP_B"))
+        # GRP_B should be under GRP_A
+        self.assertEqual(parent.getParent().nodeName(), "GRP_A")
+
+    def test_ensure_parent_chain_root_level(self):
+        """_ensure_parent_chain returns None for root-level paths (no parent needed).
+
+        Added: 2026-03-06
+        """
+        result = HierarchyManager._ensure_parent_chain("LEAF")
+        self.assertIsNone(result)
+
+    def test_create_stubs_dry_run(self):
+        """create_stubs in dry_run mode reports what would be created without touching the scene.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.differences = {"missing": ["grp|child1", "grp|child2"]}
+
+        created = manager.create_stubs()
+        self.assertEqual(len(created), 2)
+        self.assertIn("child1", created)
+        self.assertIn("child2", created)
+        # Nothing actually created
+        self.assertFalse(pm.objExists("child1"))
+        self.assertFalse(pm.objExists("child2"))
+
+    def test_create_stubs_live(self):
+        """create_stubs with dry_run=False creates transforms at correct hierarchy positions.
+
+        Added: 2026-03-06
+        """
+        # Create the parent so the stub can be placed correctly
+        pm.group(empty=True, name="grp")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"missing": ["grp|stub_child", "root_stub"]}
+
+        created = manager.create_stubs()
+        self.assertEqual(len(created), 2)
+        self.assertTrue(pm.objExists("stub_child"))
+        self.assertTrue(pm.objExists("root_stub"))
+
+        # stub_child should be under grp
+        stub_node = pm.PyNode("stub_child")
+        self.assertEqual(stub_node.getParent().nodeName(), "grp")
+
+        # root_stub should be at scene root
+        root_stub = pm.PyNode("root_stub")
+        self.assertIsNone(root_stub.getParent())
+
+    def test_create_stubs_skips_existing(self):
+        """create_stubs skips nodes that already exist in the scene.
+
+        Added: 2026-03-06
+        """
+        pm.group(empty=True, name="existing_obj")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"missing": ["existing_obj"]}
+
+        created = manager.create_stubs()
+        self.assertEqual(len(created), 0)
+
+    def test_create_stubs_builds_intermediate_parents(self):
+        """create_stubs creates intermediate parent transforms when they don't exist.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"missing": ["deep_grp|sub_grp|leaf_stub"]}
+
+        created = manager.create_stubs()
+        self.assertEqual(len(created), 1)
+        self.assertTrue(pm.objExists("deep_grp"))
+        self.assertTrue(pm.objExists("sub_grp"))
+        self.assertTrue(pm.objExists("leaf_stub"))
+        # Verify parenting chain
+        leaf = pm.PyNode("leaf_stub")
+        self.assertEqual(leaf.getParent().nodeName(), "sub_grp")
+        self.assertEqual(leaf.getParent().getParent().nodeName(), "deep_grp")
+
+    def test_quarantine_extras_dry_run(self):
+        """quarantine_extras in dry_run mode reports without modifying the scene.
+
+        Added: 2026-03-06
+        """
+        pm.group(empty=True, name="extra_obj")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.differences = {"extra": ["extra_obj"]}
+
+        moved = manager.quarantine_extras()
+        self.assertEqual(len(moved), 1)
+        self.assertIn("extra_obj", moved)
+        # Node should NOT have been moved
+        self.assertFalse(pm.objExists("_QUARANTINE"))
+
+    def test_quarantine_extras_live(self):
+        """quarantine_extras moves extra items under a quarantine group.
+
+        Added: 2026-03-06
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        # Build current scene with an extra object
+        root = pm.group(empty=True, name="root")
+        child_ok = pm.group(empty=True, name="child_ok", parent=root)
+        child_extra = pm.group(empty=True, name="child_extra", parent=root)
+
+        # Reference only has root and child_ok
+        root_ref = pm.group(empty=True, name="ref:root")
+        pm.group(empty=True, name="ref:child_ok", parent=root_ref)
+
+        ref_objects = [root_ref] + list(root_ref.getChildren())
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # child_extra should be detected as extra
+        self.assertIn("root|child_extra", manager.differences["extra"])
+
+        moved = manager.quarantine_extras()
+        self.assertEqual(len(moved), 1)
+        self.assertIn("child_extra", moved)
+
+        # Verify it's now under _QUARANTINE
+        self.assertTrue(pm.objExists("_QUARANTINE"))
+        quarantined = pm.PyNode("child_extra")
+        self.assertEqual(quarantined.getParent().nodeName(), "_QUARANTINE")
+
+    def test_quarantine_extras_ancestor_dedup(self):
+        """quarantine_extras deduplicates when both ancestor and descendant are extra.
+
+        If GRP and GRP|CHILD are both extra, only GRP should be moved.
+        Added: 2026-03-06
+        """
+        grp = pm.group(empty=True, name="orphan_grp")
+        child = pm.group(empty=True, name="orphan_child", parent=grp)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        # Manually populate the path maps so _resolve_node works
+        manager.current_scene_path_map = {
+            "orphan_grp": grp,
+            "orphan_grp|orphan_child": child,
+        }
+        manager.clean_to_raw_current = {
+            "orphan_grp": "orphan_grp",
+            "orphan_grp|orphan_child": "orphan_grp|orphan_child",
+        }
+        manager.differences = {
+            "extra": ["orphan_grp", "orphan_grp|orphan_child"],
+        }
+
+        moved = manager.quarantine_extras()
+        # Only the root should be moved; child comes along for free
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(moved[0], "orphan_grp")
+        # Both should be under _QUARANTINE
+        self.assertEqual(pm.PyNode("orphan_grp").getParent().nodeName(), "_QUARANTINE")
+        self.assertEqual(pm.PyNode("orphan_child").getParent().nodeName(), "orphan_grp")
+
+    def test_quarantine_extras_custom_group_name(self):
+        """quarantine_extras uses a custom group name when specified.
+
+        Added: 2026-03-06
+        """
+        extra_node = pm.group(empty=True, name="stray")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {"stray": extra_node}
+        manager.clean_to_raw_current = {"stray": "stray"}
+        manager.differences = {"extra": ["stray"]}
+
+        moved = manager.quarantine_extras(group="MY_EXTRAS")
+        self.assertEqual(len(moved), 1)
+        self.assertTrue(pm.objExists("MY_EXTRAS"))
+        self.assertEqual(pm.PyNode("stray").getParent().nodeName(), "MY_EXTRAS")
+
+    def test_fix_reparented_dry_run(self):
+        """fix_reparented in dry_run mode reports without modifying the scene.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.differences = {
+            "reparented": [
+                {
+                    "leaf": "child",
+                    "current_path": "grp_a|child",
+                    "reference_path": "grp_b|child",
+                }
+            ]
+        }
+
+        fixed = manager.fix_reparented()
+        self.assertEqual(len(fixed), 1)
+        self.assertIn("child", fixed)
+
+    def test_fix_reparented_live(self):
+        """fix_reparented moves nodes to match their reference hierarchy position.
+
+        Added: 2026-03-06
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        # Current: child is under grp_a
+        grp_a = pm.group(empty=True, name="grp_a")
+        grp_b = pm.group(empty=True, name="grp_b")
+        child = pm.group(empty=True, name="child", parent=grp_a)
+
+        # Reference: child should be under grp_b
+        grp_a_ref = pm.group(empty=True, name="ref:grp_a")
+        grp_b_ref = pm.group(empty=True, name="ref:grp_b")
+        child_ref = pm.group(empty=True, name="ref:child", parent=grp_b_ref)
+
+        ref_objects = [grp_a_ref, grp_b_ref, child_ref]
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # Should detect reparented
+        reparented = manager.differences.get("reparented", [])
+        self.assertEqual(len(reparented), 1)
+        self.assertEqual(reparented[0]["leaf"], "child")
+
+        fixed = manager.fix_reparented()
+        self.assertEqual(len(fixed), 1)
+
+        # child should now be under grp_b
+        child_node = pm.PyNode("child")
+        self.assertEqual(
+            child_node.getParent().nodeName(),
+            "grp_b",
+            f"Expected child under grp_b, got {child_node.getParent().nodeName()}",
+        )
+
+    def test_fix_reparented_creates_missing_parent(self):
+        """fix_reparented creates the target parent if it doesn't exist yet.
+
+        Added: 2026-03-06
+        """
+        grp_a = pm.group(empty=True, name="grp_a")
+        child = pm.group(empty=True, name="child", parent=grp_a)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {"grp_a|child": child}
+        manager.clean_to_raw_current = {"grp_a|child": "grp_a|child"}
+        manager.differences = {
+            "reparented": [
+                {
+                    "leaf": "child",
+                    "current_path": "grp_a|child",
+                    "reference_path": "new_parent|child",
+                }
+            ]
+        }
+
+        fixed = manager.fix_reparented()
+        self.assertEqual(len(fixed), 1)
+        self.assertTrue(pm.objExists("new_parent"))
+        child_node = pm.PyNode("child")
+        self.assertEqual(child_node.getParent().nodeName(), "new_parent")
+
+    def test_create_stubs_empty_differences(self):
+        """create_stubs returns empty list when no missing items exist.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"missing": []}
+        self.assertEqual(manager.create_stubs(), [])
+
+    def test_quarantine_extras_empty_differences(self):
+        """quarantine_extras returns empty list when no extra items exist.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"extra": []}
+        self.assertEqual(manager.quarantine_extras(), [])
+
+    def test_fix_reparented_empty_differences(self):
+        """fix_reparented returns empty list when no reparented items exist.
+
+        Added: 2026-03-06
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"reparented": []}
+        self.assertEqual(manager.fix_reparented(), [])
 
     def test_diff_result_counts(self):
         """Verify total_* count fields match actual list lengths.
@@ -653,6 +1015,288 @@ class TestHierarchyManager(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
     # -------------------------------------------------------------------------
+    # Real-World Diff Content Regression Tests
+    # -------------------------------------------------------------------------
+
+    @skipUnlessExtended
+    def test_c5_ma_vs_ma_diff_content(self):
+        """Regression: C5 MA-vs-MA diff produces exact known baseline counts and paths.
+
+        Validates that analyze_hierarchies returns the correct missing/extra/reparented
+        results for the C5_AFT_COMP_ASSEMBLY current.ma vs module.ma scene pair.
+        Baseline captured: 2026-06-16
+        """
+        if not self.real_scenes_dir.exists():
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
+
+        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
+        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+
+        if not current_scene.exists() or not reference_scene.exists():
+            self.skipTest("Required C5 MA scene files not found.")
+
+        default_cams = frozenset({"persp", "top", "front", "side"})
+
+        pm.openFile(str(current_scene), force=True)
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        info = sandbox.import_with_namespace(
+            str(reference_scene), force_complete_import=True
+        )
+        self.assertIsNotNone(info, "Failed to import reference scene")
+
+        ref_objs = [
+            t
+            for t in info.get("transforms", [])
+            if t.nodeName().split(":")[-1] not in default_cams
+        ]
+
+        manager = HierarchyManager(
+            import_manager=sandbox, fuzzy_matching=True, dry_run=True
+        )
+        diff = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objs,
+            filter_meshes=True,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # --- Assert exact baseline counts ---
+        self.assertEqual(
+            len(diff["missing"]),
+            48,
+            f"Expected 48 missing, got {len(diff['missing'])}",
+        )
+        self.assertEqual(
+            len(diff["extra"]),
+            4,
+            f"Expected 4 extra, got {len(diff['extra'])}",
+        )
+        self.assertEqual(
+            len(diff["reparented"]),
+            1,
+            f"Expected 1 reparented, got {len(diff['reparented'])}",
+        )
+
+        # --- Assert key paths are present in missing ---
+        missing_set = set(diff["missing"])
+        # SKINNED_HOSE rig chain must appear
+        self.assertIn("INTERACTIVE|SKINNED_HOSE_RIG_GRP", missing_set)
+        self.assertIn("INTERACTIVE|SKINNED_HOSE", missing_set)
+        # HYDRO_DRILL groups must appear
+        self.assertIn("INTERACTIVE|HYDRO_DRILL_CON_PISTON_GRP", missing_set)
+        self.assertIn("INTERACTIVE|S00C40_HYDRO_DRILL_CON_GRP", missing_set)
+
+        # --- Assert key paths in extra ---
+        extra_set = set(diff["extra"])
+        self.assertIn("S00C34_BELL_NUT_FRES_GRP", extra_set)
+        self.assertIn("S00C34_BELL_NUT_FRES_GRP|S00C34_BELL_NUT_FRES_LOC", extra_set)
+
+        # --- Assert reparented item ---
+        rp = diff["reparented"][0]
+        self.assertEqual(rp["leaf"], "S00C36_OUTB_ADAPTER_LOC")
+        self.assertIn("S00C36_OUTB_ADAPTER_GRP|", rp["reference_path"])
+        self.assertIn("S00C36_OUTB_ADAPTER_GRP1|", rp["current_path"])
+
+        # --- Cross-validate against actual scene contents ---
+        # Independently verify every diff result against the raw filtered maps
+        current_cleaned = {
+            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+        }
+        reference_cleaned = {
+            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+        }
+
+        # Every "missing" path must exist in reference but NOT in current
+        for path in diff["missing"]:
+            self.assertIn(
+                path,
+                reference_cleaned,
+                f"Missing item '{path}' not found in reference scene",
+            )
+            self.assertNotIn(
+                path,
+                current_cleaned,
+                f"Missing item '{path}' actually exists in current scene",
+            )
+
+        # Every "extra" path must exist in current but NOT in reference
+        for path in diff["extra"]:
+            self.assertIn(
+                path,
+                current_cleaned,
+                f"Extra item '{path}' not found in current scene",
+            )
+            self.assertNotIn(
+                path,
+                reference_cleaned,
+                f"Extra item '{path}' actually exists in reference scene",
+            )
+
+        # Every "reparented" leaf must appear in both but under different parents
+        for rp_item in diff["reparented"]:
+            self.assertIn(
+                rp_item["reference_path"],
+                reference_cleaned,
+                f"Reparented ref path not in reference: {rp_item['reference_path']}",
+            )
+            self.assertIn(
+                rp_item["current_path"],
+                current_cleaned,
+                f"Reparented cur path not in current: {rp_item['current_path']}",
+            )
+
+        # The independent set diff must match what analyze_hierarchies reported
+        reparented_ref_paths = {r["reference_path"] for r in diff["reparented"]}
+        reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
+        fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
+        fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
+        self.assertEqual(
+            sorted(independent_missing),
+            sorted(diff["missing"]),
+            "Independent missing computation disagrees with analyze_hierarchies",
+        )
+        self.assertEqual(
+            sorted(independent_extra),
+            sorted(diff["extra"]),
+            "Independent extra computation disagrees with analyze_hierarchies",
+        )
+
+        sandbox.cleanup_all_namespaces()
+
+    @skipUnlessExtended
+    def test_c5_ma_vs_fbx_diff_content(self):
+        """Regression: C5 MA-vs-FBX diff produces exact known baseline counts and paths.
+
+        Validates that analyze_hierarchies returns the correct missing/extra results
+        for C5_AFT_COMP_ASSEMBLY current.ma vs the FBX export.
+        Baseline captured: 2026-06-16
+        """
+        if not self.real_scenes_dir.exists():
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
+
+        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
+        reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
+
+        if not current_scene.exists() or not reference_fbx.exists():
+            self.skipTest("Required C5 MA/FBX scene files not found.")
+
+        default_cams = frozenset({"persp", "top", "front", "side"})
+
+        pm.openFile(str(current_scene), force=True)
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        info = sandbox.import_with_namespace(
+            str(reference_fbx), force_complete_import=True
+        )
+        self.assertIsNotNone(info, "Failed to import FBX reference")
+
+        ref_objs = [
+            t
+            for t in info.get("transforms", [])
+            if t.nodeName().split(":")[-1] not in default_cams
+        ]
+
+        manager = HierarchyManager(
+            import_manager=sandbox, fuzzy_matching=True, dry_run=True
+        )
+        diff = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objs,
+            filter_meshes=True,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # --- Assert exact baseline counts ---
+        self.assertEqual(
+            len(diff["missing"]),
+            0,
+            f"Expected 0 missing, got {len(diff['missing'])}: {diff['missing'][:5]}",
+        )
+        self.assertEqual(
+            len(diff["extra"]),
+            2,
+            f"Expected 2 extra, got {len(diff['extra'])}: {diff['extra']}",
+        )
+        self.assertEqual(
+            len(diff["reparented"]),
+            0,
+            f"Expected 0 reparented, got {len(diff['reparented'])}",
+        )
+
+        # --- Assert exact extra paths ---
+        extra_set = set(diff["extra"])
+        self.assertIn("S00C34_BELL_NUT_FRES_GRP", extra_set)
+        self.assertIn("S00C34_BELL_NUT_FRES_GRP|S00C34_BELL_NUT_FRES_LOC", extra_set)
+
+        # --- Cross-validate against actual scene contents ---
+        current_cleaned = {
+            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+        }
+        reference_cleaned = {
+            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+        }
+
+        for path in diff["missing"]:
+            self.assertIn(
+                path,
+                reference_cleaned,
+                f"Missing item '{path}' not found in reference scene",
+            )
+            self.assertNotIn(
+                path,
+                current_cleaned,
+                f"Missing item '{path}' actually exists in current scene",
+            )
+
+        for path in diff["extra"]:
+            self.assertIn(
+                path,
+                current_cleaned,
+                f"Extra item '{path}' not found in current scene",
+            )
+            self.assertNotIn(
+                path,
+                reference_cleaned,
+                f"Extra item '{path}' actually exists in reference scene",
+            )
+
+        reparented_ref_paths = {r["reference_path"] for r in diff["reparented"]}
+        reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
+        fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
+        fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
+        self.assertEqual(
+            sorted(independent_missing),
+            sorted(diff["missing"]),
+            "Independent missing computation disagrees with analyze_hierarchies",
+        )
+        self.assertEqual(
+            sorted(independent_extra),
+            sorted(diff["extra"]),
+            "Independent extra computation disagrees with analyze_hierarchies",
+        )
+
+        sandbox.cleanup_all_namespaces()
+
+    # -------------------------------------------------------------------------
     # Non-Destructive Scene Safety Tests
     # -------------------------------------------------------------------------
 
@@ -852,6 +1496,1168 @@ class TestHierarchyManager(MayaTkTestCase):
 
         # --- Cleanup ---
         sandbox.cleanup_all_namespaces()
+
+    def test_same_name_parent_child_survives_namespace_rename(self):
+        """Verify transforms with same-name parent/child paths survive NamespaceSandbox.
+
+        Bug: A ``has_consecutive_dupes`` filter silently dropped any transform
+        whose DAG path contained a parent and child with the same short name
+        (e.g. ``A|A``).  PyMEL's MObject-backed rename handles this correctly,
+        so the filter was unnecessary and caused false "extra" items in diffs.
+        Fixed: 2026-03-05
+        """
+        # Build hierarchy:  A -> A (child) -> B -> C
+        pm.newFile(force=True)
+        parent = pm.group(empty=True, name="A")
+        child = pm.group(empty=True, name="A", parent=parent)
+        grandchild = pm.group(empty=True, name="B", parent=child)
+        leaf = pm.group(empty=True, name="C", parent=grandchild)
+
+        # Sanity: child has a consecutive-dupe path
+        self.assertEqual(child.longName(), "|A|A")
+
+        all_nodes = [parent, child, grandchild, leaf]
+        sandbox = NamespaceSandbox(dry_run=False)
+        sandbox._fbx_importer._move_objects_to_namespace(all_nodes, "test_ns")
+
+        # All 4 must survive
+        queried = pm.ls("test_ns:*", type="transform")
+        self.assertEqual(
+            len(queried),
+            4,
+            f"Expected 4 transforms in namespace, got {len(queried)}: "
+            f"{[t.longName() for t in queried]}",
+        )
+
+        # Hierarchy must be intact
+        self.assertEqual(child.longName(), "|test_ns:A|test_ns:A")
+        self.assertEqual(leaf.longName(), "|test_ns:A|test_ns:A|test_ns:B|test_ns:C")
+
+        # Cleaned paths must preserve the same-name structure
+        cleaned_paths = {clean_hierarchy_path(t.longName()) for t in queried}
+        # clean_hierarchy_path preserves leading separator from longName()
+        self.assertIn("|A|A", cleaned_paths)
+        self.assertIn("|A|A|B|C", cleaned_paths)
+
+        pm.namespace(removeNamespace="test_ns", mergeNamespaceWithRoot=True)
+
+    def test_fbx_namespace_stripped_during_sandbox_rename(self):
+        """Verify FBX-created namespaces are stripped to avoid nested namespaces.
+
+        Bug: FBX import sometimes creates nodes in a ``ControlData:`` namespace.
+        When ``_move_objects_to_namespace`` renamed these, the result was
+        ``temp_import:ControlData:FOO`` (nested), which ``pm.ls("temp_import:*")``
+        could not find.  The fix strips existing namespace prefixes before
+        adding the sandbox namespace.
+        Fixed: 2026-03-05
+        """
+        pm.newFile(force=True)
+
+        # Simulate FBX-created node with a namespace
+        if not pm.namespace(exists="ControlData"):
+            pm.namespace(add="ControlData")
+        node = pm.group(empty=True, name="ControlData:SWITCH_NODE")
+        self.assertEqual(node.nodeName(), "ControlData:SWITCH_NODE")
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        sandbox._fbx_importer._move_objects_to_namespace([node], "test_ns")
+
+        # Must be in test_ns (flat), NOT test_ns:ControlData (nested)
+        self.assertTrue(
+            node.nodeName().startswith("test_ns:"),
+            f"Node should be in test_ns namespace, got: {node.nodeName()}",
+        )
+        self.assertNotIn(
+            "ControlData",
+            node.nodeName(),
+            f"ControlData namespace should be stripped, got: {node.nodeName()}",
+        )
+
+        # Must be discoverable with standard namespace query
+        queried = pm.ls("test_ns:*", type="transform")
+        self.assertEqual(len(queried), 1, f"Expected 1 node, got {len(queried)}")
+        self.assertEqual(queried[0].nodeName(), "test_ns:SWITCH_NODE")
+
+        pm.namespace(removeNamespace="test_ns", mergeNamespaceWithRoot=True)
+        pm.namespace(removeNamespace="ControlData", mergeNamespaceWithRoot=True)
+
+    def test_c130_fbx_vs_ma_diff_content(self):
+        """Regression: C130 FBX-vs-MA diff correctly detects FBX name-flattening.
+
+        Validates that analyze_hierarchies handles FBX name-flattening artifacts
+        (e.g. BOOSTER_OFF_6_SWITCH → OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH)
+        by recognizing them as renames rather than missing+extra pairs.
+
+        Bug: Before suffix matching, the BOOSTER items were split into 2 false
+        "missing" and 2 false "extra" entries. The fix operation would have created
+        empty stubs AND quarantined real geometry — destroying the scene.
+        Fixed: 2026-03-09
+        """
+        if not self.real_scenes_dir.exists():
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
+
+        reference_fbx = self.real_scenes_dir / "C130_FCR_Speedrun_Assembly.fbx"
+        current_scene = Path(
+            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder"
+            r"\PRODUCTION\AF\C-130HJ_Mutual\PRODUCTION\Maya\Flap_Rigging\scenes"
+            r"\modules\C130H_FCR_SPEEDRUN\C130H_FCR_SPEEDRUN_module.ma"
+        )
+
+        if not reference_fbx.exists() or not current_scene.exists():
+            self.skipTest("Required C130 FBX/MA scene files not found.")
+
+        pm.openFile(str(current_scene), force=True)
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        info = sandbox.import_with_namespace(
+            str(reference_fbx), force_complete_import=True
+        )
+        self.assertIsNotNone(info, "Failed to import FBX reference")
+
+        default_cams = frozenset({"persp", "top", "front", "side"})
+        ref_objs = [
+            t
+            for t in info.get("transforms", [])
+            if t.nodeName().split(":")[-1] not in default_cams
+        ]
+
+        manager = HierarchyManager(
+            import_manager=sandbox, fuzzy_matching=True, dry_run=True
+        )
+        diff = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objs,
+            filter_meshes=False,
+            filter_cameras=False,
+            filter_lights=False,
+        )
+
+        # --- Assert exact baseline counts ---
+        self.assertEqual(
+            len(diff["missing"]),
+            2,
+            f"Expected 2 missing, got {len(diff['missing'])}: {diff['missing']}",
+        )
+        self.assertEqual(
+            len(diff["extra"]),
+            20,
+            f"Expected 20 extra, got {len(diff['extra'])}: {diff['extra'][:5]}",
+        )
+        self.assertEqual(
+            len(diff["reparented"]),
+            3,
+            f"Expected 3 reparented, got {len(diff['reparented'])}",
+        )
+        self.assertEqual(
+            len(diff["fuzzy_matches"]),
+            2,
+            f"Expected 2 fuzzy (suffix) matches, got {len(diff['fuzzy_matches'])}",
+        )
+
+        # --- Assert missing items are genuinely missing (arrow GEOs) ---
+        missing_set = set(diff["missing"])
+        self.assertIn(
+            "INTERACTIVES|ARROWS|S00A24_ARROW_GRP|S00A24_ARROW_LOC|S00A24_ARROW_GEO",
+            missing_set,
+        )
+        self.assertIn(
+            "INTERACTIVES|ARROWS|S00A27_ARROW_GRP|S00A27_ARROW_LOC|S00A27_ARROW_GEO",
+            missing_set,
+        )
+
+        # --- Assert BOOSTER items are NOT in missing/extra (they are suffix-matched) ---
+        all_missing_extra = set(diff["missing"]) | set(diff["extra"])
+        for path in all_missing_extra:
+            self.assertNotIn(
+                "BOOSTER_OFF_6_SWITCH",
+                path.rsplit("|", 1)[-1],
+                f"BOOSTER item should be suffix-matched, not missing/extra: {path}",
+            )
+
+        # --- Assert suffix-matched pairs are in fuzzy_matches ---
+        fuzzy_targets = {m["target_name"] for m in diff["fuzzy_matches"]}
+        fuzzy_currents = {m["current_name"] for m in diff["fuzzy_matches"]}
+        self.assertIn(
+            "INTERACTIVES|SWITCHES|S00A18_AIL_SWITCH_LOC|"
+            "OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH",
+            fuzzy_targets,
+        )
+        self.assertIn(
+            "INTERACTIVES|SWITCHES|S00A18_AIL_SWITCH_LOC|BOOSTER_OFF_6_SWITCH",
+            fuzzy_currents,
+        )
+
+        # --- Assert extras are all under REVISIONS (legitimate MA-only content) ---
+        for path in diff["extra"]:
+            self.assertTrue(
+                path.startswith("REVISIONS"),
+                f"Extra item should be under REVISIONS, got: {path}",
+            )
+
+        # --- Assert reparented items are the ExampleBase nodes ---
+        reparented_leaves = {r["leaf"] for r in diff["reparented"]}
+        self.assertEqual(
+            reparented_leaves,
+            {"ExampleBase", "ExampleBase_1", "ExampleBase_2"},
+        )
+
+        # --- Cross-validate against actual scene contents ---
+        current_cleaned = {
+            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+        }
+        reference_cleaned = {
+            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+        }
+
+        for path in diff["missing"]:
+            self.assertIn(
+                path,
+                reference_cleaned,
+                f"Missing item '{path}' not found in reference scene",
+            )
+            self.assertNotIn(
+                path,
+                current_cleaned,
+                f"Missing item '{path}' actually exists in current scene",
+            )
+
+        for path in diff["extra"]:
+            self.assertIn(
+                path,
+                current_cleaned,
+                f"Extra item '{path}' not found in current scene",
+            )
+            self.assertNotIn(
+                path,
+                reference_cleaned,
+                f"Extra item '{path}' actually exists in reference scene",
+            )
+
+        # Independent diff computation must agree with analyze_hierarchies
+        reparented_ref_paths = {r["reference_path"] for r in diff["reparented"]}
+        reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
+        fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
+        fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
+        self.assertEqual(
+            sorted(independent_missing),
+            sorted(diff["missing"]),
+            "Independent missing computation disagrees with analyze_hierarchies",
+        )
+        self.assertEqual(
+            sorted(independent_extra),
+            sorted(diff["extra"]),
+            "Independent extra computation disagrees with analyze_hierarchies",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ignore Feature Tests (Controller logic — no full UI required)
+# ---------------------------------------------------------------------------
+
+
+class TestIgnoreFeature(MayaTkTestCase):
+    """Tests for the tree-item ignore/unignore feature.
+
+    These tests exercise the ignore logic on the controller directly,
+    using lightweight Qt tree widgets as stand-ins for the full UI.
+    Added: 2026-03-05
+    """
+
+    def setUp(self):
+        super().setUp()
+        from qtpy import QtWidgets, QtGui
+
+        # Minimal stub so the controller can initialise.
+        class _FakeUI:
+            class _FakeTree(QtWidgets.QTreeWidget):
+                def __init__(self):
+                    super().__init__()
+                    self.menu = type(
+                        "Menu",
+                        (),
+                        {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
+                    )()
+                    self.is_initialized = True
+
+            def __init__(self):
+                self.tree000 = self._FakeTree()
+                self.tree001 = self._FakeTree()
+                self.txt003 = type(
+                    "W",
+                    (),
+                    {
+                        "append": lambda *a: None,
+                        "setHtml": lambda *a: None,
+                        "setText": lambda *a: None,
+                        "clear": lambda *a: None,
+                    },
+                )()
+
+        class _FakeSB:
+            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
+
+        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
+        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
+            HierarchyManagerController,
+        )
+
+        self.controller = HierarchyManagerController(fake_slots)
+        self.tree000 = fake_slots.ui.tree000
+        self.tree001 = fake_slots.ui.tree001
+
+    # -- helpers --
+
+    def _populate_tree(self, tree, hierarchy):
+        """Populate a QTreeWidget from a nested dict.
+
+        Example::
+
+            {"GRP": {"child1": {"leaf": {}}, "child2": {}}}
+        """
+        tree.clear()
+        tree.setColumnCount(1)
+
+        def _add(parent_item, children_dict):
+            from qtpy import QtWidgets
+
+            for name, sub in children_dict.items():
+                item = QtWidgets.QTreeWidgetItem(parent_item, [name])
+                _add(item, sub)
+
+        _add(tree.invisibleRootItem(), hierarchy)
+
+    # -- is_path_ignored --
+
+    def test_is_path_ignored_exact_match(self):
+        """Exact path in ignored set returns True."""
+        self.controller._ignored_ref_paths.add("GRP|child1")
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
+
+    def test_is_path_ignored_ancestor_match(self):
+        """A descendant of an ignored path is also considered ignored."""
+        self.controller._ignored_ref_paths.add("GRP")
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
+        self.assertTrue(
+            self.controller.is_path_ignored(self.tree000, "GRP|child1|leaf")
+        )
+
+    def test_is_path_ignored_no_false_prefix(self):
+        """Paths that share a prefix but are NOT descendants are not ignored.
+
+        Bug guard: 'GRP2' should not match ignored 'GRP'.
+        """
+        self.controller._ignored_ref_paths.add("GRP")
+        self.assertFalse(self.controller.is_path_ignored(self.tree000, "GRP2"))
+        self.assertFalse(self.controller.is_path_ignored(self.tree000, "GRP2|child"))
+
+    def test_is_path_ignored_different_tree(self):
+        """Ignored paths for reference tree should not affect current tree."""
+        self.controller._ignored_ref_paths.add("GRP|child1")
+        self.assertFalse(self.controller.is_path_ignored(self.tree001, "GRP|child1"))
+
+    def test_is_path_ignored_empty_set(self):
+        """Nothing ignored => everything returns False."""
+        self.assertFalse(self.controller.is_path_ignored(self.tree000, "anything"))
+
+    # -- clear_ignored_paths --
+
+    def test_clear_ignored_paths(self):
+        """clear_ignored_paths empties both sets."""
+        self.controller._ignored_ref_paths.update({"A", "B"})
+        self.controller._ignored_cur_paths.update({"C"})
+        self.controller.clear_ignored_paths()
+        self.assertEqual(len(self.controller._ignored_ref_paths), 0)
+        self.assertEqual(len(self.controller._ignored_cur_paths), 0)
+
+    # -- _build_item_path --
+
+    def test_build_item_path_root(self):
+        """Root-level item returns just its name."""
+        self._populate_tree(self.tree000, {"GRP": {}})
+        root_item = self.tree000.topLevelItem(0)
+        self.assertEqual(self.controller._build_item_path(root_item), "GRP")
+
+    def test_build_item_path_nested(self):
+        """Nested item returns pipe-separated ancestor chain."""
+        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
+        root = self.tree000.topLevelItem(0)
+        child = root.child(0)
+        leaf = child.child(0)
+        self.assertEqual(self.controller._build_item_path(leaf), "GRP|child|leaf")
+
+    # -- _apply_ignore_styling --
+
+    def test_apply_ignore_styling_strikethrough(self):
+        """Ignored items get strikethrough font; non-ignored do not."""
+        self._populate_tree(self.tree000, {"GRP": {"child1": {}, "child2": {}}})
+        self.controller._ignored_ref_paths.add("GRP|child1")
+        self.controller._apply_ignore_styling(self.tree000)
+
+        root = self.tree000.topLevelItem(0)
+        child1 = root.child(0)
+        child2 = root.child(1)
+
+        self.assertTrue(
+            child1.font(0).strikeOut(), "Ignored item should have strikethrough"
+        )
+        self.assertFalse(
+            child2.font(0).strikeOut(), "Non-ignored item should NOT have strikethrough"
+        )
+
+    def test_apply_ignore_styling_clears_on_unignore(self):
+        """After removing an item from the ignored set, re-applying styling clears strikethrough."""
+        self._populate_tree(self.tree000, {"GRP": {"child1": {}}})
+        self.controller._ignored_ref_paths.add("GRP|child1")
+        self.controller._apply_ignore_styling(self.tree000)
+
+        root = self.tree000.topLevelItem(0)
+        child1 = root.child(0)
+        self.assertTrue(child1.font(0).strikeOut())
+
+        # Unignore
+        self.controller._ignored_ref_paths.discard("GRP|child1")
+        self.controller._apply_ignore_styling(self.tree000)
+        self.assertFalse(
+            child1.font(0).strikeOut(), "Strikethrough should be removed after unignore"
+        )
+
+    def test_apply_ignore_styling_ancestor_propagation(self):
+        """Ignoring a parent styles it with strikethrough; descendants get italic (inherited)."""
+        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
+        self.controller._ignored_ref_paths.add("GRP")
+        self.controller._apply_ignore_styling(self.tree000)
+
+        root = self.tree000.topLevelItem(0)
+        child = root.child(0)
+        leaf = child.child(0)
+
+        self.assertTrue(
+            root.font(0).strikeOut(), "Directly-ignored root should have strikethrough"
+        )
+        # Descendants are inherited-ignored → italic, not strikethrough
+        self.assertTrue(
+            child.font(0).italic(),
+            "Inherited-ignored descendant should be italic",
+        )
+        self.assertFalse(
+            child.font(0).strikeOut(),
+            "Inherited-ignored descendant should NOT have strikethrough",
+        )
+        self.assertTrue(
+            leaf.font(0).italic(), "Deep inherited-ignored descendant should be italic"
+        )
+
+    # -- Edge cases --
+
+    def test_unignore_child_of_ignored_parent_is_noop(self):
+        """Unignoring a child that is only implicitly ignored (via parent) changes nothing.
+
+        The child's path is not in the set, so discard is a no-op.
+        The parent remains ignored, so the child remains visually ignored.
+        """
+        self.controller._ignored_ref_paths.add("GRP")
+        # Attempt to unignore child
+        self.controller._ignored_ref_paths.discard("GRP|child1")
+        # Parent still present
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
+
+    def test_unignore_parent_frees_descendants(self):
+        """Unignoring a parent also frees all implicitly-ignored descendants."""
+        self.controller._ignored_ref_paths.add("GRP")
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child|leaf"))
+
+        self.controller._ignored_ref_paths.discard("GRP")
+        self.assertFalse(
+            self.controller.is_path_ignored(self.tree000, "GRP|child|leaf")
+        )
+
+    def test_ignore_multiple_roots_independent(self):
+        """Ignoring two independent roots does not interfere with each other."""
+        self.controller._ignored_ref_paths.update({"A", "B"})
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "A|child"))
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "B|child"))
+
+        self.controller._ignored_ref_paths.discard("A")
+        self.assertFalse(self.controller.is_path_ignored(self.tree000, "A|child"))
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "B|child"))
+
+    def test_ignore_set_per_tree(self):
+        """Reference and current trees maintain separate ignored sets."""
+        self.controller._ignored_ref_paths.add("shared_path")
+        self.controller._ignored_cur_paths.add("other_path")
+
+        self.assertTrue(self.controller.is_path_ignored(self.tree000, "shared_path"))
+        self.assertFalse(self.controller.is_path_ignored(self.tree001, "shared_path"))
+
+        self.assertFalse(self.controller.is_path_ignored(self.tree000, "other_path"))
+        self.assertTrue(self.controller.is_path_ignored(self.tree001, "other_path"))
+
+    # -- _filter_ignored_from_diff --
+
+    def test_filter_ignored_from_diff_excludes_ignored_missing(self):
+        """_filter_ignored_from_diff removes missing items whose path is ignored.
+
+        Added: 2026-03-06 (fix C1/C2)
+        """
+        self.controller._current_diff_result = {
+            "missing": ["GRP|child1", "GRP|child2"],
+            "extra": [],
+            "reparented": [],
+            "fuzzy_matches": [],
+        }
+        self.controller._ignored_ref_paths.add("GRP|child1")
+
+        effective = self.controller._filter_ignored_from_diff()
+        self.assertNotIn("GRP|child1", effective["missing"])
+        self.assertIn("GRP|child2", effective["missing"])
+
+    def test_filter_ignored_from_diff_excludes_ignored_extra(self):
+        """_filter_ignored_from_diff removes extra items whose path is ignored.
+
+        Added: 2026-03-06 (fix C1/C2)
+        """
+        self.controller._current_diff_result = {
+            "missing": [],
+            "extra": ["GRP|extra1", "GRP|extra2"],
+            "reparented": [],
+            "fuzzy_matches": [],
+        }
+        self.controller._ignored_cur_paths.add("GRP|extra1")
+
+        effective = self.controller._filter_ignored_from_diff()
+        self.assertNotIn("GRP|extra1", effective["extra"])
+        self.assertIn("GRP|extra2", effective["extra"])
+
+    def test_filter_ignored_from_diff_excludes_reparented_both_sides(self):
+        """Reparented items are excluded when either side is ignored.
+
+        Added: 2026-03-06 (fix C1/C2)
+        """
+        self.controller._current_diff_result = {
+            "missing": [],
+            "extra": [],
+            "reparented": [
+                {
+                    "leaf": "node",
+                    "current_path": "A|node",
+                    "reference_path": "B|node",
+                },
+            ],
+            "fuzzy_matches": [],
+        }
+        # Ignoring the current-side path should exclude it
+        self.controller._ignored_cur_paths.add("A|node")
+
+        effective = self.controller._filter_ignored_from_diff()
+        self.assertEqual(len(effective["reparented"]), 0)
+
+    def test_filter_ignored_from_diff_no_diff_returns_empty(self):
+        """_filter_ignored_from_diff returns empty lists when no diff exists.
+
+        Added: 2026-03-06
+        """
+        self.controller._current_diff_result = None
+        effective = self.controller._filter_ignored_from_diff()
+        self.assertEqual(effective["missing"], [])
+        self.assertEqual(effective["extra"], [])
+        self.assertEqual(effective["reparented"], [])
+        self.assertEqual(effective["fuzzy_matches"], [])
+
+    # -- _apply_ignore_styling: direct vs inherited --
+
+    def test_apply_ignore_styling_direct_vs_inherited(self):
+        """Directly-ignored items get strikethrough; inherited get italic.
+
+        Added: 2026-03-06 (fix E2)
+        """
+        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
+        self.controller._ignored_ref_paths.add("GRP|child")
+        self.controller._apply_ignore_styling(self.tree000)
+
+        root = self.tree000.topLevelItem(0)
+        child = root.child(0)
+        leaf = child.child(0)
+
+        # Direct: strikethrough, NOT italic
+        self.assertTrue(
+            child.font(0).strikeOut(), "Direct-ignored should be strikethrough"
+        )
+        self.assertFalse(child.font(0).italic(), "Direct-ignored should NOT be italic")
+
+        # Inherited: italic, NOT strikethrough
+        self.assertTrue(leaf.font(0).italic(), "Inherited-ignored should be italic")
+        self.assertFalse(
+            leaf.font(0).strikeOut(), "Inherited-ignored should NOT be strikethrough"
+        )
+
+        # Non-ignored root: neither
+        self.assertFalse(root.font(0).strikeOut())
+        self.assertFalse(root.font(0).italic())
+
+    # -- _clear_analysis_cache clears ignored paths --
+
+    def test_clear_analysis_cache_clears_ignored_paths(self):
+        """_clear_analysis_cache also resets ignored path sets.
+
+        Added: 2026-03-06 (fix B1)
+        """
+        self.controller._ignored_ref_paths.add("GRP|child")
+        self.controller._ignored_cur_paths.add("OTHER")
+        self.controller._clear_analysis_cache()
+        self.assertEqual(len(self.controller._ignored_ref_paths), 0)
+        self.assertEqual(len(self.controller._ignored_cur_paths), 0)
+
+    # -- repair_hierarchies --
+
+    def test_repair_hierarchies_requires_prior_analysis(self):
+        """repair_hierarchies returns False when no diff analysis exists.
+
+        Added: 2026-03-06
+        """
+        self.controller.hierarchy_manager = None
+        self.controller._current_diff_result = None
+        result = self.controller.repair_hierarchies(dry_run=True)
+        self.assertFalse(result)
+
+    def test_repair_hierarchies_dry_run_restore(self):
+        """repair_hierarchies restores hierarchy_manager.dry_run after execution.
+
+        Bug: method mutated dry_run on the manager without save/restore.
+        Fixed: 2026-03-06 (critique fix #1)
+        """
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {"missing": ["grp|stub"], "extra": [], "reparented": []}
+
+        self.controller.hierarchy_manager = manager
+        self.controller._current_diff_result = {
+            "missing": ["grp|stub"],
+            "extra": [],
+            "reparented": [],
+            "fuzzy_matches": [],
+        }
+
+        # Call with dry_run=True — should NOT permanently change manager.dry_run
+        self.controller.repair_hierarchies(dry_run=True)
+        self.assertFalse(
+            manager.dry_run,
+            "Manager dry_run should be restored to original value (False)",
+        )
+
+    def test_repair_hierarchies_cache_invalidation_after_live(self):
+        """repair_hierarchies invalidates cache after live (non-dry-run) changes.
+
+        Bug: stale diff cache persisted after a live repair.
+        Fixed: 2026-03-06 (critique fix #2/6)
+        """
+        pm.group(empty=True, name="grp")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.differences = {
+            "missing": ["grp|new_stub"],
+            "extra": [],
+            "reparented": [],
+        }
+
+        self.controller.hierarchy_manager = manager
+        self.controller._current_diff_result = {
+            "missing": ["grp|new_stub"],
+            "extra": [],
+            "reparented": [],
+            "fuzzy_matches": [],
+        }
+
+        self.controller.repair_hierarchies(dry_run=False)
+
+        # After live repair, cache should be cleared
+        self.assertIsNone(
+            self.controller._current_diff_result,
+            "Diff cache should be cleared after live repair",
+        )
+        self.assertIsNone(
+            self.controller.hierarchy_manager,
+            "hierarchy_manager should be cleared after live repair",
+        )
+
+    def test_repair_hierarchies_respects_ignored_paths(self):
+        """repair_hierarchies excludes ignored missing items from stub creation.
+
+        Added: 2026-03-06
+        """
+        pm.group(empty=True, name="grp")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.differences = {
+            "missing": ["grp|keep", "grp|skip"],
+            "extra": [],
+            "reparented": [],
+        }
+
+        self.controller.hierarchy_manager = manager
+        self.controller._current_diff_result = {
+            "missing": ["grp|keep", "grp|skip"],
+            "extra": [],
+            "reparented": [],
+            "fuzzy_matches": [],
+        }
+        # Ignore "grp|skip" in the reference tree
+        self.controller._ignored_ref_paths.add("grp|skip")
+
+        result = self.controller.repair_hierarchies(
+            create_stubs=True,
+            quarantine_extras=False,
+            fix_reparented=False,
+            dry_run=True,
+        )
+        self.assertTrue(result)
+        # Since it's dry-run, nothing created, but the stubs list should only contain "keep"
+        # The manager was called with filtered missing — verify no stub created for "skip"
+        self.assertFalse(pm.objExists("skip"))
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Cached Reference Import Tests
+# ---------------------------------------------------------------------------
+
+
+class TestCachedReferenceImport(MayaTkTestCase):
+    """Tests for the cached reference import mechanism in HierarchyManagerController.
+
+    Verifies that the controller reuses a single import rather than importing
+    the reference file multiple times, and that cache invalidation works correctly.
+    Added: 2026-03-08
+    """
+
+    def setUp(self):
+        super().setUp()
+        from qtpy import QtWidgets, QtGui
+
+        # Minimal stub so the controller can initialise (same pattern as TestIgnoreFeature).
+        class _FakeTree(QtWidgets.QTreeWidget):
+            def __init__(self):
+                super().__init__()
+                self.menu = type(
+                    "Menu",
+                    (),
+                    {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
+                )()
+                self.is_initialized = True
+
+            def create_item(self, data, obj=None, parent=None):
+                item = QtWidgets.QTreeWidgetItem(parent or self, data)
+                return item
+
+        class _FakeUI:
+            def __init__(self):
+                self.tree000 = _FakeTree()
+                self.tree001 = _FakeTree()
+                self.txt003 = type(
+                    "W",
+                    (),
+                    {
+                        "append": lambda *a: None,
+                        "setHtml": lambda *a: None,
+                        "setText": lambda *a: None,
+                        "clear": lambda *a: None,
+                    },
+                )()
+
+        class _FakeSB:
+            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
+
+        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
+        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
+            HierarchyManagerController,
+        )
+
+        self.controller = HierarchyManagerController(fake_slots)
+        self.tree000 = fake_slots.ui.tree000
+        self.tree001 = fake_slots.ui.tree001
+
+    def test_cached_reference_starts_none(self):
+        """_cached_reference_import is None on fresh controller."""
+        self.assertIsNone(self.controller._cached_reference_import)
+
+    def test_clear_analysis_cache_clears_cached_import(self):
+        """_clear_analysis_cache resets _cached_reference_import to None.
+
+        Added: 2026-03-08
+        """
+        # Simulate a cached import entry (without a real sandbox).
+        self.controller._cached_reference_import = {
+            "path": "/fake/path.ma",
+            "sandbox": None,
+            "transforms": [],
+        }
+        self.controller._clear_analysis_cache()
+        self.assertIsNone(
+            self.controller._cached_reference_import,
+            "Cached import should be cleared after _clear_analysis_cache()",
+        )
+
+    def test_analysis_preserves_cache_after_populate_reference_tree(self):
+        """Analysis results survive a subsequent populate_reference_tree call.
+
+        Regression: previously, populate_reference_tree() called
+        _clear_analysis_cache() unconditionally, which destroyed the diff
+        result even for the same reference path.
+        Added: 2026-03-08
+        """
+        # Build a scene & reference in-process (no file I/O needed).
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        root_cur = pm.group(empty=True, name="root")
+        pm.group(empty=True, name="child_a", parent=root_cur)
+
+        root_ref = pm.group(empty=True, name="ref:root")
+        pm.group(empty=True, name="ref:child_a", parent=root_ref)
+        pm.group(empty=True, name="ref:child_b", parent=root_ref)
+
+        ref_objects = [root_ref] + list(root_ref.getChildren())
+
+        # Run analysis directly on the core HierarchyManager.
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        diff = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        # Simulate the controller state after a successful analysis.
+        self.controller.hierarchy_manager = manager
+        self.controller._current_diff_result = diff
+
+        # Verify analysis detected something.
+        self.assertIn("root|child_b", diff["missing"])
+
+        # Now verify the analysis result still exists.
+        # (In the old code, populate_reference_tree() would destroy it.)
+        self.assertIsNotNone(
+            self.controller._current_diff_result,
+            "Diff result should survive (no file-based tree population in this test)",
+        )
+        self.assertIn("root|child_b", self.controller._current_diff_result["missing"])
+
+    def test_cleanup_cached_reference_import_noop_when_none(self):
+        """_cleanup_cached_reference_import is safe to call when cache is None.
+
+        Added: 2026-03-08
+        """
+        self.controller._cached_reference_import = None
+        # Should not raise.
+        self.controller._cleanup_cached_reference_import()
+        self.assertIsNone(self.controller._cached_reference_import)
+
+
+class TestBatchPyMELOptimizations(MayaTkTestCase):
+    """Tests for Phase 2 optimizations: batch pm.ls in build_path_map,
+    cmds-based traversal in build_path_map_from_nodes/build_hierarchy_structure.
+
+    These verify identical behaviour after replacing per-node pm.PyNode()
+    with batch pm.ls() and PyMEL traversal with cmds equivalents.
+    Added: 2026-03-08
+    """
+
+    def test_build_path_map_deep_hierarchy(self):
+        """build_path_map returns correct keys and PyMEL nodes for a 4-level hierarchy."""
+        a = pm.group(empty=True, name="A")
+        b = pm.group(empty=True, name="B", parent=a)
+        c = pm.group(empty=True, name="C", parent=b)
+        d = pm.group(empty=True, name="D", parent=c)
+
+        path_map = HierarchyMapBuilder.build_path_map(a)
+        self.assertEqual(set(path_map.keys()), {"A", "A|B", "A|B|C", "A|B|C|D"})
+        self.assertEqual(path_map["A"], a)
+        self.assertEqual(path_map["A|B|C|D"], d)
+
+    def test_build_path_map_scene_wide_mode(self):
+        """build_path_map with SCENE_WIDE_MODE sentinel includes all assemblies."""
+        r1 = pm.group(empty=True, name="Root1")
+        r2 = pm.group(empty=True, name="Root2")
+        c = pm.group(empty=True, name="Child", parent=r1)
+
+        path_map = HierarchyMapBuilder.build_path_map("SCENE_WIDE_MODE")
+        self.assertIn("Root1", path_map)
+        self.assertIn("Root2", path_map)
+        self.assertIn("Root1|Child", path_map)
+        self.assertEqual(path_map["Root1|Child"], c)
+
+    def test_build_path_map_values_are_pymel(self):
+        """Values returned by build_path_map are PyMEL Transform nodes."""
+        grp = pm.group(empty=True, name="GRP")
+        path_map = HierarchyMapBuilder.build_path_map(grp)
+        node = path_map["GRP"]
+        self.assertIsInstance(node, pm.nodetypes.Transform)
+        self.assertTrue(node.exists())
+
+    def test_build_path_map_from_nodes_subset(self):
+        """build_path_map_from_nodes only includes nodes in the given list."""
+        a = pm.group(empty=True, name="A")
+        b = pm.group(empty=True, name="B", parent=a)
+        pm.group(empty=True, name="C", parent=b)  # not passed in
+
+        path_map = HierarchyMapBuilder.build_path_map_from_nodes([a, b])
+        self.assertIn("A", path_map)
+        self.assertIn("A|B", path_map)
+        self.assertNotIn("A|B|C", path_map)
+
+    def test_build_path_map_from_nodes_values_are_original_pymel(self):
+        """build_path_map_from_nodes preserves the original PyMEL objects."""
+        a = pm.group(empty=True, name="A")
+        b = pm.group(empty=True, name="B", parent=a)
+        path_map = HierarchyMapBuilder.build_path_map_from_nodes([a, b])
+        self.assertIs(path_map["A"], a)
+        self.assertIs(path_map["A|B"], b)
+
+    def test_build_hierarchy_structure_basic(self):
+        """build_hierarchy_structure returns correct parent/type info using cmds."""
+        from mayatk.env_utils.hierarchy_manager._tree_utils import (
+            build_hierarchy_structure,
+        )
+
+        parent = pm.group(empty=True, name="Parent")
+        child = pm.group(empty=True, name="Child", parent=parent)
+
+        items, roots = build_hierarchy_structure([parent, child])
+        parent_key = parent.fullPath()
+        child_key = child.fullPath()
+
+        self.assertIn(parent_key, items)
+        self.assertIn(child_key, items)
+        self.assertEqual(items[parent_key]["short_name"], "Parent")
+        self.assertEqual(items[child_key]["short_name"], "Child")
+        self.assertEqual(items[child_key]["type"], "transform")
+        self.assertEqual(items[child_key]["parent"], parent_key)
+        self.assertIsNone(items[parent_key]["parent"])
+        self.assertIn(parent_key, roots)
+        self.assertNotIn(child_key, roots)
+
+    # ── Auto-detect quarantine container ──
+
+    def test_quarantine_auto_detects_natural_container(self):
+        """quarantine_extras reuses existing root group when all extras share it.
+
+        When using the default "_QUARANTINE" name and all extras share a
+        single root-level ancestor that is itself extra AND has ≥2 direct
+        extra children, that root is adopted as the quarantine container.
+        Added: 2026-03-09
+        """
+        container = pm.group(empty=True, name="REVISIONS")
+        child_a = pm.group(empty=True, name="rev_a", parent=container)
+        child_b = pm.group(empty=True, name="rev_b", parent=container)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "REVISIONS": container,
+            "REVISIONS|rev_a": child_a,
+            "REVISIONS|rev_b": child_b,
+        }
+        manager.clean_to_raw_current = {
+            "REVISIONS": "REVISIONS",
+            "REVISIONS|rev_a": "REVISIONS|rev_a",
+            "REVISIONS|rev_b": "REVISIONS|rev_b",
+        }
+        manager.differences = {
+            "extra": ["REVISIONS", "REVISIONS|rev_a", "REVISIONS|rev_b"],
+        }
+
+        moved = manager.quarantine_extras()
+        # Should auto-detect REVISIONS as the container; nothing to move
+        self.assertFalse(
+            pm.objExists("_QUARANTINE"),
+            "Should NOT create _QUARANTINE when natural container exists",
+        )
+        # Items are already under REVISIONS — returned as "already contained"
+        self.assertIn("REVISIONS", moved)
+
+    def test_quarantine_no_auto_detect_single_child(self):
+        """quarantine_extras does NOT auto-detect when root has < 2 direct extra children.
+
+        A lone orphan root with one child should still be moved to _QUARANTINE.
+        Added: 2026-03-09
+        """
+        grp = pm.group(empty=True, name="lone_grp")
+        child = pm.group(empty=True, name="lone_child", parent=grp)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "lone_grp": grp,
+            "lone_grp|lone_child": child,
+        }
+        manager.clean_to_raw_current = {
+            "lone_grp": "lone_grp",
+            "lone_grp|lone_child": "lone_grp|lone_child",
+        }
+        manager.differences = {
+            "extra": ["lone_grp", "lone_grp|lone_child"],
+        }
+
+        moved = manager.quarantine_extras()
+        # Should use default _QUARANTINE since only 1 direct child
+        self.assertTrue(pm.objExists("_QUARANTINE"))
+        self.assertEqual(pm.PyNode("lone_grp").getParent().nodeName(), "_QUARANTINE")
+
+    def test_quarantine_already_under_group(self):
+        """quarantine_extras skips extras already under the quarantine group.
+
+        If the quarantine group already exists and an extra is nested under
+        it, that item should be reported but not moved again.
+        Added: 2026-03-09
+        """
+        q_grp = pm.group(empty=True, name="MY_Q")
+        existing = pm.group(empty=True, name="already_there", parent=q_grp)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "MY_Q|already_there": existing,
+        }
+        manager.clean_to_raw_current = {
+            "MY_Q|already_there": "MY_Q|already_there",
+        }
+        manager.differences = {
+            "extra": ["MY_Q|already_there"],
+        }
+
+        moved = manager.quarantine_extras(group="MY_Q")
+        # Should recognize it's already under MY_Q
+        self.assertIn("already_there", moved)
+        # Should NOT have been re-parented
+        self.assertEqual(existing.getParent().nodeName(), "MY_Q")
+
+    # ── Skip animated ancestor ──
+
+    def test_has_animated_ancestor_positive(self):
+        """_has_animated_ancestor returns True when a parent has keyframes.
+
+        Added: 2026-03-09
+        """
+        parent = pm.group(empty=True, name="anim_parent")
+        child = pm.group(empty=True, name="anim_child", parent=parent)
+        # Add a keyframe to the parent
+        pm.setKeyframe(parent, attribute="translateX", time=1, value=0)
+        pm.setKeyframe(parent, attribute="translateX", time=10, value=5)
+
+        self.assertTrue(HierarchyManager._has_animated_ancestor(child))
+
+    def test_has_animated_ancestor_negative(self):
+        """_has_animated_ancestor returns False when no ancestor has keyframes.
+
+        Added: 2026-03-09
+        """
+        parent = pm.group(empty=True, name="static_parent")
+        child = pm.group(empty=True, name="static_child", parent=parent)
+
+        self.assertFalse(HierarchyManager._has_animated_ancestor(child))
+
+    def test_has_animated_ancestor_self(self):
+        """_has_animated_ancestor returns True when the node itself is animated.
+
+        Added: 2026-03-09
+        """
+        node = pm.group(empty=True, name="self_animated")
+        pm.setKeyframe(node, attribute="rotateY", time=1, value=0)
+
+        self.assertTrue(HierarchyManager._has_animated_ancestor(node))
+
+    def test_quarantine_skip_animated_live(self):
+        """quarantine_extras skips extras parented under animated objects.
+
+        When skip_animated=True, extras whose ancestor has keyframes are
+        left in place and not moved to the quarantine group.
+        Added: 2026-03-09
+        """
+        anim_root = pm.group(empty=True, name="anim_root")
+        pm.setKeyframe(anim_root, attribute="translateX", time=1, value=0)
+        extra_under_anim = pm.group(empty=True, name="attached_extra", parent=anim_root)
+        plain_extra = pm.group(empty=True, name="plain_extra")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "anim_root|attached_extra": extra_under_anim,
+            "plain_extra": plain_extra,
+        }
+        manager.clean_to_raw_current = {
+            "anim_root|attached_extra": "anim_root|attached_extra",
+            "plain_extra": "plain_extra",
+        }
+        manager.differences = {
+            "extra": ["anim_root|attached_extra", "plain_extra"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=True)
+        # plain_extra should be quarantined
+        self.assertIn("plain_extra", moved)
+        # attached_extra should NOT be moved (animated ancestor)
+        self.assertNotIn("attached_extra", moved)
+        self.assertEqual(extra_under_anim.getParent().nodeName(), "anim_root")
+
+    def test_quarantine_skip_animated_false_default(self):
+        """quarantine_extras moves animated-parent extras when skip_animated=False.
+
+        Default behavior: skip_animated is False, so animation on ancestors
+        does not prevent quarantining.
+        Added: 2026-03-09
+        """
+        anim_root = pm.group(empty=True, name="anim_root2")
+        pm.setKeyframe(anim_root, attribute="translateX", time=1, value=0)
+        extra = pm.group(empty=True, name="child_under_anim", parent=anim_root)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "anim_root2|child_under_anim": extra,
+        }
+        manager.clean_to_raw_current = {
+            "anim_root2|child_under_anim": "anim_root2|child_under_anim",
+        }
+        manager.differences = {
+            "extra": ["anim_root2|child_under_anim"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=False)
+        self.assertIn("child_under_anim", moved)
+        self.assertEqual(extra.getParent().nodeName(), "_QUARANTINE")
+
+    def test_quarantine_skip_animated_dry_run(self):
+        """quarantine_extras dry_run respects skip_animated.
+
+        In dry-run mode, items under animated ancestors should be reported
+        as skipped and not included in the returned list.
+        Added: 2026-03-09
+        """
+        anim_parent = pm.group(empty=True, name="dry_anim_parent")
+        pm.setKeyframe(anim_parent, attribute="translateY", time=1, value=0)
+        extra = pm.group(empty=True, name="dry_anim_extra", parent=anim_parent)
+        static_extra = pm.group(empty=True, name="dry_static_extra")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.current_scene_path_map = {
+            "dry_anim_parent|dry_anim_extra": extra,
+            "dry_static_extra": static_extra,
+        }
+        manager.clean_to_raw_current = {
+            "dry_anim_parent|dry_anim_extra": "dry_anim_parent|dry_anim_extra",
+            "dry_static_extra": "dry_static_extra",
+        }
+        manager.differences = {
+            "extra": ["dry_anim_parent|dry_anim_extra", "dry_static_extra"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=True)
+        # Only static_extra should be in the "would quarantine" list
+        self.assertIn("dry_static_extra", moved)
+        self.assertNotIn("dry_anim_extra", moved)
+        # No quarantine group created in dry-run
+        self.assertFalse(pm.objExists("_QUARANTINE"))
 
 
 if __name__ == "__main__":

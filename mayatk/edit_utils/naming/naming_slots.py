@@ -27,6 +27,18 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Naming:")
 
+        widget.menu.add("Separator", setTitle="Scope")
+        widget.menu.add(
+            "QComboBox",
+            addItems=["Selection", "All Objects"],
+            setObjectName="cmb_scope",
+            setToolTip=(
+                "Choose which objects operations act on:\n"
+                "  Selection — Only the current selection.\n"
+                "  All Objects — All scene objects."
+            ),
+        )
+
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",
@@ -46,8 +58,8 @@ class NamingSlots(Naming, ptk.LoggingMixin):
                 "  • Suffix by Type: Append type-based suffixes (_GEO,\n"
                 "    _GRP, _JNT, etc.) with configurable suffix strings.\n\n"
                 "Tip: Use the option box (▸) on each button for settings.\n"
-                "Operations apply to the selection, or all objects when\n"
-                "nothing is selected."
+                "Set Scope to 'All Objects' in the header menu to operate\n"
+                "on the entire scene instead of only the selection."
             ),
         )
 
@@ -177,7 +189,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         # Get current valid suffixes from property if retain_suffix is enabled
         valid_suffixes = self.valid_suffixes if retain_suffix else None
 
-        selection = pm.selected() or pm.ls()
+        use_all = self.ui.header.menu.cmb_scope.currentText() == "All Objects"
+        selection = pm.selected() if not use_all else pm.ls()
+        if not selection:
+            pm.warning(
+                "Nothing selected. Set Scope to 'All Objects' in the header menu to operate on the entire scene."
+            )
+            return
 
         # Count objects before rename
         object_count = len(selection)
@@ -213,8 +231,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         """Convert Case"""
         case = widget.option_box.menu.cmb001.currentText()
 
-        selection = pm.ls(sl=1)
-        objects = selection if selection else pm.ls(objectsOnly=1)
+        use_all = self.ui.header.menu.cmb_scope.currentText() == "All Objects"
+        objects = pm.ls(objectsOnly=1) if use_all else pm.ls(sl=1)
+        if not objects:
+            pm.warning(
+                "Nothing selected. Set Scope to 'All Objects' in the header menu to operate on the entire scene."
+            )
+            return
         self.set_case(objects, case)
 
     def tb001_init(self, widget):
