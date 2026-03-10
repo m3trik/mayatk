@@ -35,6 +35,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
+    "anim_utils.scene_sequencer._scene_sequencer": ["SceneSequencer", "SceneBlock"],
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",

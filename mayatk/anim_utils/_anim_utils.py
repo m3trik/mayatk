@@ -496,6 +496,57 @@ class _AnimUtilsMixin:
         return list(set(attributes))
 
 
+def _freeze_adjacent_tangent(fn, idx, is_in, bookend_facing, auto_types, step_types):
+    """Freeze an auto tangent to kFixed (preserving its current XY), or set
+    the bookend-facing side to kFlat for a constant-value hold.
+
+    Parameters:
+        fn (MFnAnimCurve): The animation curve function set.
+        idx (int): Key index whose tangent to freeze.
+        is_in (bool): True = in-tangent, False = out-tangent.
+        bookend_facing (bool): True if this tangent handle faces the bookend
+            key (should become flat).  False if it faces the curve interior
+            (should lock its current angle via kFixed).
+        auto_types (set): Set of MFnAnimCurve tangent type constants that are
+            auto-computed (kTangentAuto, kTangentSmooth, kTangentClamped).
+        step_types (set): Set of step tangent type constants to skip.
+    """
+    import maya.api.OpenMayaAnim as oma2
+
+    tt = fn.inTangentType(idx) if is_in else fn.outTangentType(idx)
+    if tt in step_types:
+        return  # Stepped tangents are never recalculated — nothing to freeze.
+
+    if tt in auto_types:
+        if bookend_facing:
+            # Set to flat for a clean constant-value hold into the bookend.
+            if is_in:
+                fn.setInTangentType(idx, oma2.MFnAnimCurve.kTangentFlat)
+            else:
+                fn.setOutTangentType(idx, oma2.MFnAnimCurve.kTangentFlat)
+        else:
+            # Interior-facing: snapshot current XY, then convert to kFixed
+            # so Maya won't recalculate it when a neighbor key is added.
+            xy = fn.getTangentXY(idx, is_in)
+            if is_in:
+                fn.setInTangentType(idx, oma2.MFnAnimCurve.kTangentFixed)
+                fn.setTangent(idx, xy[0], xy[1], True)
+            else:
+                fn.setOutTangentType(idx, oma2.MFnAnimCurve.kTangentFixed)
+                fn.setTangent(idx, xy[0], xy[1], False)
+
+
+def _find_adjacent_key(fn, frame, n):
+    """Find the index of the first key at or after *frame*.
+
+    Returns None if no key is found (all keys are before *frame*).
+    """
+    for ki in range(n):
+        if fn.input(ki).value >= frame - 1e-4:
+            return ki
+    return None
+
+
 class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     """Animation utilities for Maya.
 
@@ -1209,7 +1260,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     fn_new.setIsWeighted(True)
 
                 fn_new.addKeysWithTangents(
-                    s_times, s_values,
+                    s_times,
+                    s_values,
                     tangentInTypeArray=s_in_tt,
                     tangentOutTypeArray=s_out_tt,
                     tangentInXArray=s_in_x,
@@ -1590,16 +1642,18 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 for c in surviving
                 if cmds.objExists(c)
             )
-            stats.update({
-                "keys_before": keys_before_count,
-                "keys_after": keys_after_count,
-                "curves_before": curves_before_count,
-                "curves_after": len(surviving),
-                "static_deleted": static_curves_deleted,
-                "flat_removed": flat_keys_deleted,
-                "simplified": simplified_curves_count,
-                "auto_frozen": auto_tangents_frozen,
-            })
+            stats.update(
+                {
+                    "keys_before": keys_before_count,
+                    "keys_after": keys_after_count,
+                    "curves_before": curves_before_count,
+                    "curves_after": len(surviving),
+                    "static_deleted": static_curves_deleted,
+                    "flat_removed": flat_keys_deleted,
+                    "simplified": simplified_curves_count,
+                    "auto_frozen": auto_tangents_frozen,
+                }
+            )
 
         # Return strings to avoid expensive PyNode construction per curve
         return surviving
@@ -4944,6 +4998,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         by setting keyframes only on the attributes that already have keyframes,
         at the start and end of the specified animation range.
 
+        Uses OpenMaya 2.0 (MFnAnimCurve) to freeze auto tangents on adjacent
+        keys BEFORE inserting bookend keys, preventing Maya from recalculating
+        them.  This eliminates the need for post-insertion tangent restoration
+        and is O(curves) with only fast C++ calls per curve.
+
         Parameters:
             objects (List[pm.nt.Transform], optional): List of PyMel transform nodes to process.
                 If None, all keyed objects in the scene will be used.
@@ -4966,18 +5025,17 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             tie_keyframes(absolute=True, padding=10)  # Adds 10 frame hold before/after animation
         """
         import maya.cmds as cmds
-        import time
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
 
         if objects is None:  # Get all objects that have keyframes
             objects = cmds.ls(type="transform")
-            # Filter objects that have keyframes
             objects = [
                 obj
                 for obj in objects
                 if cmds.keyframe(obj, query=True, timeChange=True)
             ]
         else:
-            # Ensure objects are strings
             if isinstance(objects, (str, pm.PyNode)):
                 objects = [str(objects)]
             elif isinstance(objects, list):
@@ -4992,303 +5050,186 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Determine the keyframe range
         if custom_range:
             start_frame, end_frame = custom_range
-        elif absolute:  # Use the absolute start and end keyframes of all objects
+        elif absolute:
             range_result = AnimUtils.get_keyframe_times(objects, as_range=True)
             if range_result is None:
                 pm.warning("No keyframes found on any objects.")
                 return
             start_frame, end_frame = range_result
-        else:  # Use the start and end frames of the entire scene's playback range
+        else:
             start_frame = cmds.playbackOptions(query=True, minTime=True)
             end_frame = cmds.playbackOptions(query=True, maxTime=True)
 
-        # Apply padding
         tie_start_frame = start_frame - padding
         tie_end_frame = end_frame + padding
 
-        # Collect all keyed attributes (curves) first
-        import time
-
-        t0 = time.time()
-        # Use listConnections for speed (much faster than keyframe query)
-        all_keyed_curves = (
-            cmds.listConnections(
-                objects, type="animCurve", source=True, destination=False
+        # Collect unique animation curves
+        all_keyed_curves = list(
+            set(
+                cmds.listConnections(
+                    objects, type="animCurve", source=True, destination=False
+                )
+                or []
             )
-            or []
-        )
-        # Ensure uniqueness
-        all_keyed_curves = list(set(all_keyed_curves))
-        t1 = time.time()
-        pm.displayInfo(
-            f"Query curves took: {t1-t0:.4f}s. Found {len(all_keyed_curves)} curves."
         )
 
-        if all_keyed_curves:
-            # Snapshot every stepped key time per curve BEFORE inserting
-            # bookend keys.  cmds.setKeyframe auto-tangents neighbouring
-            # keys, corrupting stepped tangents to fixed/auto.  We also
-            # track which curves are fully stepped so we can step the
-            # new bookend keys on those curves.
-            _step_types = {"step", "stepnext"}
-            _auto_types = {"auto", "spline", "clamped"}
-            stepped_times_per_curve = {}  # {curve: [times]}
-            fully_stepped_curves = []
-            # Save boundary tangent data so we can restore it after
-            # setKeyframe recalculates auto tangents on neighbor keys.
-            boundary_tangents = (
-                {}
-            )  # {curve: {time: (in_t, in_a, in_w, out_t, out_a, out_w)}}
-            for curve in all_keyed_curves:
-                out_types = cmds.keyTangent(curve, q=True, outTangentType=True) or []
-                if not out_types:
-                    continue
-                key_times = cmds.keyframe(curve, q=True, timeChange=True) or []
-                stepped_times = [
-                    t for t, ot in zip(key_times, out_types) if ot in _step_types
-                ]
-                if stepped_times:
-                    stepped_times_per_curve[curve] = stepped_times
-                if len(stepped_times) == len(out_types):
-                    fully_stepped_curves.append(curve)
+        if not all_keyed_curves:
+            pm.displayInfo(
+                f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."
+            )
+            return
 
-                # Save tangent data on first and last keys (the ones
-                # adjacent to the new bookend keys whose auto tangents
-                # will be recalculated by setKeyframe).
-                if key_times:
-                    # Batch query all tangent data per curve (5 queries)
-                    # instead of 6 per-key queries × 2 boundary keys.
-                    all_in_types = (
-                        cmds.keyTangent(curve, q=True, inTangentType=True) or []
-                    )
-                    all_in_angles = cmds.keyTangent(curve, q=True, inAngle=True) or []
-                    all_out_angles = cmds.keyTangent(curve, q=True, outAngle=True) or []
-                    all_in_weights = cmds.keyTangent(curve, q=True, inWeight=True) or []
-                    all_out_weights = (
-                        cmds.keyTangent(curve, q=True, outWeight=True) or []
-                    )
-                    bd = {}
-                    for t_idx in {0, len(key_times) - 1}:
-                        t = key_times[t_idx]
-                        in_tt = (
-                            all_in_types[t_idx] if t_idx < len(all_in_types) else None
+        # Tangent type constants
+        kStep = oma2.MFnAnimCurve.kTangentStep
+        kStepNext = oma2.MFnAnimCurve.kTangentStepNext
+        kFlat = oma2.MFnAnimCurve.kTangentFlat
+        kFixed = oma2.MFnAnimCurve.kTangentFixed
+        _step_types = {kStep, kStepNext}
+        _auto_types = {
+            oma2.MFnAnimCurve.kTangentAuto,
+            oma2.MFnAnimCurve.kTangentSmooth,
+            oma2.MFnAnimCurve.kTangentClamped,
+        }
+
+        start_mtime = om2.MTime(tie_start_frame, om2.MTime.uiUnit())
+        end_mtime = om2.MTime(tie_end_frame, om2.MTime.uiUnit())
+
+        # Build MSelectionList for all curves at once
+        sel = om2.MSelectionList()
+        for curve_name in all_keyed_curves:
+            try:
+                sel.add(curve_name)
+            except RuntimeError:
+                continue  # Curve may have been deleted
+
+        for i in range(sel.length()):
+            dep = sel.getDependNode(i)
+            fn = oma2.MFnAnimCurve(dep)
+            n = fn.numKeys
+            if n == 0:
+                continue
+
+            first_t = fn.input(0).value
+            last_t = fn.input(n - 1).value
+
+            # Determine if curve is fully stepped (early-exit check)
+            is_fully_stepped = True
+            for ki in range(n):
+                if fn.outTangentType(ki) not in _step_types:
+                    is_fully_stepped = False
+                    break
+
+            bookend_tt = kStep if is_fully_stepped else kFlat
+
+            # --- Start bookend ---
+            if abs(tie_start_frame - first_t) < 1e-4:
+                # Bookend overlaps first key — skip to avoid corrupting it
+                pass
+            else:
+                if tie_start_frame < first_t:
+                    # Bookend is BEFORE the curve range.
+                    # Freeze first key's auto tangents before inserting.
+                    if not is_fully_stepped:
+                        _freeze_adjacent_tangent(
+                            fn,
+                            0,
+                            is_in=True,
+                            bookend_facing=True,
+                            auto_types=_auto_types,
+                            step_types=_step_types,
                         )
-                        out_tt = out_types[t_idx] if t_idx < len(out_types) else None
-                        in_a_v = (
-                            all_in_angles[t_idx] if t_idx < len(all_in_angles) else None
+                        _freeze_adjacent_tangent(
+                            fn,
+                            0,
+                            is_in=False,
+                            bookend_facing=False,
+                            auto_types=_auto_types,
+                            step_types=_step_types,
                         )
-                        out_a_v = (
-                            all_out_angles[t_idx]
-                            if t_idx < len(all_out_angles)
-                            else None
-                        )
-                        in_w_v = (
-                            all_in_weights[t_idx]
-                            if t_idx < len(all_in_weights)
-                            else None
-                        )
-                        out_w_v = (
-                            all_out_weights[t_idx]
-                            if t_idx < len(all_out_weights)
-                            else None
-                        )
-                        if (
-                            in_tt
-                            and out_tt
-                            and in_a_v is not None
-                            and out_a_v is not None
-                        ):
-                            bd[t] = (
-                                in_tt,
-                                in_a_v,
-                                in_w_v if in_w_v is not None else 1.0,
-                                out_tt,
-                                out_a_v,
-                                out_w_v if out_w_v is not None else 1.0,
-                            )
-                    if bd:
-                        boundary_tangents[curve] = bd
-
-            t2 = time.time()
-            cmds.setKeyframe(all_keyed_curves, time=tie_start_frame)
-            t3 = time.time()
-            cmds.setKeyframe(all_keyed_curves, time=tie_end_frame)
-            t4 = time.time()
-            pm.displayInfo(f"SetKeyframe start took: {t3-t2:.4f}s")
-            pm.displayInfo(f"SetKeyframe end took: {t4-t3:.4f}s")
-
-            # Restore stepped tangent types per-key.  This handles:
-            # 1. Fully-stepped curves: re-step ALL keys including new
-            #    bookend keys (entire curve should be stepped).
-            # 2. Mixed curves with some stepped keys: restore only the
-            #    original stepped key times that setKeyframe may have
-            #    corrupted, without touching non-stepped keys.
-            if fully_stepped_curves:
-                AnimUtils.step_keys(keys=fully_stepped_curves)
-                pm.displayInfo(
-                    f"Restored stepped tangents on {len(fully_stepped_curves)} fully-stepped curves."
-                )
-            # Restore individual stepped keys on non-fully-stepped curves
-            mixed_restore = {
-                c: times
-                for c, times in stepped_times_per_curve.items()
-                if c not in fully_stepped_curves
-            }
-            if mixed_restore:
-                AnimUtils.step_keys(keys=mixed_restore)
-                pm.displayInfo(
-                    f"Restored individual stepped keys on {len(mixed_restore)} mixed curves."
-                )
-
-            # Restore boundary tangent data on original first/last keys.
-            # Only needed when a bookend key was inserted BEYOND the
-            # curve's existing range — setKeyframe recalculates auto
-            # tangents on neighbor keys when a new key is added.
-            # When the bookend overlaps an existing key, no new neighbor
-            # is added and tangents are unchanged, so skip restoration.
-            #
-            # For the side facing the bookend (first key IN, last key
-            # OUT), set "flat" to create a constant-value hold region
-            # matching default pre/post-infinity behavior.  For the
-            # interior-facing side, convert auto types to "fixed" to
-            # lock the original angle/weight.
-            #
-            # Use lock=False everywhere to prevent Maya's tangent lock
-            # from coupling in/out handles on the same key.
-            boundary_restored = 0
-            for curve, times_data in boundary_tangents.items():
-                curve_first = min(times_data.keys())
-                curve_last = max(times_data.keys())
-                bookend_before = tie_start_frame < curve_first
-                bookend_after = tie_end_frame > curve_last
-
-                for t, (in_tt, in_a, in_w, out_tt, out_a, out_w) in times_data.items():
-                    is_first = t == curve_first
-                    is_last = t == curve_last
-
-                    # Only restore keys adjacent to a NEW bookend key.
-                    if not (is_first and bookend_before) and not (
-                        is_last and bookend_after
-                    ):
-                        continue
-
-                    # Skip fully-stepped keys (handled by stepped restoration).
-                    if in_tt in _step_types and out_tt in _step_types:
-                        continue
-
-                    # --- IN tangent ---
-                    if in_tt not in _step_types:
-                        if is_first and bookend_before:
-                            # Faces the bookend → ensure flat behavior
-                            # for constant-value hold while preserving
-                            # the original tangent *type* so FBX export
-                            # retains the correct tangent mode.
-                            if in_tt in _auto_types:
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    inTangentType="flat",
-                                    lock=False,
-                                )
-                            elif in_tt == "fixed":
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    inTangentType="fixed",
-                                    inAngle=0.0,
-                                    inWeight=in_w,
-                                    lock=False,
-                                )
-                            else:
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    inTangentType=in_tt,
-                                    lock=False,
-                                )
-                        else:
-                            # Interior-facing → restore saved data.
-                            restore_in = "fixed" if in_tt in _auto_types else in_tt
-                            kw = {"inTangentType": restore_in, "lock": False}
-                            if restore_in == "fixed":
-                                kw["inAngle"] = in_a
-                                kw["inWeight"] = in_w
-                            cmds.keyTangent(curve, time=(t, t), **kw)
-
-                    # --- OUT tangent ---
-                    if out_tt not in _step_types:
-                        if is_last and bookend_after:
-                            # Faces the bookend → ensure flat behavior
-                            # for constant-value hold while preserving
-                            # the original tangent *type* so FBX export
-                            # retains the correct tangent mode.
-                            if out_tt in _auto_types:
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    outTangentType="flat",
-                                    lock=False,
-                                )
-                            elif out_tt == "fixed":
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    outTangentType="fixed",
-                                    outAngle=0.0,
-                                    outWeight=out_w,
-                                    lock=False,
-                                )
-                            else:
-                                cmds.keyTangent(
-                                    curve,
-                                    time=(t, t),
-                                    outTangentType=out_tt,
-                                    lock=False,
-                                )
-                        else:
-                            # Interior-facing → restore saved data.
-                            restore_out = "fixed" if out_tt in _auto_types else out_tt
-                            kw = {"outTangentType": restore_out, "lock": False}
-                            if restore_out == "fixed":
-                                kw["outAngle"] = out_a
-                                kw["outWeight"] = out_w
-                            cmds.keyTangent(curve, time=(t, t), **kw)
-                    boundary_restored += 1
-
-            # Set flat tangent on bookend keys for non-stepped curves
-            # so they create clean holds beyond the original key range.
-            # Only flatten when the bookend is a NEW key (not overlapping
-            # an existing key), otherwise it corrupts the original key's
-            # tangent type.
-            fully_stepped_set = set(fully_stepped_curves)
-            for curve in all_keyed_curves:
-                if curve in fully_stepped_set:
-                    continue  # Stepped restoration already handled these
-                # Determine if bookend keys are distinct from existing keys.
-                if curve in boundary_tangents:
-                    ct = boundary_tangents[curve].keys()
-                    c_first, c_last = min(ct), max(ct)
                 else:
-                    c_first = c_last = None
-                if c_first is None or tie_start_frame < c_first:
-                    cmds.keyTangent(
-                        curve,
-                        time=(tie_start_frame, tie_start_frame),
-                        inTangentType="flat",
-                        outTangentType="flat",
-                    )
-                if c_last is None or tie_end_frame > c_last:
-                    cmds.keyTangent(
-                        curve,
-                        time=(tie_end_frame, tie_end_frame),
-                        inTangentType="flat",
-                        outTangentType="flat",
-                    )
+                    # Bookend is INSIDE the curve range — freeze neighbors.
+                    if not is_fully_stepped:
+                        adj_idx = _find_adjacent_key(fn, tie_start_frame, n)
+                        if adj_idx is not None:
+                            # Key after insertion: freeze its in-tangent
+                            _freeze_adjacent_tangent(
+                                fn,
+                                adj_idx,
+                                is_in=True,
+                                bookend_facing=False,
+                                auto_types=_auto_types,
+                                step_types=_step_types,
+                            )
+                            # Key before insertion: freeze its out-tangent
+                            if adj_idx > 0:
+                                _freeze_adjacent_tangent(
+                                    fn,
+                                    adj_idx - 1,
+                                    is_in=False,
+                                    bookend_facing=False,
+                                    auto_types=_auto_types,
+                                    step_types=_step_types,
+                                )
 
-            if boundary_restored:
-                pm.displayInfo(
-                    f"Restored boundary tangents on {boundary_restored} keys."
-                )
+                # Evaluate curve value at the bookend time and insert
+                start_val = fn.evaluate(start_mtime)
+                fn.addKey(start_mtime, start_val, bookend_tt, bookend_tt)
+
+            # --- End bookend ---
+            # Re-read numKeys since we may have added a key
+            n = fn.numKeys
+            # Re-read last_t from the actual last key
+            last_t = fn.input(n - 1).value
+
+            if abs(tie_end_frame - last_t) < 1e-4:
+                # Bookend overlaps last key — skip
+                pass
+            else:
+                if tie_end_frame > last_t:
+                    # Bookend is AFTER the curve range.
+                    last_idx = n - 1
+                    if not is_fully_stepped:
+                        _freeze_adjacent_tangent(
+                            fn,
+                            last_idx,
+                            is_in=False,
+                            bookend_facing=True,
+                            auto_types=_auto_types,
+                            step_types=_step_types,
+                        )
+                        _freeze_adjacent_tangent(
+                            fn,
+                            last_idx,
+                            is_in=True,
+                            bookend_facing=False,
+                            auto_types=_auto_types,
+                            step_types=_step_types,
+                        )
+                else:
+                    # Bookend is INSIDE the curve range — freeze neighbors.
+                    if not is_fully_stepped:
+                        adj_idx = _find_adjacent_key(fn, tie_end_frame, n)
+                        if adj_idx is not None:
+                            _freeze_adjacent_tangent(
+                                fn,
+                                adj_idx,
+                                is_in=True,
+                                bookend_facing=False,
+                                auto_types=_auto_types,
+                                step_types=_step_types,
+                            )
+                            if adj_idx > 0:
+                                _freeze_adjacent_tangent(
+                                    fn,
+                                    adj_idx - 1,
+                                    is_in=False,
+                                    bookend_facing=False,
+                                    auto_types=_auto_types,
+                                    step_types=_step_types,
+                                )
+
+                end_val = fn.evaluate(end_mtime)
+                fn.addKey(end_mtime, end_val, bookend_tt, bookend_tt)
 
         pm.displayInfo(
             f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."

@@ -1,0 +1,13 @@
+description: "Fade objects in at scene start and out at scene end via visibility."
+attributes:
+  visibility:
+    in:
+      offset: 0
+      duration: 15
+      values: [0.0, 1.0]
+      tangent: linear
+    out:
+      offset: 0
+      duration: 15
+      values: [1.0, 0.0]
+      tangent: linear

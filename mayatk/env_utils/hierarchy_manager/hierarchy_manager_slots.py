@@ -70,7 +70,11 @@ class HierarchyManagerController(ptk.LoggingMixin):
         return workspace_path
 
     def analyze_hierarchies(
-        self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True
+        self,
+        reference_path: str,
+        fuzzy_matching: bool = True,
+        dry_run: bool = True,
+        filter_meshes: bool = False,
     ) -> bool:
         """Analyze hierarchies and perform comparison.
 
@@ -82,6 +86,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             reference_path: Path to the reference scene file
             fuzzy_matching: Enable fuzzy name matching
             dry_run: Perform analysis without making changes
+            filter_meshes: Exclude mesh-bearing transforms from comparison
 
         Returns:
             bool: True if analysis was successful
@@ -111,8 +116,8 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 )
 
             # Reuse cached import or perform a fresh one.
-            non_default_camera_reference_transforms = (
-                self._import_reference_cached(reference_path)
+            non_default_camera_reference_transforms = self._import_reference_cached(
+                reference_path
             )
             if not non_default_camera_reference_transforms:
                 self.logger.error(
@@ -139,7 +144,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             self._current_diff_result = self.hierarchy_manager.analyze_hierarchies(
                 current_tree_root="SCENE_WIDE_MODE",
                 reference_objects=non_default_camera_reference_transforms,
-                filter_meshes=True,
+                filter_meshes=filter_meshes,
                 filter_cameras=False,
                 filter_lights=False,
             )
@@ -175,6 +180,14 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self.clear_ignored_paths()
         self._cleanup_cached_reference_import()
         self.logger.debug("Analysis cache cleared (ignore paths also reset)")
+
+    def _on_window_hidden(self):
+        """Unload reference scene data when the hierarchy manager is hidden."""
+        self._cleanup_cached_reference_import()
+        # Clear the reference tree
+        if hasattr(self, "ui") and hasattr(self.ui, "tree000"):
+            self.ui.tree000.clear()
+        self.logger.debug("Reference scene unloaded on window hide.")
 
     def _cleanup_cached_reference_import(self):
         """Clean up the cached reference import (namespace + transforms)."""
@@ -304,6 +317,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         create_stubs: bool = True,
         quarantine_extras: bool = True,
         quarantine_group: str = "_QUARANTINE",
+        skip_animated: bool = False,
         fix_reparented: bool = True,
         dry_run: bool = True,
     ) -> bool:
@@ -316,6 +330,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             create_stubs: Create empty transforms for missing items.
             quarantine_extras: Move extra items to a _QUARANTINE group.
             quarantine_group: Name of the quarantine group.
+            skip_animated: Skip quarantining extras under animated ancestors.
             fix_reparented: Move reparented nodes to reference position.
             dry_run: Preview without changes.
 
@@ -349,6 +364,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 results["quarantined"] = self.hierarchy_manager.quarantine_extras(
                     group=quarantine_group,
                     paths=effective["extra"],
+                    skip_animated=skip_animated,
                 )
 
             if fix_reparented and effective["reparented"]:
@@ -522,9 +538,13 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 return
 
             tree_widget.setHeaderLabels([scene_name])
-            self.populate_tree_with_hierarchy(
-                tree_widget, filtered_transforms, "current"
-            )
+            tree_widget.blockSignals(True)
+            try:
+                self.populate_tree_with_hierarchy(
+                    tree_widget, filtered_transforms, "current"
+                )
+            finally:
+                tree_widget.blockSignals(False)
 
         except Exception as e:
             self.logger.error(f"Error populating current scene tree: {e}")
@@ -562,9 +582,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         # Clean up any previous cached import before creating a new one.
         self._cleanup_cached_reference_import()
 
-        self.logger.progress(
-            f"Importing reference: {os.path.basename(reference_path)}"
-        )
+        self.logger.progress(f"Importing reference: {os.path.basename(reference_path)}")
 
         sandbox = NamespaceSandbox(dry_run=False)
         self._redirect_logger(sandbox.logger)
@@ -573,17 +591,13 @@ class HierarchyManagerController(ptk.LoggingMixin):
             reference_path, force_complete_import=True
         )
         if not import_info or not import_info.get("transforms"):
-            self.logger.error(
-                "Failed to import reference file or no transforms found"
-            )
+            self.logger.error("Failed to import reference file or no transforms found")
             return None
 
         all_transforms = import_info.get("transforms", [])
 
         # Filter out default Maya cameras.
-        filtered = [
-            t for t in all_transforms if not self._is_default_maya_camera(t)
-        ]
+        filtered = [t for t in all_transforms if not self._is_default_maya_camera(t)]
         excluded_count = len(all_transforms) - len(filtered)
 
         self.logger.result(
@@ -600,11 +614,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         # Extract reference namespaces for UI filtering.
         self._reference_namespaces = sorted(
-            {
-                t.nodeName().split(":")[0]
-                for t in all_transforms
-                if ":" in t.nodeName()
-            }
+            {t.nodeName().split(":")[0] for t in all_transforms if ":" in t.nodeName()}
         )
         if self._reference_namespaces:
             self.logger.debug(
@@ -863,7 +873,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         def _find_item(path):
             """Locate the best matching tree item for a diff path."""
-            candidates, _ = tree_matcher.find_path_matches(
+            candidates, strategy = tree_matcher.find_path_matches(
                 path,
                 by_full,
                 by_clean,
@@ -871,7 +881,23 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 prefer_cleaned=True,
                 strict=False,
             )
+            if candidates:
+                self.logger.debug(
+                    f"[DIFF-FMT] {tree_type}: '{path}' -> found via {strategy}"
+                )
+            else:
+                self.logger.debug(
+                    f"[DIFF-FMT] {tree_type}: '{path}' -> NOT FOUND"
+                )
             return candidates[0] if candidates else None
+
+        def _expand_parents(item):
+            """Expand all ancestor items so the colored item is visible."""
+            parent = item.parent()
+            while parent:
+                if not parent.isExpanded():
+                    parent.setExpanded(True)
+                parent = parent.parent()
 
         try:
             # Apply formatters based on difference type
@@ -889,6 +915,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                         item = _find_item(current_path)
                         if item:
                             self._apply_diff_color(item, "reparented")
+                            _expand_parents(item)
 
             elif tree_type == "reference":
                 # Reference tree — missing items exist here but not in current
@@ -904,6 +931,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                         item = _find_item(ref_path)
                         if item:
                             self._apply_diff_color(item, "reparented")
+                            _expand_parents(item)
 
             # Apply fuzzy match formatting to both trees
             for fuzzy_match in self._current_diff_result.get("fuzzy_matches", []):
@@ -914,11 +942,13 @@ class HierarchyManagerController(ptk.LoggingMixin):
                     item = _find_item(current_name)
                     if item:
                         self._apply_diff_color(item, "fuzzy")
+                        _expand_parents(item)
 
                 elif tree_type == "reference" and target_name:
                     item = _find_item(target_name)
                     if item:
                         self._apply_diff_color(item, "fuzzy")
+                        _expand_parents(item)
 
         except Exception as e:
             self.logger.error(f"Error formatting tree differences: {e}")
@@ -1339,6 +1369,88 @@ class HierarchyManagerController(ptk.LoggingMixin):
         )
 
 
+class _MiddleButtonDragFilter(QtCore.QObject):
+    """Event filter that enables middle-mouse drag-to-reparent on a QTreeWidget.
+
+    Installed on ``tree001``'s **viewport** to intercept middle-button presses
+    and synthesise left-button events so that Qt's built-in ``InternalMove``
+    drag-drop machinery handles the visual move.
+
+    Also installed on the **tree widget** itself to intercept ``Drop`` events.
+    After Qt completes the internal move, the filter calls back into the slots
+    layer to mirror the reparent operation inside Maya.
+    """
+
+    def __init__(self, parent=None, *, reparent_callback=None):
+        super().__init__(parent)
+        self._mid_dragging = False
+        self._reparent_callback = reparent_callback
+        self._dragged_items = []
+
+    # ---- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _synth_mouse(etype, event, button=QtCore.Qt.LeftButton):
+        return QtGui.QMouseEvent(
+            etype, event.localPos(), button, button, event.modifiers()
+        )
+
+    # ---- eventFilter -------------------------------------------------------
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        etype = event.type()
+
+        # --- viewport events (middle → left translation) ---
+        is_viewport = not obj.inherits("QTreeWidget")
+
+        if is_viewport:
+            if (
+                etype == QtCore.QEvent.MouseButtonPress
+                and event.button() == QtCore.Qt.MiddleButton
+            ):
+                tree = obj.parent()
+                self._dragged_items = list(tree.selectedItems())
+                self._mid_dragging = True
+                QtCore.QCoreApplication.sendEvent(
+                    obj, self._synth_mouse(QtCore.QEvent.MouseButtonPress, event)
+                )
+                return True
+
+            if self._mid_dragging and etype == QtCore.QEvent.MouseMove:
+                QtCore.QCoreApplication.sendEvent(
+                    obj, self._synth_mouse(QtCore.QEvent.MouseMove, event)
+                )
+                return True
+
+            if (
+                etype == QtCore.QEvent.MouseButtonRelease
+                and event.button() == QtCore.Qt.MiddleButton
+            ):
+                was_dragging = self._mid_dragging
+                self._mid_dragging = False
+                if was_dragging:
+                    QtCore.QCoreApplication.sendEvent(
+                        obj,
+                        self._synth_mouse(QtCore.QEvent.MouseButtonRelease, event),
+                    )
+                    return True
+
+            return super().eventFilter(obj, event)
+
+        # --- tree-widget-level: intercept Drop to reparent in Maya ----------
+        if etype == QtCore.QEvent.Drop and self._reparent_callback:
+            # Let Qt handle the tree-item move first
+            result = super().eventFilter(obj, event)
+            # Now mirror reparent operations in Maya
+            for item in self._dragged_items:
+                new_parent = item.parent()
+                self._reparent_callback(item, new_parent)
+            self._dragged_items.clear()
+            return result
+
+        return super().eventFilter(obj, event)
+
+
 class HierarchyManagerSlots(ptk.LoggingMixin):
     """Slots class for hierarchy management UI operations.
 
@@ -1377,6 +1489,11 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Create controller
         self.controller = HierarchyManagerController(self)
 
+        # Middle-mouse drag filter for current scene tree reparenting
+        self._tree001_drag_filter = _MiddleButtonDragFilter(
+            self.ui, reparent_callback=self._on_tree001_drop_reparent
+        )
+
         # Setup logging
         self.controller._redirect_logger(self.logger)
 
@@ -1397,6 +1514,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         # Kill scriptJobs when the UI is destroyed
         self.ui.destroyed.connect(self._cleanup_script_jobs)
+
+        # Unload reference scene when the manager window is hidden
+        if hasattr(self.ui, "on_hide"):
+            self.ui.on_hide.connect(self.controller._on_window_hidden)
 
         # Auto-refresh current scene tree on initialization
         self.controller.populate_current_scene_tree(self.ui.tree001)
@@ -1485,6 +1606,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
     def tree000_init(self, widget):
         """Initialize the reference/imported hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
+            # Reference tree is read-only — editing names here has no meaning
+            widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
+
             # Enable multi-selection for auto-select functionality
             widget.setSelectionMode(
                 self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
@@ -1563,6 +1687,88 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 cmds.file(scene_files[0], open=True, force=True)
                 self.controller.refresh_trees()
 
+    def _on_current_tree_item_renamed(self, item, column):
+        """Rename the Maya scene object when the user edits a tree item's name."""
+        if column != 0:
+            return
+
+        if getattr(self, "_renaming_in_progress", False):
+            return
+        self._renaming_in_progress = True
+        try:
+            node = item.data(0, self.sb.QtCore.Qt.UserRole)
+            if node is None or isinstance(node, str):
+                return
+
+            new_name = item.text(0).strip()
+            if not new_name:
+                return
+
+            try:
+                old_name = node.nodeName()
+                if new_name == old_name:
+                    return
+
+                node.rename(new_name)
+                actual_name = node.nodeName()
+                item._raw_name = actual_name
+
+                # Maya may have appended a number to avoid clashes
+                if actual_name != new_name:
+                    item.setText(0, actual_name)
+
+                self.controller.logger.info(
+                    f"Renamed '{old_name}' \u2192 '{actual_name}'"
+                )
+            except Exception as e:
+                # Revert the tree item text on failure
+                try:
+                    item.setText(0, node.nodeName())
+                except Exception:
+                    pass
+                self.controller.logger.error(f"Rename failed: {e}")
+        finally:
+            self._renaming_in_progress = False
+
+    def _on_tree001_drop_reparent(self, item, new_parent_item):
+        """Mirror a tree-widget drag-drop reparent in the Maya scene.
+
+        Called by ``_MiddleButtonDragFilter`` after Qt finishes moving the
+        tree item.
+
+        Parameters:
+            item: The ``QTreeWidgetItem`` that was moved.
+            new_parent_item: Its new parent item (``None`` if dropped at root).
+        """
+        node = item.data(0, self.sb.QtCore.Qt.UserRole)
+        if node is None or isinstance(node, str):
+            return
+
+        try:
+            if new_parent_item is not None:
+                parent_node = new_parent_item.data(0, self.sb.QtCore.Qt.UserRole)
+                if parent_node is None or isinstance(parent_node, str):
+                    self.controller.logger.warning(
+                        "Drop target has no Maya node — reparent skipped."
+                    )
+                    return
+                pm.parent(node, parent_node)
+                self.controller.logger.info(
+                    f"Reparented '{node}' under '{parent_node}'"
+                )
+            else:
+                # Dropped at root level → world-parent
+                pm.parent(node, world=True)
+                self.controller.logger.info(
+                    f"Reparented '{node}' to world"
+                )
+        except Exception as e:
+            self.controller.logger.error(
+                f"Maya reparent failed for '{node}': {e}"
+            )
+            # Refresh tree to revert the visual move
+            self.controller.populate_current_scene_tree(self.ui.tree001)
+
     def tree001_init(self, widget):
         """Initialize the current scene hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
@@ -1609,9 +1815,27 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 setObjectName="b016",
                 setToolTip="Remove ignore mark from selected items.",
             )
+            widget.menu.add("Separator")
+            widget.menu.add(
+                "QPushButton",
+                setText="Rename from Reference",
+                setObjectName="b017",
+                setToolTip="Rename selected current-scene items using the names of selected reference-tree items (matched by order).",
+            )
 
             # Open file dialog when the placeholder item is clicked
             widget.itemClicked.connect(self._on_current_tree_item_clicked)
+
+            # Rename the Maya scene object when user edits a tree item
+            widget.itemChanged.connect(self._on_current_tree_item_renamed)
+
+            # Enable internal drag-and-drop for reparenting via middle mouse button
+            widget.setDragDropMode(
+                self.sb.QtWidgets.QAbstractItemView.InternalMove
+            )
+            widget.setDefaultDropAction(self.sb.QtCore.Qt.MoveAction)
+            widget.viewport().installEventFilter(self._tree001_drag_filter)
+            widget.installEventFilter(self._tree001_drag_filter)
 
             # Mark as initialized to prevent re-adding menu items
             widget.is_initialized = True
@@ -1700,6 +1924,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setChecked=True,
             setToolTip="Enable fuzzy name matching for improved object identification.",
         )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Filter Mesh Objects",
+            setObjectName="chk_filter_meshes",
+            setChecked=False,
+            setToolTip="Exclude mesh-bearing transforms from the comparison. When unchecked, all transforms (including geometry) are compared.",
+        )
 
     def tb002_init(self, widget):
         """Initialize the pull objects toggle button with options menu."""
@@ -1749,6 +1980,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setObjectName="txt_quarantine_name",
             setPlaceholderText="_QUARANTINE",
             setToolTip="Custom name for the quarantine group (leave blank for default).",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Skip Animated Parents",
+            setObjectName="chk_skip_animated",
+            setChecked=False,
+            setToolTip="Skip quarantining extras that are parented under an animated object (they may be intentionally attached).",
         )
         widget.option_box.menu.add(
             "QCheckBox",
@@ -1812,6 +2050,14 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                     self.ui.tb001.option_box.menu.chk_fuzzy_matching.isChecked()
                 )
 
+        # Get filter_meshes option
+        filter_meshes = False  # Default: compare all transforms
+        if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
+            if hasattr(self.ui.tb001.menu, "chk_filter_meshes"):
+                filter_meshes = (
+                    self.ui.tb001.option_box.menu.chk_filter_meshes.isChecked()
+                )
+
         # Parse selection mode
         auto_select = selection_mode != "none"
         select_root_only = selection_mode == "root_only"
@@ -1840,7 +2086,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         # Perform hierarchy analysis
         success = self.controller.analyze_hierarchies(
-            reference_path, fuzzy_matching, dry_run
+            reference_path, fuzzy_matching, dry_run, filter_meshes=filter_meshes
         )
         if not success:
             return
@@ -1904,7 +2150,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 n_miss = len(effective["missing"])
                 n_extra = len(effective["extra"])
                 n_repar = len(effective["reparented"])
-                total = n_miss + n_extra + n_repar
+                n_fuzzy = len(effective.get("fuzzy_matches", []))
+                total = n_miss + n_extra + n_repar + n_fuzzy
                 if total == 0:
                     self.ui.footer.setText("Diff: hierarchies match.")
                 else:
@@ -1915,6 +2162,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         parts.append(f"{n_extra} extra")
                     if n_repar:
                         parts.append(f"{n_repar} reparented")
+                    if n_fuzzy:
+                        parts.append(f"{n_fuzzy} renamed")
                     self.ui.footer.setText(f"Diff: {', '.join(parts)}.")
 
     def tb002(self, state=None):
@@ -2125,6 +2374,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         do_stubs = True
         do_quarantine = True
         do_reparent = True
+        skip_animated = False
         quarantine_name = "_QUARANTINE"
 
         if hasattr(self.ui, "tb003") and hasattr(self.ui.tb003, "menu"):
@@ -2133,6 +2383,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             if hasattr(self.ui.tb003.menu, "chk_fix_quarantine"):
                 do_quarantine = (
                     self.ui.tb003.option_box.menu.chk_fix_quarantine.isChecked()
+                )
+            if hasattr(self.ui.tb003.menu, "chk_skip_animated"):
+                skip_animated = (
+                    self.ui.tb003.option_box.menu.chk_skip_animated.isChecked()
                 )
             if hasattr(self.ui.tb003.menu, "chk_fix_reparented"):
                 do_reparent = (
@@ -2153,6 +2407,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             create_stubs=do_stubs,
             quarantine_extras=do_quarantine,
             quarantine_group=quarantine_name,
+            skip_animated=skip_animated,
             fix_reparented=do_reparent,
             dry_run=dry_run,
         )
@@ -2249,12 +2504,20 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         dry_run = self.ui.chk002.isChecked()
         log_level = self.ui.cmb001.currentData()
 
+        # Get filter_meshes option
+        filter_meshes = False
+        if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
+            if hasattr(self.ui.tb001.menu, "chk_filter_meshes"):
+                filter_meshes = (
+                    self.ui.tb001.option_box.menu.chk_filter_meshes.isChecked()
+                )
+
         # Set log level
         if log_level:
             self.logger.setLevel(log_level)
 
         success = self.controller.analyze_hierarchies(
-            reference_path, fuzzy_matching, dry_run
+            reference_path, fuzzy_matching, dry_run, filter_meshes=filter_meshes
         )
         if success:
             # Refresh tree widgets with new analysis
@@ -2279,6 +2542,131 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
     def b016(self):
         """Unignore selected items in the current scene tree."""
         self._unignore_selected(self.ui.tree001)
+
+    def b017(self):
+        """Rename current-scene items to match reference names.
+
+        Works in two modes:
+        1. **Manual** — when items are selected in both trees, pairs them
+           by selection order (first-to-first, second-to-second, etc.).
+        2. **Auto (fuzzy)** — when nothing is selected in the reference tree,
+           uses the fuzzy-match results from the last diff to auto-pair items.
+           Only fuzzy-matched items that are currently selected in the current
+           tree are renamed, or ALL fuzzy matches if nothing is selected.
+        """
+        cur_items = self.ui.tree001.selectedItems()
+        ref_items = self.ui.tree000.selectedItems()
+
+        # ── Build rename pairs ──
+        rename_pairs = []  # list of (cur_tree_item, new_name_str)
+
+        if ref_items:
+            # Manual mode: pair by selection order
+            if not cur_items:
+                self.logger.warning(
+                    "Select at least one item in the current scene tree."
+                )
+                return
+            pairs = min(len(cur_items), len(ref_items))
+            if len(cur_items) != len(ref_items):
+                self.logger.notice(
+                    f"Selection counts differ (current={len(cur_items)}, "
+                    f"reference={len(ref_items)}). Renaming first {pairs} pairs."
+                )
+            for ci, ri in zip(cur_items[:pairs], ref_items[:pairs]):
+                rename_pairs.append((ci, ri.text(0).strip()))
+        else:
+            # Auto mode: use fuzzy matches from last diff
+            diff = self.controller._current_diff_result
+            if not diff or not diff.get("fuzzy_matches"):
+                self.logger.warning(
+                    "No reference selection and no fuzzy matches available.\n"
+                    "Select items in both trees, or run Diff first."
+                )
+                return
+
+            fuzzy_list = diff["fuzzy_matches"]
+            self.logger.info(
+                f"Auto-rename: {len(fuzzy_list)} fuzzy match(es) from last diff."
+            )
+
+            # Build a lookup: cleaned_path → tree item for current tree
+            cur_item_map = {}
+            it = self.sb.QtWidgets.QTreeWidgetItemIterator(self.ui.tree001)
+            while it.value():
+                item = it.value()
+                path = self.controller._build_item_path(item)
+                cur_item_map[path] = item
+                it += 1
+
+            # If user selected specific items, restrict to those
+            selected_paths = set()
+            if cur_items:
+                selected_paths = {
+                    self.controller._build_item_path(i) for i in cur_items
+                }
+
+            for fz in fuzzy_list:
+                cur_path = fz.get("current_name", "")
+                ref_path = fz.get("target_name", "")
+                if not cur_path or not ref_path:
+                    continue
+                # Extract the leaf name from the reference path
+                ref_leaf = ref_path.rsplit("|", 1)[-1]
+                item = cur_item_map.get(cur_path)
+                if not item:
+                    continue
+                if selected_paths and cur_path not in selected_paths:
+                    continue
+                rename_pairs.append((item, ref_leaf))
+
+            if not rename_pairs:
+                self.logger.notice(
+                    "No matching fuzzy items found in the current tree."
+                )
+                return
+
+        # ── Execute renames ──
+        renamed = 0
+        for cur_item, new_name in rename_pairs:
+            node = cur_item.data(0, self.sb.QtCore.Qt.UserRole)
+            if node is None or isinstance(node, str):
+                continue
+            if not new_name:
+                continue
+
+            try:
+                old_name = node.nodeName()
+                if new_name == old_name:
+                    continue
+
+                node.rename(new_name)
+                actual_name = node.nodeName()
+                cur_item._raw_name = actual_name
+
+                # Block signals to prevent itemChanged from interfering
+                self.ui.tree001.blockSignals(True)
+                try:
+                    cur_item.setText(0, actual_name)
+                finally:
+                    self.ui.tree001.blockSignals(False)
+
+                renamed += 1
+                self.controller.logger.info(
+                    f"Renamed '{old_name}' \u2192 '{actual_name}'"
+                )
+            except Exception as e:
+                self.controller.logger.error(
+                    f"Failed to rename '{node}': {e}"
+                )
+
+        if renamed:
+            self.logger.success(f"Renamed {renamed} object(s) from reference names.")
+            # Re-run diff if one was active
+            if self.controller._current_diff_result:
+                self.controller.apply_difference_formatting(
+                    self.ui.tree001, self.ui.tree000
+                )
 
     def _ignore_selected(self, tree_widget):
         """Mark selected tree items (and their descendants) as ignored."""
@@ -2836,6 +3224,74 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                                 parent.setExpanded(True)
                             parent = parent.parent()
 
+            # -------------------- Select REPARENTED (both trees) ---------------------
+            reparented_list = self.controller._current_diff_result.get(
+                "reparented", []
+            )
+            if reparented_list:
+                self.logger.debug(
+                    f"[AUTO-SELECT] Selecting {len(reparented_list)} reparented items"
+                )
+            for rp in reparented_list:
+                for key, tree, by_f, by_c, by_l in (
+                    ("reference_path", tree000, ref_by_full, ref_by_clean_full, ref_by_last),
+                    ("current_path", tree001, cur_by_full, cur_by_clean_full, cur_by_last),
+                ):
+                    rp_path = rp.get(key, "")
+                    if not rp_path:
+                        continue
+                    candidates, strategy = tree_matcher.find_path_matches(
+                        rp_path, by_f, by_c, by_l,
+                        prefer_cleaned=True, strict=False,
+                    )
+                    for c in candidates:
+                        if not c.isSelected():
+                            c.setSelected(True)
+                            selected_count += 1
+                            parent = c.parent()
+                            while parent:
+                                if not parent.isExpanded():
+                                    parent.setExpanded(True)
+                                parent = parent.parent()
+                            self.logger.debug(
+                                f"  ✓ SELECTED reparented '{rp['leaf']}' in "
+                                f"{'ref' if key == 'reference_path' else 'cur'} tree"
+                            )
+
+            # -------------------- Select FUZZY (both trees) ---------------------
+            fuzzy_list = self.controller._current_diff_result.get(
+                "fuzzy_matches", []
+            )
+            if fuzzy_list:
+                self.logger.debug(
+                    f"[AUTO-SELECT] Selecting {len(fuzzy_list)} fuzzy-matched items"
+                )
+            for fz in fuzzy_list:
+                for key, tree, by_f, by_c, by_l in (
+                    ("target_name", tree000, ref_by_full, ref_by_clean_full, ref_by_last),
+                    ("current_name", tree001, cur_by_full, cur_by_clean_full, cur_by_last),
+                ):
+                    fz_path = fz.get(key, "")
+                    if not fz_path:
+                        continue
+                    candidates, strategy = tree_matcher.find_path_matches(
+                        fz_path, by_f, by_c, by_l,
+                        prefer_cleaned=True, strict=False,
+                    )
+                    for c in candidates:
+                        if not c.isSelected():
+                            c.setSelected(True)
+                            selected_count += 1
+                            parent = c.parent()
+                            while parent:
+                                if not parent.isExpanded():
+                                    parent.setExpanded(True)
+                                parent = parent.parent()
+                            self.logger.debug(
+                                f"  ✓ SELECTED fuzzy '{fz_path.split('|')[-1]}' in "
+                                f"{'ref' if key == 'target_name' else 'cur'} tree"
+                            )
+
             # -------------------- Select ALL CHILDREN of selected nodes ---------------------
             # After selecting the diff paths, also select all their children to ensure
             # the deepest visible nodes (like _GEO objects) are also selected
@@ -2881,7 +3337,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 )
 
             # Update expected total to reflect condensed selection intention
-            total_expected = len(extra_list) + len(missing_list)
+            total_expected = (
+                len(extra_list)
+                + len(missing_list)
+                + len(reparented_list) * 2  # both trees
+                + len(fuzzy_list) * 2  # both trees
+            )
             if unresolved_extra or unresolved_missing:
                 self.logger.warning(
                     f"Unresolved diff paths (extra={len(unresolved_extra)}, missing={len(unresolved_missing)}) sample extra={unresolved_extra[:5]} missing={unresolved_missing[:5]}"
@@ -3090,6 +3551,54 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                                 expanded_count += 1
                             parent = parent.parent()
 
+            # Expand reparented items in both trees
+            for reparented in self.controller._current_diff_result.get(
+                "reparented", []
+            ):
+                for key, tree in (
+                    ("reference_path", tree000),
+                    ("current_path", tree001),
+                ):
+                    rp_path = reparented.get(key, "")
+                    if not rp_path:
+                        continue
+                    node_name = rp_path.split("|")[-1]
+                    items = tree.findItems(
+                        node_name, self.sb.QtCore.Qt.MatchRecursive
+                    )
+                    for item in items:
+                        if self._matches_hierarchy_path(item, rp_path):
+                            parent = item.parent()
+                            while parent:
+                                if not parent.isExpanded():
+                                    parent.setExpanded(True)
+                                    expanded_count += 1
+                                parent = parent.parent()
+
+            # Expand fuzzy-matched items in both trees
+            for fuzzy in self.controller._current_diff_result.get(
+                "fuzzy_matches", []
+            ):
+                for key, tree in (
+                    ("target_name", tree000),
+                    ("current_name", tree001),
+                ):
+                    fz_path = fuzzy.get(key, "")
+                    if not fz_path:
+                        continue
+                    node_name = fz_path.split("|")[-1]
+                    items = tree.findItems(
+                        node_name, self.sb.QtCore.Qt.MatchRecursive
+                    )
+                    for item in items:
+                        if self._matches_hierarchy_path(item, fz_path):
+                            parent = item.parent()
+                            while parent:
+                                if not parent.isExpanded():
+                                    parent.setExpanded(True)
+                                    expanded_count += 1
+                                parent = parent.parent()
+
             if expanded_count > 0:
                 self.logger.debug(
                     f"Expanded {expanded_count} nodes showing differences"
@@ -3112,7 +3621,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         final_cur_count += 1
                     it_final_cur += 1
 
-                if final_ref_count > 0:
+                if final_ref_count > 0 and final_cur_count > 0:
+                    self.logger.success(
+                        f"✓ AUTO-SELECT COMPLETE: {final_ref_count} items in REFERENCE tree, "
+                        f"{final_cur_count} items in CURRENT tree. "
+                        f"Use 'Pull' to import missing, or 'Fix' to repair reparented/renamed."
+                    )
+                elif final_ref_count > 0:
                     self.logger.success(
                         f"✓ AUTO-SELECT COMPLETE: {final_ref_count} items selected in REFERENCE tree (left panel). "
                         f"Use 'Pull' button to import selected objects to current scene."

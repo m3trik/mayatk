@@ -1639,6 +1639,120 @@ class TestAnimUtils(MayaTkTestCase):
                 f"{before_values[f]:.8f} -> {after_values[f]:.8f}",
             )
 
+    def test_tie_keyframes_custom_range(self):
+        """Verify tie_keyframes respects the custom_range parameter."""
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
+
+        AnimUtils.tie_keyframes([self.cube], custom_range=(0, 20))
+
+        keys = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, timeChange=True
+        )
+        self.assertIn(0.0, keys, "Bookend at custom start missing")
+        self.assertIn(20.0, keys, "Bookend at custom end missing")
+
+    def test_tie_keyframes_evaluates_correct_value(self):
+        """Verify bookend keys are set to the evaluated curve value at the
+        bookend frame, not just the nearest key's value.
+
+        A curve from t=5 v=0 to t=15 v=10 should produce a bookend at t=0 with
+        v=0 (the evaluation of the curve at t=0, which is the pre-infinity value).
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
+
+        AnimUtils.tie_keyframes([self.cube], custom_range=(0, 20))
+
+        vals = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, valueChange=True
+        )
+        keys = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, timeChange=True
+        )
+        kv = dict(zip(keys, vals))
+
+        # Pre-infinity for constant (default) should give 0.0 at t=0
+        self.assertAlmostEqual(kv[0.0], 0.0, places=3,
+            msg=f"Bookend at t=0 has wrong value: {kv[0.0]}")
+        # Post-infinity for constant should give 10.0 at t=20
+        self.assertAlmostEqual(kv[20.0], 10.0, places=3,
+            msg=f"Bookend at t=20 has wrong value: {kv[20.0]}")
+
+    def test_tie_keyframes_idempotent(self):
+        """Verify calling tie_keyframes twice doesn't produce duplicate keys
+        or corrupt tangent types.
+        """
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=8, value=5)
+
+        AnimUtils.tie_keyframes([self.cube])
+        keys_first = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, timeChange=True
+        )
+        vals_first = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, valueChange=True
+        )
+
+        # Tie again — should not add duplicate keys or change values
+        AnimUtils.tie_keyframes([self.cube])
+        keys_second = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, timeChange=True
+        )
+        vals_second = cmds.keyframe(
+            str(self.cube), attribute="translateX", q=True, valueChange=True
+        )
+
+        self.assertEqual(keys_first, keys_second,
+            f"Key times changed on second tie: {keys_first} -> {keys_second}")
+        for v1, v2 in zip(vals_first, vals_second):
+            self.assertAlmostEqual(v1, v2, places=6,
+                msg=f"Values changed on second tie: {vals_first} -> {vals_second}")
+
+    def test_tie_keyframes_bookend_tangent_is_flat(self):
+        """Verify non-stepped bookend keys have flat tangent types for clean holds."""
+        import maya.cmds as cmds
+
+        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        pm.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
+        pm.setKeyframe(self.cube, attribute="translateX", time=8, value=10)
+
+        AnimUtils.tie_keyframes([self.cube])
+
+        curve = (
+            cmds.listConnections(
+                f"{self.cube}.translateX", type="animCurve", source=True
+            )
+            or [None]
+        )[0]
+        self.assertIsNotNone(curve)
+
+        keys = cmds.keyframe(curve, q=True, timeChange=True)
+        out_types = cmds.keyTangent(curve, q=True, outTangentType=True)
+        in_types = cmds.keyTangent(curve, q=True, inTangentType=True)
+        kv = dict(zip(keys, zip(in_types, out_types)))
+
+        # Bookend at start (t=1) should be flat
+        self.assertEqual(kv[1.0][0], "flat",
+            f"Start bookend in-tangent should be flat: {kv[1.0]}")
+        self.assertEqual(kv[1.0][1], "flat",
+            f"Start bookend out-tangent should be flat: {kv[1.0]}")
+
+        # Bookend at end (t=10) should be flat
+        self.assertEqual(kv[10.0][0], "flat",
+            f"End bookend in-tangent should be flat: {kv[10.0]}")
+        self.assertEqual(kv[10.0][1], "flat",
+            f"End bookend out-tangent should be flat: {kv[10.0]}")
+
     def test_snap_keys_to_frames(self):
         """Test snapping keys to whole frame values."""
         # Add a key at fractional time

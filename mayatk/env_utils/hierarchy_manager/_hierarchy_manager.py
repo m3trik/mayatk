@@ -258,9 +258,7 @@ class HierarchyMapBuilder:
         long_path_set = set(node_paths)
 
         def _is_root(long_path: str) -> bool:
-            parent = cmds.listRelatives(
-                long_path, parent=True, fullPath=True
-            )
+            parent = cmds.listRelatives(long_path, parent=True, fullPath=True)
             return (not parent) or (parent[0] not in long_path_set)
 
         def _traverse(long_path: str, path: str = ""):
@@ -340,7 +338,10 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         ]
 
     def _find_fuzzy_match(
-        self, target_name: str, name_to_nodes: Dict[str, List[Any]], dry_run: bool = False
+        self,
+        target_name: str,
+        name_to_nodes: Dict[str, List[Any]],
+        dry_run: bool = False,
     ) -> Optional[Tuple[Any, str]]:
         """Find fuzzy match for target object using pre-built name index."""
         if pm.objExists(target_name):
@@ -373,7 +374,10 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         return None
 
     def _log_debug_info(
-        self, target_name: str, name_to_nodes: Dict[str, List[Any]], dry_run: bool = False
+        self,
+        target_name: str,
+        name_to_nodes: Dict[str, List[Any]],
+        dry_run: bool = False,
     ):
         """Log debug information for matching process."""
         log_prefix = "[DRY-RUN] " if dry_run else ""
@@ -482,7 +486,9 @@ class HierarchyManager(ptk.LoggingMixin):
                     if is_default_maya_camera(path, node):
                         continue
                     if exclude_types:
-                        if not should_keep_node_by_type(node, exclude_types, exclude=True):
+                        if not should_keep_node_by_type(
+                            node, exclude_types, exclude=True
+                        ):
                             continue
                     filtered[path] = node
                 setattr(self, attr, filtered)
@@ -736,6 +742,85 @@ class HierarchyManager(ptk.LoggingMixin):
             except Exception as fz_err:
                 self.logger.debug(f"Fuzzy renamed detection failed: {fz_err}")
 
+            # ── Detect FBX name-flattening (suffix matching) ──
+            # FBX export can prepend parent group names to child node names,
+            # e.g. "BOOSTER_OFF_6_SWITCH" → "OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH".
+            # Detect these by checking if an extra leaf is a suffix of a missing leaf
+            # (or vice versa) at the same parent path.
+            try:
+                if remaining_missing and remaining_extra:
+                    # Group by parent path for efficient matching
+                    missing_by_parent: Dict[str, List[tuple]] = {}
+                    for p in remaining_missing:
+                        if "|" in p:
+                            parent, leaf = p.rsplit("|", 1)
+                        else:
+                            parent, leaf = "", p
+                        missing_by_parent.setdefault(parent, []).append((leaf, p))
+
+                    extra_by_parent: Dict[str, List[tuple]] = {}
+                    for p in remaining_extra:
+                        if "|" in p:
+                            parent, leaf = p.rsplit("|", 1)
+                        else:
+                            parent, leaf = "", p
+                        extra_by_parent.setdefault(parent, []).append((leaf, p))
+
+                    matched_sfx_missing: set = set()
+                    matched_sfx_extra: set = set()
+
+                    for parent in missing_by_parent:
+                        if parent not in extra_by_parent:
+                            continue
+                        m_items = missing_by_parent[parent]
+                        e_items = extra_by_parent[parent]
+                        # For each missing leaf, look for an extra leaf that is
+                        # a suffix (the shorter name is contained at the end of
+                        # the longer name preceded by _ or matching exactly).
+                        for m_leaf, m_path in m_items:
+                            if m_path in matched_sfx_missing:
+                                continue
+                            for e_leaf, e_path in e_items:
+                                if e_path in matched_sfx_extra:
+                                    continue
+                                if m_leaf == e_leaf:
+                                    continue
+                                # Determine which is the longer (flattened) name
+                                if len(m_leaf) > len(e_leaf):
+                                    longer, shorter = m_leaf, e_leaf
+                                else:
+                                    longer, shorter = e_leaf, m_leaf
+                                # The shorter name must appear at the end of the
+                                # longer name, preceded by '_'
+                                if (
+                                    longer.endswith(shorter)
+                                    and longer[len(longer) - len(shorter) - 1] == "_"
+                                ):
+                                    fuzzy_matches.append(
+                                        {
+                                            "target_name": m_path,
+                                            "current_name": e_path,
+                                            "score": 1.0,
+                                        }
+                                    )
+                                    matched_sfx_missing.add(m_path)
+                                    matched_sfx_extra.add(e_path)
+                                    break  # move to next missing item
+
+                    if matched_sfx_missing:
+                        remaining_missing = [
+                            p for p in remaining_missing if p not in matched_sfx_missing
+                        ]
+                        remaining_extra = [
+                            p for p in remaining_extra if p not in matched_sfx_extra
+                        ]
+                        self.logger.debug(
+                            f"Detected {len(matched_sfx_missing)} FBX name-flattening "
+                            f"matches (suffix matching)"
+                        )
+            except Exception as sfx_err:
+                self.logger.debug(f"Suffix matching failed: {sfx_err}")
+
             # Update missing/extra to only contain truly-missing/truly-extra items
             self.missing_objects = remaining_missing
             self.extra_objects = remaining_extra
@@ -914,10 +999,21 @@ class HierarchyManager(ptk.LoggingMixin):
         self.logger.result(f"Created {len(created)} stub transform(s).")
         return created
 
+    @staticmethod
+    def _has_animated_ancestor(node) -> bool:
+        """Return True if *node* or any of its ancestors has animation curves."""
+        current = node
+        while current is not None:
+            if pm.keyframe(current, query=True, keyframeCount=True):
+                return True
+            current = current.getParent()
+        return False
+
     def quarantine_extras(
         self,
         group: str = "_QUARANTINE",
         paths: Optional[List[str]] = None,
+        skip_animated: bool = False,
     ) -> List[str]:
         """Move extra (scene-only) items to a root-level quarantine group.
 
@@ -929,10 +1025,21 @@ class HierarchyManager(ptk.LoggingMixin):
         Ancestor deduplication is applied: if ``GRP`` and ``GRP|CHILD`` are
         both extra, only ``GRP`` is moved (``CHILD`` comes along for free).
 
+        Root-level extras (no ``|`` in path) are already isolated from the
+        reference hierarchy and are left in place unless they need to be
+        gathered under a specific group.
+
+        Auto-detection: when ``group`` is the default ``"_QUARANTINE"`` and
+        all extras share a single root-level ancestor that is itself extra,
+        that existing group is reused instead of creating a new one.
+
         Args:
             group: Name of the root-level quarantine group.
             paths: Cleaned hierarchy paths to quarantine.  Defaults to
                 ``self.differences["extra"]``.
+            skip_animated: When True, extras parented under an animated
+                object are left in place (they may be intentionally
+                constrained/attached).
 
         Returns:
             List of node names that were moved.
@@ -953,10 +1060,69 @@ class HierarchyManager(ptk.LoggingMixin):
             ):
                 roots_only.append(p)
 
+        # ── Auto-detect existing container ──
+        # If the user hasn't set a custom name (still default) and all
+        # extras share a single root-level ancestor that is itself extra
+        # AND that root has multiple direct extra children, reuse it as
+        # the quarantine container instead of creating _QUARANTINE.
+        if group == "_QUARANTINE" and roots_only:
+            root_names = {p.split("|")[0] for p in roots_only}
+            if len(root_names) == 1:
+                natural_root = next(iter(root_names))
+                # Count direct children of this root that are also extra
+                direct_extra_children = sum(
+                    1
+                    for p in targets_set
+                    if p.startswith(natural_root + "|")
+                    and "|" not in p[len(natural_root) + 1 :]
+                )
+                # Only adopt if the root is extra AND has multiple extra
+                # children — meaning it's a real container, not a lone orphan.
+                if natural_root in targets_set and direct_extra_children >= 2:
+                    group = natural_root
+                    self.logger.info(
+                        f"Using existing root group '{group}' as quarantine "
+                        f"(all extras are already under it)."
+                    )
+
+        # ── Separate already-root items from nested ones ──
+        already_root: List[str] = []
+        needs_move: List[str] = []
+        for p in roots_only:
+            top = p.split("|")[0]
+            if "|" not in p:
+                # This IS a root-level item
+                if p == group:
+                    # The quarantine group itself — nothing to do
+                    already_root.append(p)
+                else:
+                    needs_move.append(p)
+            elif top == group:
+                # Already under the quarantine group
+                already_root.append(p)
+            else:
+                needs_move.append(p)
+
+        if already_root:
+            self.logger.info(
+                f"{len(already_root)} extra(s) already under '{group}' — skipped."
+            )
+
         moved: List[str] = []
 
+        if not needs_move:
+            self.logger.notice(
+                f"All {len(already_root)} extra(s) are already contained "
+                f"under '{group}'. Nothing to move."
+            )
+            return [p.rsplit("|", 1)[-1] for p in already_root]
+
         if self.dry_run:
-            for p in roots_only:
+            for p in needs_move:
+                node = self._resolve_node(p, source="current")
+                if skip_animated and node and self._has_animated_ancestor(node):
+                    self.logger.info(f"[DRY-RUN] Would skip (animated ancestor): {p}")
+                    continue
                 self.logger.info(f"[DRY-RUN] Would quarantine: {p}")
                 moved.append(p.rsplit("|", 1)[-1])
             self.logger.result(f"[DRY-RUN] Would quarantine {len(moved)} item(s).")
@@ -968,12 +1134,16 @@ class HierarchyManager(ptk.LoggingMixin):
         else:
             quarantine_grp = pm.createNode("transform", name=group)
 
-        for cleaned_path in roots_only:
+        skipped_animated: List[str] = []
+        for cleaned_path in needs_move:
             node = self._resolve_node(cleaned_path, source="current")
             if not node:
                 self.logger.debug(
                     f"Quarantine skipped (node not found): {cleaned_path}"
                 )
+                continue
+            if skip_animated and self._has_animated_ancestor(node):
+                skipped_animated.append(cleaned_path)
                 continue
             try:
                 pm.parent(node, quarantine_grp)
@@ -981,6 +1151,11 @@ class HierarchyManager(ptk.LoggingMixin):
                 self.logger.debug(f"Quarantined: {node.fullPath()}")
             except Exception as e:
                 self.logger.warning(f"Failed to quarantine {cleaned_path}: {e}")
+
+        if skipped_animated:
+            self.logger.info(
+                f"{len(skipped_animated)} extra(s) skipped (under animated ancestor)."
+            )
 
         self.logger.result(f"Quarantined {len(moved)} item(s) under '{group}'.")
         return moved

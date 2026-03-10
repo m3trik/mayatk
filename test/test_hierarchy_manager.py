@@ -1027,7 +1027,9 @@ class TestHierarchyManager(MayaTkTestCase):
         Baseline captured: 2026-06-16
         """
         if not self.real_scenes_dir.exists():
-            self.skipTest(f"Real-world scenes directory not found: {self.real_scenes_dir}")
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
 
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
@@ -1046,7 +1048,8 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIsNotNone(info, "Failed to import reference scene")
 
         ref_objs = [
-            t for t in info.get("transforms", [])
+            t
+            for t in info.get("transforms", [])
             if t.nodeName().split(":")[-1] not in default_cams
         ]
 
@@ -1063,15 +1066,18 @@ class TestHierarchyManager(MayaTkTestCase):
 
         # --- Assert exact baseline counts ---
         self.assertEqual(
-            len(diff["missing"]), 48,
+            len(diff["missing"]),
+            48,
             f"Expected 48 missing, got {len(diff['missing'])}",
         )
         self.assertEqual(
-            len(diff["extra"]), 4,
+            len(diff["extra"]),
+            4,
             f"Expected 4 extra, got {len(diff['extra'])}",
         )
         self.assertEqual(
-            len(diff["reparented"]), 1,
+            len(diff["reparented"]),
+            1,
             f"Expected 1 reparented, got {len(diff['reparented'])}",
         )
 
@@ -1107,33 +1113,39 @@ class TestHierarchyManager(MayaTkTestCase):
         # Every "missing" path must exist in reference but NOT in current
         for path in diff["missing"]:
             self.assertIn(
-                path, reference_cleaned,
+                path,
+                reference_cleaned,
                 f"Missing item '{path}' not found in reference scene",
             )
             self.assertNotIn(
-                path, current_cleaned,
+                path,
+                current_cleaned,
                 f"Missing item '{path}' actually exists in current scene",
             )
 
         # Every "extra" path must exist in current but NOT in reference
         for path in diff["extra"]:
             self.assertIn(
-                path, current_cleaned,
+                path,
+                current_cleaned,
                 f"Extra item '{path}' not found in current scene",
             )
             self.assertNotIn(
-                path, reference_cleaned,
+                path,
+                reference_cleaned,
                 f"Extra item '{path}' actually exists in reference scene",
             )
 
         # Every "reparented" leaf must appear in both but under different parents
         for rp_item in diff["reparented"]:
             self.assertIn(
-                rp_item["reference_path"], reference_cleaned,
+                rp_item["reference_path"],
+                reference_cleaned,
                 f"Reparented ref path not in reference: {rp_item['reference_path']}",
             )
             self.assertIn(
-                rp_item["current_path"], current_cleaned,
+                rp_item["current_path"],
+                current_cleaned,
                 f"Reparented cur path not in current: {rp_item['current_path']}",
             )
 
@@ -1142,14 +1154,20 @@ class TestHierarchyManager(MayaTkTestCase):
         reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
         fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
         fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
-        independent_missing = reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
-        independent_extra = current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
         self.assertEqual(
-            sorted(independent_missing), sorted(diff["missing"]),
+            sorted(independent_missing),
+            sorted(diff["missing"]),
             "Independent missing computation disagrees with analyze_hierarchies",
         )
         self.assertEqual(
-            sorted(independent_extra), sorted(diff["extra"]),
+            sorted(independent_extra),
+            sorted(diff["extra"]),
             "Independent extra computation disagrees with analyze_hierarchies",
         )
 
@@ -1164,7 +1182,9 @@ class TestHierarchyManager(MayaTkTestCase):
         Baseline captured: 2026-06-16
         """
         if not self.real_scenes_dir.exists():
-            self.skipTest(f"Real-world scenes directory not found: {self.real_scenes_dir}")
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
 
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
@@ -1183,7 +1203,8 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIsNotNone(info, "Failed to import FBX reference")
 
         ref_objs = [
-            t for t in info.get("transforms", [])
+            t
+            for t in info.get("transforms", [])
             if t.nodeName().split(":")[-1] not in default_cams
         ]
 
@@ -1200,15 +1221,18 @@ class TestHierarchyManager(MayaTkTestCase):
 
         # --- Assert exact baseline counts ---
         self.assertEqual(
-            len(diff["missing"]), 0,
+            len(diff["missing"]),
+            0,
             f"Expected 0 missing, got {len(diff['missing'])}: {diff['missing'][:5]}",
         )
         self.assertEqual(
-            len(diff["extra"]), 2,
+            len(diff["extra"]),
+            2,
             f"Expected 2 extra, got {len(diff['extra'])}: {diff['extra']}",
         )
         self.assertEqual(
-            len(diff["reparented"]), 0,
+            len(diff["reparented"]),
+            0,
             f"Expected 0 reparented, got {len(diff['reparented'])}",
         )
 
@@ -1227,21 +1251,25 @@ class TestHierarchyManager(MayaTkTestCase):
 
         for path in diff["missing"]:
             self.assertIn(
-                path, reference_cleaned,
+                path,
+                reference_cleaned,
                 f"Missing item '{path}' not found in reference scene",
             )
             self.assertNotIn(
-                path, current_cleaned,
+                path,
+                current_cleaned,
                 f"Missing item '{path}' actually exists in current scene",
             )
 
         for path in diff["extra"]:
             self.assertIn(
-                path, current_cleaned,
+                path,
+                current_cleaned,
                 f"Extra item '{path}' not found in current scene",
             )
             self.assertNotIn(
-                path, reference_cleaned,
+                path,
+                reference_cleaned,
                 f"Extra item '{path}' actually exists in reference scene",
             )
 
@@ -1249,14 +1277,20 @@ class TestHierarchyManager(MayaTkTestCase):
         reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
         fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
         fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
-        independent_missing = reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
-        independent_extra = current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
         self.assertEqual(
-            sorted(independent_missing), sorted(diff["missing"]),
+            sorted(independent_missing),
+            sorted(diff["missing"]),
             "Independent missing computation disagrees with analyze_hierarchies",
         )
         self.assertEqual(
-            sorted(independent_extra), sorted(diff["extra"]),
+            sorted(independent_extra),
+            sorted(diff["extra"]),
             "Independent extra computation disagrees with analyze_hierarchies",
         )
 
@@ -1546,6 +1580,182 @@ class TestHierarchyManager(MayaTkTestCase):
 
         pm.namespace(removeNamespace="test_ns", mergeNamespaceWithRoot=True)
         pm.namespace(removeNamespace="ControlData", mergeNamespaceWithRoot=True)
+
+    def test_c130_fbx_vs_ma_diff_content(self):
+        """Regression: C130 FBX-vs-MA diff correctly detects FBX name-flattening.
+
+        Validates that analyze_hierarchies handles FBX name-flattening artifacts
+        (e.g. BOOSTER_OFF_6_SWITCH → OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH)
+        by recognizing them as renames rather than missing+extra pairs.
+
+        Bug: Before suffix matching, the BOOSTER items were split into 2 false
+        "missing" and 2 false "extra" entries. The fix operation would have created
+        empty stubs AND quarantined real geometry — destroying the scene.
+        Fixed: 2026-03-09
+        """
+        if not self.real_scenes_dir.exists():
+            self.skipTest(
+                f"Real-world scenes directory not found: {self.real_scenes_dir}"
+            )
+
+        reference_fbx = self.real_scenes_dir / "C130_FCR_Speedrun_Assembly.fbx"
+        current_scene = Path(
+            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder"
+            r"\PRODUCTION\AF\C-130HJ_Mutual\PRODUCTION\Maya\Flap_Rigging\scenes"
+            r"\modules\C130H_FCR_SPEEDRUN\C130H_FCR_SPEEDRUN_module.ma"
+        )
+
+        if not reference_fbx.exists() or not current_scene.exists():
+            self.skipTest("Required C130 FBX/MA scene files not found.")
+
+        pm.openFile(str(current_scene), force=True)
+
+        sandbox = NamespaceSandbox(dry_run=False)
+        info = sandbox.import_with_namespace(
+            str(reference_fbx), force_complete_import=True
+        )
+        self.assertIsNotNone(info, "Failed to import FBX reference")
+
+        default_cams = frozenset({"persp", "top", "front", "side"})
+        ref_objs = [
+            t
+            for t in info.get("transforms", [])
+            if t.nodeName().split(":")[-1] not in default_cams
+        ]
+
+        manager = HierarchyManager(
+            import_manager=sandbox, fuzzy_matching=True, dry_run=True
+        )
+        diff = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objs,
+            filter_meshes=False,
+            filter_cameras=False,
+            filter_lights=False,
+        )
+
+        # --- Assert exact baseline counts ---
+        self.assertEqual(
+            len(diff["missing"]),
+            2,
+            f"Expected 2 missing, got {len(diff['missing'])}: {diff['missing']}",
+        )
+        self.assertEqual(
+            len(diff["extra"]),
+            20,
+            f"Expected 20 extra, got {len(diff['extra'])}: {diff['extra'][:5]}",
+        )
+        self.assertEqual(
+            len(diff["reparented"]),
+            3,
+            f"Expected 3 reparented, got {len(diff['reparented'])}",
+        )
+        self.assertEqual(
+            len(diff["fuzzy_matches"]),
+            2,
+            f"Expected 2 fuzzy (suffix) matches, got {len(diff['fuzzy_matches'])}",
+        )
+
+        # --- Assert missing items are genuinely missing (arrow GEOs) ---
+        missing_set = set(diff["missing"])
+        self.assertIn(
+            "INTERACTIVES|ARROWS|S00A24_ARROW_GRP|S00A24_ARROW_LOC|S00A24_ARROW_GEO",
+            missing_set,
+        )
+        self.assertIn(
+            "INTERACTIVES|ARROWS|S00A27_ARROW_GRP|S00A27_ARROW_LOC|S00A27_ARROW_GEO",
+            missing_set,
+        )
+
+        # --- Assert BOOSTER items are NOT in missing/extra (they are suffix-matched) ---
+        all_missing_extra = set(diff["missing"]) | set(diff["extra"])
+        for path in all_missing_extra:
+            self.assertNotIn(
+                "BOOSTER_OFF_6_SWITCH",
+                path.rsplit("|", 1)[-1],
+                f"BOOSTER item should be suffix-matched, not missing/extra: {path}",
+            )
+
+        # --- Assert suffix-matched pairs are in fuzzy_matches ---
+        fuzzy_targets = {m["target_name"] for m in diff["fuzzy_matches"]}
+        fuzzy_currents = {m["current_name"] for m in diff["fuzzy_matches"]}
+        self.assertIn(
+            "INTERACTIVES|SWITCHES|S00A18_AIL_SWITCH_LOC|"
+            "OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH",
+            fuzzy_targets,
+        )
+        self.assertIn(
+            "INTERACTIVES|SWITCHES|S00A18_AIL_SWITCH_LOC|BOOSTER_OFF_6_SWITCH",
+            fuzzy_currents,
+        )
+
+        # --- Assert extras are all under REVISIONS (legitimate MA-only content) ---
+        for path in diff["extra"]:
+            self.assertTrue(
+                path.startswith("REVISIONS"),
+                f"Extra item should be under REVISIONS, got: {path}",
+            )
+
+        # --- Assert reparented items are the ExampleBase nodes ---
+        reparented_leaves = {r["leaf"] for r in diff["reparented"]}
+        self.assertEqual(
+            reparented_leaves,
+            {"ExampleBase", "ExampleBase_1", "ExampleBase_2"},
+        )
+
+        # --- Cross-validate against actual scene contents ---
+        current_cleaned = {
+            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+        }
+        reference_cleaned = {
+            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+        }
+
+        for path in diff["missing"]:
+            self.assertIn(
+                path,
+                reference_cleaned,
+                f"Missing item '{path}' not found in reference scene",
+            )
+            self.assertNotIn(
+                path,
+                current_cleaned,
+                f"Missing item '{path}' actually exists in current scene",
+            )
+
+        for path in diff["extra"]:
+            self.assertIn(
+                path,
+                current_cleaned,
+                f"Extra item '{path}' not found in current scene",
+            )
+            self.assertNotIn(
+                path,
+                reference_cleaned,
+                f"Extra item '{path}' actually exists in reference scene",
+            )
+
+        # Independent diff computation must agree with analyze_hierarchies
+        reparented_ref_paths = {r["reference_path"] for r in diff["reparented"]}
+        reparented_cur_paths = {r["current_path"] for r in diff["reparented"]}
+        fuzzy_ref_paths = {m["target_name"] for m in diff.get("fuzzy_matches", [])}
+        fuzzy_cur_paths = {m["current_name"] for m in diff.get("fuzzy_matches", [])}
+        independent_missing = (
+            reference_cleaned - current_cleaned - reparented_ref_paths - fuzzy_ref_paths
+        )
+        independent_extra = (
+            current_cleaned - reference_cleaned - reparented_cur_paths - fuzzy_cur_paths
+        )
+        self.assertEqual(
+            sorted(independent_missing),
+            sorted(diff["missing"]),
+            "Independent missing computation disagrees with analyze_hierarchies",
+        )
+        self.assertEqual(
+            sorted(independent_extra),
+            sorted(diff["extra"]),
+            "Independent extra computation disagrees with analyze_hierarchies",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2136,9 +2346,7 @@ class TestCachedReferenceImport(MayaTkTestCase):
             self.controller._current_diff_result,
             "Diff result should survive (no file-based tree population in this test)",
         )
-        self.assertIn(
-            "root|child_b", self.controller._current_diff_result["missing"]
-        )
+        self.assertIn("root|child_b", self.controller._current_diff_result["missing"])
 
     def test_cleanup_cached_reference_import_noop_when_none(self):
         """_cleanup_cached_reference_import is safe to call when cache is None.
@@ -2233,6 +2441,223 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         self.assertIsNone(items[parent_key]["parent"])
         self.assertIn(parent_key, roots)
         self.assertNotIn(child_key, roots)
+
+    # ── Auto-detect quarantine container ──
+
+    def test_quarantine_auto_detects_natural_container(self):
+        """quarantine_extras reuses existing root group when all extras share it.
+
+        When using the default "_QUARANTINE" name and all extras share a
+        single root-level ancestor that is itself extra AND has ≥2 direct
+        extra children, that root is adopted as the quarantine container.
+        Added: 2026-03-09
+        """
+        container = pm.group(empty=True, name="REVISIONS")
+        child_a = pm.group(empty=True, name="rev_a", parent=container)
+        child_b = pm.group(empty=True, name="rev_b", parent=container)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "REVISIONS": container,
+            "REVISIONS|rev_a": child_a,
+            "REVISIONS|rev_b": child_b,
+        }
+        manager.clean_to_raw_current = {
+            "REVISIONS": "REVISIONS",
+            "REVISIONS|rev_a": "REVISIONS|rev_a",
+            "REVISIONS|rev_b": "REVISIONS|rev_b",
+        }
+        manager.differences = {
+            "extra": ["REVISIONS", "REVISIONS|rev_a", "REVISIONS|rev_b"],
+        }
+
+        moved = manager.quarantine_extras()
+        # Should auto-detect REVISIONS as the container; nothing to move
+        self.assertFalse(
+            pm.objExists("_QUARANTINE"),
+            "Should NOT create _QUARANTINE when natural container exists",
+        )
+        # Items are already under REVISIONS — returned as "already contained"
+        self.assertIn("REVISIONS", moved)
+
+    def test_quarantine_no_auto_detect_single_child(self):
+        """quarantine_extras does NOT auto-detect when root has < 2 direct extra children.
+
+        A lone orphan root with one child should still be moved to _QUARANTINE.
+        Added: 2026-03-09
+        """
+        grp = pm.group(empty=True, name="lone_grp")
+        child = pm.group(empty=True, name="lone_child", parent=grp)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "lone_grp": grp,
+            "lone_grp|lone_child": child,
+        }
+        manager.clean_to_raw_current = {
+            "lone_grp": "lone_grp",
+            "lone_grp|lone_child": "lone_grp|lone_child",
+        }
+        manager.differences = {
+            "extra": ["lone_grp", "lone_grp|lone_child"],
+        }
+
+        moved = manager.quarantine_extras()
+        # Should use default _QUARANTINE since only 1 direct child
+        self.assertTrue(pm.objExists("_QUARANTINE"))
+        self.assertEqual(pm.PyNode("lone_grp").getParent().nodeName(), "_QUARANTINE")
+
+    def test_quarantine_already_under_group(self):
+        """quarantine_extras skips extras already under the quarantine group.
+
+        If the quarantine group already exists and an extra is nested under
+        it, that item should be reported but not moved again.
+        Added: 2026-03-09
+        """
+        q_grp = pm.group(empty=True, name="MY_Q")
+        existing = pm.group(empty=True, name="already_there", parent=q_grp)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "MY_Q|already_there": existing,
+        }
+        manager.clean_to_raw_current = {
+            "MY_Q|already_there": "MY_Q|already_there",
+        }
+        manager.differences = {
+            "extra": ["MY_Q|already_there"],
+        }
+
+        moved = manager.quarantine_extras(group="MY_Q")
+        # Should recognize it's already under MY_Q
+        self.assertIn("already_there", moved)
+        # Should NOT have been re-parented
+        self.assertEqual(existing.getParent().nodeName(), "MY_Q")
+
+    # ── Skip animated ancestor ──
+
+    def test_has_animated_ancestor_positive(self):
+        """_has_animated_ancestor returns True when a parent has keyframes.
+
+        Added: 2026-03-09
+        """
+        parent = pm.group(empty=True, name="anim_parent")
+        child = pm.group(empty=True, name="anim_child", parent=parent)
+        # Add a keyframe to the parent
+        pm.setKeyframe(parent, attribute="translateX", time=1, value=0)
+        pm.setKeyframe(parent, attribute="translateX", time=10, value=5)
+
+        self.assertTrue(HierarchyManager._has_animated_ancestor(child))
+
+    def test_has_animated_ancestor_negative(self):
+        """_has_animated_ancestor returns False when no ancestor has keyframes.
+
+        Added: 2026-03-09
+        """
+        parent = pm.group(empty=True, name="static_parent")
+        child = pm.group(empty=True, name="static_child", parent=parent)
+
+        self.assertFalse(HierarchyManager._has_animated_ancestor(child))
+
+    def test_has_animated_ancestor_self(self):
+        """_has_animated_ancestor returns True when the node itself is animated.
+
+        Added: 2026-03-09
+        """
+        node = pm.group(empty=True, name="self_animated")
+        pm.setKeyframe(node, attribute="rotateY", time=1, value=0)
+
+        self.assertTrue(HierarchyManager._has_animated_ancestor(node))
+
+    def test_quarantine_skip_animated_live(self):
+        """quarantine_extras skips extras parented under animated objects.
+
+        When skip_animated=True, extras whose ancestor has keyframes are
+        left in place and not moved to the quarantine group.
+        Added: 2026-03-09
+        """
+        anim_root = pm.group(empty=True, name="anim_root")
+        pm.setKeyframe(anim_root, attribute="translateX", time=1, value=0)
+        extra_under_anim = pm.group(empty=True, name="attached_extra", parent=anim_root)
+        plain_extra = pm.group(empty=True, name="plain_extra")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "anim_root|attached_extra": extra_under_anim,
+            "plain_extra": plain_extra,
+        }
+        manager.clean_to_raw_current = {
+            "anim_root|attached_extra": "anim_root|attached_extra",
+            "plain_extra": "plain_extra",
+        }
+        manager.differences = {
+            "extra": ["anim_root|attached_extra", "plain_extra"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=True)
+        # plain_extra should be quarantined
+        self.assertIn("plain_extra", moved)
+        # attached_extra should NOT be moved (animated ancestor)
+        self.assertNotIn("attached_extra", moved)
+        self.assertEqual(extra_under_anim.getParent().nodeName(), "anim_root")
+
+    def test_quarantine_skip_animated_false_default(self):
+        """quarantine_extras moves animated-parent extras when skip_animated=False.
+
+        Default behavior: skip_animated is False, so animation on ancestors
+        does not prevent quarantining.
+        Added: 2026-03-09
+        """
+        anim_root = pm.group(empty=True, name="anim_root2")
+        pm.setKeyframe(anim_root, attribute="translateX", time=1, value=0)
+        extra = pm.group(empty=True, name="child_under_anim", parent=anim_root)
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager.current_scene_path_map = {
+            "anim_root2|child_under_anim": extra,
+        }
+        manager.clean_to_raw_current = {
+            "anim_root2|child_under_anim": "anim_root2|child_under_anim",
+        }
+        manager.differences = {
+            "extra": ["anim_root2|child_under_anim"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=False)
+        self.assertIn("child_under_anim", moved)
+        self.assertEqual(extra.getParent().nodeName(), "_QUARANTINE")
+
+    def test_quarantine_skip_animated_dry_run(self):
+        """quarantine_extras dry_run respects skip_animated.
+
+        In dry-run mode, items under animated ancestors should be reported
+        as skipped and not included in the returned list.
+        Added: 2026-03-09
+        """
+        anim_parent = pm.group(empty=True, name="dry_anim_parent")
+        pm.setKeyframe(anim_parent, attribute="translateY", time=1, value=0)
+        extra = pm.group(empty=True, name="dry_anim_extra", parent=anim_parent)
+        static_extra = pm.group(empty=True, name="dry_static_extra")
+
+        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager.current_scene_path_map = {
+            "dry_anim_parent|dry_anim_extra": extra,
+            "dry_static_extra": static_extra,
+        }
+        manager.clean_to_raw_current = {
+            "dry_anim_parent|dry_anim_extra": "dry_anim_parent|dry_anim_extra",
+            "dry_static_extra": "dry_static_extra",
+        }
+        manager.differences = {
+            "extra": ["dry_anim_parent|dry_anim_extra", "dry_static_extra"],
+        }
+
+        moved = manager.quarantine_extras(skip_animated=True)
+        # Only static_extra should be in the "would quarantine" list
+        self.assertIn("dry_static_extra", moved)
+        self.assertNotIn("dry_anim_extra", moved)
+        # No quarantine group created in dry-run
+        self.assertFalse(pm.objExists("_QUARANTINE"))
 
 
 if __name__ == "__main__":
