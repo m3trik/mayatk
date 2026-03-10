@@ -1,10 +1,10 @@
-"""Run scene_sequencer Maya tests via maya_connection.
+"""Run sequencer Maya tests via maya_connection.
 
 Writes the test code to a temp file and tells Maya to exec it,
 avoiding command-port namespace-scoping issues with inline strings.
 
 Usage:
-    python mayatk/test/_run_scene_sequencer_tests.py
+    python mayatk/test/_run_sequencer_tests.py
 """
 
 import sys
@@ -40,11 +40,11 @@ def _write_test_script():
 
         # Clear stale modules
         for k in list(sys.modules):
-            if 'scene_sequencer' in k or 'test_scene_sequencer' in k:
+            if 'sequencer' in k or 'test_sequencer' in k:
                 del sys.modules[k]
 
-        from mayatk.anim_utils.scene_sequencer._scene_sequencer import (
-            SceneBlock, SceneSequencer, load_template, _resolve_keys,
+        from mayatk.anim_utils.sequencer._sequencer import (
+            SceneBlock, Sequencer, load_template, _resolve_keys,
         )
         import pymel.core as pm
 
@@ -57,12 +57,12 @@ def _write_test_script():
                 self.assertEqual(b.duration, 30)
 
             def test_round_trip(self):
-                seq = SceneSequencer([
+                seq = Sequencer([
                     SceneBlock(0, "S0", 0, 50, ["cube1"]),
                     SceneBlock(1, "S1", 60, 100, ["sphere1"]),
                 ])
                 data = seq.to_dict()
-                restored = SceneSequencer.from_dict(data)
+                restored = Sequencer.from_dict(data)
                 self.assertEqual(len(restored.scenes), 2)
                 self.assertEqual(restored.scene_by_id(0).name, "S0")
 
@@ -99,7 +99,7 @@ def _write_test_script():
 
             def test_single_object(self):
                 cube = self._make_cube("box", {{1: 0, 10: 5, 20: 10}})
-                seq = SceneSequencer.detect_scenes([cube])
+                seq = Sequencer.detect_scenes([cube])
                 self.assertEqual(len(seq.scenes), 1)
                 self.assertAlmostEqual(seq.scenes[0].start, 1.0)
                 self.assertAlmostEqual(seq.scenes[0].end, 20.0)
@@ -107,13 +107,13 @@ def _write_test_script():
             def test_gap_creates_two_scenes(self):
                 c1 = self._make_cube("early", {{1: 0, 10: 5}})
                 c2 = self._make_cube("late", {{100: 0, 110: 5}})
-                seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+                seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
                 self.assertEqual(len(seq.scenes), 2)
 
             def test_overlapping_ranges_merge(self):
                 c1 = self._make_cube("a", {{0: 0, 50: 10}})
                 c2 = self._make_cube("b", {{30: 0, 80: 10}})
-                seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+                seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
                 self.assertEqual(len(seq.scenes), 1)
                 self.assertAlmostEqual(seq.scenes[0].start, 0.0)
                 self.assertAlmostEqual(seq.scenes[0].end, 80.0)
@@ -132,7 +132,7 @@ def _write_test_script():
             def test_set_scene_duration_ripple(self):
                 c1 = self._make_cube("a", {{0: 0, 50: 10}})
                 c2 = self._make_cube("b", {{100: 0, 150: 10}})
-                seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+                seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
 
                 scene0 = seq.scene_by_id(0)
                 s1_start_before = seq.scene_by_id(1).start
@@ -146,7 +146,7 @@ def _write_test_script():
             def test_set_scene_start_ripple(self):
                 c1 = self._make_cube("x", {{0: 0, 30: 5}})
                 c2 = self._make_cube("y", {{50: 0, 80: 5}})
-                seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+                seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
 
                 s1_start_before = seq.scene_by_id(1).start
                 seq.set_scene_start(0, 10, ripple=True)
@@ -165,7 +165,7 @@ def _write_test_script():
                 pm.setKeyframe(cube, attribute="translateX", time=0, value=0)
                 pm.setKeyframe(cube, attribute="translateX", time=100, value=10)
 
-                seq = SceneSequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
+                seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
                 seq.apply_template(0, str(cube), "fade_in_out", attrs=["visibility"])
 
                 vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
@@ -176,7 +176,7 @@ def _write_test_script():
 
             def test_template_not_found(self):
                 cube = pm.polyCube(name="tmp")[0]
-                seq = SceneSequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
+                seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
                 with self.assertRaises(FileNotFoundError):
                     seq.apply_template(0, str(cube), "nonexistent_xyz")
 
@@ -194,10 +194,10 @@ def _write_test_script():
         class TestPersistence(unittest.TestCase):
             def setUp(self):
                 pm.mel.file(new=True, force=True)
-                SceneSequencer.delete_storage_node()
+                Sequencer.delete_storage_node()
 
             def tearDown(self):
-                SceneSequencer.delete_storage_node()
+                Sequencer.delete_storage_node()
 
             def _make_cube(self, name, keys):
                 cube = pm.polyCube(name=name)[0]
@@ -207,7 +207,7 @@ def _write_test_script():
 
             def test_save_creates_node(self):
                 cube = self._make_cube("sc", {{0: 0, 50: 10}})
-                seq = SceneSequencer([SceneBlock(0, "S0", 0, 50, [str(cube)])])
+                seq = Sequencer([SceneBlock(0, "S0", 0, 50, [str(cube)])])
                 node_name = seq.save()
                 self.assertTrue(pm.objExists(node_name))
                 self.assertEqual(pm.PyNode(node_name).nodeType(), "network")
@@ -215,12 +215,12 @@ def _write_test_script():
             def test_save_load_round_trip(self):
                 c1 = self._make_cube("rt_a", {{0: 0, 50: 10}})
                 c2 = self._make_cube("rt_b", {{60: 0, 100: 5}})
-                seq = SceneSequencer([
+                seq = Sequencer([
                     SceneBlock(0, "Alpha", 0, 50, [str(c1)]),
                     SceneBlock(1, "Beta", 60, 100, [str(c2)]),
                 ])
                 seq.save()
-                loaded = SceneSequencer.load()
+                loaded = Sequencer.load()
                 self.assertIsNotNone(loaded)
                 self.assertEqual(len(loaded.scenes), 2)
                 self.assertEqual(loaded.scene_by_id(0).name, "Alpha")
@@ -228,21 +228,21 @@ def _write_test_script():
 
             def test_load_resolves_renames(self):
                 cube = self._make_cube("orig", {{0: 0, 50: 10}})
-                seq = SceneSequencer([SceneBlock(0, "S", 0, 50, [str(cube)])])
+                seq = Sequencer([SceneBlock(0, "S", 0, 50, [str(cube)])])
                 seq.save()
                 pm.rename(cube, "renamed")
-                loaded = SceneSequencer.load()
+                loaded = Sequencer.load()
                 self.assertIn("renamed", loaded.scene_by_id(0).objects)
 
             def test_delete_storage_node(self):
-                seq = SceneSequencer([SceneBlock(0, "S", 0, 50)])
+                seq = Sequencer([SceneBlock(0, "S", 0, 50)])
                 seq.save()
-                self.assertTrue(SceneSequencer.delete_storage_node())
-                self.assertFalse(pm.objExists(SceneSequencer.STORAGE_NODE))
-                self.assertFalse(SceneSequencer.delete_storage_node())
+                self.assertTrue(Sequencer.delete_storage_node())
+                self.assertFalse(pm.objExists(Sequencer.STORAGE_NODE))
+                self.assertFalse(Sequencer.delete_storage_node())
 
             def test_load_returns_none_when_empty(self):
-                self.assertIsNone(SceneSequencer.load())
+                self.assertIsNone(Sequencer.load())
 
 
         # --- Run and write results ---

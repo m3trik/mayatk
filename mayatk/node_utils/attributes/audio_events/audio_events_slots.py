@@ -1045,9 +1045,11 @@ class AudioEventsSlots:
             self._deferred_sync_pending = False
 
     def _run_deferred_sync(self):
-        """Execute the deferred dirty-check + sync.
+        """Execute the deferred sync.
 
         Called by ``evalDeferred`` from ``_schedule_deferred_sync``.
+        With numpy-accelerated compositing (~35ms for 71 clips) this
+        always rebuilds unconditionally instead of dirty-checking.
         """
         self._deferred_sync_pending = False
         try:
@@ -1056,10 +1058,10 @@ class AudioEventsSlots:
                 return
             if not self._audio_files:
                 return
-            result = self._sync_if_dirty(target)
-            if result > 0:
+            total = self._sync_and_refresh_target(target)
+            if total > 0:
                 self.ui.footer.setText(
-                    f"Auto-synced {result} clip(s) on {target.name()}."
+                    f"Auto-synced {total} clip(s) on {target.name()}."
                 )
         except Exception:
             logging.getLogger(__name__).warning(
@@ -1095,6 +1097,35 @@ class AudioEventsSlots:
                 fallback = node_name
         if fallback:
             AudioEvents.set_active(fallback)
+
+    def _is_composite_stale(self, target):
+        """Return True if the target has keyed events but no valid composite WAV.
+
+        Checks whether a composite audio node exists for *target* and,
+        if so, whether its backing WAV file is present on disk.  Returns
+        True when events are keyed but the composite is missing or
+        points to a non-existent file (e.g. after moving the project to
+        a different machine or clearing the audio cache).
+
+        Returns False when no events are keyed (no composite needed).
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if not keyed:
+            return False
+
+        target_name = target.name()
+        for candidate in (f"{target_name}_composite", f"{self.CATEGORY}_composite"):
+            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                if node_name == candidate:
+                    try:
+                        fpath = cmds.getAttr(f"{node_name}.filename") or ""
+                        if fpath and os.path.isfile(fpath):
+                            return False  # Valid composite exists
+                    except Exception:
+                        pass
+        return True  # Has keyed events but no valid composite on disk
 
     def _ensure_start_anchor(self, target, event_frame):
         """Key a ``None`` anchor at frame 0 when the first event is keyed.
@@ -1397,6 +1428,74 @@ class AudioEventsSlots:
         else:
             self._refresh_combo_from_target()
             self.ui.footer.setText(f"Replaced '{old_stem}' → '{new_stem}'.")
+
+    def b006(self):
+        """Rename Track — rename the currently selected track's label.
+
+        Renames the enum label (preserving the index and all existing
+        keyframes), updates ``_audio_files``, re-stamps the preview
+        audio node, persists the file map, and re-syncs if keyed events
+        exist.
+        """
+        from mayatk.node_utils.attributes._attributes import Attributes
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        current_label = self.ui.cmb000.currentText()
+        if not current_label or current_label == "None":
+            self.ui.footer.setText("Select a track in the combo first.")
+            return
+
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self.ui.footer.setText("No audio-trigger object active.")
+            return
+
+        new_name = self.sb.input_dialog(
+            title="Rename Track",
+            label=f"Rename '{current_label}' to:",
+            text=current_label,
+            parent=self.ui,
+            placeholder="e.g. Footstep_Left",
+            validate=lambda t: bool(t.strip()) and t.strip() != current_label,
+            error_text="Name cannot be empty or unchanged.",
+        )
+        if not new_name:
+            return
+
+        old_key = current_label.lower()
+        new_key = new_name.lower()
+
+        # Rename the enum label (preserves index and keyframes)
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        Attributes.rename_enum_field(str(target), trigger_attr, current_label, new_name)
+
+        # Update _audio_files dict
+        old_path = self._audio_files.pop(old_key, None)
+        if old_path:
+            self._audio_files[new_key] = old_path
+
+        # Re-stamp the preview audio node
+        preview_node = self._find_preview_node(old_key)
+        if preview_node:
+            AudioEvents._stamp_event_attrs(preview_node, new_key, "preview")
+            try:
+                cmds.rename(preview_node, new_name)
+            except Exception:
+                pass
+
+        # Persist and re-sync
+        self._save_file_map(target)
+        EventTriggers.bake_manifest([target], category=self.CATEGORY)
+
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if keyed:
+            total = self._sync_and_refresh_target(target)
+            self.ui.footer.setText(
+                f"Renamed '{current_label}' → '{new_name}', synced {total} clip(s)."
+            )
+        else:
+            self._refresh_combo_from_target()
+            self.ui.footer.setText(f"Renamed '{current_label}' → '{new_name}'.")
 
     def b003(self):
         """Remove — clean up trigger attributes and audio nodes.
@@ -2134,7 +2233,12 @@ class AudioEventsSlots:
 
         # Auto-switch to this object's composite audio node so the
         # correct waveform/playback activates on selection change.
-        self._activate_composite_for(obj)
+        # If the composite WAV is missing on disk (moved project, cleared
+        # cache), rebuild it so audio doesn't go silently broken.
+        if self._audio_files and self._is_composite_stale(obj):
+            self._sync_and_refresh_target(obj)
+        else:
+            self._activate_composite_for(obj)
 
     # -- OpenMaya attribute-changed callback ------------------------------
 

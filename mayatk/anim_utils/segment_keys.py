@@ -341,8 +341,9 @@ class SegmentKeys(SegmentKeysInfo):
                     continue
 
             # Determine segment ranges
+            stepped_points = []
             if split_static:
-                active_segments = cls._get_active_animation_segments(
+                active_segments, stepped_points = cls._get_active_animation_segments(
                     curves_to_use,
                     tolerance=static_tolerance,
                     ignore_visibility_holds=ignore_visibility_holds,
@@ -359,6 +360,14 @@ class SegmentKeys(SegmentKeysInfo):
                         if seg_start < seg_end:
                             filtered_segments.append((seg_start, seg_end))
                     active_segments = filtered_segments
+                    # Also filter stepped points to time range
+                    if stepped_points:
+                        stepped_points = [
+                            (t, t)
+                            for t, _ in stepped_points
+                            if (range_start is None or t >= range_start)
+                            and (range_end is None or t <= range_end)
+                        ]
             else:
                 active_segments = [(keyframes[0], keyframes[-1])]
 
@@ -425,6 +434,21 @@ class SegmentKeys(SegmentKeysInfo):
                         "end": seg_end,
                         "duration": seg_end - seg_start,
                         "segment_range": (seg_start, seg_end),
+                    }
+                )
+
+            # Create individual segments for stepped key points
+            for pt_time, _ in stepped_points:
+                segments.append(
+                    {
+                        "obj": obj,
+                        "curves": list(curves_to_use),
+                        "keyframes": [pt_time],
+                        "start": pt_time,
+                        "end": pt_time,
+                        "duration": 0.0,
+                        "segment_range": (pt_time, pt_time),
+                        "is_stepped": True,
                     }
                 )
 
@@ -915,6 +939,11 @@ class SegmentKeys(SegmentKeysInfo):
         A segment is considered active if at least one curve has changing values.
         Static gaps (where all curves hold the same value) are excluded.
 
+        Stepped tangent pairs are emitted as individual zero-duration points
+        so that the caller can distinguish them from smooth spans.  These
+        points are returned in a second list to avoid being swallowed by
+        the merge step.
+
         Note: Visibility curves (and other stepped curves) are treated as active
         between all keys to preserve holds during scaling, unless ignore_visibility_holds
         is True.
@@ -926,13 +955,16 @@ class SegmentKeys(SegmentKeysInfo):
                 other curve (static holds are ignored).
 
         Returns:
-            List of (start, end) tuples representing active animation segments.
+            A tuple ``(merged_spans, stepped_points)`` where
+            *merged_spans* is a list of ``(start, end)`` tuples for
+            smooth animation and *stepped_points* is a list of
+            ``(time, time)`` zero-duration tuples for stepped keys.
         """
         if not curves:
-            return []
+            return ([], [])
 
-        # Collect all active intervals from all curves
         all_intervals = []
+        stepped_points: List[Tuple[float, float]] = []
 
         for curve in curves:
             times = pm.keyframe(curve, query=True, timeChange=True)
@@ -963,7 +995,9 @@ class SegmentKeys(SegmentKeysInfo):
                 except Exception:
                     pass
 
-            # Identify segments where value changes
+            # Query out-tangent types for stepped detection
+            out_tangents = pm.keyTangent(curve, query=True, outTangentType=True) or []
+
             for i in range(len(times) - 1):
                 t1, t2 = times[i], times[i + 1]
                 v1, v2 = values[i], values[i + 1]
@@ -971,31 +1005,40 @@ class SegmentKeys(SegmentKeysInfo):
                 # For visibility, treat all intervals as active to preserve holds
                 # unless ignore_visibility_holds is True
                 if is_visibility or abs(v1 - v2) > tolerance:
-                    all_intervals.append((t1, t2))
+                    # Check if this interval is stepped
+                    is_step = i < len(out_tangents) and out_tangents[i] in (
+                        "step",
+                        "stepnext",
+                    )
+                    if is_step:
+                        stepped_points.append((t1, t1))
+                        stepped_points.append((t2, t2))
+                    else:
+                        all_intervals.append((t1, t2))
 
-        if not all_intervals:
-            return []
+        if not all_intervals and not stepped_points:
+            return ([], [])
 
-        # Merge overlapping intervals
-        all_intervals.sort(key=lambda x: x[0])
+        # Merge overlapping span intervals
+        if all_intervals:
+            all_intervals.sort(key=lambda x: x[0])
+            merged = []
+            current_start, current_end = all_intervals[0]
+            for i in range(1, len(all_intervals)):
+                next_start, next_end = all_intervals[i]
+                if next_start <= current_end:
+                    current_end = max(current_end, next_end)
+                else:
+                    merged.append((current_start, current_end))
+                    current_start, current_end = next_start, next_end
+            merged.append((current_start, current_end))
+        else:
+            merged = []
 
-        merged = []
-        current_start, current_end = all_intervals[0]
+        # De-duplicate stepped points
+        stepped_points = sorted(set(stepped_points))
 
-        for i in range(1, len(all_intervals)):
-            next_start, next_end = all_intervals[i]
-
-            if next_start <= current_end:
-                # Overlap or adjacent - extend current segment
-                current_end = max(current_end, next_end)
-            else:
-                # Gap found - push current segment and start new one
-                merged.append((current_start, current_end))
-                current_start, current_end = next_start, next_end
-
-        merged.append((current_start, current_end))
-
-        return merged
+        return (merged, stepped_points)
 
     @staticmethod
     def shift_curves(

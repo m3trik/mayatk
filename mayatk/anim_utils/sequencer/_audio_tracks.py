@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Audio track management for the Scene Sequencer.
+"""Audio track management for the Sequencer.
 
 Discovers Maya ``audio`` nodes from the scene (or from an FBX import)
 and exposes them as clip-like segments suitable for the

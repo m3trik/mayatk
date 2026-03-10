@@ -1,42 +1,71 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Switchboard slots for the Scene Sequencer UI.
+"""Switchboard slots for the Sequencer UI.
 
-Provides ``SceneSequencerSlots`` — bridges the generic
+Provides ``SequencerSlots`` — bridges the generic
 :class:`~uitk.widgets.sequencer._sequencer.SequencerWidget` to the
-Maya-specific :class:`~mayatk.anim_utils.scene_sequencer._scene_sequencer.SceneSequencer`.
+Maya-specific :class:`~mayatk.anim_utils.sequencer._sequencer.Sequencer`.
 """
 from collections import defaultdict
 from typing import Optional, List
 
 try:
     import pymel.core as pm
+    import maya.api.OpenMaya as om2
 except ImportError:
-    pass
+    pm = None
+    om2 = None
 
 import pythontk as ptk
 
 from uitk.widgets.sequencer._sequencer import SequencerWidget
-from mayatk.anim_utils.scene_sequencer._scene_sequencer import (
-    SceneSequencer,
+from mayatk.anim_utils.sequencer._sequencer import (
+    Sequencer,
     SceneBlock,
     load_template,
 )
-from mayatk.anim_utils.scene_sequencer._audio_tracks import (
+from mayatk.anim_utils.sequencer._audio_tracks import (
     AudioTrackManager,
 )
 
 
-class SceneSequencerController(ptk.LoggingMixin):
-    """Business logic controller bridging SequencerWidget ↔ SceneSequencer."""
+class SequencerController(ptk.LoggingMixin):
+    """Business logic controller bridging SequencerWidget ↔ Sequencer."""
 
     def __init__(self, slots_instance):
         super().__init__()
         self.sb = slots_instance.sb
         self.ui = slots_instance.ui
-        self.sequencer: Optional[SceneSequencer] = None
+        self.sequencer: Optional[Sequencer] = None
         self._audio_mgr = AudioTrackManager()
-        self.logger.debug("SceneSequencerController initialized.")
+        self._undo_callback_ids: List[int] = []
+        self._syncing = False
+        self._register_maya_undo_callbacks()
+        self.logger.debug("SequencerController initialized.")
+
+    # ---- Maya undo/redo event callbacks ----------------------------------
+
+    def _register_maya_undo_callbacks(self) -> None:
+        """Listen for Maya Undo/Redo events to refresh the widget."""
+        if om2 is None:
+            return
+        for event_name in ("Undo", "Redo"):
+            cb_id = om2.MEventMessage.addEventCallback(event_name, self._on_maya_undo)
+            self._undo_callback_ids.append(cb_id)
+
+    def remove_callbacks(self) -> None:
+        """Remove Maya event callbacks (call on teardown)."""
+        if om2 is None:
+            return
+        for cb_id in self._undo_callback_ids:
+            om2.MMessage.removeCallback(cb_id)
+        self._undo_callback_ids.clear()
+
+    def _on_maya_undo(self, *_args) -> None:
+        """Refresh the widget when Maya's undo/redo fires."""
+        if self._syncing:
+            return
+        self._sync_to_widget()
 
     # ---- persistence ----------------------------------------------------
 
@@ -46,13 +75,13 @@ class SceneSequencerController(ptk.LoggingMixin):
             pm.warning("No scene data to save.")
             return
         self.sequencer.save()
-        pm.displayInfo("Scene Sequencer data saved.")
+        pm.displayInfo("Sequencer data saved.")
 
     def load(self) -> None:
-        """Load scene sequencer state from the Maya scene."""
-        seq = SceneSequencer.load()
+        """Load sequencer state from the Maya scene."""
+        seq = Sequencer.load()
         if seq is None:
-            pm.warning("No saved Scene Sequencer data found.")
+            pm.warning("No saved Sequencer data found.")
             return
         self.sequencer = seq
         self._audio_mgr.invalidate()
@@ -98,7 +127,7 @@ class SceneSequencerController(ptk.LoggingMixin):
             pm.warning("Select transform nodes to detect scenes.")
             return
 
-        self.sequencer = SceneSequencer.detect_scenes(sel, gap_threshold=gap_threshold)
+        self.sequencer = Sequencer.detect_scenes(sel, gap_threshold=gap_threshold)
         self._audio_mgr.invalidate()
         self._sync_to_widget()
         self._sync_combobox()
@@ -115,9 +144,7 @@ class SceneSequencerController(ptk.LoggingMixin):
             pm.warning("No animated transforms found.")
             return
 
-        self.sequencer = SceneSequencer.detect_scenes(
-            animated, gap_threshold=gap_threshold
-        )
+        self.sequencer = Sequencer.detect_scenes(animated, gap_threshold=gap_threshold)
         self._audio_mgr.invalidate()
         self._sync_to_widget()
         self._sync_combobox()
@@ -133,7 +160,7 @@ class SceneSequencerController(ptk.LoggingMixin):
         end = pm.playbackOptions(q=True, max=True)
 
         if self.sequencer is None:
-            self.sequencer = SceneSequencer()
+            self.sequencer = Sequencer()
 
         if not name:
             idx = len(self.sequencer.scenes)
@@ -159,6 +186,28 @@ class SceneSequencerController(ptk.LoggingMixin):
             return self.sequencer.sorted_scenes()[0].scene_id
         return None
 
+    def on_undo(self) -> None:
+        """Handle undo_requested from the widget — delegate to Maya undo."""
+        if pm is None:
+            return
+        self._syncing = True
+        try:
+            pm.undo()
+        finally:
+            self._syncing = False
+        self._sync_to_widget()
+
+    def on_redo(self) -> None:
+        """Handle redo_requested from the widget — delegate to Maya redo."""
+        if pm is None:
+            return
+        self._syncing = True
+        try:
+            pm.redo()
+        finally:
+            self._syncing = False
+        self._sync_to_widget()
+
     def _sync_to_widget(self, scene_id: Optional[int] = None) -> None:
         """Push per-object animation data for the active scene into the widget.
 
@@ -178,6 +227,9 @@ class SceneSequencerController(ptk.LoggingMixin):
         if scene is None:
             return
 
+        # Preserve horizontal scroll position across the rebuild
+        h_scroll = widget._timeline.horizontalScrollBar().value()
+
         widget.clear()
 
         segments = self.sequencer.collect_object_segments(scene_id)
@@ -187,15 +239,23 @@ class SceneSequencerController(ptk.LoggingMixin):
             by_obj[seg["obj"]].append(seg)
 
         # Ensure every object in the scene has a track, even without segments.
-        # Merge all segments per object into a single clip (one color per row).
+        # Span segments are merged into one clip per object; stepped-key
+        # segments (zero-duration) become individual non-resizable clips.
         for obj_name in sorted(set(scene.objects) | set(by_obj)):
             if self.sequencer.is_object_hidden(obj_name):
                 continue
             track_id = widget.add_track(obj_name.split("|")[-1])
             obj_segs = by_obj.get(obj_name, [])
-            if obj_segs:
-                s = min(seg["start"] for seg in obj_segs)
-                e = max(seg["end"] for seg in obj_segs)
+            if not obj_segs:
+                continue
+
+            span_segs = [seg for seg in obj_segs if not seg.get("is_stepped")]
+            stepped_segs = [seg for seg in obj_segs if seg.get("is_stepped")]
+
+            # Merge span segments into a single clip
+            if span_segs:
+                s = min(seg["start"] for seg in span_segs)
+                e = max(seg["end"] for seg in span_segs)
                 widget.add_clip(
                     track_id=track_id,
                     start=s,
@@ -205,6 +265,23 @@ class SceneSequencerController(ptk.LoggingMixin):
                     obj=obj_name,
                     orig_start=s,
                     orig_end=e,
+                )
+
+            # Each stepped key becomes its own non-resizable clip
+            for seg in stepped_segs:
+                widget.add_clip(
+                    track_id=track_id,
+                    start=seg["start"],
+                    duration=0.0,
+                    label="",
+                    scene_id=scene_id,
+                    obj=obj_name,
+                    orig_start=seg["start"],
+                    orig_end=seg["start"],
+                    is_stepped=True,
+                    resizable_left=False,
+                    resizable_right=False,
+                    stepped_key_time=seg["start"],
                 )
 
         # --- audio tracks (grouped by locator / node source) ---
@@ -218,13 +295,27 @@ class SceneSequencerController(ptk.LoggingMixin):
 
         for source_node, segs in audio_by_source.items():
             short_name = source_node.rsplit("|", 1)[-1]
-            track_id = widget.add_track(f"\u266B {short_name}")
+            track_id = widget.add_track(f"\u266b {short_name}")
             for seg in segs:
                 # Clamp audio clip to the current scene range
                 vis_start = max(seg["start"], scene.start)
                 vis_end = min(seg["end"], scene.end)
                 if vis_end <= vis_start:
                     continue
+
+                # Slice waveform to match the visible portion of the clip
+                full_waveform = seg.get("waveform", [])
+                full_dur = seg["end"] - seg["start"]
+                if full_waveform and full_dur > 0:
+                    n = len(full_waveform)
+                    frac_lo = (vis_start - seg["start"]) / full_dur
+                    frac_hi = (vis_end - seg["start"]) / full_dur
+                    i_lo = int(frac_lo * n)
+                    i_hi = max(i_lo + 1, int(frac_hi * n))
+                    vis_waveform = full_waveform[i_lo:i_hi]
+                else:
+                    vis_waveform = full_waveform
+
                 widget.add_clip(
                     track_id=track_id,
                     start=vis_start,
@@ -235,7 +326,7 @@ class SceneSequencerController(ptk.LoggingMixin):
                     audio_source=seg.get("audio_source", "dg"),
                     audio_node=seg["node"],
                     file_path=seg["file_path"],
-                    waveform=seg.get("waveform", []),
+                    waveform=vis_waveform,
                     orig_start=seg["start"],
                     event_key_frame=seg.get("event_key_frame"),
                 )
@@ -245,13 +336,26 @@ class SceneSequencerController(ptk.LoggingMixin):
         # Inform the widget which tracks are hidden (for "show hidden" menu)
         widget.set_hidden_tracks(sorted(self.sequencer.hidden_objects))
 
-    def hide_track(self, track_name: str) -> None:
-        """Hide a track by object name, persist, and rebuild the widget."""
+        # Restore persisted markers
+        for m in self.sequencer.markers:
+            widget.add_marker(
+                time=m["time"],
+                note=m.get("note", ""),
+                color=m.get("color"),
+            )
+
+        # Restore horizontal scroll position
+        widget._timeline.horizontalScrollBar().setValue(h_scroll)
+
+    def hide_track(self, track_names) -> None:
+        """Hide one or more tracks by name, persist, and rebuild the widget."""
         if self.sequencer is None:
             return
-        # Resolve short name back to the full object name stored in scenes
-        full_name = self._resolve_full_name(track_name)
-        self.sequencer.set_object_hidden(full_name, True)
+        if isinstance(track_names, str):
+            track_names = [track_names]
+        for name in track_names:
+            full_name = self._resolve_full_name(name)
+            self.sequencer.set_object_hidden(full_name, True)
         self.sequencer.save()
         self._sync_to_widget()
 
@@ -262,6 +366,48 @@ class SceneSequencerController(ptk.LoggingMixin):
         self.sequencer.set_object_hidden(track_name, False)
         self.sequencer.save()
         self._sync_to_widget()
+
+    def on_selection_changed(self, clip_ids: list) -> None:
+        """Select the corresponding Maya objects when clips are clicked.
+
+        Also opens the Graph Editor so the selected object's animation
+        curves are immediately visible.
+        """
+        if not clip_ids or pm is None:
+            return
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+        resolved = []
+        for cid in clip_ids:
+            clip = widget.get_clip(cid)
+            if clip is None:
+                continue
+            obj = clip.data.get("obj")
+            if obj and pm.objExists(obj):
+                resolved.append(obj)
+        self._select_and_show(resolved)
+
+    def on_track_selected(self, track_names: list) -> None:
+        """Select Maya objects when track labels are clicked in the header."""
+        if not track_names or pm is None:
+            return
+        resolved = []
+        for name in track_names:
+            full = self._resolve_full_name(name)
+            if pm.objExists(full):
+                resolved.append(full)
+        self._select_and_show(resolved)
+
+    def _select_and_show(self, objects: list) -> None:
+        """Select the given Maya objects and open the Graph Editor."""
+        if not objects:
+            return
+        pm.select(objects, replace=True)
+        try:
+            pm.mel.eval("GraphEditor")
+        except Exception:
+            pass
 
     def _resolve_full_name(self, short_name: str) -> str:
         """Map a short display name back to the full DAG path in scene objects."""
@@ -278,6 +424,46 @@ class SceneSequencerController(ptk.LoggingMixin):
         return getattr(self.ui, "sequencer", None)
 
     # ---- signal handlers ------------------------------------------------
+
+    def on_marker_added(self, marker_id: int, time: float) -> None:
+        """Persist a newly added marker."""
+        if self.sequencer is None:
+            return
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+        md = widget.get_marker(marker_id)
+        if md is None:
+            return
+        self.sequencer.markers.append(
+            {"time": md.time, "note": md.note, "color": md.color}
+        )
+        self.sequencer.save()
+
+    def on_marker_moved(self, marker_id: int, new_time: float) -> None:
+        """Update persisted marker time."""
+        self._rebuild_markers_store()
+
+    def on_marker_changed(self, marker_id: int) -> None:
+        """Update persisted marker note/color."""
+        self._rebuild_markers_store()
+
+    def on_marker_removed(self, marker_id: int) -> None:
+        """Remove marker from persistent store."""
+        self._rebuild_markers_store()
+
+    def _rebuild_markers_store(self) -> None:
+        """Rebuild the sequencer's markers list from the widget's markers."""
+        if self.sequencer is None:
+            return
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+        self.sequencer.markers = [
+            {"time": md.time, "note": md.note, "color": md.color}
+            for md in widget.markers()
+        ]
+        self.sequencer.save()
 
     def on_clip_resized(
         self, clip_id: int, new_start: float, new_duration: float
@@ -330,9 +516,7 @@ class SceneSequencerController(ptk.LoggingMixin):
                 locator = clip.data.get("audio_node")
                 old_frame = clip.data.get("event_key_frame")
                 if locator and old_frame is not None:
-                    AudioTrackManager.move_event_key(
-                        locator, old_frame, new_start
-                    )
+                    AudioTrackManager.move_event_key(locator, old_frame, new_start)
                     clip.data["event_key_frame"] = new_start
             else:
                 # DG audio node: update offset attribute
@@ -341,6 +525,29 @@ class SceneSequencerController(ptk.LoggingMixin):
                     AudioTrackManager.set_audio_offset(audio_node, new_start)
             clip.data["orig_start"] = new_start
             self._audio_mgr.invalidate()
+            return
+
+        # Stepped key clip — move individual keyframe(s)
+        if clip.data.get("is_stepped"):
+            obj_name = clip.data.get("obj")
+            old_time = clip.data.get("stepped_key_time")
+            if obj_name and old_time is not None and pm.objExists(obj_name):
+                curves = (
+                    pm.listConnections(
+                        pm.PyNode(obj_name), type="animCurve", s=True, d=False
+                    )
+                    or []
+                )
+                delta = new_start - old_time
+                if abs(delta) > 1e-6 and curves:
+                    from mayatk.anim_utils.segment_keys import SegmentKeys
+
+                    SegmentKeys.shift_curves(
+                        curves, delta, time_range=(old_time, old_time)
+                    )
+                clip.data["stepped_key_time"] = new_start
+                clip.data["orig_start"] = new_start
+            self._sync_to_widget()
             return
 
         # Animation clip move — scene-level ripple
@@ -365,8 +572,29 @@ class SceneSequencerController(ptk.LoggingMixin):
         self._sync_to_widget()
 
     def on_playhead_moved(self, frame: float) -> None:
-        """Sync the Maya playhead to the widget playhead."""
-        pm.currentTime(frame)
+        """Sync the Maya playhead to the widget playhead with audio scrub."""
+        self._ensure_sound_on_timeline()
+        pm.currentTime(frame, update=True)
+
+    def _ensure_sound_on_timeline(self) -> None:
+        """Bind the first available audio node to Maya's time slider.
+
+        This only runs once (per session) — subsequent calls are no-ops
+        unless the cached node no longer exists.
+        """
+        if hasattr(self, "_active_sound") and pm.objExists(self._active_sound):
+            return
+        clips = self._audio_mgr.find_audio_nodes()
+        if not clips:
+            self._active_sound = ""
+            return
+        node = clips[0].node_name
+        try:
+            slider = pm.mel.eval("$tmp = $gPlayBackSlider")
+            pm.timeControl(slider, e=True, sound=node)
+        except Exception:
+            pass
+        self._active_sound = node
 
     # ---- template -------------------------------------------------------
 
@@ -377,16 +605,16 @@ class SceneSequencerController(ptk.LoggingMixin):
         self.sequencer.apply_template_to_scene(scene_id, template_name)
 
 
-class SceneSequencerSlots(ptk.LoggingMixin):
+class SequencerSlots(ptk.LoggingMixin):
     """Switchboard slot class — routes UI events to the controller."""
 
     def __init__(self, switchboard):
         super().__init__()
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.scene_sequencer
+        self.ui = self.sb.loaded_ui.sequencer
 
         # Create controller
-        self.controller = SceneSequencerController(self)
+        self.controller = SequencerController(self)
 
         # Replace the QWidget placeholder with the real SequencerWidget
         from qtpy import QtWidgets
@@ -411,6 +639,14 @@ class SceneSequencerSlots(ptk.LoggingMixin):
             sequencer.playhead_moved.connect(self.controller.on_playhead_moved)
             sequencer.track_hidden.connect(self.controller.hide_track)
             sequencer.track_shown.connect(self.controller.show_track)
+            sequencer.selection_changed.connect(self.controller.on_selection_changed)
+            sequencer.track_selected.connect(self.controller.on_track_selected)
+            sequencer.undo_requested.connect(self.controller.on_undo)
+            sequencer.redo_requested.connect(self.controller.on_redo)
+            sequencer.marker_added.connect(self.controller.on_marker_added)
+            sequencer.marker_moved.connect(self.controller.on_marker_moved)
+            sequencer.marker_changed.connect(self.controller.on_marker_changed)
+            sequencer.marker_removed.connect(self.controller.on_marker_removed)
 
         # Connect scene combobox
         cmb = getattr(self.ui, "cmb_scene", None)
@@ -433,7 +669,7 @@ class SceneSequencerSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header menu."""
         widget.config_buttons("menu", "pin")
-        widget.menu.setTitle("Scene Sequencer:")
+        widget.menu.setTitle("Sequencer:")
         widget.menu.add(
             "QPushButton",
             setText="Detect from Selection",
@@ -459,6 +695,11 @@ class SceneSequencerSlots(ptk.LoggingMixin):
             setText="Load Scenes",
             setObjectName="btn_load",
         )
+        widget.menu.add(
+            "QPushButton",
+            setText="Show Hidden Tracks",
+            setObjectName="btn_show_hidden",
+        )
 
     # ---- buttons ---------------------------------------------------------
 
@@ -476,3 +717,27 @@ class SceneSequencerSlots(ptk.LoggingMixin):
 
     def btn_load(self):
         self.controller.load()
+
+    def btn_show_hidden(self):
+        """Show a popup listing hidden tracks; clicking one un-hides it."""
+        from qtpy import QtWidgets
+
+        seq = self.controller.sequencer
+        if seq is None or not seq.hidden_objects:
+            pm.displayInfo("No hidden tracks.")
+            return
+
+        widget = self.controller._get_sequencer_widget()
+        menu = QtWidgets.QMenu(widget or self.ui)
+        for name in sorted(seq.hidden_objects):
+            short = name.split("|")[-1]
+            menu.addAction(
+                f"Show: {short}",
+                lambda n=name: self.controller.show_track(n),
+            )
+        menu.addSeparator()
+        menu.addAction(
+            "Show All",
+            lambda: [self.controller.show_track(n) for n in list(seq.hidden_objects)],
+        )
+        menu.exec_(QtWidgets.QCursor.pos())

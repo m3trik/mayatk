@@ -194,6 +194,30 @@ auto-key 'None' at clip end (if enabled), and sync.</string>
         <number>1</number>
        </property>
        <item>
+        <widget class="QPushButton" name="b006">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Rename the currently selected track.
+Updates the enum label, audio nodes, file map,
+and re-syncs if keyed events exist.</string>
+         </property>
+         <property name="text">
+          <string>Rename Track</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QPushButton" name="b005">
          <property name="minimumSize">
           <size>

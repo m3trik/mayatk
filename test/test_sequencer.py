@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for mayatk.anim_utils.scene_sequencer.
+"""Tests for mayatk.anim_utils.sequencer.
 
 Pure-Python tests run without Maya.  Maya-dependent tests bootstrap a
 standalone session via ``MayaConnection`` so they can run from a normal
@@ -15,20 +15,20 @@ scripts_dir = r"O:\Cloud\Code\_scripts"
 if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
-from mayatk.anim_utils.scene_sequencer._scene_sequencer import (
+from mayatk.anim_utils.sequencer._sequencer import (
     SceneBlock,
-    SceneSequencer,
+    Sequencer,
     load_template,
     _resolve_keys,
 )
-from mayatk.anim_utils.scene_sequencer._audio_tracks import (
+from mayatk.anim_utils.sequencer._audio_tracks import (
     AudioClipInfo,
     compute_waveform_envelope,
 )
 
 # Try importing AudioTrackManager (requires Maya modules at import time)
 try:
-    from mayatk.anim_utils.scene_sequencer._audio_tracks import AudioTrackManager
+    from mayatk.anim_utils.sequencer._audio_tracks import AudioTrackManager
 except Exception:
     AudioTrackManager = None
 
@@ -62,11 +62,11 @@ class TestSceneBlock(unittest.TestCase):
         self.assertEqual(b.objects, [])
 
 
-class TestSceneSequencer(unittest.TestCase):
-    """Test SceneSequencer (no Maya)."""
+class TestSequencer(unittest.TestCase):
+    """Test Sequencer (no Maya)."""
 
     def _make(self):
-        return SceneSequencer(
+        return Sequencer(
             [
                 SceneBlock(0, "S0", 0, 50, ["cube1"]),
                 SceneBlock(1, "S1", 60, 100, ["sphere1"]),
@@ -87,7 +87,7 @@ class TestSceneSequencer(unittest.TestCase):
     def test_to_dict_round_trip(self):
         seq = self._make()
         data = seq.to_dict()
-        restored = SceneSequencer.from_dict(data)
+        restored = Sequencer.from_dict(data)
         self.assertEqual(len(restored.scenes), 3)
         self.assertEqual(restored.scene_by_id(0).name, "S0")
         self.assertEqual(restored.scene_by_id(2).objects, ["cone1"])
@@ -97,7 +97,7 @@ class TestSceneSequencer(unittest.TestCase):
             {"scene_id": 2, "name": "Z", "start": 100, "end": 200, "objects": []},
             {"scene_id": 0, "name": "A", "start": 0, "end": 50, "objects": []},
         ]
-        seq = SceneSequencer.from_dict(data)
+        seq = Sequencer.from_dict(data)
         sorted_names = [s.name for s in seq.sorted_scenes()]
         self.assertEqual(sorted_names, ["A", "Z"])
 
@@ -117,7 +117,7 @@ class TestSceneSequencer(unittest.TestCase):
         seq = self._make()
         seq.set_object_hidden("sphere1")
         data = seq.to_dict()
-        restored = SceneSequencer.from_dict(data)
+        restored = Sequencer.from_dict(data)
         self.assertTrue(restored.is_object_hidden("sphere1"))
         self.assertFalse(restored.is_object_hidden("cube1"))
 
@@ -126,7 +126,7 @@ class TestSceneSequencer(unittest.TestCase):
         data = [
             {"scene_id": 0, "name": "A", "start": 0, "end": 50, "objects": ["x"]},
         ]
-        seq = SceneSequencer.from_dict(data)
+        seq = Sequencer.from_dict(data)
         self.assertEqual(seq.hidden_objects, set())
 
 
@@ -199,7 +199,7 @@ class TestLoadTemplate(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
-class TestSceneSequencerMaya(unittest.TestCase):
+class TestSequencerMaya(unittest.TestCase):
     """Tests requiring a running Maya session."""
 
     def setUp(self):
@@ -207,7 +207,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
 
     def tearDown(self):
         try:
-            SceneSequencer.delete_storage_node()
+            Sequencer.delete_storage_node()
         except Exception:
             pass
 
@@ -224,20 +224,20 @@ class TestSceneSequencerMaya(unittest.TestCase):
         """_scene_nodes returns PyNode refs for existing objects."""
         cube = self._create_animated_cube("sn_test", {0: 0, 10: 5})
         scene = SceneBlock(0, "S", 0, 10, [str(cube)])
-        nodes = SceneSequencer._scene_nodes(scene)
+        nodes = Sequencer._scene_nodes(scene)
         self.assertEqual(len(nodes), 1)
         self.assertEqual(str(nodes[0]), str(cube))
 
     def test_scene_nodes_skips_missing(self):
         """_scene_nodes silently skips objects that no longer exist."""
         scene = SceneBlock(0, "S", 0, 10, ["ghost_node"])
-        nodes = SceneSequencer._scene_nodes(scene)
+        nodes = Sequencer._scene_nodes(scene)
         self.assertEqual(len(nodes), 0)
 
     def test_move_object_keys_shifts(self):
         """move_object_keys offsets keys within the given range."""
         cube = self._create_animated_cube("mv", {10: 0, 20: 5})
-        seq = SceneSequencer()
+        seq = Sequencer()
         seq.move_object_keys(str(cube), 10, 20, 30)
         keys = sorted(pm.keyframe(cube, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 30.0, places=1)
@@ -245,13 +245,13 @@ class TestSceneSequencerMaya(unittest.TestCase):
 
     def test_move_object_keys_noop_for_missing(self):
         """move_object_keys silently skips non-existent objects."""
-        seq = SceneSequencer()
+        seq = Sequencer()
         seq.move_object_keys("no_such_obj", 0, 50, 10)  # should not raise
 
     def test_scale_object_keys_rescales(self):
         """scale_object_keys remaps keys into a new time range."""
         cube = self._create_animated_cube("sc", {0: 0, 100: 10})
-        seq = SceneSequencer()
+        seq = Sequencer()
         seq.scale_object_keys(str(cube), 0, 100, 0, 200)
         keys = sorted(pm.keyframe(cube, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 0.0, places=1)
@@ -259,26 +259,26 @@ class TestSceneSequencerMaya(unittest.TestCase):
 
     def test_scale_object_keys_noop_for_missing(self):
         """scale_object_keys silently skips non-existent objects."""
-        seq = SceneSequencer()
+        seq = Sequencer()
         seq.scale_object_keys("no_such_obj", 0, 50, 0, 80)  # should not raise
 
     # -- error handling ----------------------------------------------------
 
     def test_set_scene_duration_invalid_id(self):
         """set_scene_duration raises ValueError for unknown scene_id."""
-        seq = SceneSequencer()
+        seq = Sequencer()
         with self.assertRaises(ValueError):
             seq.set_scene_duration(99, 100)
 
     def test_set_scene_start_invalid_id(self):
         """set_scene_start raises ValueError for unknown scene_id."""
-        seq = SceneSequencer()
+        seq = Sequencer()
         with self.assertRaises(ValueError):
             seq.set_scene_start(99, 0)
 
     def test_resize_object_invalid_id(self):
         """resize_object raises ValueError for unknown scene_id."""
-        seq = SceneSequencer()
+        seq = Sequencer()
         with self.assertRaises(ValueError):
             seq.resize_object(99, "cube1", 0, 50, 0, 80)
 
@@ -286,7 +286,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
         """resize_object should only scale the target object, not others."""
         c1 = self._create_animated_cube("obj_a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("obj_b", {10: 0, 40: 5})
-        seq = SceneSequencer([SceneBlock(0, "S0", 0, 50, [str(c1), str(c2)])])
+        seq = Sequencer([SceneBlock(0, "S0", 0, 50, [str(c1), str(c2)])])
 
         # Resize only obj_a from [0,50] → [0,80]
         seq.resize_object(0, str(c1), 0, 50, 0, 80)
@@ -305,7 +305,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
         """resize_object should shift downstream scenes by the end-frame delta."""
         c1 = self._create_animated_cube("early", {0: 0, 50: 10})
         c2 = self._create_animated_cube("late", {100: 0, 150: 5})
-        seq = SceneSequencer(
+        seq = Sequencer(
             [
                 SceneBlock(0, "S0", 0, 50, [str(c1)]),
                 SceneBlock(1, "S1", 100, 150, [str(c2)]),
@@ -322,7 +322,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
     def test_detect_scenes_single_object(self):
         """One object with keys → one scene."""
         cube = self._create_animated_cube("box", {1: 0, 10: 5, 20: 10})
-        seq = SceneSequencer.detect_scenes([cube])
+        seq = Sequencer.detect_scenes([cube])
         self.assertEqual(len(seq.scenes), 1)
         self.assertAlmostEqual(seq.scenes[0].start, 1.0)
         self.assertAlmostEqual(seq.scenes[0].end, 20.0)
@@ -331,14 +331,14 @@ class TestSceneSequencerMaya(unittest.TestCase):
         """Two objects with a large gap → two scenes."""
         c1 = self._create_animated_cube("early", {1: 0, 10: 5})
         c2 = self._create_animated_cube("late", {100: 0, 110: 5})
-        seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+        seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
         self.assertEqual(len(seq.scenes), 2)
 
     def test_set_scene_duration_ripple(self):
         """Changing scene 0's duration ripples scene 1's start/end."""
         c1 = self._create_animated_cube("a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("b", {100: 0, 150: 10})
-        seq = SceneSequencer.detect_scenes([c1, c2], gap_threshold=10)
+        seq = Sequencer.detect_scenes([c1, c2], gap_threshold=10)
 
         scene0 = seq.scene_by_id(0)
         original_s1_start = seq.scene_by_id(1).start
@@ -354,7 +354,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
     def test_apply_template_sets_keys(self):
         """apply_template should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
-        seq = SceneSequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
+        seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
         seq.apply_template(0, str(cube), "fade_in_out", attrs=["visibility"])
 
         # Visibility should now have keyframes
@@ -365,15 +365,15 @@ class TestSceneSequencerMaya(unittest.TestCase):
     def test_save_creates_network_node(self):
         """save() should create a locked network node with JSON data."""
         cube = self._create_animated_cube("save_cube", {0: 0, 50: 10})
-        seq = SceneSequencer([SceneBlock(0, "S0", 0, 50, [str(cube)])])
+        seq = Sequencer([SceneBlock(0, "S0", 0, 50, [str(cube)])])
         node_name = seq.save()
 
         self.assertTrue(pm.objExists(node_name))
         node = pm.PyNode(node_name)
         self.assertEqual(node.nodeType(), "network")
-        self.assertTrue(node.hasAttr(SceneSequencer._DATA_ATTR))
+        self.assertTrue(node.hasAttr(Sequencer._DATA_ATTR))
 
-        raw = node.attr(SceneSequencer._DATA_ATTR).get()
+        raw = node.attr(Sequencer._DATA_ATTR).get()
         import json
 
         data = json.loads(raw)
@@ -384,7 +384,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
         """save() then load() should restore identical scene data."""
         c1 = self._create_animated_cube("rt_a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("rt_b", {60: 0, 100: 5})
-        seq = SceneSequencer(
+        seq = Sequencer(
             [
                 SceneBlock(0, "Alpha", 0, 50, [str(c1)]),
                 SceneBlock(1, "Beta", 60, 100, [str(c2)]),
@@ -392,7 +392,7 @@ class TestSceneSequencerMaya(unittest.TestCase):
         )
         seq.save()
 
-        loaded = SceneSequencer.load()
+        loaded = Sequencer.load()
         self.assertIsNotNone(loaded)
         self.assertEqual(len(loaded.scenes), 2)
         self.assertEqual(loaded.scene_by_id(0).name, "Alpha")
@@ -402,33 +402,33 @@ class TestSceneSequencerMaya(unittest.TestCase):
     def test_load_resolves_renamed_objects(self):
         """load() should resolve object names via message connections after rename."""
         cube = self._create_animated_cube("orig_name", {0: 0, 50: 10})
-        seq = SceneSequencer([SceneBlock(0, "S", 0, 50, [str(cube)])])
+        seq = Sequencer([SceneBlock(0, "S", 0, 50, [str(cube)])])
         seq.save()
 
         # Rename the object
         pm.rename(cube, "new_name")
 
-        loaded = SceneSequencer.load()
+        loaded = Sequencer.load()
         self.assertIn("new_name", loaded.scene_by_id(0).objects)
 
     def test_delete_storage_node(self):
         """delete_storage_node() should remove the node."""
-        seq = SceneSequencer([SceneBlock(0, "S", 0, 50)])
+        seq = Sequencer([SceneBlock(0, "S", 0, 50)])
         seq.save()
-        self.assertTrue(pm.objExists(SceneSequencer.STORAGE_NODE))
+        self.assertTrue(pm.objExists(Sequencer.STORAGE_NODE))
 
-        result = SceneSequencer.delete_storage_node()
+        result = Sequencer.delete_storage_node()
         self.assertTrue(result)
-        self.assertFalse(pm.objExists(SceneSequencer.STORAGE_NODE))
+        self.assertFalse(pm.objExists(Sequencer.STORAGE_NODE))
 
         # Deleting again returns False
-        self.assertFalse(SceneSequencer.delete_storage_node())
+        self.assertFalse(Sequencer.delete_storage_node())
 
     def test_load_returns_none_when_no_node(self):
         """load() should return None when no storage node exists."""
         # Ensure clean state
-        SceneSequencer.delete_storage_node()
-        self.assertIsNone(SceneSequencer.load())
+        Sequencer.delete_storage_node()
+        self.assertIsNone(Sequencer.load())
 
 
 # ---------------------------------------------------------------------------
@@ -449,9 +449,7 @@ class TestAudioClipInfo(unittest.TestCase):
         self.assertAlmostEqual(clip.end_frame, 60.0)
 
     def test_defaults(self):
-        clip = AudioClipInfo(
-            node_name="a", file_path="", offset=0, duration_frames=0
-        )
+        clip = AudioClipInfo(node_name="a", file_path="", offset=0, duration_frames=0)
         self.assertEqual(clip.sample_rate, 44100)
         self.assertEqual(clip.num_channels, 1)
         self.assertEqual(clip.num_frames, 0)

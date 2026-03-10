@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Scene Sequencer — manages per-scene animation with ripple editing.
+"""Sequencer — manages per-scene animation with ripple editing.
 
 Scenes are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one scene's duration or position ripples downstream scenes.
@@ -108,11 +108,11 @@ def _resolve_keys(block_def: Dict, scene: SceneBlock) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# SceneSequencer
+# Sequencer
 # ---------------------------------------------------------------------------
 
 
-class SceneSequencer:
+class Sequencer:
     """Manages a linear sequence of :class:`SceneBlock` objects and provides
     operations for ripple editing, scene detection, and template application.
     """
@@ -120,6 +120,7 @@ class SceneSequencer:
     def __init__(self, scenes: Optional[List[SceneBlock]] = None):
         self.scenes: List[SceneBlock] = list(scenes) if scenes else []
         self.hidden_objects: set = set()
+        self.markers: List[Dict[str, Any]] = []
 
     def is_object_hidden(self, obj_name: str) -> bool:
         """Return True if *obj_name* is hidden in the sequencer UI."""
@@ -225,8 +226,8 @@ class SceneSequencer:
         cls,
         name: str = "Scene",
         objects: Optional[List[str]] = None,
-    ) -> "SceneSequencer":
-        """Create a SceneSequencer with one scene spanning Maya's current
+    ) -> "Sequencer":
+        """Create a Sequencer with one scene spanning Maya's current
         playback range.
 
         Parameters:
@@ -235,7 +236,7 @@ class SceneSequencer:
                 discovers all transforms with keyframes in the range.
 
         Returns:
-            A new :class:`SceneSequencer` with a single scene.
+            A new :class:`Sequencer` with a single scene.
         """
         start = pm.playbackOptions(q=True, min=True)
         end = pm.playbackOptions(q=True, max=True)
@@ -304,8 +305,8 @@ class SceneSequencer:
         objects: List["pm.PyNode"],
         gap_threshold: float = 10.0,
         ignore: Optional[str] = None,
-    ) -> "SceneSequencer":
-        """Build a SceneSequencer by detecting animation segments.
+    ) -> "Sequencer":
+        """Build a Sequencer by detecting animation segments.
 
         Uses :class:`~mayatk.anim_utils.segment_keys.SegmentKeys` to
         collect per-object segments, then merges overlapping ranges into
@@ -319,7 +320,7 @@ class SceneSequencer:
                 ``collect_segments``).
 
         Returns:
-            A populated :class:`SceneSequencer`.
+            A populated :class:`Sequencer`.
         """
         from mayatk.anim_utils.segment_keys import SegmentKeys
 
@@ -384,13 +385,42 @@ class SceneSequencer:
         delta = new_start - old_start
         if abs(delta) < 1e-6:
             return
-        pm.keyframe(
-            obj,
-            edit=True,
-            relative=True,
-            timeChange=delta,
-            time=(old_start, old_end),
-        )
+
+        # Two-pass move avoids "Cannot move keys" when destination frames
+        # overlap with existing keys.  First park keys at a safe temp
+        # offset, then move them to the real destination.
+        _TEMP_OFFSET = 100000.0
+        temp_start = old_start + _TEMP_OFFSET
+        try:
+            pm.keyframe(
+                obj,
+                edit=True,
+                relative=True,
+                timeChange=_TEMP_OFFSET,
+                time=(old_start, old_end),
+            )
+        except RuntimeError:
+            return
+        try:
+            pm.keyframe(
+                obj,
+                edit=True,
+                relative=True,
+                timeChange=delta - _TEMP_OFFSET,
+                time=(temp_start, old_end + _TEMP_OFFSET),
+            )
+        except RuntimeError:
+            # Best-effort: try to move them back
+            try:
+                pm.keyframe(
+                    obj,
+                    edit=True,
+                    relative=True,
+                    timeChange=-_TEMP_OFFSET,
+                    time=(temp_start, old_end + _TEMP_OFFSET),
+                )
+            except RuntimeError:
+                pass
 
     def scale_object_keys(
         self,
@@ -623,10 +653,11 @@ class SceneSequencer:
                 for s in self.sorted_scenes()
             ],
             "hidden_objects": sorted(self.hidden_objects),
+            "markers": list(self.markers),
         }
 
     @classmethod
-    def from_dict(cls, data) -> "SceneSequencer":
+    def from_dict(cls, data) -> "Sequencer":
         """Restore from serialised data.
 
         Accepts the current dict format ``{"scenes": [...], ...}`` or
@@ -651,6 +682,7 @@ class SceneSequencer:
         ]
         seq = cls(scenes)
         seq.hidden_objects = set(hidden)
+        seq.markers = data.get("markers", []) if isinstance(data, dict) else []
         return seq
 
     # ---- Maya scene persistence (network node) ---------------------------
@@ -714,15 +746,15 @@ class SceneSequencer:
         return str(node)
 
     @classmethod
-    def load(cls) -> Optional["SceneSequencer"]:
-        """Load a SceneSequencer from the Maya scene's storage node.
+    def load(cls) -> Optional["Sequencer"]:
+        """Load a Sequencer from the Maya scene's storage node.
 
         Reads the JSON data from :pyattr:`STORAGE_NODE` and refreshes
         object names from live ``message`` connections so that renames
         and namespace changes are automatically resolved.
 
         Returns:
-            A populated :class:`SceneSequencer`, or ``None`` if no
+            A populated :class:`Sequencer`, or ``None`` if no
             storage node exists.
         """
         if not pm.objExists(cls.STORAGE_NODE):
