@@ -3,11 +3,8 @@
 
 Scenes are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one scene's duration or position ripples downstream scenes.
-YAML animation templates define how objects react relative to scene
-boundaries (e.g. fade-in/out durations and values).
 """
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Dict, Optional, Any
 import json
 
@@ -48,66 +45,6 @@ class SceneBlock:
 
 
 # ---------------------------------------------------------------------------
-# Template helpers
-# ---------------------------------------------------------------------------
-
-_TEMPLATES_DIR = Path(__file__).parent / "templates"
-
-
-def load_template(name: str) -> Dict[str, Any]:
-    """Load a YAML animation template by stem name.
-
-    Parameters:
-        name: Template name without extension (e.g. ``"fade_in_out"``).
-
-    Returns:
-        Parsed YAML dict.
-
-    Raises:
-        FileNotFoundError: If the template file does not exist.
-    """
-    try:
-        import yaml
-    except ImportError as exc:
-        raise ImportError("PyYAML is required for animation templates") from exc
-
-    path = _TEMPLATES_DIR / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Template not found: {path}")
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _resolve_keys(block_def: Dict, scene: SceneBlock) -> List[Dict[str, Any]]:
-    """Resolve a single ``in`` or ``out`` block to absolute keyframe dicts.
-
-    Parameters:
-        block_def: Dict with ``offset``, ``duration``, ``values``,
-            and optionally ``tangent`` and ``anchor`` (``"start"`` or ``"end"``).
-        scene: The scene these keys belong to.
-
-    Returns:
-        List of ``{"time": float, "value": float, "tangent": str}`` dicts.
-    """
-    anchor = block_def.get("anchor", "start")
-    offset = block_def.get("offset", 0)
-    dur = block_def.get("duration", 0)
-    values = block_def.get("values", [])
-    tangent = block_def.get("tangent", "linear")
-
-    if anchor == "end":
-        base = scene.end - dur - offset
-    else:
-        base = scene.start + offset
-
-    n = len(values)
-    keys = []
-    for i, v in enumerate(values):
-        t = base + (dur * i / max(n - 1, 1))
-        keys.append({"time": t, "value": v, "tangent": tangent})
-    return keys
-
-
-# ---------------------------------------------------------------------------
 # Sequencer
 # ---------------------------------------------------------------------------
 
@@ -142,6 +79,13 @@ class Sequencer:
     def scene_by_id(self, scene_id: int) -> Optional[SceneBlock]:
         for s in self.scenes:
             if s.scene_id == scene_id:
+                return s
+        return None
+
+    def scene_by_name(self, name: str) -> Optional[SceneBlock]:
+        """Return the first scene whose name matches *name*, or ``None``."""
+        for s in self.scenes:
+            if s.name == name:
                 return s
         return None
 
@@ -386,41 +330,145 @@ class Sequencer:
         if abs(delta) < 1e-6:
             return
 
-        # Two-pass move avoids "Cannot move keys" when destination frames
-        # overlap with existing keys.  First park keys at a safe temp
-        # offset, then move them to the real destination.
-        _TEMP_OFFSET = 100000.0
-        temp_start = old_start + _TEMP_OFFSET
-        try:
-            pm.keyframe(
-                obj,
-                edit=True,
-                relative=True,
-                timeChange=_TEMP_OFFSET,
-                time=(old_start, old_end),
-            )
-        except RuntimeError:
+        # Operate on individual anim curves so we only affect keys in the
+        # requested time range without colliding with keys elsewhere.
+        node = pm.PyNode(obj)
+        curves = pm.listConnections(node, type="animCurve", s=True, d=False) or []
+        if not curves:
             return
-        try:
-            pm.keyframe(
-                obj,
-                edit=True,
-                relative=True,
-                timeChange=delta - _TEMP_OFFSET,
-                time=(temp_start, old_end + _TEMP_OFFSET),
-            )
-        except RuntimeError:
-            # Best-effort: try to move them back
+
+        _TEMP_OFFSET = 100000.0
+        eps = 1e-3
+        tr = (old_start - eps, old_end + eps)
+        temp_tr = (old_start + _TEMP_OFFSET - eps, old_end + _TEMP_OFFSET + eps)
+
+        for crv in curves:
+            # Skip curves that have no keys in this range
+            if not pm.keyframe(crv, q=True, time=tr):
+                continue
             try:
                 pm.keyframe(
-                    obj,
+                    crv,
                     edit=True,
                     relative=True,
-                    timeChange=-_TEMP_OFFSET,
-                    time=(temp_start, old_end + _TEMP_OFFSET),
+                    timeChange=_TEMP_OFFSET,
+                    time=tr,
                 )
             except RuntimeError:
-                pass
+                continue
+            try:
+                pm.keyframe(
+                    crv,
+                    edit=True,
+                    relative=True,
+                    timeChange=delta - _TEMP_OFFSET,
+                    time=temp_tr,
+                )
+            except RuntimeError:
+                try:
+                    pm.keyframe(
+                        crv,
+                        edit=True,
+                        relative=True,
+                        timeChange=-_TEMP_OFFSET,
+                        time=temp_tr,
+                    )
+                except RuntimeError:
+                    pass
+
+    @CoreUtils.undoable
+    def move_object_in_scene(
+        self,
+        scene_id: int,
+        obj: str,
+        old_start: float,
+        old_end: float,
+        new_start: float,
+        prevent_overlap: bool = False,
+    ) -> None:
+        """Move one object's keys within a scene, expanding the scene and
+        rippling downstream scenes when the clip exceeds scene boundaries.
+
+        Parameters:
+            scene_id: Scene the object belongs to.
+            obj: Transform node name to move.
+            old_start: Original first frame of the object segment.
+            old_end: Original last frame of the object segment.
+            new_start: Desired first frame after the move.
+            prevent_overlap: If True, push other objects in the same scene
+                that would overlap with the moved object's new range.
+        """
+        scene = self.scene_by_id(scene_id)
+        if scene is None:
+            raise ValueError(f"No scene with id {scene_id}")
+
+        dur = old_end - old_start
+        new_end = new_start + dur
+
+        # Move the object's keys
+        self.move_object_keys(obj, old_start, old_end, new_start)
+
+        # Optionally push overlapping objects within the same scene
+        if prevent_overlap:
+            self._push_overlapping_objects(scene, obj, new_start, new_end)
+
+        # Check if the clip now exceeds the scene boundaries
+        prior_end = scene.end
+        expanded = False
+
+        if new_start < scene.start:
+            scene.start = new_start
+            expanded = True
+
+        if new_end > scene.end:
+            scene.end = new_end
+            expanded = True
+
+        # Ripple downstream scenes by however much the scene tail grew
+        if expanded:
+            delta = scene.end - prior_end
+            if abs(delta) > 1e-6:
+                self._ripple_downstream(scene_id, prior_end, delta)
+
+    def _push_overlapping_objects(
+        self,
+        scene: SceneBlock,
+        moved_obj: str,
+        moved_start: float,
+        moved_end: float,
+    ) -> None:
+        """Push other objects in *scene* to resolve overlaps with the moved object.
+
+        Objects whose animation range overlaps with [moved_start, moved_end]
+        are shifted forward so they start at moved_end.  This cascades: if
+        pushing one object causes a new overlap with the next, that object
+        is pushed too.
+        """
+        segments = self.collect_object_segments(scene.scene_id)
+        # Build per-object ranges (excluding the moved object)
+        obj_ranges = {}
+        for seg in segments:
+            name = seg["obj"]
+            if name == moved_obj:
+                continue
+            if name in obj_ranges:
+                obj_ranges[name] = (
+                    min(obj_ranges[name][0], seg["start"]),
+                    max(obj_ranges[name][1], seg["end"]),
+                )
+            else:
+                obj_ranges[name] = (seg["start"], seg["end"])
+
+        # Sort by start time and cascade pushes
+        sorted_objs = sorted(obj_ranges.items(), key=lambda x: x[1][0])
+        push_end = moved_end
+        for name, (s, e) in sorted_objs:
+            if s < push_end and e > moved_start:
+                delta = push_end - s
+                self.move_object_keys(name, s, e, s + delta)
+                push_end = e + delta
+            else:
+                push_end = max(push_end, e)
 
     def scale_object_keys(
         self,
@@ -564,78 +612,6 @@ class Sequencer:
 
         if ripple:
             self._ripple_downstream(scene_id, old_end, delta)
-
-    # ---- template application -------------------------------------------
-
-    @CoreUtils.undoable
-    def apply_template(
-        self,
-        scene_id: int,
-        obj: str,
-        template_name: str,
-        attrs: Optional[List[str]] = None,
-    ) -> None:
-        """Apply a YAML animation template to an object within a scene.
-
-        Parameters:
-            scene_id: Scene whose boundaries anchor the template.
-            obj: Object name to key.
-            template_name: YAML template stem name.
-            attrs: If given, only apply to these attribute names. Otherwise
-                apply all attributes defined in the template.
-        """
-        scene = self.scene_by_id(scene_id)
-        if scene is None:
-            raise ValueError(f"No scene with id {scene_id}")
-
-        template = load_template(template_name)
-        node = pm.PyNode(obj)
-
-        for attr_name, attr_def in template.get("attributes", {}).items():
-            if attrs and attr_name not in attrs:
-                continue
-
-            for phase in ("in", "out"):
-                block = attr_def.get(phase)
-                if not block:
-                    continue
-
-                # Inject the correct anchor default based on phase
-                if "anchor" not in block:
-                    block = dict(block, anchor="start" if phase == "in" else "end")
-
-                keys = _resolve_keys(block, scene)
-                for k in keys:
-                    pm.setKeyframe(
-                        node,
-                        attribute=attr_name,
-                        time=k["time"],
-                        value=k["value"],
-                        inTangentType=k["tangent"],
-                        outTangentType=k["tangent"],
-                    )
-
-    @CoreUtils.undoable
-    def apply_template_to_scene(
-        self,
-        scene_id: int,
-        template_name: str,
-        attrs: Optional[List[str]] = None,
-    ) -> None:
-        """Apply a template to *every* object in a scene.
-
-        Parameters:
-            scene_id: Target scene.
-            template_name: YAML template stem name.
-            attrs: Optional attribute filter.
-        """
-        scene = self.scene_by_id(scene_id)
-        if scene is None:
-            raise ValueError(f"No scene with id {scene_id}")
-
-        for obj in scene.objects:
-            if pm.objExists(obj):
-                self.apply_template(scene_id, obj, template_name, attrs)
 
     # ---- serialisation ---------------------------------------------------
 

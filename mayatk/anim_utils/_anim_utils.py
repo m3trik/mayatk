@@ -4379,6 +4379,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         objects: List[Union[str, object]],
         relative: bool = False,
         transfer_tangents: bool = False,
+        optimize: bool = False,
     ):
         """Transfer keyframes from the first selected object to the subsequent objects.
 
@@ -4389,6 +4390,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             objects (List[Union[str, object]]): List of objects. The first object is the source, and the rest are targets.
             relative (bool): If True, apply keyframes relative to the current values of the target objects.
             transfer_tangents (bool): If True, transfer the tangent handles along with the keyframes.
+            optimize (bool): If True, run optimize_keys on the source before transferring.
         """
         resolved_objects = pm.ls(objects)
         if len(resolved_objects) < 2:
@@ -4397,6 +4399,9 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         source_obj = resolved_objects[0]
         target_objs = resolved_objects[1:]
+
+        if optimize:
+            cls.optimize_keys([source_obj], quiet=True)
 
         # Check if keyframes are selected, if not use all keyframes
         selected_curves = pm.keyframe(source_obj, query=True, name=True, selected=True)
@@ -4434,47 +4439,57 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Copy keyframes from source to each target
         for target_obj in target_objs:
             for attr in keyframe_attributes:
-                if not target_obj.hasAttr(attr):
-                    continue
+                try:
+                    if not target_obj.hasAttr(attr):
+                        pm.warning(
+                            f"Skipping attribute '{attr}': not found on '{target_obj}'."
+                        )
+                        continue
 
-                initial_value = initial_values[target_obj].get(attr)
-                if initial_value is None:
-                    continue
+                    initial_value = initial_values[target_obj].get(attr)
+                    if initial_value is None:
+                        continue
 
-                # Pre-compute the relative offset once per attribute using
-                # this attribute's own first key (not the global earliest).
-                relative_offset = 0.0
-                if relative:
-                    attr_first_val = pm.keyframe(
-                        source_obj.attr(attr),
-                        query=True,
-                        time=(keyframe_times[0], keyframe_times[-1]),
-                        valueChange=True,
-                    )
-                    if attr_first_val:
-                        relative_offset = initial_value - attr_first_val[0]
+                    # Pre-compute the relative offset once per attribute using
+                    # this attribute's own first key (not the global earliest).
+                    relative_offset = 0.0
+                    if relative:
+                        attr_first_val = pm.keyframe(
+                            source_obj.attr(attr),
+                            query=True,
+                            time=(keyframe_times[0], keyframe_times[-1]),
+                            valueChange=True,
+                        )
+                        if attr_first_val:
+                            relative_offset = initial_value - attr_first_val[0]
 
-                for time in keyframe_times:
-                    values = pm.keyframe(
-                        source_obj.attr(attr),
-                        query=True,
-                        time=(time,),
-                        valueChange=True,
-                    )
-                    if values:
-                        value = values[0]
-                        if relative:
-                            value += relative_offset
+                    for time in keyframe_times:
+                        values = pm.keyframe(
+                            source_obj.attr(attr),
+                            query=True,
+                            time=(time,),
+                            valueChange=True,
+                        )
+                        if values:
+                            value = values[0]
+                            if relative:
+                                value += relative_offset
 
-                        pm.setKeyframe(target_obj.attr(attr), time=time, value=value)
-
-                        if transfer_tangents:
-                            tangent_info = cls.get_tangent_info(
-                                source_obj.attr(attr), time
+                            pm.setKeyframe(
+                                target_obj.attr(attr), time=time, value=value
                             )
-                            cls.set_tangent_info(
-                                target_obj.attr(attr), time, tangent_info
-                            )
+
+                            if transfer_tangents:
+                                tangent_info = cls.get_tangent_info(
+                                    source_obj.attr(attr), time
+                                )
+                                cls.set_tangent_info(
+                                    target_obj.attr(attr), time, tangent_info
+                                )
+                except Exception as e:
+                    pm.warning(
+                        f"Could not transfer attribute '{attr}' to '{target_obj}': {e}"
+                    )
 
     @staticmethod
     def parse_time_range(

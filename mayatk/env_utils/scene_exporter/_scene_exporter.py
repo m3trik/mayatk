@@ -207,6 +207,35 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 self.task_manager._bake_override_layer = None
 
+            # Clean up base-layer visibility curves baked by SmartBake.
+            # Deleting these and restoring the original .visibility
+            # values returns the scene to its pre-bake state.
+            _vis_curves = getattr(
+                self.task_manager, "_bake_visibility_curves", None
+            )
+            _vis_originals = getattr(
+                self.task_manager, "_bake_visibility_originals", {}
+            )
+            if _vis_curves:
+                for obj, curve in _vis_curves.items():
+                    if cmds.objExists(curve):
+                        cmds.delete(curve)
+                    # Restore original visibility (not just True).
+                    if cmds.objExists(obj):
+                        orig = _vis_originals.get(obj, 1.0)
+                        try:
+                            cmds.setAttr(
+                                f"{obj}.visibility", bool(orig)
+                            )
+                        except RuntimeError:
+                            pass
+                self.logger.info(
+                    f"Deleted {len(_vis_curves)} base-layer visibility "
+                    f"curves — scene restored."
+                )
+                self.task_manager._bake_visibility_curves = None
+                self.task_manager._bake_visibility_originals = None
+
         if not export_succeeded:
             return False
 
@@ -813,7 +842,9 @@ class SceneExporterSlots(SceneExporter):
 
             if export_mode == "visible":
                 return DisplayUtils.get_visible_geometry(
-                    consider_templated_visible=False, inherit_parent_visibility=True
+                    consider_templated_visible=False,
+                    inherit_parent_visibility=True,
+                    consider_animated_visible=True,
                 )
             elif export_mode == "selected":
                 return cmds.ls(selection=True, long=True)
@@ -822,7 +853,9 @@ class SceneExporterSlots(SceneExporter):
             else:
                 # Default to visible if unknown mode
                 return DisplayUtils.get_visible_geometry(
-                    consider_templated_visible=False, inherit_parent_visibility=True
+                    consider_templated_visible=False,
+                    inherit_parent_visibility=True,
+                    consider_animated_visible=True,
                 )
 
         export_successful = self.perform_export(

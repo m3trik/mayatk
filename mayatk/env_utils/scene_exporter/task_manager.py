@@ -246,6 +246,9 @@ class _TaskActionsMixin(_TaskDataMixin):
             sample_by=1,
             preserve_outside_keys=True,
             optimize_keys=True,  # Optimize baked layer curves internally
+            bake_inherited_visibility=getattr(
+                self, "_bake_visibility_enabled", False
+            ),
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )
@@ -263,9 +266,13 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         result = baker.bake(analysis)
 
-        # Store layer name for cleanup after export
+        # Store layer names and curves for cleanup after export
         if result.override_layer:
             self._bake_override_layer = result.override_layer
+        if result.visibility_curves:
+            self._bake_visibility_curves = result.visibility_curves
+        if result.visibility_originals:
+            self._bake_visibility_originals = result.visibility_originals
 
         # Build detailed log message
         log_parts = [
@@ -964,6 +971,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Smart Bake",
                 "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.",
                 "setChecked": True,
+            },
+            "bake_visibility": {
+                "widget_type": "QCheckBox",
+                "setText": "Bake Inherited Visibility",
+                "setToolTip": "Bake ancestor visibility animation onto child mesh transforms.\nRequired when parent LOC nodes toggle visibility that child GEO inherits at runtime in Maya but is not written to FBX.",
+                "setChecked": False,
             },
             "optimize_keys": {
                 "widget_type": "QCheckBox",
