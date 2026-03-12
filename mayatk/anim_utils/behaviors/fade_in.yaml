@@ -1,0 +1,9 @@
+description: "Fade objects in at scene start via visibility."
+attributes:
+  visibility:
+    in:
+      anchor: start
+      offset: 0
+      duration: 15
+      values: [0.0, 1.0]
+      tangent: linear

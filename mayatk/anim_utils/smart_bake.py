@@ -77,6 +77,15 @@ class BakeResult:
     override_layer: Optional[str] = None
     """Name of override layer created (if use_override_layer=True)."""
 
+    visibility_curves: Dict[str, str] = field(default_factory=dict)
+    """Base-layer visibility animCurves created by inherited-vis bake.
+    Maps ``{object_long_name: animCurve_node}`` so the caller can
+    delete them after export to restore the scene."""
+
+    visibility_originals: Dict[str, float] = field(default_factory=dict)
+    """Original ``.visibility`` values before bake, for cleanup restoration.
+    Maps ``{object_long_name: original_value}``."""
+
     backup_path: Optional[str] = None
     """Path to backup file saved (if backup_file was used)."""
 
@@ -184,6 +193,7 @@ class SmartBake:
         delete_inputs: bool = False,
         optimize_keys: bool = False,
         bake_blend_shapes: bool = True,
+        bake_inherited_visibility: bool = False,
         use_override_layer: bool = False,
         mute_drivers: bool = False,
         backup_file: Any = False,
@@ -200,6 +210,10 @@ class SmartBake:
                 remove static curves and redundant flat keys.
             bake_blend_shapes: Analyze and bake driven blend shape weights.
                 Required for Unity if blend shapes are driven by SDKs/expressions.
+            bake_inherited_visibility: Walk ancestor transforms to detect
+                inherited ``.visibility`` animation and bake it onto child
+                mesh transforms.  Required for FBX/Unity when parent LOC
+                nodes toggle visibility that child GEO inherits at runtime.
             use_override_layer: Bake to a new override animation layer instead
                 of the base layer. Original constraints/expressions remain
                 connected on base but are overridden by the baked layer.
@@ -219,6 +233,7 @@ class SmartBake:
         self.delete_inputs = delete_inputs
         self.optimize_keys = optimize_keys
         self.bake_blend_shapes = bake_blend_shapes
+        self.bake_inherited_visibility = bake_inherited_visibility
         self.use_override_layer = use_override_layer
         self.mute_drivers = mute_drivers
         self.backup_file = backup_file
@@ -289,6 +304,29 @@ class SmartBake:
             if analysis.requires_bake or analysis.already_keyed:
                 results[obj] = analysis
 
+        # Detect inherited visibility from ancestor transforms.
+        # Maya's FBX exporter only writes visibility curves for nodes
+        # that have *direct* animation on .visibility. When a parent
+        # LOC has keyed visibility, the child GEO inherits the
+        # show/hide at runtime in Maya but the FBX file omits the
+        # curve — Unity then never toggles the Renderer. This step
+        # marks such children so bake() will sample the effective
+        # visibility and key it directly on the mesh transform.
+        if self.bake_inherited_visibility:
+            inherited = self._analyze_inherited_visibility(objects, results)
+            for obj, analysis in inherited.items():
+                if obj in results:
+                    # Merge into existing analysis
+                    existing = results[obj]
+                    for k, v in analysis.driven_channels.items():
+                        if k not in existing.driven_channels:
+                            existing.driven_channels[k] = v
+                    for k, v in analysis.source_nodes.items():
+                        if k not in existing.source_nodes:
+                            existing.source_nodes[k] = v
+                else:
+                    results[obj] = analysis
+
         # Analyze blend shapes separately (they're on deformers, not transforms)
         if self.bake_blend_shapes:
             blendshape_results = self._analyze_blend_shapes(objects)
@@ -352,6 +390,116 @@ class SmartBake:
 
             if analysis.requires_bake:
                 results[bs] = analysis
+
+        return results
+
+    def _analyze_inherited_visibility(
+        self,
+        objects: List[str],
+        existing_results: Dict[str, BakeAnalysis],
+    ) -> Dict[str, BakeAnalysis]:
+        """Detect visibility animation on ancestor transforms.
+
+        For each export object, walk up the DAG hierarchy. If any
+        ancestor's ``.visibility`` plug has incoming animation (animCurve,
+        expression, constraint, driven key, etc.) the effective visibility
+        of the export object depends on something outside itself.
+
+        Maya evaluates inherited visibility at runtime, but the FBX
+        exporter only writes a visibility curve for nodes whose own
+        ``.visibility`` attribute is keyed. By flagging such objects here,
+        ``bake()`` can sample the evaluated ancestor visibility and key it
+        directly on the mesh transform so that the FBX exporter (and Unity)
+        see it.
+
+        The analysis stores **all** ancestor ``.visibility`` plugs on
+        ``source_nodes["inherited_visibility_plugs"]`` — including
+        statically-set parents — so the bake phase can reuse them
+        without re-walking the hierarchy.
+
+        Parameters:
+            objects: The list of export objects (typically mesh transforms).
+            existing_results: Already-analysed results from ``_analyze_object``.
+
+        Returns:
+            Dict of *new* ``BakeAnalysis`` entries for objects that need
+            inherited-visibility baking. Does not include objects whose
+            own ``.visibility`` is already keyed or driven (handled by
+            the normal analysis path).
+        """
+        results: Dict[str, BakeAnalysis] = {}
+
+        for obj in objects:
+            # Skip only if visibility is already driven by a non-keyframe
+            # source (constraint, expression, etc.) — those are handled
+            # by the normal bake path.  Do NOT skip objects whose own
+            # .visibility is merely keyed: their keys may represent only
+            # the object's *own* show/hide state and not account for an
+            # ancestor being hidden.  We need to multiply ancestor
+            # visibility into the bake.
+            if obj in existing_results:
+                existing = existing_results[obj]
+                vis_driven = any(
+                    "v" in ch_list
+                    for ch_list in existing.driven_channels.values()
+                )
+                if vis_driven:
+                    continue
+
+            # Walk up the DAG hierarchy collecting ALL ancestor vis
+            # plugs and any animCurve source nodes.
+            ancestor_curves: List[str] = []
+            ancestor_plugs: List[str] = []
+            current = obj
+            while True:
+                parents = cmds.listRelatives(
+                    current, parent=True, fullPath=True
+                )
+                if not parents:
+                    break
+                parent = parents[0]
+
+                # Always track the plug — even statically-set parents
+                # affect inherited visibility.
+                ancestor_plugs.append(f"{parent}.visibility")
+
+                # Check if parent has animated visibility
+                vis_conns = (
+                    cmds.listConnections(
+                        f"{parent}.visibility",
+                        source=True,
+                        destination=False,
+                        type="animCurve",
+                    )
+                    or []
+                )
+                if vis_conns:
+                    ancestor_curves.extend(vis_conns)
+
+                # Also check for non-animCurve drivers (expressions, etc.)
+                if not vis_conns:
+                    any_driver = (
+                        cmds.listConnections(
+                            f"{parent}.visibility",
+                            source=True,
+                            destination=False,
+                        )
+                        or []
+                    )
+                    if any_driver:
+                        ancestor_curves.extend(any_driver)
+
+                current = parent
+
+            if ancestor_curves:
+                analysis = BakeAnalysis(object=obj)
+                analysis.driven_channels["inherited_visibility"] = ["v"]
+                analysis.source_nodes["inherited_visibility"] = ancestor_curves
+                # Store all ancestor plugs for the bake phase to reuse.
+                analysis.source_nodes["inherited_visibility_plugs"] = (
+                    ancestor_plugs
+                )
+                results[obj] = analysis
 
         return results
 
@@ -512,6 +660,152 @@ class SmartBake:
                 suffix="_prebake",
             )
 
+    def _bake_inherited_visibility(
+        self,
+        objects: Dict[str, "BakeAnalysis"],
+        start: int,
+        end: int,
+        result: "BakeResult",
+    ) -> None:
+        """Sample effective ancestor visibility and key it on each object.
+
+        Keys are written directly on the **base layer** (no animation
+        layer) because FBX ``BakeComplexAnimation`` does not evaluate
+        visibility through animation-layer blend nodes — it only reads
+        direct animCurve connections.  The caller is responsible for
+        deleting the curves listed in ``result.visibility_curves`` after
+        export to restore the scene.
+
+        The effective visibility is the product of **all** ancestor
+        ``.visibility`` values (including statically-set parents) **and**
+        the child's own ``.visibility`` at each frame.  This ensures
+        that:
+
+        - A child under a statically-hidden parent is never made visible.
+        - A child with its own independent show/hide keys retains them
+          (merged with ancestor state) rather than being overwritten.
+
+        Ancestor plugs are reused from the analysis phase stored on
+        ``data.source_nodes["inherited_visibility_plugs"]`` to avoid
+        re-walking the hierarchy.
+
+        Uses stepped tangents since visibility is boolean.
+
+        Parameters:
+            objects: ``{obj: BakeAnalysis}`` for objects needing bake.
+            start: First frame of the bake range.
+            end: Last frame of the bake range (inclusive).
+            result: Live ``BakeResult`` to update with baked/skipped info.
+        """
+        for obj, data in objects.items():
+            # Reuse plugs from analysis; fall back to source_nodes curves.
+            ancestor_plugs: List[str] = data.source_nodes.get(
+                "inherited_visibility_plugs", []
+            )
+            ancestor_curves: List[str] = data.source_nodes.get(
+                "inherited_visibility", []
+            )
+
+            if not ancestor_plugs:
+                result.skipped.append(obj)
+                continue
+
+            try:
+                # Snapshot original visibility for cleanup restoration.
+                original_vis = cmds.getAttr(f"{obj}.visibility")
+                result.visibility_originals[obj] = float(original_vis)
+
+                # Collect key times from ancestor animCurves — only
+                # sample at those frames instead of the entire range.
+                # Also include key times from the child's own vis curve
+                # (if any) so we don't lose its independent transitions.
+                sample_times: Set[float] = {float(start), float(end)}
+                for curve in ancestor_curves:
+                    if cmds.objExists(curve):
+                        times = cmds.keyframe(
+                            curve, query=True, timeChange=True
+                        ) or []
+                        for t in times:
+                            if start <= t <= end:
+                                sample_times.add(t)
+
+                # Include the child's own vis key times.
+                child_vis_curves = (
+                    cmds.listConnections(
+                        f"{obj}.visibility",
+                        source=True,
+                        destination=False,
+                        type="animCurve",
+                    )
+                    or []
+                )
+                for cvc in child_vis_curves:
+                    times = cmds.keyframe(
+                        cvc, query=True, timeChange=True
+                    ) or []
+                    for t in times:
+                        if start <= t <= end:
+                            sample_times.add(t)
+
+                sorted_times = sorted(sample_times)
+
+                # Snapshot the child's own visibility at ALL sample
+                # times BEFORE writing any keys.  Once we start keying
+                # the curve, later getAttr reads would return values
+                # from the modified curve rather than the original.
+                child_vis_snapshot = {
+                    frame: float(
+                        cmds.getAttr(f"{obj}.visibility", time=frame)
+                    )
+                    for frame in sorted_times
+                }
+
+                for frame in sorted_times:
+                    # Start with the child's original visibility.
+                    effective = child_vis_snapshot[frame]
+                    if effective == 0:
+                        pass  # Already 0, skip ancestor evaluation.
+                    else:
+                        for plug in ancestor_plugs:
+                            val = cmds.getAttr(plug, time=frame)
+                            if val == 0:
+                                effective = 0.0
+                                break
+                            effective *= val
+
+                    cmds.setKeyframe(
+                        obj,
+                        attribute="visibility",
+                        time=frame,
+                        value=effective,
+                        shape=False,
+                    )
+
+                # Track the created base-layer curve for cleanup.
+                vis_curve = cmds.listConnections(
+                    f"{obj}.visibility",
+                    source=True,
+                    destination=False,
+                    type="animCurve",
+                )
+                if vis_curve:
+                    result.visibility_curves[obj] = vis_curve[0]
+                    cmds.keyTangent(vis_curve[0], outTangentType="step")
+                    result.baked[obj] = ["v"]
+                else:
+                    cmds.warning(
+                        f"SmartBake: No animCurve found on "
+                        f"{obj}.visibility after keying — "
+                        f"curve may have been renamed."
+                    )
+                    result.skipped.append(obj)
+            except Exception as e:
+                result.skipped.append(obj)
+                cmds.warning(
+                    f"SmartBake: Failed to bake inherited visibility "
+                    f"for {obj}: {e}"
+                )
+
     def _create_override_layer(self, to_bake: Dict[str, Any]) -> str:
         """Create an override animation layer for baking.
 
@@ -603,15 +897,66 @@ class SmartBake:
         # Save backup before any destructive operations
         result.backup_path = self._save_backup()
 
-        # Create override layer if requested
+        # Split inherited-visibility objects from standard driven channels.
+        # These get their own dedicated layer and frame-by-frame sampling.
+        inherited_vis_objects = {}
+        remaining_to_bake = {}
+
+        for obj, data in to_bake.items():
+            if "inherited_visibility" in data.driven_channels:
+                inherited_vis_objects[obj] = data
+                # If the object also has other driven channels, include
+                # it in the standard bake pass for those channels.
+                other_channels = {
+                    k: v
+                    for k, v in data.driven_channels.items()
+                    if k != "inherited_visibility"
+                }
+                if other_channels:
+                    other_analysis = BakeAnalysis(object=obj)
+                    other_analysis.driven_channels = other_channels
+                    other_analysis.source_nodes = {
+                        k: v
+                        for k, v in data.source_nodes.items()
+                        if not k.startswith("inherited_visibility")
+                    }
+                    other_analysis.already_keyed = list(data.already_keyed)
+                    remaining_to_bake[obj] = other_analysis
+            else:
+                remaining_to_bake[obj] = data
+
+        # Create override layer for standard channels (excludes visibility)
         override_layer = None
-        if self.use_override_layer:
-            override_layer = self._create_override_layer(to_bake)
+        if self.use_override_layer and remaining_to_bake:
+            override_layer = self._create_override_layer(remaining_to_bake)
             result.override_layer = override_layer
 
         start, end = time_range
 
         from mayatk.anim_utils._anim_utils import AnimUtils
+
+        # -----------------------------------------------------------
+        # Phase 1: Bake inherited visibility via frame-by-frame sampling.
+        #
+        # bakeResults cannot resolve ancestor-inherited visibility; it
+        # only evaluates the attribute's own value at each time.  We
+        # manually sample the effective visibility (product of all
+        # ancestor .visibility values) and key it on the mesh transform.
+        # Keys are written on the BASE LAYER (not an override layer)
+        # because FBX BakeComplexAnimation does not evaluate visibility
+        # through animation-layer blend nodes.
+        # -----------------------------------------------------------
+        if inherited_vis_objects:
+            self._bake_inherited_visibility(
+                inherited_vis_objects,
+                start,
+                end,
+                result,
+            )
+
+        # -----------------------------------------------------------
+        # Phase 2: Standard channel bake via bakeResults.
+        # -----------------------------------------------------------
 
         # Bake each object with its specific channels
         # Group by channels to use batched bake
@@ -621,7 +966,7 @@ class SmartBake:
             list
         )  # tuple(channels) -> list[objects]
 
-        for obj, data in to_bake.items():
+        for obj, data in remaining_to_bake.items():
             channels = data.all_driven_channels
             if not channels:
                 result.skipped.append(obj)
@@ -718,7 +1063,13 @@ class SmartBake:
                     or []
                 )
                 baked_curves = list(set(layer_curves))
-            else:
+
+            # Also include base-layer visibility curves.
+            if result.visibility_curves:
+                baked_curves.extend(result.visibility_curves.values())
+                baked_curves = list(set(baked_curves))
+
+            if not baked_curves:
                 for obj, channels in result.baked.items():
                     for ch in channels:
                         plug = f"{obj}.{ch}"

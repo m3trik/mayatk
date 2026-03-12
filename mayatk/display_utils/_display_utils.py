@@ -126,6 +126,7 @@ class DisplayUtils(ptk.HelpMixin):
         shapes: bool = False,
         consider_templated_visible: bool = False,
         inherit_parent_visibility: bool = False,
+        consider_animated_visible: bool = False,
     ) -> List[object]:
         """Get a list of visible geometry.
 
@@ -133,6 +134,12 @@ class DisplayUtils(ptk.HelpMixin):
             shapes (bool): Return shape nodes instead of transforms. Default is False.
             consider_templated_visible (bool): Treat templated geometry as visible.
             inherit_parent_visibility (bool): Check visibility of parent objects.
+            consider_animated_visible (bool): When True, parents whose
+                ``.visibility`` attribute has incoming connections (e.g.
+                animCurves, expressions) are treated as visible regardless
+                of the current-frame value.  This ensures geometry that
+                is hidden at the current frame but animated at other
+                frames is included in the result.
 
         Returns:
             List[pm.PyNode]: A list of visible nodes of the specified type.
@@ -143,7 +150,12 @@ class DisplayUtils(ptk.HelpMixin):
             while node:
                 # Check if node is visible
                 if not node.visibility.get():
-                    return False
+                    # If animated visibility should be treated as visible,
+                    # skip this check when the attribute has a driver.
+                    if consider_animated_visible and node.visibility.isConnected():
+                        pass  # Treat as visible — animation will be baked
+                    else:
+                        return False
                 # Check if node is templated and should be excluded
                 if not consider_templated_visible and cls.is_templated(node):
                     return False
@@ -165,8 +177,16 @@ class DisplayUtils(ptk.HelpMixin):
             # Append nodes based on whether shapes or transforms are requested
             if shapes and node.nodeType() == "geometry":
                 result.append(node)
-            elif not shapes and node.getShapes():
-                result.append(node)
+            elif not shapes:
+                # Only include transforms with renderable geometry shapes
+                # (mesh, nurbsSurface, subdiv). Exclude locators,
+                # cameras, lights, etc. which have shape nodes but no
+                # exportable geometry.
+                _RENDERABLE = {"mesh", "nurbsSurface", "subdiv"}
+                for s in node.getShapes():
+                    if s.nodeType() in _RENDERABLE:
+                        result.append(node)
+                        break
 
         return result
 

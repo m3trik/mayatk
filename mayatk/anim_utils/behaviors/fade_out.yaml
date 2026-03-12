@@ -1,0 +1,9 @@
+description: "Fade objects out at scene end via visibility."
+attributes:
+  visibility:
+    out:
+      anchor: end
+      offset: 0
+      duration: 15
+      values: [1.0, 0.0]
+      tangent: linear

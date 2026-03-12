@@ -18,8 +18,11 @@ if scripts_dir not in sys.path:
 from mayatk.anim_utils.sequencer._sequencer import (
     SceneBlock,
     Sequencer,
-    load_template,
-    _resolve_keys,
+)
+from mayatk.anim_utils.behavior_keys import (
+    load_behavior,
+    resolve_keys,
+    apply_behavior,
 )
 from mayatk.anim_utils.sequencer._audio_tracks import (
     AudioClipInfo,
@@ -129,15 +132,20 @@ class TestSequencer(unittest.TestCase):
         seq = Sequencer.from_dict(data)
         self.assertEqual(seq.hidden_objects, set())
 
+    def test_scene_by_name(self):
+        seq = self._make()
+        self.assertEqual(seq.scene_by_name("S1").scene_id, 1)
+        self.assertIsNone(seq.scene_by_name("nonexistent"))
+
 
 class TestResolveKeys(unittest.TestCase):
-    """Test _resolve_keys helper."""
+    """Test behavior_keys.resolve_keys helper."""
 
     def test_in_phase_start_anchor(self):
-        scene = SceneBlock(0, "S", 100, 200)
-        keys = _resolve_keys(
+        keys = resolve_keys(
             {"offset": 0, "duration": 10, "values": [0.0, 1.0], "anchor": "start"},
-            scene,
+            start=100.0,
+            end=200.0,
         )
         self.assertEqual(len(keys), 2)
         self.assertAlmostEqual(keys[0]["time"], 100.0)
@@ -146,29 +154,29 @@ class TestResolveKeys(unittest.TestCase):
         self.assertEqual(keys[1]["value"], 1.0)
 
     def test_out_phase_end_anchor(self):
-        scene = SceneBlock(0, "S", 100, 200)
-        keys = _resolve_keys(
+        keys = resolve_keys(
             {"offset": 0, "duration": 20, "values": [1.0, 0.0], "anchor": "end"},
-            scene,
+            start=100.0,
+            end=200.0,
         )
         # base = 200 - 20 - 0 = 180
         self.assertAlmostEqual(keys[0]["time"], 180.0)
         self.assertAlmostEqual(keys[1]["time"], 200.0)
 
     def test_offset_shifts_base(self):
-        scene = SceneBlock(0, "S", 0, 100)
-        keys = _resolve_keys(
+        keys = resolve_keys(
             {"offset": 5, "duration": 10, "values": [0.0, 1.0], "anchor": "start"},
-            scene,
+            start=0.0,
+            end=100.0,
         )
         self.assertAlmostEqual(keys[0]["time"], 5.0)
         self.assertAlmostEqual(keys[1]["time"], 15.0)
 
     def test_three_values(self):
-        scene = SceneBlock(0, "S", 0, 100)
-        keys = _resolve_keys(
+        keys = resolve_keys(
             {"duration": 20, "values": [0.0, 0.5, 1.0], "anchor": "start"},
-            scene,
+            start=0.0,
+            end=100.0,
         )
         self.assertEqual(len(keys), 3)
         self.assertAlmostEqual(keys[0]["time"], 0.0)
@@ -176,11 +184,11 @@ class TestResolveKeys(unittest.TestCase):
         self.assertAlmostEqual(keys[2]["time"], 20.0)
 
 
-class TestLoadTemplate(unittest.TestCase):
-    """Test YAML template loading."""
+class TestLoadBehavior(unittest.TestCase):
+    """Test YAML behavior loading."""
 
     def test_load_fade_in_out(self):
-        t = load_template("fade_in_out")
+        t = load_behavior("fade_in_out")
         self.assertIn("attributes", t)
         self.assertIn("visibility", t["attributes"])
         vis = t["attributes"]["visibility"]
@@ -188,9 +196,9 @@ class TestLoadTemplate(unittest.TestCase):
         self.assertIn("out", vis)
         self.assertEqual(vis["in"]["values"], [0.0, 1.0])
 
-    def test_missing_template_raises(self):
+    def test_missing_behavior_raises(self):
         with self.assertRaises(FileNotFoundError):
-            load_template("nonexistent_template_xyz")
+            load_behavior("nonexistent_template_xyz")
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +212,7 @@ class TestSequencerMaya(unittest.TestCase):
 
     def setUp(self):
         pm.mel.file(new=True, force=True)
+        Sequencer.delete_storage_node()
 
     def tearDown(self):
         try:
@@ -351,11 +360,10 @@ class TestSequencerMaya(unittest.TestCase):
             seq.scene_by_id(1).start, original_s1_start + 20, places=1
         )
 
-    def test_apply_template_sets_keys(self):
-        """apply_template should create keyframes on the object."""
+    def test_apply_behavior_sets_keys(self):
+        """apply_behavior should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
-        seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
-        seq.apply_template(0, str(cube), "fade_in_out", attrs=["visibility"])
+        apply_behavior(str(cube), "fade_in_out", 0, 100, attrs=["visibility"])
 
         # Visibility should now have keyframes
         vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
@@ -377,8 +385,9 @@ class TestSequencerMaya(unittest.TestCase):
         import json
 
         data = json.loads(raw)
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["name"], "S0")
+        self.assertIn("scenes", data)
+        self.assertEqual(len(data["scenes"]), 1)
+        self.assertEqual(data["scenes"][0]["name"], "S0")
 
     def test_save_load_round_trip(self):
         """save() then load() should restore identical scene data."""
@@ -429,6 +438,311 @@ class TestSequencerMaya(unittest.TestCase):
         # Ensure clean state
         Sequencer.delete_storage_node()
         self.assertIsNone(Sequencer.load())
+
+
+# ---------------------------------------------------------------------------
+# Scene Builder tests (pure Python — no Maya)
+# ---------------------------------------------------------------------------
+
+from mayatk.anim_utils.scene_builder._scene_builder import (
+    detect_behavior,
+    parse_csv,
+    BuilderObject,
+    BuilderStep,
+    ColumnMap,
+    SceneBuilder,
+)
+
+
+class TestDetectBehavior(unittest.TestCase):
+    """Test behavior auto-detection from step-contents text."""
+
+    def test_fade_in(self):
+        self.assertEqual(detect_behavior("Arrow fades in."), "fade_in")
+
+    def test_fade_out(self):
+        self.assertEqual(detect_behavior("Checklist fades out."), "fade_out")
+
+    def test_fade_in_out(self):
+        self.assertEqual(
+            detect_behavior("Arrow fades in, then fades out."), "fade_in_out"
+        )
+
+    def test_no_behavior(self):
+        self.assertEqual(detect_behavior("User is teleported."), "")
+
+    def test_empty(self):
+        self.assertEqual(detect_behavior(""), "")
+
+    def test_na(self):
+        self.assertEqual(detect_behavior("N/A"), "")
+
+
+class TestParseCSV(unittest.TestCase):
+    """Test CSV parsing with a synthetic fixture."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+
+        cls._tmp_dir = tempfile.mkdtemp()
+        cls._csv_path = os.path.join(cls._tmp_dir, "test.csv")
+        with open(cls._csv_path, "w", newline="", encoding="utf-8") as f:
+            import csv
+
+            w = csv.writer(f)
+            w.writerow(["SECTION A: AILERON RIGGING", "", "", "", "", "", "", ""])
+            w.writerow(
+                [
+                    "Step",
+                    "Ref",
+                    "Placard",
+                    "Voice",
+                    "Contents",
+                    "Asset",
+                    "Who",
+                    "Status",
+                ]
+            )
+            w.writerow(
+                ["A01.)", "", "", "", "Arrow fades in.", "ARROW_01", "", "Complete"]
+            )
+            w.writerow(["", "", "", "", "", "ARROW_02", "", "Complete"])
+            w.writerow(
+                ["A02.)", "", "", "", "Checklist fades out.", "CHECK_01", "", ""]
+            )
+            w.writerow(["SECTION B: RUDDER RIGGING", "", "", "", "", "", "", ""])
+            w.writerow(
+                [
+                    "Step",
+                    "Ref",
+                    "Placard",
+                    "Voice",
+                    "Contents",
+                    "Asset",
+                    "Who",
+                    "Status",
+                ]
+            )
+            w.writerow(["B01.)", "", "", "", "N/A", "N/A", "", ""])
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+
+        shutil.rmtree(cls._tmp_dir, ignore_errors=True)
+
+    def test_step_count(self):
+        steps = parse_csv(self._csv_path)
+        self.assertEqual(len(steps), 3)  # A01, A02, B01
+
+    def test_section_assignment(self):
+        steps = parse_csv(self._csv_path)
+        self.assertEqual(steps[0].section, "A")
+        self.assertEqual(steps[2].section, "B")
+
+    def test_continuation_row_merges(self):
+        steps = parse_csv(self._csv_path)
+        a01 = steps[0]
+        self.assertEqual(len(a01.objects), 2)
+        self.assertEqual(a01.objects[0].name, "ARROW_01")
+        self.assertEqual(a01.objects[1].name, "ARROW_02")
+
+    def test_continuation_inherits_behavior(self):
+        """Continuation-row objects inherit the parent step's behavior."""
+        steps = parse_csv(self._csv_path)
+        a01 = steps[0]
+        self.assertEqual(a01.objects[0].behavior, "fade_in")
+        self.assertEqual(a01.objects[1].behavior, "fade_in")  # inherited
+
+    def test_behavior_detected(self):
+        steps = parse_csv(self._csv_path)
+        self.assertEqual(steps[0].objects[0].behavior, "fade_in")
+        self.assertEqual(steps[1].objects[0].behavior, "fade_out")
+
+    def test_na_objects_excluded(self):
+        steps = parse_csv(self._csv_path)
+        b01 = steps[2]
+        self.assertEqual(len(b01.objects), 0)
+
+    def test_section_title(self):
+        steps = parse_csv(self._csv_path)
+        self.assertEqual(steps[0].section_title, "AILERON RIGGING")
+
+    def test_duplicate_step_id_skipped(self):
+        """Duplicate step_id rows should be skipped with a warning."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "dup.csv")
+            import csv as csv_mod
+
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: SEC", "", "", "", "", "", "", ""])
+                w.writerow(["Step", "", "", "", "Contents", "Asset", "", "Status"])
+                w.writerow(["A01.)", "", "", "", "first", "OBJ1", "", ""])
+                w.writerow(["A01.)", "", "", "", "duplicate", "OBJ2", "", ""])
+                w.writerow(["A02.)", "", "", "", "second", "OBJ3", "", ""])
+            steps = parse_csv(csv_path)
+            self.assertEqual(len(steps), 2)  # A01 + A02 only
+            self.assertEqual(steps[0].content, "first")
+            self.assertEqual(steps[1].step_id, "A02")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_continuation_merges_content(self):
+        """Continuation rows with content should merge text into parent step."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "merge.csv")
+            import csv as csv_mod
+
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: SEC", "", "", "", "", "", "", ""])
+                w.writerow(["Step", "", "", "", "Contents", "Asset", "", "Status"])
+                w.writerow(["A01.)", "", "", "", "First line.", "OBJ1", "", ""])
+                w.writerow(["", "", "", "", "Second line.", "OBJ2", "", ""])
+            steps = parse_csv(csv_path)
+            self.assertIn("Second line.", steps[0].content)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestSceneBuilderPure(unittest.TestCase):
+    """Test SceneBuilder data-only features (no Maya)."""
+
+    def _make_steps(self):
+        return [
+            BuilderStep(
+                "A01",
+                "A",
+                "SEC A",
+                "Arrow fades in.",
+                [
+                    BuilderObject("ARROW_01", "fade_in"),
+                    BuilderObject("ARROW_02", "fade_in"),
+                ],
+            ),
+            BuilderStep(
+                "A02",
+                "A",
+                "SEC A",
+                "Checklist fades out.",
+                [
+                    BuilderObject("CHECK_01", "fade_out"),
+                ],
+            ),
+        ]
+
+    def test_preview_returns_layout(self):
+        seq = Sequencer()
+        builder = SceneBuilder(seq, step_duration=30, gap=5, start_frame=1)
+        layout = builder.preview(self._make_steps())
+        self.assertEqual(len(layout), 2)
+        self.assertEqual(layout[0]["step_id"], "A01")
+        self.assertAlmostEqual(layout[0]["start"], 1)
+        self.assertAlmostEqual(layout[0]["end"], 31)
+        self.assertAlmostEqual(layout[1]["start"], 36)
+        self.assertAlmostEqual(layout[1]["end"], 66)
+        self.assertEqual(len(layout[0]["objects"]), 2)
+
+    def test_preview_does_not_mutate(self):
+        seq = Sequencer()
+        builder = SceneBuilder(seq, step_duration=30)
+        builder.preview(self._make_steps())
+        self.assertEqual(len(seq.scenes), 0)  # nothing added
+
+    def test_build_without_behaviors(self):
+        seq = Sequencer()
+        builder = SceneBuilder(seq, step_duration=30, gap=0, start_frame=1)
+        builder.build(self._make_steps(), apply_behaviors=False)
+        self.assertEqual(len(seq.scenes), 2)
+        self.assertEqual(seq.scenes[0].name, "A01")
+        self.assertAlmostEqual(seq.scenes[0].start, 1)
+        self.assertAlmostEqual(seq.scenes[0].end, 31)
+
+    def test_from_csv_accepts_existing_sequencer(self):
+        """from_csv should use the provided sequencer, not create a new one."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "t.csv")
+            import csv as csv_mod
+
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", "", "", "", "", ""])
+                w.writerow(["Step", "", "", "", "Contents", "Asset", "", "Status"])
+                w.writerow(["A01.)", "", "", "", "stuff", "OBJ", "", ""])
+            existing = Sequencer()
+            builder, steps = SceneBuilder.from_csv(csv_path, sequencer=existing)
+            self.assertIs(builder.sequencer, existing)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestBehaviorYAMLAnchors(unittest.TestCase):
+    """Verify YAML templates include explicit anchor fields."""
+
+    def test_fade_in_out_has_anchors(self):
+        t = load_behavior("fade_in_out")
+        vis = t["attributes"]["visibility"]
+        self.assertEqual(vis["in"]["anchor"], "start")
+        self.assertEqual(vis["out"]["anchor"], "end")
+
+    def test_fade_in_template_exists(self):
+        """fade_in.yaml should load and contain only the 'in' phase."""
+        t = load_behavior("fade_in")
+        vis = t["attributes"]["visibility"]
+        self.assertIn("in", vis)
+        self.assertNotIn("out", vis)
+
+    def test_fade_out_template_exists(self):
+        """fade_out.yaml should load and contain only the 'out' phase."""
+        t = load_behavior("fade_out")
+        vis = t["attributes"]["visibility"]
+        self.assertNotIn("in", vis)
+        self.assertIn("out", vis)
+
+
+class TestSceneBuilderSlotsImport(unittest.TestCase):
+    """Verify the scene_builder_slots module can be imported (no Qt required)."""
+
+    def test_controller_class_exists(self):
+        from mayatk.anim_utils.scene_builder.scene_builder_slots import (
+            SceneBuilderController,
+        )
+
+        self.assertTrue(callable(SceneBuilderController))
+
+    def test_slots_class_exists(self):
+        from mayatk.anim_utils.scene_builder.scene_builder_slots import (
+            SceneBuilderSlots,
+        )
+
+        self.assertTrue(callable(SceneBuilderSlots))
+
+
+class TestSceneBuilderUIFile(unittest.TestCase):
+    """Verify the .ui file exists alongside the slots."""
+
+    def test_ui_file_exists(self):
+        from pathlib import Path
+
+        ui_path = (
+            Path(__file__).parent.parent
+            / "mayatk"
+            / "anim_utils"
+            / "scene_builder"
+            / "scene_builder.ui"
+        )
+        self.assertTrue(ui_path.exists(), f"Missing: {ui_path}")
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,10 @@ def _write_test_script():
                 del sys.modules[k]
 
         from mayatk.anim_utils.sequencer._sequencer import (
-            SceneBlock, Sequencer, load_template, _resolve_keys,
+            SceneBlock, Sequencer,
+        )
+        from mayatk.anim_utils.behavior_keys import (
+            load_behavior, resolve_keys, apply_behavior,
         )
         import pymel.core as pm
 
@@ -69,19 +72,19 @@ def _write_test_script():
 
         class TestResolveKeysMaya(unittest.TestCase):
             def test_in_anchor(self):
-                scene = SceneBlock(0, "S", 100, 200)
-                keys = _resolve_keys(
+                keys = resolve_keys(
                     {{"offset": 0, "duration": 10, "values": [0.0, 1.0], "anchor": "start"}},
-                    scene,
+                    start=100.0,
+                    end=200.0,
                 )
                 self.assertAlmostEqual(keys[0]["time"], 100.0)
                 self.assertAlmostEqual(keys[1]["time"], 110.0)
 
             def test_out_anchor(self):
-                scene = SceneBlock(0, "S", 100, 200)
-                keys = _resolve_keys(
+                keys = resolve_keys(
                     {{"offset": 0, "duration": 20, "values": [1.0, 0.0], "anchor": "end"}},
-                    scene,
+                    start=100.0,
+                    end=200.0,
                 )
                 self.assertAlmostEqual(keys[0]["time"], 180.0)
                 self.assertAlmostEqual(keys[1]["time"], 200.0)
@@ -156,7 +159,7 @@ def _write_test_script():
                 )
 
 
-        class TestApplyTemplate(unittest.TestCase):
+        class TestApplyBehavior(unittest.TestCase):
             def setUp(self):
                 pm.mel.file(new=True, force=True)
 
@@ -165,8 +168,7 @@ def _write_test_script():
                 pm.setKeyframe(cube, attribute="translateX", time=0, value=0)
                 pm.setKeyframe(cube, attribute="translateX", time=100, value=10)
 
-                seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
-                seq.apply_template(0, str(cube), "fade_in_out", attrs=["visibility"])
+                apply_behavior(str(cube), "fade_in_out", 0, 100, attrs=["visibility"])
 
                 vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
                 self.assertIsNotNone(vis_keys)
@@ -174,16 +176,15 @@ def _write_test_script():
                     len(vis_keys), 2, "Expected at least 2 visibility keys"
                 )
 
-            def test_template_not_found(self):
+            def test_behavior_not_found(self):
                 cube = pm.polyCube(name="tmp")[0]
-                seq = Sequencer([SceneBlock(0, "S", 0, 100, [str(cube)])])
                 with self.assertRaises(FileNotFoundError):
-                    seq.apply_template(0, str(cube), "nonexistent_xyz")
+                    apply_behavior(str(cube), "nonexistent_xyz", 0, 100)
 
 
-        class TestLoadTemplate(unittest.TestCase):
+        class TestLoadBehavior(unittest.TestCase):
             def test_fade_in_out(self):
-                t = load_template("fade_in_out")
+                t = load_behavior("fade_in_out")
                 self.assertIn("attributes", t)
                 self.assertIn("visibility", t["attributes"])
                 vis = t["attributes"]["visibility"]
@@ -249,7 +250,7 @@ def _write_test_script():
         suite = unittest.TestSuite()
         loader = unittest.TestLoader()
         for cls in [TestSceneBlockMaya, TestResolveKeysMaya, TestDetectScenes,
-                    TestRippleEdit, TestApplyTemplate, TestLoadTemplate,
+                    TestRippleEdit, TestApplyBehavior, TestLoadBehavior,
                     TestPersistence]:
             suite.addTests(loader.loadTestsFromTestCase(cls))
 

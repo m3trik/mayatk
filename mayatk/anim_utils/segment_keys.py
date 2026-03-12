@@ -1045,35 +1045,108 @@ class SegmentKeys(SegmentKeysInfo):
         curves: List[Any],
         offset: float,
         time_range: Optional[Tuple[float, float]] = None,
+        remove_flat_at_dest: bool = False,
     ):
-        """Shift keys on curves by offset.
+        """Shift keys on curves by offset using a two-pass move to avoid
+        'Cannot move keys' errors when destination frames already have keys.
 
         Args:
             curves: List of animation curves to shift.
             offset: Amount to shift (in frames).
             time_range: Optional (start, end) tuple to limit the shift to specific keys.
+            remove_flat_at_dest: If True, remove static (flat/hold) keys at the
+                destination range before moving.  This prevents collisions with
+                keys that aren't part of active animation.
         """
         if not curves or abs(offset) < 1e-6:
             return
 
-        try:
-            kwargs = {
-                "edit": True,
-                "relative": True,
-                "timeChange": offset,
-            }
-            if time_range:
-                try:
-                    eps = 1e-3
-                    start, end = float(time_range[0]), float(time_range[1])
-                    kwargs["time"] = (start - eps, end + eps)
-                except Exception:
-                    kwargs["time"] = time_range
+        _TEMP_OFFSET = 100000.0
+        eps = 1e-3
 
+        # Pre-clean: remove flat keys at the destination that would collide
+        if remove_flat_at_dest and time_range:
+            src_start, src_end = float(time_range[0]), float(time_range[1])
+            dst_start = src_start + offset
+            dst_end = src_end + offset
+            dst_range = (dst_start - eps, dst_end + eps)
             for curve in curves:
-                pm.keyframe(curve, **kwargs)
-        except RuntimeError as e:
-            pm.warning(f"Failed to move keys for {curves}: {e}")
+                try:
+                    dest_keys = pm.keyframe(
+                        curve, q=True, time=dst_range, timeChange=True
+                    )
+                    if not dest_keys:
+                        continue
+                    dest_vals = pm.keyframe(
+                        curve, q=True, time=dst_range, valueChange=True
+                    )
+                    if not dest_vals or len(dest_vals) != len(dest_keys):
+                        continue
+                    # Remove keys whose value matches their neighbours (flat)
+                    for kt, kv in zip(dest_keys, dest_vals):
+                        # Skip keys that are also in the source range (being moved)
+                        if src_start - eps <= kt <= src_end + eps:
+                            continue
+                        # Check if value matches curve value just before/after
+                        try:
+                            v_before = pm.keyframe(
+                                curve,
+                                q=True,
+                                eval=True,
+                                time=(kt - 1, kt - 1),
+                            )
+                            v_after = pm.keyframe(
+                                curve,
+                                q=True,
+                                eval=True,
+                                time=(kt + 1, kt + 1),
+                            )
+                            is_flat = True
+                            if v_before and abs(v_before[0] - kv) > 1e-4:
+                                is_flat = False
+                            if v_after and abs(v_after[0] - kv) > 1e-4:
+                                is_flat = False
+                            if is_flat:
+                                pm.cutKey(curve, time=(kt, kt), clear=True)
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+
+        for curve in curves:
+            try:
+                kw_range = {}
+                if time_range:
+                    start, end = float(time_range[0]), float(time_range[1])
+                    kw_range["time"] = (start - eps, end + eps)
+                    temp_range = {
+                        "time": (start + _TEMP_OFFSET - eps, end + _TEMP_OFFSET + eps)
+                    }
+                else:
+                    temp_range = {}
+
+                # Skip if no keys match
+                if not pm.keyframe(curve, q=True, **kw_range):
+                    continue
+
+                # Pass 1: park keys at a safe temp offset
+                pm.keyframe(
+                    curve,
+                    edit=True,
+                    relative=True,
+                    timeChange=_TEMP_OFFSET,
+                    **kw_range,
+                )
+                # Pass 2: move to the real destination
+                pm.keyframe(
+                    curve,
+                    edit=True,
+                    relative=True,
+                    timeChange=offset - _TEMP_OFFSET,
+                    **temp_range,
+                )
+            except RuntimeError as e:
+                pm.warning(f"Failed to move keys for {curve}: {e}")
 
     @classmethod
     def execute_stagger(
