@@ -46,7 +46,6 @@ class ImageToPlaneSlots:
 
     def header_init(self, widget):
         """Configure header menu."""
-        widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Image to Plane:")
 
         widget.menu.add(

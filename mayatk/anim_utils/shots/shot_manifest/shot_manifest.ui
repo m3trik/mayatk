@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>scene_builder</class>
- <widget class="QMainWindow" name="scene_builder">
+ <class>shot_manifest</class>
+ <widget class="QMainWindow" name="shot_manifest">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -13,19 +13,19 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>1</number>
+     <number>6</number>
     </property>
     <property name="leftMargin">
-     <number>1</number>
+     <number>6</number>
     </property>
     <property name="topMargin">
-     <number>1</number>
+     <number>6</number>
     </property>
     <property name="rightMargin">
-     <number>1</number>
+     <number>6</number>
     </property>
     <property name="bottomMargin">
-     <number>1</number>
+     <number>6</number>
     </property>
     <item>
      <widget class="Header" name="header" native="true">
@@ -48,15 +48,14 @@
        </font>
       </property>
       <property name="text" stdset="0">
-       <string>SCENE BUILDER</string>
+       <string>SHOT MANIFEST</string>
       </property>
      </widget>
     </item>
-    <!-- File picker row -->
     <item>
      <layout class="QHBoxLayout" name="file_layout">
       <property name="spacing">
-       <number>4</number>
+       <number>1</number>
       </property>
       <item>
        <widget class="QLabel" name="lbl_file">
@@ -73,111 +72,29 @@
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
-        <property name="placeholderText">
-         <string>Path to CSV file...</string>
-        </property>
         <property name="readOnly">
          <bool>true</bool>
+        </property>
+        <property name="placeholderText">
+         <string>Path to CSV file...</string>
         </property>
        </widget>
       </item>
       <item>
        <widget class="PushButton" name="b001">
-        <property name="text">
-         <string>Browse</string>
-        </property>
         <property name="maximumSize">
          <size>
           <width>70</width>
           <height>16777215</height>
          </size>
         </property>
+        <property name="text">
+         <string>Browse</string>
+        </property>
        </widget>
       </item>
      </layout>
     </item>
-    <!-- Settings row -->
-    <item>
-     <layout class="QHBoxLayout" name="settings_layout">
-      <property name="spacing">
-       <number>8</number>
-      </property>
-      <item>
-       <widget class="QLabel" name="lbl_duration">
-        <property name="text">
-         <string>Step Duration:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="DoubleSpinBox" name="spn_duration">
-        <property name="minimum">
-         <double>1.000000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>9999.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>30.000000000000000</double>
-        </property>
-        <property name="suffix">
-         <string> frames</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLabel" name="lbl_gap">
-        <property name="text">
-         <string>Gap:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="DoubleSpinBox" name="spn_gap">
-        <property name="minimum">
-         <double>0.000000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>999.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>0.000000000000000</double>
-        </property>
-        <property name="suffix">
-         <string> frames</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLabel" name="lbl_start">
-        <property name="text">
-         <string>Start Frame:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="DoubleSpinBox" name="spn_start_frame">
-        <property name="minimum">
-         <double>-99999.000000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>99999.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>1.000000000000000</double>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <spacer name="settings_spacer">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-       </spacer>
-      </item>
-     </layout>
-    </item>
-    <!-- Steps table -->
     <item>
      <widget class="TreeWidget" name="tbl_steps">
       <property name="sizePolicy">
@@ -186,37 +103,51 @@
         <verstretch>1</verstretch>
        </sizepolicy>
       </property>
+      <column>
+       <property name="text">
+        <string notr="true">1</string>
+       </property>
+      </column>
      </widget>
     </item>
-    <!-- Action buttons -->
     <item>
      <layout class="QHBoxLayout" name="action_layout">
       <property name="spacing">
-       <number>4</number>
+       <number>1</number>
       </property>
-      <item>
-       <widget class="QLabel" name="lbl_summary">
-        <property name="text">
-         <string>No CSV loaded.</string>
-        </property>
-       </widget>
-      </item>
       <item>
        <spacer name="action_spacer">
         <property name="orientation">
          <enum>Qt::Horizontal</enum>
         </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
        </spacer>
       </item>
       <item>
        <widget class="PushButton" name="b002">
+        <property name="toolTip">
+         <string>Compare CSV steps against live Maya shots.
+Shows timing, missing objects, missing behaviors,
+and additional objects in the tree.</string>
+        </property>
         <property name="text">
-         <string>Preview</string>
+         <string>Assess</string>
         </property>
        </widget>
       </item>
       <item>
        <widget class="PushButton" name="b003">
+        <property name="toolTip">
+         <string>Build or update shots from the loaded CSV.
+New shots are created, changed shots are patched,
+unchanged shots are skipped. Behaviors are applied
+automatically. Assesses the scene after completion.</string>
+        </property>
         <property name="text">
          <string>Build</string>
         </property>
@@ -263,11 +194,6 @@
    <class>PushButton</class>
    <extends>QPushButton</extends>
    <header>uitk.widgets.pushButton</header>
-  </customwidget>
-  <customwidget>
-   <class>DoubleSpinBox</class>
-   <extends>QDoubleSpinBox</extends>
-   <header>uitk.widgets.doubleSpinBox</header>
   </customwidget>
   <customwidget>
    <class>TreeWidget</class>

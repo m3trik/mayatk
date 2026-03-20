@@ -20,13 +20,15 @@ from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
     select_objects_in_maya,
 )
 import mayatk.env_utils.hierarchy_manager._tree_utils as tree_utils
+from mayatk.ui_utils.node_icons import NodeIcons
 
 
 class HierarchyManagerController(ptk.LoggingMixin):
     """Controller for hierarchy management operations."""
 
-    def __init__(self, slots_instance):
+    def __init__(self, slots_instance, log_level="WARNING"):
         super().__init__()
+        self.set_log_level(log_level)
         self.sb = slots_instance.sb
         self.ui = slots_instance.ui
 
@@ -755,6 +757,11 @@ class HierarchyManagerController(ptk.LoggingMixin):
                     item_data, obj_info["object"], parent_widget_item
                 )
 
+                # Set node-type icon from Maya's resource system
+                icon = NodeIcons.get_icon(obj_key)
+                if icon:
+                    tree_item.setIcon(0, icon)
+
                 # Store raw/original key (full DAG path) for later matching
                 try:
                     tree_item._raw_name = obj_info[
@@ -886,9 +893,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                     f"[DIFF-FMT] {tree_type}: '{path}' -> found via {strategy}"
                 )
             else:
-                self.logger.debug(
-                    f"[DIFF-FMT] {tree_type}: '{path}' -> NOT FOUND"
-                )
+                self.logger.debug(f"[DIFF-FMT] {tree_type}: '{path}' -> NOT FOUND")
             return candidates[0] if candidates else None
 
         def _expand_parents(item):
@@ -1476,8 +1481,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         "Log Level: ERROR": 40,
     }
 
-    def __init__(self, switchboard):
+    def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
+        self.set_log_level(log_level)
 
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.hierarchy_manager
@@ -1759,13 +1765,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             else:
                 # Dropped at root level → world-parent
                 pm.parent(node, world=True)
-                self.controller.logger.info(
-                    f"Reparented '{node}' to world"
-                )
+                self.controller.logger.info(f"Reparented '{node}' to world")
         except Exception as e:
-            self.controller.logger.error(
-                f"Maya reparent failed for '{node}': {e}"
-            )
+            self.controller.logger.error(f"Maya reparent failed for '{node}': {e}")
             # Refresh tree to revert the visual move
             self.controller.populate_current_scene_tree(self.ui.tree001)
 
@@ -1830,9 +1832,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             widget.itemChanged.connect(self._on_current_tree_item_renamed)
 
             # Enable internal drag-and-drop for reparenting via middle mouse button
-            widget.setDragDropMode(
-                self.sb.QtWidgets.QAbstractItemView.InternalMove
-            )
+            widget.setDragDropMode(self.sb.QtWidgets.QAbstractItemView.InternalMove)
             widget.setDefaultDropAction(self.sb.QtCore.Qt.MoveAction)
             widget.viewport().installEventFilter(self._tree001_drag_filter)
             widget.installEventFilter(self._tree001_drag_filter)
@@ -2621,9 +2621,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 rename_pairs.append((item, ref_leaf))
 
             if not rename_pairs:
-                self.logger.notice(
-                    "No matching fuzzy items found in the current tree."
-                )
+                self.logger.notice("No matching fuzzy items found in the current tree.")
                 return
 
         # ── Execute renames ──
@@ -2656,9 +2654,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                     f"Renamed '{old_name}' \u2192 '{actual_name}'"
                 )
             except Exception as e:
-                self.controller.logger.error(
-                    f"Failed to rename '{node}': {e}"
-                )
+                self.controller.logger.error(f"Failed to rename '{node}': {e}")
 
         if renamed:
             self.logger.success(f"Renamed {renamed} object(s) from reference names.")
@@ -3225,24 +3221,38 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                             parent = parent.parent()
 
             # -------------------- Select REPARENTED (both trees) ---------------------
-            reparented_list = self.controller._current_diff_result.get(
-                "reparented", []
-            )
+            reparented_list = self.controller._current_diff_result.get("reparented", [])
             if reparented_list:
                 self.logger.debug(
                     f"[AUTO-SELECT] Selecting {len(reparented_list)} reparented items"
                 )
             for rp in reparented_list:
                 for key, tree, by_f, by_c, by_l in (
-                    ("reference_path", tree000, ref_by_full, ref_by_clean_full, ref_by_last),
-                    ("current_path", tree001, cur_by_full, cur_by_clean_full, cur_by_last),
+                    (
+                        "reference_path",
+                        tree000,
+                        ref_by_full,
+                        ref_by_clean_full,
+                        ref_by_last,
+                    ),
+                    (
+                        "current_path",
+                        tree001,
+                        cur_by_full,
+                        cur_by_clean_full,
+                        cur_by_last,
+                    ),
                 ):
                     rp_path = rp.get(key, "")
                     if not rp_path:
                         continue
                     candidates, strategy = tree_matcher.find_path_matches(
-                        rp_path, by_f, by_c, by_l,
-                        prefer_cleaned=True, strict=False,
+                        rp_path,
+                        by_f,
+                        by_c,
+                        by_l,
+                        prefer_cleaned=True,
+                        strict=False,
                     )
                     for c in candidates:
                         if not c.isSelected():
@@ -3259,24 +3269,38 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                             )
 
             # -------------------- Select FUZZY (both trees) ---------------------
-            fuzzy_list = self.controller._current_diff_result.get(
-                "fuzzy_matches", []
-            )
+            fuzzy_list = self.controller._current_diff_result.get("fuzzy_matches", [])
             if fuzzy_list:
                 self.logger.debug(
                     f"[AUTO-SELECT] Selecting {len(fuzzy_list)} fuzzy-matched items"
                 )
             for fz in fuzzy_list:
                 for key, tree, by_f, by_c, by_l in (
-                    ("target_name", tree000, ref_by_full, ref_by_clean_full, ref_by_last),
-                    ("current_name", tree001, cur_by_full, cur_by_clean_full, cur_by_last),
+                    (
+                        "target_name",
+                        tree000,
+                        ref_by_full,
+                        ref_by_clean_full,
+                        ref_by_last,
+                    ),
+                    (
+                        "current_name",
+                        tree001,
+                        cur_by_full,
+                        cur_by_clean_full,
+                        cur_by_last,
+                    ),
                 ):
                     fz_path = fz.get(key, "")
                     if not fz_path:
                         continue
                     candidates, strategy = tree_matcher.find_path_matches(
-                        fz_path, by_f, by_c, by_l,
-                        prefer_cleaned=True, strict=False,
+                        fz_path,
+                        by_f,
+                        by_c,
+                        by_l,
+                        prefer_cleaned=True,
+                        strict=False,
                     )
                     for c in candidates:
                         if not c.isSelected():
@@ -3563,9 +3587,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                     if not rp_path:
                         continue
                     node_name = rp_path.split("|")[-1]
-                    items = tree.findItems(
-                        node_name, self.sb.QtCore.Qt.MatchRecursive
-                    )
+                    items = tree.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                     for item in items:
                         if self._matches_hierarchy_path(item, rp_path):
                             parent = item.parent()
@@ -3576,9 +3598,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                                 parent = parent.parent()
 
             # Expand fuzzy-matched items in both trees
-            for fuzzy in self.controller._current_diff_result.get(
-                "fuzzy_matches", []
-            ):
+            for fuzzy in self.controller._current_diff_result.get("fuzzy_matches", []):
                 for key, tree in (
                     ("target_name", tree000),
                     ("current_name", tree001),
@@ -3587,9 +3607,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                     if not fz_path:
                         continue
                     node_name = fz_path.split("|")[-1]
-                    items = tree.findItems(
-                        node_name, self.sb.QtCore.Qt.MatchRecursive
-                    )
+                    items = tree.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
                     for item in items:
                         if self._matches_hierarchy_path(item, fz_path):
                             parent = item.parent()

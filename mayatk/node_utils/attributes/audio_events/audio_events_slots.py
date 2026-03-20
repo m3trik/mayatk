@@ -70,7 +70,6 @@ class AudioEventsSlots:
 
     def header_init(self, widget):
         """Configure header menu with tool description and workflow instructions."""
-        widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Audio Events:")
 
         widget.menu.add("Separator", setTitle="Create")
@@ -99,26 +98,47 @@ class AudioEventsSlots:
         )
 
         widget.menu.add("Separator", setTitle="Export")
+        widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_export_mode",
+            setToolTip=(
+                "Choose what to export:\n"
+                "• Composite — single mixed WAV of all keyed clips.\n"
+                "• Keyed Tracks — individual source clips that are\n"
+                "  keyed on the timeline (unused clips skipped).\n"
+                "• All Tracks — every loaded clip regardless of\n"
+                "  whether it has been keyed."
+            ),
+            addItems=["Composite", "Keyed Tracks", "All Tracks"],
+        )
         btn_export = widget.menu.add(
             "QPushButton",
-            setText="Export Composite WAV",
-            setObjectName="btn_export_composite",
-            setToolTip=(
-                "Save the current composite WAV to a chosen location.\n"
-                "The composite is built by 'Sync Audio to Timeline'\n"
-                "and contains all keyed clips mixed into one file."
-            ),
+            setText="Export",
+            setObjectName="btn_export",
+            setToolTip="Export audio using the selected mode above.",
         )
-        btn_export.clicked.connect(self._export_composite)
+        btn_export.clicked.connect(self._export)
         widget.menu.add(
             "QCheckBox",
             setText="Trim Silence",
             setObjectName="chk_trim_silence",
             setToolTip=(
-                "When enabled, leading and trailing silence is removed\n"
-                "from the exported composite WAV."
+                "When exporting Composite, remove leading and\n"
+                "trailing silence from the exported WAV."
             ),
             setChecked=True,
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Suffix Time Range",
+            setObjectName="chk_suffix_time_range",
+            setToolTip=(
+                "When exporting Keyed Tracks, append the keyed\n"
+                "frame range to each filename.\n\n"
+                "Example: Footstep_12-47.wav\n"
+                "(start frame 12, end frame 47)"
+            ),
+            setChecked=False,
         )
 
         widget.menu.add("Separator", setTitle="About")
@@ -149,6 +169,21 @@ class AudioEventsSlots:
                 "reflects the updated audio immediately."
             ),
         )
+
+    def _export(self):
+        """Dispatch export based on the mode combobox selection."""
+        combo = getattr(
+            getattr(getattr(self.ui, "header", None), "menu", None),
+            "cmb_export_mode",
+            None,
+        )
+        mode = combo.currentText() if combo else "Composite"
+        if mode == "Composite":
+            self._export_composite()
+        elif mode == "Keyed Tracks":
+            self._export_clips(keyed_only=True)
+        else:  # "All Tracks"
+            self._export_clips(keyed_only=False)
 
     def _export_composite(self):
         """Export the current target's composite WAV to a user-chosen file path.
@@ -238,6 +273,121 @@ class AudioEventsSlots:
         except OSError as exc:
             self.ui.footer.setText(f"Export failed: {exc}")
             logging.warning("AudioEvents: export failed: %s", exc)
+
+    def _export_clips(self, keyed_only=True):
+        """Export audio clips to a user-chosen directory.
+
+        Parameters:
+            keyed_only: When True, only clips that are keyed on the
+                current target are exported.  When False, every loaded
+                clip is exported.
+
+        When *Suffix Time Range* is enabled (keyed-only mode), each
+        filename is appended with the keyed frame range
+        (e.g. ``Footstep_12-47.wav``).  If a clip is keyed multiple
+        times, one copy per occurrence is exported with its own suffix.
+        """
+        import math
+        import shutil
+
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self.ui.footer.setText("Select an audio-trigger object first.")
+            return
+
+        if not self._audio_files:
+            self.ui.footer.setText("No audio clips loaded.")
+            return
+
+        # Build per-stem data depending on mode
+        keyed_ranges = {}  # {lower_stem: [(start, end), ...]}
+
+        if keyed_only:
+            from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+            keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+            if not keyed:
+                self.ui.footer.setText("No keyed events — nothing to export.")
+                return
+
+            for start_frame, label in keyed:
+                key = label.lower()
+                source = self._audio_files.get(key)
+                if source:
+                    length = self._get_clip_length_frames(source)
+                    end_frame = (
+                        math.ceil(start_frame + length)
+                        if length > 0
+                        else int(start_frame)
+                    )
+                    keyed_ranges.setdefault(key, []).append(
+                        (int(start_frame), end_frame)
+                    )
+
+            if not keyed_ranges:
+                self.ui.footer.setText("No keyed clips have matching audio files.")
+                return
+        else:
+            # All loaded tracks — no time-range data needed
+            for stem in self._audio_files:
+                keyed_ranges[stem] = []
+
+        # Pick export directory
+        start_dir = os.path.dirname(next(iter(self._audio_files.values()), ""))
+        export_dir = self.sb.dir_dialog(
+            title="Export Audio Clips",
+            start_dir=start_dir,
+        )
+        if not export_dir:
+            return
+
+        suffix_range = getattr(
+            getattr(getattr(self.ui, "header", None), "menu", None),
+            "chk_suffix_time_range",
+            None,
+        )
+        use_suffix = keyed_only and suffix_range and suffix_range.isChecked()
+
+        exported = 0
+        errors = []
+        already_exported = set()
+
+        for stem, ranges in keyed_ranges.items():
+            source_path = self._audio_files.get(stem)
+            if not source_path or not os.path.isfile(source_path):
+                errors.append(stem)
+                continue
+
+            ext = os.path.splitext(source_path)[1]
+            original_stem = os.path.splitext(os.path.basename(source_path))[0]
+
+            if use_suffix and ranges:
+                for start_f, end_f in ranges:
+                    out_name = f"{original_stem}_{start_f}-{end_f}{ext}"
+                    dest = os.path.join(export_dir, out_name)
+                    try:
+                        shutil.copy2(source_path, dest)
+                        exported += 1
+                    except OSError as exc:
+                        logging.warning("AudioEvents: clip export failed: %s", exc)
+                        errors.append(stem)
+            else:
+                if stem in already_exported:
+                    continue
+                already_exported.add(stem)
+                dest = os.path.join(export_dir, f"{original_stem}{ext}")
+                try:
+                    shutil.copy2(source_path, dest)
+                    exported += 1
+                except OSError as exc:
+                    logging.warning("AudioEvents: clip export failed: %s", exc)
+                    errors.append(stem)
+
+        suffix = f" ({len(errors)} failed)" if errors else ""
+        self.ui.footer.setText(
+            f"Exported {exported} clip(s) → {os.path.basename(export_dir)}{suffix}"
+        )
+        logging.info("AudioEvents: exported %d clip(s) to '%s'", exported, export_dir)
 
     def _sync_from_menu(self):
         """Sync audio to timeline — header-menu entry point.
@@ -2187,11 +2337,11 @@ class AudioEventsSlots:
         # Hydrate _audio_files: persisted attr is primary source,
         # then fill gaps from existing audio-node .filename attrs.
         # The node-filename fallback reads from the GLOBAL audio_set
-        # which contains nodes from ALL targets, so it is only used
-        # when no persisted file-map exists.  Cache paths (converted
-        # WAVs inside ``_maya_audio_cache/`` dirs) are always rejected
-        # because they are ephemeral build artefacts, not user sources.
+        # which contains nodes from ALL targets, so we filter by the
+        # stamped owner attr when available, and fall back to rejecting
+        # cache paths for legacy nodes without an owner stamp.
         _CACHE_SEGMENTS = {"_maya_audio_cache", "_audio_cache"}
+        target_name = obj.name()
         try:
             persisted = self._load_file_map(obj)
             if persisted:
@@ -2201,6 +2351,24 @@ class AudioEventsSlots:
                 # Only runs when no persisted map exists (first hydration).
                 event_labels = {e.lower() for e in track_names}
                 for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                    # Skip nodes owned by a different target.
+                    try:
+                        if cmds.attributeQuery(
+                            AudioEvents.NODE_OWNER_ATTR,
+                            node=node_name,
+                            exists=True,
+                        ):
+                            owner = (
+                                cmds.getAttr(
+                                    f"{node_name}.{AudioEvents.NODE_OWNER_ATTR}"
+                                )
+                                or ""
+                            )
+                            if owner and owner != target_name:
+                                continue
+                    except Exception:
+                        pass
+
                     node_event = self._node_to_event_label(node_name)
                     if node_event and node_event in event_labels:
                         if node_event not in self._audio_files:

@@ -667,7 +667,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         pm.setKeyframe(cube, t=30, v=20, at="tx")
 
         curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
-        result, stepped = SegmentKeys._get_active_animation_segments(curves)
+        result, stepped, _kf = SegmentKeys._get_active_animation_segments(curves)
 
         # Should have 2 segments
         self.assertEqual(len(result), 2)

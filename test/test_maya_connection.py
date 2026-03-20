@@ -328,6 +328,98 @@ class TestMayaConnectionMocked(unittest.TestCase):
                 MockAppLauncher.launch.call_args[0][0], "/custom/path/to/maya.exe"
             )
 
+    # ---- context manager -------------------------------------------------
+
+    @patch("socket.socket")
+    def test_context_manager_connects_and_shuts_down(self, mock_socket_cls):
+        """with MayaConnection() should connect on enter and shutdown on exit."""
+        mock_socket = MagicMock()
+        mock_socket_cls.return_value = mock_socket
+
+        conn = MayaConnection()
+
+        with patch.object(conn, "connect", wraps=conn.connect) as spy_connect, \
+             patch.object(conn, "shutdown") as mock_shutdown:
+            # Force connect to succeed
+            spy_connect.side_effect = lambda **kw: setattr(conn, "is_connected", True) or True
+
+            with conn:
+                self.assertTrue(conn.is_connected)
+
+            mock_shutdown.assert_called_once()
+
+    def test_context_manager_already_connected(self):
+        """__enter__ should not call connect() again if already connected."""
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "port"
+
+        with patch.object(conn, "connect") as mock_connect, \
+             patch.object(conn, "shutdown"):
+            with conn:
+                pass
+            mock_connect.assert_not_called()
+
+    def test_context_manager_does_not_suppress_exceptions(self):
+        """Exceptions inside the with-block must propagate."""
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "port"
+
+        with patch.object(conn, "shutdown"):
+            with self.assertRaises(RuntimeError):
+                with conn:
+                    raise RuntimeError("boom")
+
+    @patch.object(MayaConnection, "close_instance")
+    def test_shutdown_port_mode(self, mock_close):
+        """shutdown() in port mode should call close_instance(port=...)."""
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "port"
+        conn.port = 7005
+
+        conn.shutdown()
+
+        mock_close.assert_called_once_with(port=7005)
+        self.assertFalse(conn.is_connected)
+        self.assertIsNone(conn.mode)
+
+    def test_shutdown_standalone_mode(self):
+        """shutdown() in standalone mode should uninitialise Maya."""
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "standalone"
+
+        with patch("maya.standalone.uninitialize") as mock_uninit:
+            conn.shutdown()
+            mock_uninit.assert_called_once()
+
+        self.assertFalse(conn.is_connected)
+        self.assertIsNone(conn.mode)
+
+    def test_shutdown_interactive_mode_no_kill(self):
+        """shutdown() in interactive mode should NOT kill Maya — only reset state."""
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "interactive"
+
+        with patch.object(MayaConnection, "close_instance") as mock_close:
+            conn.shutdown()
+            mock_close.assert_not_called()
+
+        self.assertFalse(conn.is_connected)
+        self.assertIsNone(conn.mode)
+
+    def test_shutdown_noop_when_not_connected(self):
+        """shutdown() should be a no-op when not connected."""
+        conn = MayaConnection()
+        conn.is_connected = False
+
+        with patch.object(MayaConnection, "close_instance") as mock_close:
+            conn.shutdown()  # should not raise
+            mock_close.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

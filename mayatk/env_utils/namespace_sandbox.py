@@ -1100,11 +1100,12 @@ class MayaImporter:
 class CameraTracker(ptk.LoggingMixin):
     """Tracks cameras before and after import operations for proper cleanup."""
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, log_level="WARNING"):
         if logger:
             self.logger = logger
         else:
             super().__init__()
+        self.set_log_level(log_level)
         self.pre_import_cameras = set()
         self.post_import_cameras = set()
         self.new_cameras = set()
@@ -1228,8 +1229,11 @@ class NamespaceSandbox(ptk.LoggingMixin):
     TEMP_NAMESPACE_PREFIX = "temp_import_"
     DRY_RUN_NAMESPACE = "dry_run_temp"
 
-    def __init__(self, dry_run: bool = True, fuzzy_matching: bool = True):
+    def __init__(
+        self, dry_run: bool = True, fuzzy_matching: bool = True, log_level="WARNING"
+    ):
         super().__init__()
+        self.set_log_level(log_level)
         self.dry_run = dry_run
         self.fuzzy_matching = fuzzy_matching
         self._active_namespaces = []  # Track only OUR namespaces for cleanup

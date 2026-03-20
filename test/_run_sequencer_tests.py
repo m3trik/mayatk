@@ -43,10 +43,10 @@ def _write_test_script():
             if 'sequencer' in k or 'test_sequencer' in k:
                 del sys.modules[k]
 
-        from mayatk.anim_utils.sequencer._sequencer import (
-            SceneBlock, Sequencer,
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            SceneBlock, ShotSequencer as Sequencer,
         )
-        from mayatk.anim_utils.behavior_keys import (
+        from mayatk.anim_utils.shots.behaviors import (
             load_behavior, resolve_keys, apply_behavior,
         )
         import pymel.core as pm

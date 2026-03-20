@@ -17,9 +17,10 @@ class TelescopeRig(ptk.LoggingMixin):
     Configures constraints and driven keys to make a series of segments telescope between two locators.
     """
 
-    def __init__(self):
+    def __init__(self, log_level="WARNING"):
         """Initialize telescope rig with logging."""
         super().__init__()
+        self.set_log_level(log_level)
 
     @CoreUtils.undoable
     def setup_telescope_rig(
@@ -168,8 +169,9 @@ class TelescopeRig(ptk.LoggingMixin):
 
 
 class TelescopeRigSlots(ptk.LoggingMixin):
-    def __init__(self, switchboard):
+    def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
+        self.set_log_level(log_level)
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.telescope_rig
 
@@ -183,7 +185,6 @@ class TelescopeRigSlots(ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
-        widget.config_buttons("menu", "pin")
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",
