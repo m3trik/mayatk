@@ -835,7 +835,6 @@ class ShadowRigSlots:
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
-        widget.config_buttons("menu", "pin")
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",

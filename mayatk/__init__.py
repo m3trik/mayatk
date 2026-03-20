@@ -35,7 +35,8 @@ DEFAULT_INCLUDE = {
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
-    "anim_utils.sequencer._sequencer": ["Sequencer", "SceneBlock"],
+    "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
+    "anim_utils.shots._shots": "ShotStore",
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",
@@ -95,6 +96,7 @@ DEFAULT_INCLUDE = {
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
+    "ui_utils.node_icons": "NodeIcons",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     # NURBS utils

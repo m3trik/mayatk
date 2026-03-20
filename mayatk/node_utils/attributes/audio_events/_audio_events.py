@@ -68,6 +68,9 @@ class AudioEvents(ptk.LoggingMixin):
     NODE_TYPE_ATTR = "audio_node_type"
     """String attr stamped on audio nodes: ``"preview"``, ``"synced"``, or ``"composite"``."""
 
+    NODE_OWNER_ATTR = "audio_event_owner"
+    """String attr stamped on synced/composite audio nodes identifying the trigger object."""
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -150,24 +153,55 @@ class AudioEvents(ptk.LoggingMixin):
             output_dir = os.path.dirname(output_dir)
 
         # Build the set of object names being synced so we only
-        # clean up composites and synced nodes belonging to *these*
-        # objects, leaving other objects' composites intact.
+        # clean up synced/composite nodes belonging to *these*
+        # objects, leaving other objects' nodes intact.
         obj_names = {str(pm.PyNode(o).name()) for o in objects}
-        obj_composite_suffixes = {f"{n}_composite" for n in obj_names}
 
-        # 2. Get or create the set — remove only previously-synced
-        #    nodes (those with a digit suffix like ``label_42``) and
-        #    composite nodes owned by the objects being synced.
-        #    Preview nodes from ``load_tracks`` (plain stems at offset 0)
-        #    and composites belonging to *other* objects are preserved.
+        # 2. Get or create the set — remove synced/composite nodes
+        #    owned by the objects being synced (via stamped owner attr).
+        #    Preview nodes from ``load_tracks`` and nodes belonging to
+        #    *other* objects are preserved.  Orphan nodes whose owner
+        #    no longer exists are also cleaned up.
         audio_set = cls._get_or_create_set(cat, clear=False)
         for member in list(audio_set.members()):
             name = str(member)
-            if name.endswith("_composite"):
-                # Only remove composites belonging to the objects being synced
-                # (or the legacy global composite ``{cat}_composite``).
-                if name in obj_composite_suffixes or name == f"{cat}_composite":
-                    # Clean up old composite WAV from disk
+            # Read stamped owner and type attrs
+            has_owner = cmds.attributeQuery(cls.NODE_OWNER_ATTR, node=name, exists=True)
+            owner = (
+                (cmds.getAttr(f"{name}.{cls.NODE_OWNER_ATTR}") or "")
+                if has_owner
+                else ""
+            )
+            has_type = cmds.attributeQuery(cls.NODE_TYPE_ATTR, node=name, exists=True)
+            ntype = (
+                (cmds.getAttr(f"{name}.{cls.NODE_TYPE_ATTR}") or "") if has_type else ""
+            )
+
+            should_delete = False
+            if owner:
+                # Owner-stamped node: delete if owned by a synced object
+                # or if the owner no longer exists (orphan).
+                if owner in obj_names or not pm.objExists(owner):
+                    if ntype in ("synced", "composite"):
+                        should_delete = True
+            else:
+                # Legacy node without owner stamp — use old heuristics.
+                if ntype == "synced":
+                    should_delete = True
+                elif name.endswith("_composite"):
+                    # Legacy composite: match by name prefix.
+                    obj_composite_suffixes = {f"{n}_composite" for n in obj_names}
+                    if name in obj_composite_suffixes or name == f"{cat}_composite":
+                        should_delete = True
+                elif not has_type:
+                    # Very old node: ``{label}_{frame}`` pattern
+                    parts = name.rsplit("_", 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        should_delete = True
+
+            if should_delete:
+                # Clean up composite WAV from disk before deletion.
+                if ntype == "composite" or name.endswith("_composite"):
                     fpath = cmds.getAttr(f"{name}.filename")
                     if (
                         fpath
@@ -178,18 +212,7 @@ class AudioEvents(ptk.LoggingMixin):
                             os.remove(fpath)
                         except OSError:
                             pass
-                    pm.delete(member)
-            else:
-                # Check stamped type attr first (new-style)
-                if cmds.attributeQuery(cls.NODE_TYPE_ATTR, node=name, exists=True):
-                    ntype = cmds.getAttr(f"{name}.{cls.NODE_TYPE_ATTR}") or ""
-                    if ntype == "synced":
-                        pm.delete(member)
-                else:
-                    # Legacy fallback: ``{label}_{frame}`` pattern
-                    parts = name.rsplit("_", 1)
-                    if len(parts) == 2 and parts[1].isdigit():
-                        pm.delete(member)
+                pm.delete(member)
 
         # Re-fetch handle — Maya may have auto-deleted the set if it
         # became empty after the selective removal above.
@@ -234,7 +257,9 @@ class AudioEvents(ptk.LoggingMixin):
                 clean_name = f"{label}_{int(t)}"
                 node_name = cmds.createNode("audio", name=clean_name, skipSelect=True)
                 cls._configure_audio_node(node_name, audio_path, t)
-                cls._stamp_event_attrs(node_name, label.lower(), "synced")
+                cls._stamp_event_attrs(
+                    node_name, label.lower(), "synced", owner=obj.name()
+                )
                 cmds.sets(node_name, addElement=audio_set.name())
                 obj_nodes.append(node_name)
                 all_events.append((t, label))
@@ -290,7 +315,7 @@ class AudioEvents(ptk.LoggingMixin):
                     )
                     cmds.setAttr(f"{comp_node}.filename", comp_path, type="string")
                     cmds.setAttr(f"{comp_node}.offset", 0)
-                    cls._stamp_event_attrs(comp_node, "", "composite")
+                    cls._stamp_event_attrs(comp_node, "", "composite", owner=obj_name)
                     cmds.sets(comp_node, addElement=audio_set.name())
                     cls.logger.debug(f"Composite '{comp_node}' built for {obj_name}")
 
@@ -591,18 +616,25 @@ class AudioEvents(ptk.LoggingMixin):
         )
 
     @classmethod
-    def _stamp_event_attrs(cls, node_name: str, stem: str, node_type: str) -> None:
+    def _stamp_event_attrs(
+        cls, node_name: str, stem: str, node_type: str, owner: str = ""
+    ) -> None:
         """Stamp event metadata on an audio node.
 
         Parameters:
             node_name: Audio DG node.
             stem: Lowercase event stem (empty for composite).
             node_type: ``"preview"``, ``"synced"``, or ``"composite"``.
+            owner: Name of the trigger object that owns this node.
+                Omit for category-level preview nodes.
         """
-        for attr_name, value in [
+        entries = [
             (cls.NODE_STEM_ATTR, stem),
             (cls.NODE_TYPE_ATTR, node_type),
-        ]:
+        ]
+        if owner:
+            entries.append((cls.NODE_OWNER_ATTR, owner))
+        for attr_name, value in entries:
             if not cmds.attributeQuery(attr_name, node=node_name, exists=True):
                 cmds.addAttr(node_name, ln=attr_name, dt="string")
             cmds.setAttr(f"{node_name}.{attr_name}", value, type="string")

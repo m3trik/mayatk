@@ -26,8 +26,9 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     - Provides workspace navigation and selection
     """
 
-    def __init__(self):
+    def __init__(self, log_level="WARNING"):
         super().__init__()
+        self.set_log_level(log_level)
         self._filter_text = ""
         self._workspace_data = {}
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
@@ -378,7 +379,6 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
-        widget.config_buttons("menu", "pin")
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",

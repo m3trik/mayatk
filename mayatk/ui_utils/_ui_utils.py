@@ -154,13 +154,14 @@ class UiUtils:
 
     @staticmethod
     def reveal_in_outliner(objects):
-        """Reveal objects in the Outliner panel."""
-        # Get the outliner editor associated with 'outlinerPanel1'
+        """Reveal and select objects in the Outliner panel."""
+        if not objects:
+            return
         outliner_editor = pm.outlinerPanel(
             "outlinerPanel1", query=True, outlinerEditor=True
         )
-        # Reveal the objects in the outliner
-        pm.outlinerEditor(outliner_editor, edit=True, revealObjects=objects)
+        pm.select(objects, replace=True)
+        pm.outlinerEditor(outliner_editor, edit=True, showSelected=True)
 
 
 # --------------------------------------------------------------------------------------------

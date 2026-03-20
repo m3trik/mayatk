@@ -250,6 +250,8 @@ class SegmentKeys(SegmentKeysInfo):
         ignore_visibility_holds: bool = False,
         ignore_holds: bool = False,
         exclude_next_start: bool = True,
+        motion_only: bool = False,
+        motion_rate: float = 1e-3,
     ) -> List[Dict[str, Any]]:
         """Collect animation segments from objects.
 
@@ -282,15 +284,22 @@ class SegmentKeys(SegmentKeysInfo):
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         segments: List[Dict[str, Any]] = []
+        if not objects:
+            return segments
 
         # Parse time range
         range_start = time_range[0] if time_range else None
         range_end = time_range[1] if time_range else None
 
+        import maya.cmds as cmds
+
         for obj in objects:
+            obj_str = str(obj)
             # Get curves based on selection state
             if selected_keys_only:
-                selected_curves = pm.keyframe(obj, query=True, name=True, selected=True)
+                selected_curves = cmds.keyframe(
+                    obj_str, query=True, name=True, selected=True
+                )
                 if not selected_curves:
                     continue
                 curves_to_use = cls._filter_curves_by_ignore(selected_curves, ignore)
@@ -299,12 +308,19 @@ class SegmentKeys(SegmentKeysInfo):
                 )
             else:
                 all_curves = (
-                    pm.listConnections(obj, type="animCurve", s=True, d=False) or []
+                    cmds.listConnections(obj_str, type="animCurve", s=True, d=False)
+                    or []
                 )
                 curves_to_use = cls._filter_curves_by_ignore(all_curves, ignore)
-                keyframes = AnimUtils.get_keyframe_times(
-                    curves_to_use, from_curves=True
-                )
+                # When split_static is requested, _get_active_animation_segments
+                # already queries all keyframe times internally.  Defer the
+                # get_keyframe_times call to avoid duplicating that work.
+                if not split_static:
+                    keyframes = AnimUtils.get_keyframe_times(
+                        curves_to_use, from_curves=True
+                    )
+                else:
+                    keyframes = None  # will be populated below
 
             # Apply channel box filter if specified
             if channel_box_attrs and curves_to_use:
@@ -319,10 +335,31 @@ class SegmentKeys(SegmentKeysInfo):
                         curves_to_use, mode="selected", from_curves=True
                     )
                 else:
-                    keyframes = AnimUtils.get_keyframe_times(
-                        curves_to_use, from_curves=True
-                    )
+                    if not split_static:
+                        keyframes = AnimUtils.get_keyframe_times(
+                            curves_to_use, from_curves=True
+                        )
+                    else:
+                        keyframes = None
 
+            # Determine segment ranges
+            stepped_points = []
+            if split_static:
+                active_segments, stepped_points, all_kf = (
+                    cls._get_active_animation_segments(
+                        curves_to_use,
+                        tolerance=static_tolerance,
+                        ignore_visibility_holds=ignore_visibility_holds,
+                        motion_only=motion_only,
+                        motion_rate=motion_rate,
+                    )
+                )
+                # Use keyframes collected inside _get_active_animation_segments
+                # so we don't query maya a second time.
+                if keyframes is None:
+                    keyframes = all_kf
+
+            # Common validation and filtering for both branches
             if not keyframes or not curves_to_use:
                 continue
 
@@ -340,33 +377,31 @@ class SegmentKeys(SegmentKeysInfo):
                 if not keyframes:
                     continue
 
-            # Determine segment ranges
-            stepped_points = []
             if split_static:
-                active_segments, stepped_points = cls._get_active_animation_segments(
-                    curves_to_use,
-                    tolerance=static_tolerance,
-                    ignore_visibility_holds=ignore_visibility_holds,
-                )
-                # Filter active segments to time range
+                # Filter active segments to time range.
+                # Use a small tolerance so boundary keys that land at
+                # shot.end via float-imprecise ripple deltas are not
+                # dropped (seg_start may exceed seg_end by ~1 ULP).
                 if range_start is not None or range_end is not None:
+                    _BOUNDARY_EPS = 1e-4
                     filtered_segments = []
                     for seg_start, seg_end in active_segments:
-                        # Clip segments to time range
                         if range_start is not None:
                             seg_start = max(seg_start, range_start)
                         if range_end is not None:
                             seg_end = min(seg_end, range_end)
-                        if seg_start < seg_end:
-                            filtered_segments.append((seg_start, seg_end))
+                        if seg_start <= seg_end + _BOUNDARY_EPS:
+                            # Clamp so output always has start <= end
+                            filtered_segments.append(
+                                (seg_start, max(seg_start, seg_end))
+                            )
                     active_segments = filtered_segments
-                    # Also filter stepped points to time range
                     if stepped_points:
                         stepped_points = [
                             (t, t)
                             for t, _ in stepped_points
-                            if (range_start is None or t >= range_start)
-                            and (range_end is None or t <= range_end)
+                            if (range_start is None or t >= range_start - _BOUNDARY_EPS)
+                            and (range_end is None or t <= range_end + _BOUNDARY_EPS)
                         ]
             else:
                 active_segments = [(keyframes[0], keyframes[-1])]
@@ -834,17 +869,17 @@ class SegmentKeys(SegmentKeysInfo):
 
     @staticmethod
     def _filter_curves_by_ignore(
-        curves: List["pm.PyNode"],
+        curves: List[str],
         ignore: Optional[Union[str, List[str]]],
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         """Filter out curves connected to ignored attributes.
 
         Parameters:
-            curves: List of animation curve nodes.
+            curves: List of animation curve node names.
             ignore: Attribute name(s) to exclude.
 
         Returns:
-            Filtered list of curves.
+            Filtered list of curve names.
         """
         if not ignore or not curves:
             return list(curves)
@@ -868,17 +903,11 @@ class SegmentKeys(SegmentKeysInfo):
             + list(f".{attr}" for attr in ignored_attrs)
         )
 
-        filtered: List["pm.PyNode"] = []
+        filtered = []
         for curve in curves:
-            try:
-                curve_node = pm.PyNode(curve)
-            except Exception:
-                continue
-
-            curve_name = str(curve_node).lower()
-            curve_short = (
-                curve_node.name().lower() if hasattr(curve_node, "name") else curve_name
-            )
+            curve_name = str(curve).lower()
+            # Short name: take portion after last '|' (or whole string)
+            curve_short = curve_name.rsplit("|", 1)[-1]
 
             # Check if the curve matches any ignored pattern
             if curve_short in ignored_full or curve_name in ignored_full:
@@ -889,23 +918,23 @@ class SegmentKeys(SegmentKeysInfo):
             ):
                 continue
 
-            filtered.append(curve_node)
+            filtered.append(curve)
 
         return filtered
 
     @staticmethod
     def _filter_curves_by_channel_box(
-        curves: List["pm.PyNode"],
+        curves: List[str],
         channel_box_attrs: Optional[List[str]],
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         """Filter curves to only those connected to channel box selected attributes.
 
         Parameters:
-            curves: List of animation curve nodes.
+            curves: List of animation curve node names.
             channel_box_attrs: List of attribute names from channel box selection.
 
         Returns:
-            Filtered list of curves.
+            Filtered list of curve names.
         """
         if not channel_box_attrs or not curves:
             return list(curves)
@@ -930,10 +959,12 @@ class SegmentKeys(SegmentKeysInfo):
 
     @staticmethod
     def _get_active_animation_segments(
-        curves: List["pm.PyNode"],
+        curves: List[str],
         tolerance: float = 1e-4,
         ignore_visibility_holds: bool = False,
-    ) -> List[Tuple[float, float]]:
+        motion_only: bool = False,
+        motion_rate: float = 1e-3,
+    ) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]], List[float]]:
         """Identify segments of active animation, excluding static gaps.
 
         A segment is considered active if at least one curve has changing values.
@@ -949,29 +980,51 @@ class SegmentKeys(SegmentKeysInfo):
         is True.
 
         Parameters:
-            curves: List of animation curves to analyze.
+            curves: List of animation curves to analyze (PyNodes or strings).
             tolerance: Value tolerance for detecting static segments.
             ignore_visibility_holds: If True, visibility curves are treated like any
                 other curve (static holds are ignored).
+            motion_rate: Per-frame rate threshold used when *motion_only* is
+                ``True``.  An interval is considered motion only when
+                ``abs(v2 - v1) / max(t2 - t1, 1) > motion_rate``.  This
+                normalises by interval duration so sparse/baked keys that
+                drift slowly are correctly classified as static.
 
         Returns:
-            A tuple ``(merged_spans, stepped_points)`` where
-            *merged_spans* is a list of ``(start, end)`` tuples for
-            smooth animation and *stepped_points* is a list of
-            ``(time, time)`` zero-duration tuples for stepped keys.
+            A tuple ``(merged_spans, stepped_points, all_keyframe_times)``
+            where *merged_spans* is a list of ``(start, end)`` tuples for
+            smooth animation, *stepped_points* is a list of
+            ``(time, time)`` zero-duration tuples for stepped keys, and
+            *all_keyframe_times* is a sorted list of every keyframe time
+            across all curves (useful to avoid a redundant query in the
+            caller).
         """
+        import logging
+        import maya.cmds as cmds
+
+        _log = logging.getLogger("mayatk.segment_keys.active_segments")
+        if not _log.handlers:
+            _h = logging.StreamHandler()
+            _h.setLevel(logging.WARNING)
+            _log.addHandler(_h)
+        _log.setLevel(logging.WARNING)
+
         if not curves:
-            return ([], [])
+            return ([], [], [])
 
         all_intervals = []
         stepped_points: List[Tuple[float, float]] = []
+        all_keyframe_times: set = set()
 
         for curve in curves:
-            times = pm.keyframe(curve, query=True, timeChange=True)
-            values = pm.keyframe(curve, query=True, valueChange=True)
+            crv = str(curve)
+            times = cmds.keyframe(crv, query=True, timeChange=True)
+            values = cmds.keyframe(crv, query=True, valueChange=True)
 
             if not times:
                 continue
+
+            all_keyframe_times.update(times)
 
             if len(times) == 1:
                 all_intervals.append((times[0], times[0]))
@@ -980,31 +1033,52 @@ class SegmentKeys(SegmentKeysInfo):
             # Check if curve is visibility
             is_visibility = False
             if not ignore_visibility_holds:
-                try:
-                    if "visibility" in curve.name().lower():
-                        is_visibility = True
-                    else:
-                        plugs = curve.outputs(plugs=True)
-                        for plug in plugs:
-                            if (
-                                "visibility"
-                                in plug.partialName(includeNode=False).lower()
-                            ):
+                crv_lower = crv.lower()
+                if "visibility" in crv_lower:
+                    is_visibility = True
+                else:
+                    try:
+                        dest_plugs = (
+                            cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+                        )
+                        for plug_str in dest_plugs:
+                            attr = (
+                                plug_str.rsplit(".", 1)[-1] if "." in plug_str else ""
+                            )
+                            if "visibility" in attr.lower():
                                 is_visibility = True
                                 break
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
             # Query out-tangent types for stepped detection
-            out_tangents = pm.keyTangent(curve, query=True, outTangentType=True) or []
+            out_tangents = cmds.keyTangent(crv, query=True, outTangentType=True) or []
+
+            _log.debug(
+                "[SEGMENTS] curve=%s is_vis=%s times=%s vals=%s tangents=%s",
+                crv,
+                is_visibility,
+                times,
+                values,
+                out_tangents,
+            )
 
             for i in range(len(times) - 1):
                 t1, t2 = times[i], times[i + 1]
                 v1, v2 = values[i], values[i + 1]
 
                 # For visibility, treat all intervals as active to preserve holds
-                # unless ignore_visibility_holds is True
-                if is_visibility or abs(v1 - v2) > tolerance:
+                # unless ignore_visibility_holds is True.
+                # Static intervals (same value) are also kept as zero-duration
+                # points so the object still appears in the sequencer.
+                from mayatk.anim_utils.shots._shots import _is_motion_interval
+
+                if motion_only:
+                    is_value_change = _is_motion_interval(v1, v2, t1, t2, motion_rate)
+                else:
+                    is_value_change = abs(v1 - v2) > tolerance
+
+                if is_visibility or is_value_change:
                     # Check if this interval is stepped
                     is_step = i < len(out_tangents) and out_tangents[i] in (
                         "step",
@@ -1013,11 +1087,44 @@ class SegmentKeys(SegmentKeysInfo):
                     if is_step:
                         stepped_points.append((t1, t1))
                         stepped_points.append((t2, t2))
+                        _log.debug(
+                            "[SEGMENTS]   interval %s-%s: STEPPED (vals %s->%s)",
+                            t1,
+                            t2,
+                            v1,
+                            v2,
+                        )
                     else:
                         all_intervals.append((t1, t2))
+                        _log.debug(
+                            "[SEGMENTS]   interval %s-%s: SMOOTH (vals %s->%s)",
+                            t1,
+                            t2,
+                            v1,
+                            v2,
+                        )
+                elif not motion_only:
+                    # Static hold — emit as a span so consecutive flat
+                    # intervals merge into one segment instead of N points.
+                    # Skipped entirely in motion_only mode (the is_value_change
+                    # branch above already excluded this interval).
+                    all_intervals.append((t1, t2))
+                    _log.debug(
+                        "[SEGMENTS]   interval %s-%s: STATIC (val=%s)",
+                        t1,
+                        t2,
+                        v1,
+                    )
+                else:
+                    _log.debug(
+                        "[SEGMENTS]   interval %s-%s: STATIC [SKIPPED] (val=%s)",
+                        t1,
+                        t2,
+                        v1,
+                    )
 
         if not all_intervals and not stepped_points:
-            return ([], [])
+            return ([], [], sorted(all_keyframe_times))
 
         # Merge overlapping span intervals
         if all_intervals:
@@ -1038,7 +1145,7 @@ class SegmentKeys(SegmentKeysInfo):
         # De-duplicate stepped points
         stepped_points = sorted(set(stepped_points))
 
-        return (merged, stepped_points)
+        return (merged, stepped_points, sorted(all_keyframe_times))
 
     @staticmethod
     def shift_curves(
@@ -1058,10 +1165,27 @@ class SegmentKeys(SegmentKeysInfo):
                 destination range before moving.  This prevents collisions with
                 keys that aren't part of active animation.
         """
+        import logging
+
+        _log = logging.getLogger("mayatk.segment_keys.shift_curves")
+        if not _log.handlers:
+            _h = logging.StreamHandler()
+            _h.setLevel(logging.WARNING)
+            _log.addHandler(_h)
+        _log.setLevel(logging.WARNING)
+
+        _log.debug(
+            "[SHIFT] curves=%s offset=%s range=%s remove_flat=%s",
+            curves,
+            offset,
+            time_range,
+            remove_flat_at_dest,
+        )
+
         if not curves or abs(offset) < 1e-6:
+            _log.debug("[SHIFT] early return: no curves or zero offset")
             return
 
-        _TEMP_OFFSET = 100000.0
         eps = 1e-3
 
         # Pre-clean: remove flat keys at the destination that would collide
@@ -1107,6 +1231,11 @@ class SegmentKeys(SegmentKeysInfo):
                             if v_after and abs(v_after[0] - kv) > 1e-4:
                                 is_flat = False
                             if is_flat:
+                                _log.debug(
+                                    "[SHIFT] pre-clean: removing flat key on %s at %s",
+                                    curve,
+                                    kt,
+                                )
                                 pm.cutKey(curve, time=(kt, kt), clear=True)
                         except Exception:
                             pass
@@ -1119,33 +1248,31 @@ class SegmentKeys(SegmentKeysInfo):
                 if time_range:
                     start, end = float(time_range[0]), float(time_range[1])
                     kw_range["time"] = (start - eps, end + eps)
-                    temp_range = {
-                        "time": (start + _TEMP_OFFSET - eps, end + _TEMP_OFFSET + eps)
-                    }
                 else:
-                    temp_range = {}
+                    pass
 
                 # Skip if no keys match
-                if not pm.keyframe(curve, q=True, **kw_range):
+                matched_keys = pm.keyframe(curve, q=True, **kw_range)
+                if not matched_keys:
+                    _log.debug("[SHIFT] %s: no keys in range — skipping", curve)
                     continue
 
-                # Pass 1: park keys at a safe temp offset
+                _log.debug(
+                    "[SHIFT] %s: matched=%s",
+                    curve,
+                    matched_keys,
+                )
+
+                # Single-pass: move keys directly to the destination
                 pm.keyframe(
                     curve,
                     edit=True,
                     relative=True,
-                    timeChange=_TEMP_OFFSET,
+                    timeChange=offset,
                     **kw_range,
                 )
-                # Pass 2: move to the real destination
-                pm.keyframe(
-                    curve,
-                    edit=True,
-                    relative=True,
-                    timeChange=offset - _TEMP_OFFSET,
-                    **temp_range,
-                )
             except RuntimeError as e:
+                _log.error("[SHIFT] Exception for %s: %s", curve, e)
                 pm.warning(f"Failed to move keys for {curve}: {e}")
 
     @classmethod

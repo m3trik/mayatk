@@ -2840,5 +2840,636 @@ class TestDirtyTracking(MayaTkTestCase):
                 pass
 
 
+# ===========================================================================
+# Export Audio Clips
+# ===========================================================================
+
+
+class TestExportClips(MayaTkTestCase):
+    """Verify _export_clips exports individual audio clips."""
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+        self.loc = pm.PyNode(cmds.spaceLocator(name="clipExportObj")[0])
+        EventTriggers.create([self.loc], events=["Walk", "Jump"], category="audio")
+        self.slots._current_target = self.loc
+
+    # -- _export dispatcher ---------------------------------------------------
+
+    def test_export_dispatch_composite(self):
+        """_export should delegate to _export_composite when mode is 'Composite'."""
+        combo = MagicMock()
+        combo.currentText.return_value = "Composite"
+        self.slots.ui.header.menu.cmb_export_mode = combo
+        with patch.object(self.slots, "_export_composite") as mock_comp:
+            self.slots._export()
+            mock_comp.assert_called_once()
+
+    def test_export_dispatch_keyed_tracks(self):
+        """_export should delegate to _export_clips(keyed_only=True) for 'Keyed Tracks'."""
+        combo = MagicMock()
+        combo.currentText.return_value = "Keyed Tracks"
+        self.slots.ui.header.menu.cmb_export_mode = combo
+        with patch.object(self.slots, "_export_clips") as mock_clips:
+            self.slots._export()
+            mock_clips.assert_called_once_with(keyed_only=True)
+
+    def test_export_dispatch_all_tracks(self):
+        """_export should delegate to _export_clips(keyed_only=False) for 'All Tracks'."""
+        combo = MagicMock()
+        combo.currentText.return_value = "All Tracks"
+        self.slots.ui.header.menu.cmb_export_mode = combo
+        with patch.object(self.slots, "_export_clips") as mock_clips:
+            self.slots._export()
+            mock_clips.assert_called_once_with(keyed_only=False)
+
+    # -- _export_clips edge cases --------------------------------------------
+
+    def test_export_clips_no_target(self):
+        """_export_clips should show message when no target is set."""
+        self.slots._current_target = None
+        self.slots._audio_files = {"walk": "/audio/Walk.wav"}
+        self.slots._export_clips()
+        footer = self.slots.ui.footer.setText.call_args[0][0]
+        self.assertIn("Select an audio-trigger object", footer)
+
+    def test_export_clips_no_files(self):
+        """_export_clips should show message when no audio files are loaded."""
+        self.slots._audio_files = {}
+        self.slots._export_clips()
+        footer = self.slots.ui.footer.setText.call_args[0][0]
+        self.assertIn("No audio clips", footer)
+
+    def test_export_clips_no_keyed_events(self):
+        """_export_clips should show message when no events are keyed."""
+        self.slots._audio_files = {"walk": "/audio/Walk.wav"}
+        self.slots._export_clips()
+        footer = self.slots.ui.footer.setText.call_args[0][0]
+        self.assertIn("No keyed events", footer)
+
+    def test_export_clips_copies_keyed_files_only(self):
+        """_export_clips should copy only keyed clips, not unused ones."""
+        import tempfile
+
+        tmp_src = tempfile.mkdtemp()
+        tmp_dst = tempfile.mkdtemp()
+        try:
+            # Create fake source files
+            walk_path = os.path.join(tmp_src, "Walk.wav")
+            jump_path = os.path.join(tmp_src, "Jump.wav")
+            for p in (walk_path, jump_path):
+                with open(p, "wb") as f:
+                    f.write(b"\x00" * 44)
+
+            self.slots._audio_files = {
+                "walk": walk_path,
+                "jump": jump_path,
+            }
+
+            # Only key Walk — Jump should NOT be exported
+            EventTriggers.set_key(self.loc, event="Walk", time=5, category="audio")
+
+            # No suffix checkbox
+            self.slots.ui.header.menu.chk_suffix_time_range = None
+            self.slots.sb.dir_dialog.return_value = tmp_dst
+
+            with patch.object(
+                self.slots,
+                "_get_clip_length_frames",
+                return_value=10.0,
+            ):
+                self.slots._export_clips()
+
+            exported = os.listdir(tmp_dst)
+            self.assertIn("Walk.wav", exported)
+            self.assertNotIn("Jump.wav", exported)
+            footer = self.slots.ui.footer.setText.call_args[0][0]
+            self.assertIn("1 clip(s)", footer)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp_src, ignore_errors=True)
+            shutil.rmtree(tmp_dst, ignore_errors=True)
+
+    def test_export_clips_with_time_range_suffix(self):
+        """_export_clips should suffix time ranges when checkbox is enabled."""
+        import tempfile
+
+        tmp_src = tempfile.mkdtemp()
+        tmp_dst = tempfile.mkdtemp()
+        try:
+            walk_path = os.path.join(tmp_src, "Walk.wav")
+            with open(walk_path, "wb") as f:
+                f.write(b"\x00" * 44)
+
+            self.slots._audio_files = {"walk": walk_path}
+
+            # Enable suffix checkbox
+            chk = MagicMock()
+            chk.isChecked.return_value = True
+            self.slots.ui.header.menu.chk_suffix_time_range = chk
+
+            # Key an event so iter_keyed_events returns data
+            EventTriggers.set_key(self.loc, event="Walk", time=10, category="audio")
+
+            self.slots.sb.dir_dialog.return_value = tmp_dst
+
+            with patch.object(
+                self.slots,
+                "_get_clip_length_frames",
+                return_value=30.0,
+            ):
+                self.slots._export_clips()
+
+            exported = os.listdir(tmp_dst)
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0], "Walk_10-40.wav")
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp_src, ignore_errors=True)
+            shutil.rmtree(tmp_dst, ignore_errors=True)
+
+    def test_export_clips_multiple_occurrences(self):
+        """When a clip is keyed multiple times, one copy per occurrence is exported."""
+        import tempfile
+
+        tmp_src = tempfile.mkdtemp()
+        tmp_dst = tempfile.mkdtemp()
+        try:
+            walk_path = os.path.join(tmp_src, "Walk.wav")
+            with open(walk_path, "wb") as f:
+                f.write(b"\x00" * 44)
+
+            self.slots._audio_files = {"walk": walk_path}
+
+            chk = MagicMock()
+            chk.isChecked.return_value = True
+            self.slots.ui.header.menu.chk_suffix_time_range = chk
+
+            EventTriggers.set_key(self.loc, event="Walk", time=10, category="audio")
+            EventTriggers.set_key(self.loc, event="Walk", time=50, category="audio")
+
+            self.slots.sb.dir_dialog.return_value = tmp_dst
+
+            with patch.object(
+                self.slots,
+                "_get_clip_length_frames",
+                return_value=20.0,
+            ):
+                self.slots._export_clips()
+
+            exported = sorted(os.listdir(tmp_dst))
+            self.assertEqual(len(exported), 2)
+            self.assertEqual(exported[0], "Walk_10-30.wav")
+            self.assertEqual(exported[1], "Walk_50-70.wav")
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp_src, ignore_errors=True)
+            shutil.rmtree(tmp_dst, ignore_errors=True)
+
+    def test_export_clips_dialog_cancel(self):
+        """Cancelling the directory dialog should be a no-op."""
+        self.slots._audio_files = {"walk": "/audio/Walk.wav"}
+
+        # Need a keyed event to get past the early gate
+        EventTriggers.set_key(self.loc, event="Walk", time=5, category="audio")
+
+        self.slots.sb.dir_dialog.return_value = ""
+
+        with patch.object(
+            self.slots,
+            "_get_clip_length_frames",
+            return_value=10.0,
+        ):
+            self.slots._export_clips()
+
+        # Footer should not have been updated with an export message
+        calls = self.slots.ui.footer.setText.call_args_list
+        has_export_msg = any("clip(s)" in str(c) for c in calls)
+        self.assertFalse(has_export_msg)
+
+    # -- All Tracks mode (keyed_only=False) -----------------------------------
+
+    def test_export_all_tracks_includes_unkeyed(self):
+        """keyed_only=False should export every loaded clip, even unkeyed ones."""
+        import tempfile
+
+        tmp_src = tempfile.mkdtemp()
+        tmp_dst = tempfile.mkdtemp()
+        try:
+            walk_path = os.path.join(tmp_src, "Walk.wav")
+            jump_path = os.path.join(tmp_src, "Jump.wav")
+            for p in (walk_path, jump_path):
+                with open(p, "wb") as f:
+                    f.write(b"\x00" * 44)
+
+            self.slots._audio_files = {
+                "walk": walk_path,
+                "jump": jump_path,
+            }
+
+            # Only key Walk — but keyed_only=False so both should export
+            EventTriggers.set_key(self.loc, event="Walk", time=5, category="audio")
+
+            self.slots.ui.header.menu.chk_suffix_time_range = None
+            self.slots.sb.dir_dialog.return_value = tmp_dst
+
+            self.slots._export_clips(keyed_only=False)
+
+            exported = sorted(os.listdir(tmp_dst))
+            self.assertIn("Walk.wav", exported)
+            self.assertIn("Jump.wav", exported)
+            self.assertEqual(len(exported), 2)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp_src, ignore_errors=True)
+            shutil.rmtree(tmp_dst, ignore_errors=True)
+
+    def test_export_all_tracks_ignores_suffix(self):
+        """keyed_only=False should never apply time-range suffix."""
+        import tempfile
+
+        tmp_src = tempfile.mkdtemp()
+        tmp_dst = tempfile.mkdtemp()
+        try:
+            walk_path = os.path.join(tmp_src, "Walk.wav")
+            with open(walk_path, "wb") as f:
+                f.write(b"\x00" * 44)
+
+            self.slots._audio_files = {"walk": walk_path}
+
+            # Enable suffix checkbox — should still be ignored
+            chk = MagicMock()
+            chk.isChecked.return_value = True
+            self.slots.ui.header.menu.chk_suffix_time_range = chk
+
+            EventTriggers.set_key(self.loc, event="Walk", time=10, category="audio")
+
+            self.slots.sb.dir_dialog.return_value = tmp_dst
+
+            self.slots._export_clips(keyed_only=False)
+
+            exported = os.listdir(tmp_dst)
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0], "Walk.wav")
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp_src, ignore_errors=True)
+            shutil.rmtree(tmp_dst, ignore_errors=True)
+
+
+# ===========================================================================
+# Owner-attr stamping and owner-based cleanup
+# ===========================================================================
+
+
+class TestOwnerAttrStamping(MayaTkTestCase):
+    """Verify audio_event_owner attr is stamped on synced/composite nodes.
+
+    New owner-attr approach replaces fragile name-prefix matching for
+    identifying which trigger object owns each audio node.
+    Added: 2026-03-13
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.loc = pm.PyNode(cmds.spaceLocator(name="ownerTestLoc")[0])
+        EventTriggers.create(
+            [self.loc], events=["Kick", "Snare"], category="audio"
+        )
+        EventTriggers.set_key(
+            self.loc, "Kick", time=5, auto_clear=False, category="audio"
+        )
+
+    def test_sync_stamps_owner_on_synced_nodes(self):
+        """Synced audio nodes must have audio_event_owner = trigger object name."""
+        fake_map = {"kick": "/audio/Kick.wav"}
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/_composite_ownerTestLoc.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.loc],
+                audio_file_map=fake_map,
+                category="audio",
+            )
+        for node_name in AudioEvents.list_nodes(category="audio"):
+            if cmds.attributeQuery(
+                AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
+            ):
+                ntype = cmds.getAttr(f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}") or ""
+                if ntype == "synced":
+                    self.assertTrue(
+                        cmds.attributeQuery(
+                            AudioEvents.NODE_OWNER_ATTR,
+                            node=node_name,
+                            exists=True,
+                        ),
+                        f"Synced node '{node_name}' missing owner attr.",
+                    )
+                    owner = cmds.getAttr(
+                        f"{node_name}.{AudioEvents.NODE_OWNER_ATTR}"
+                    )
+                    self.assertEqual(owner, "ownerTestLoc")
+
+    def test_sync_stamps_owner_on_composite_nodes(self):
+        """Composite audio nodes must have audio_event_owner = trigger object name."""
+        fake_map = {"kick": "/audio/Kick.wav"}
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value="/fake/_composite_ownerTestLoc.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            AudioEvents.sync(
+                objects=[self.loc],
+                audio_file_map=fake_map,
+                category="audio",
+            )
+        comp_node = "ownerTestLoc_composite"
+        self.assertTrue(
+            pm.objExists(comp_node), "Composite node should exist."
+        )
+        self.assertTrue(
+            cmds.attributeQuery(
+                AudioEvents.NODE_OWNER_ATTR, node=comp_node, exists=True
+            ),
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{comp_node}.{AudioEvents.NODE_OWNER_ATTR}"),
+            "ownerTestLoc",
+        )
+
+    def test_preview_nodes_have_no_owner_attr(self):
+        """Preview nodes (from load_tracks) should NOT have audio_event_owner."""
+        import tempfile
+
+        tmp = tempfile.mkdtemp()
+        try:
+            wav = os.path.join(tmp, "TestClip.wav")
+            with open(wav, "wb") as f:
+                f.write(b"\x00" * 44)
+            with patch.object(
+                AudioEvents,
+                "_resolve_playable_path",
+                return_value=wav,
+            ):
+                created = AudioEvents.load_tracks([wav], category="audio")
+            self.assertTrue(len(created) > 0, "Should create preview node.")
+            for node_name in created:
+                self.assertFalse(
+                    cmds.attributeQuery(
+                        AudioEvents.NODE_OWNER_ATTR,
+                        node=node_name,
+                        exists=True,
+                    ),
+                    f"Preview node '{node_name}' should NOT have owner attr.",
+                )
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_stamp_event_attrs_backward_compatible(self):
+        """Calling _stamp_event_attrs without owner should work (no owner attr)."""
+        node = cmds.createNode("audio", name="legacyNode", skipSelect=True)
+        AudioEvents._stamp_event_attrs(node, "test", "preview")
+        self.assertFalse(
+            cmds.attributeQuery(
+                AudioEvents.NODE_OWNER_ATTR, node=node, exists=True
+            ),
+            "No owner attr should be stamped when owner is omitted.",
+        )
+
+
+class TestOwnerBasedCleanup(MayaTkTestCase):
+    """Verify sync() uses owner attr for cleanup instead of name-prefix matching.
+
+    Added: 2026-03-13
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.locA = pm.PyNode(cmds.spaceLocator(name="cleanupA")[0])
+        self.locB = pm.PyNode(cmds.spaceLocator(name="cleanupB")[0])
+        EventTriggers.create([self.locA], events=["Hit"], category="audio")
+        EventTriggers.create([self.locB], events=["Hit"], category="audio")
+        EventTriggers.set_key(
+            self.locA, "Hit", time=10, auto_clear=False, category="audio"
+        )
+        EventTriggers.set_key(
+            self.locB, "Hit", time=20, auto_clear=False, category="audio"
+        )
+
+    def _sync_object(self, obj, obj_name):
+        fake_map = {"hit": f"/audio/{obj_name}_Hit.wav"}
+        with (
+            patch.object(
+                AudioEvents,
+                "_build_audio_map_from_file_map",
+                return_value=fake_map,
+            ),
+            patch(
+                "pythontk.AudioUtils.build_composite_wav",
+                return_value=f"/fake/_composite_{obj_name}.wav",
+            ),
+            patch.object(AudioEvents, "set_active"),
+        ):
+            return AudioEvents.sync(
+                objects=[obj],
+                audio_file_map=fake_map,
+                category="audio",
+            )
+
+    def test_resync_cleans_only_owned_nodes(self):
+        """Re-syncing A should remove A's old synced nodes but preserve B's."""
+        self._sync_object(self.locA, "cleanupA")
+        self._sync_object(self.locB, "cleanupB")
+
+        nodes_before = AudioEvents.list_nodes(category="audio")
+        b_nodes_before = [
+            n for n in nodes_before
+            if cmds.attributeQuery(
+                AudioEvents.NODE_OWNER_ATTR, node=n, exists=True
+            )
+            and cmds.getAttr(f"{n}.{AudioEvents.NODE_OWNER_ATTR}") == "cleanupB"
+        ]
+
+        # Re-sync A
+        self._sync_object(self.locA, "cleanupA")
+
+        nodes_after = AudioEvents.list_nodes(category="audio")
+        b_nodes_after = [
+            n for n in nodes_after
+            if cmds.attributeQuery(
+                AudioEvents.NODE_OWNER_ATTR, node=n, exists=True
+            )
+            and cmds.getAttr(f"{n}.{AudioEvents.NODE_OWNER_ATTR}") == "cleanupB"
+        ]
+
+        self.assertEqual(
+            len(b_nodes_before),
+            len(b_nodes_after),
+            "B's nodes must survive A's re-sync.",
+        )
+
+    def test_orphan_nodes_cleaned_on_sync(self):
+        """Nodes whose owner was deleted should be cleaned up on next sync."""
+        self._sync_object(self.locA, "cleanupA")
+        self._sync_object(self.locB, "cleanupB")
+
+        # Delete owner B
+        pm.delete(self.locB)
+
+        # Re-sync A — should also clean up B's orphaned nodes
+        self._sync_object(self.locA, "cleanupA")
+
+        nodes = AudioEvents.list_nodes(category="audio")
+        for n in nodes:
+            if cmds.attributeQuery(
+                AudioEvents.NODE_OWNER_ATTR, node=n, exists=True
+            ):
+                owner = cmds.getAttr(f"{n}.{AudioEvents.NODE_OWNER_ATTR}") or ""
+                self.assertNotEqual(
+                    owner,
+                    "cleanupB",
+                    f"Orphan node '{n}' owned by deleted 'cleanupB' should be removed.",
+                )
+
+    def test_legacy_nodes_without_owner_still_cleaned(self):
+        """Synced nodes without owner attr (legacy) should still be cleaned up."""
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        # Create a legacy synced node (no owner attr).
+        # Use frame 99 (not keyed) so the name won't collide with
+        # newly synced nodes created by sync().
+        legacy = cmds.createNode("audio", name="Hit_99", skipSelect=True)
+        AudioEvents._stamp_event_attrs(legacy, "hit", "synced")
+        cmds.sets(legacy, addElement=audio_set.name())
+
+        # Sync A — legacy synced node should be cleaned
+        self._sync_object(self.locA, "cleanupA")
+
+        nodes = AudioEvents.list_nodes(category="audio")
+        self.assertNotIn(
+            "Hit_99",
+            nodes,
+            "Legacy synced node without owner should be cleaned on sync.",
+        )
+
+
+class TestHydrateFallbackOwnerFilter(MayaTkTestCase):
+    """Verify hydration fallback filters by owner attr.
+
+    When no persisted file-map exists, the fallback reads node filenames
+    from the global audio_set.  Nodes stamped with a different owner
+    should be skipped.
+    Added: 2026-03-13
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.slots = _make_slots_instance()
+
+    def test_fallback_skips_nodes_owned_by_other_target(self):
+        """Node with owner=targetA should not hydrate targetB."""
+        targetA = pm.PyNode(cmds.spaceLocator(name="filterA")[0])
+        targetB = pm.PyNode(cmds.spaceLocator(name="filterB")[0])
+        EventTriggers.create([targetA], events=["Clap"], category="audio")
+        EventTriggers.create([targetB], events=["Clap"], category="audio")
+
+        # Ensure no persisted file map on B
+        node_str = str(targetB)
+        if cmds.attributeQuery(
+            self.slots.FILE_MAP_ATTR, node=node_str, exists=True
+        ):
+            cmds.deleteAttr(f"{node_str}.{self.slots.FILE_MAP_ATTR}")
+
+        # Create a preview node owned by A
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="clap", skipSelect=True)
+        cmds.setAttr(f"{node}.filename", "/dirA/clap.wav", type="string")
+        AudioEvents._stamp_event_attrs(node, "clap", "preview", owner="filterA")
+        cmds.sets(node, addElement=audio_set.name())
+
+        self.slots._current_target = None
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(targetB)
+        self.assertNotIn(
+            "clap",
+            self.slots._audio_files,
+            "Node owned by filterA should NOT hydrate filterB.",
+        )
+
+    def test_fallback_accepts_unowned_preview_nodes(self):
+        """Preview nodes without owner attr should still be accepted."""
+        target = pm.PyNode(cmds.spaceLocator(name="filterC")[0])
+        EventTriggers.create([target], events=["Tap"], category="audio")
+
+        node_str = str(target)
+        if cmds.attributeQuery(
+            self.slots.FILE_MAP_ATTR, node=node_str, exists=True
+        ):
+            cmds.deleteAttr(f"{node_str}.{self.slots.FILE_MAP_ATTR}")
+
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="tap", skipSelect=True)
+        cmds.setAttr(f"{node}.filename", "/audio/tap.wav", type="string")
+        AudioEvents._stamp_event_attrs(node, "tap", "preview")  # No owner
+        cmds.sets(node, addElement=audio_set.name())
+
+        self.slots._current_target = None
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(target)
+        self.assertEqual(
+            self.slots._audio_files.get("tap"),
+            "/audio/tap.wav",
+            "Unowned preview node should be accepted in fallback.",
+        )
+
+    def test_fallback_accepts_nodes_owned_by_same_target(self):
+        """Nodes with matching owner should be accepted."""
+        target = pm.PyNode(cmds.spaceLocator(name="filterD")[0])
+        EventTriggers.create([target], events=["Pop"], category="audio")
+
+        node_str = str(target)
+        if cmds.attributeQuery(
+            self.slots.FILE_MAP_ATTR, node=node_str, exists=True
+        ):
+            cmds.deleteAttr(f"{node_str}.{self.slots.FILE_MAP_ATTR}")
+
+        audio_set = AudioEvents._get_or_create_set("audio", clear=True)
+        node = cmds.createNode("audio", name="pop", skipSelect=True)
+        cmds.setAttr(f"{node}.filename", "/audio/pop.wav", type="string")
+        AudioEvents._stamp_event_attrs(node, "pop", "preview", owner="filterD")
+        cmds.sets(node, addElement=audio_set.name())
+
+        self.slots._current_target = None
+        self.slots._audio_files.clear()
+        self.slots._hydrate_from_target(target)
+        self.assertEqual(
+            self.slots._audio_files.get("pop"),
+            "/audio/pop.wav",
+            "Node owned by same target should be accepted.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

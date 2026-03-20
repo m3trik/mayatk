@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Audio track management for the Sequencer.
+"""Audio track management for the Slot Sequencer.
 
 Discovers Maya ``audio`` nodes from the scene (or from an FBX import)
 and exposes them as clip-like segments suitable for the
@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import json
 import logging
-import struct
 import wave
 
 try:
@@ -49,88 +48,12 @@ class AudioClipInfo:
 
 
 # ---------------------------------------------------------------------------
-# Waveform helpers (no Maya dependency)
+# Waveform helpers — delegated to pythontk
 # ---------------------------------------------------------------------------
 
+from pythontk.audio_utils._audio_utils import AudioUtils
 
-def compute_waveform_envelope(
-    wav_path: str,
-    num_bins: int = 512,
-) -> List[tuple]:
-    """Read a WAV file and return a downsampled min/max envelope.
-
-    Parameters:
-        wav_path: Path to a PCM WAV file (8, 16, or 24-bit).
-        num_bins: Number of (min, max) pairs to return.  The widget
-            resamples during paint so this only needs to be
-            "high-enough" resolution (512 is fine for most clips).
-
-    Returns:
-        List of ``(min_sample, max_sample)`` tuples normalised to
-        [-1.0, 1.0].  Empty list if the file cannot be read.
-    """
-    try:
-        with wave.open(wav_path, "rb") as wf:
-            n_channels = wf.getnchannels()
-            sampwidth = wf.getsampwidth()
-            n_frames = wf.getnframes()
-
-            if sampwidth not in (1, 2, 3) or n_frames == 0:
-                if n_frames > 0:
-                    logger.warning(
-                        "Unsupported sample width %d in %s", sampwidth, wav_path
-                    )
-                return []
-
-            raw = wf.readframes(n_frames)
-    except Exception:
-        logger.debug("Cannot read WAV file: %s", wav_path)
-        return []
-
-    # Decode samples (mono-mix if stereo)
-    if sampwidth == 2:
-        fmt = f"<{n_frames * n_channels}h"
-        samples = struct.unpack(fmt, raw)
-        scale = 1.0 / 32768.0
-    elif sampwidth == 3:
-        # 24-bit PCM — unpack 3 bytes per sample as signed int
-        total = n_frames * n_channels
-        samples = []
-        for i in range(total):
-            off = i * 3
-            lo = raw[off]
-            mid = raw[off + 1]
-            hi = raw[off + 2]
-            val = lo | (mid << 8) | (hi << 16)
-            if val >= 0x800000:
-                val -= 0x1000000
-            samples.append(val)
-        scale = 1.0 / 8388608.0
-    else:
-        samples = [b - 128 for b in raw]
-        scale = 1.0 / 128.0
-
-    # Mono-mix
-    if n_channels > 1:
-        mono = []
-        for i in range(0, len(samples), n_channels):
-            mono.append(sum(samples[i : i + n_channels]) / n_channels)
-        samples = mono
-        n_frames = len(samples)
-
-    if n_frames == 0:
-        return []
-
-    # Down-sample into bins
-    bin_size = max(1, n_frames // num_bins)
-    envelope = []
-    for i in range(0, n_frames, bin_size):
-        chunk = samples[i : i + bin_size]
-        lo = min(chunk) * scale
-        hi = max(chunk) * scale
-        envelope.append((lo, hi))
-
-    return envelope[:num_bins]
+compute_waveform_envelope = AudioUtils.compute_waveform_envelope
 
 
 # ---------------------------------------------------------------------------

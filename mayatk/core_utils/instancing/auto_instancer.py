@@ -69,8 +69,10 @@ class AutoInstancer(ptk.LoggingMixin):
         needs_individual: bool = False,
         will_be_lightmapped: bool = False,
         can_gpu_instance: bool = True,
+        log_level: str = "WARNING",
     ) -> None:
         super().__init__()
+        self.set_log_level(log_level)
         self._tolerance = tolerance
         self._scale_tolerance = scale_tolerance
         self._require_same_material = require_same_material

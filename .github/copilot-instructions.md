@@ -86,35 +86,53 @@
 - **Runner**: `test/run_tests.py` (CLI entry point).
 - **Connection**: `test/maya_connection.py` handles Port, Standalone, and Interactive modes.
 
-### Running Tests
+### Running Tests — Decision Tree
 
-**1. mayapy (Recommended — headless)**:
+> **Pick the right method for the scenario.** Do not default to one approach
+> for every situation — read the test file first and follow this decision tree.
+
+**Step 1: Identify what you're running.**
+
+| Scenario | How to tell | Method |
+|:---|:---|:---|
+| **Standalone script** (temp/repro test) | File has `maya.standalone.initialize()` and a `__main__` block | **Direct mayapy** |
+| **Standard test module** (production suite) | File uses `MayaTkTestCase`/`QuickTestCase` from `base_test.py`, no standalone init | **run_tests.py** |
+| **GUI-dependent test** | Test requires Qt widgets, UI interaction, or viewport rendering | **Maya Script Editor** or **Command Port** |
+
+**Step 2: Run with the matching method.**
+
+#### A. Direct `mayapy` — for standalone scripts
+Use when the test file manages its own `maya.standalone` session (typical for
+`test/temp_tests/` reproduction scripts and one-off diagnostics).
+```powershell
+$env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk;o:\Cloud\Code\_scripts\uitk;o:\Cloud\Code\_scripts\tentacle"
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" <path_to_script.py> 2>&1
+```
+
+#### B. `run_tests.py` — for production test modules
+Use when running test modules from `mayatk/test/test_*.py` that extend
+`MayaTkTestCase` or `QuickTestCase`. The runner handles Maya connection,
+scene cleanup, and result reporting.
 ```powershell
 $env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"
 
 # Run all tests (launches a NEW Maya instance automatically)
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
 
-# Run a specific module's tests
+# Run specific module(s) by name (without test_ prefix)
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py core_utils components
 
 # List available test modules
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --list
-
-# DANGEROUS: Reuse an existing Maya session (only if you know what you're doing)
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --reuse core_utils
 ```
 
-**2. Maya Script Editor (interactive)**:
+#### C. Maya Script Editor / Command Port — for GUI-dependent tests
+Use when the test requires a running Maya GUI (Qt widgets, viewport, etc.).
+Run from Maya's Script Editor or via an open command port.
 ```python
+# In Maya Script Editor:
 import mayatk.test.run_tests as runner
 runner.MayaTestRunner().run_tests(['core_utils'])
-```
-
-**3. Maya Command Port (remote)**:
-Requires Maya running with `cmds.commandPort(name=":7002", sourceType="python")` open.
-```powershell
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
 ```
 
 ---

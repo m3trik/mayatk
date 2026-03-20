@@ -121,8 +121,9 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     For UI integration, use ReferenceManagerController and ReferenceManagerSlots.
     """
 
-    def __init__(self):
+    def __init__(self, log_level="WARNING"):
         super().__init__()
+        self.set_log_level(log_level)
         self._filter_text = ""
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
 

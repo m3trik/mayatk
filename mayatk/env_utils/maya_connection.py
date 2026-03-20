@@ -1016,8 +1016,75 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
             print(f"Error executing code: {e}")
             return None
 
+    # ---- context manager --------------------------------------------------
+
+    def __enter__(self) -> "MayaConnection":
+        """Enter a managed session.
+
+        If not already connected, ``connect()`` is called with the
+        default arguments (which launches a new Maya instance).
+
+        Returns:
+            self
+        """
+        if not self.is_connected:
+            self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit the managed session.
+
+        * **port** mode — shuts down the Maya process that was launched
+          (via :meth:`close_instance`) and resets connection state.
+        * **standalone** mode — calls ``maya.standalone.uninitialize()``.
+        * **interactive** mode — resets state only (never kills the
+          user's Maya).
+
+        Exceptions are not suppressed.
+        """
+        self.shutdown()
+        return False  # do not suppress exceptions
+
+    def shutdown(self) -> None:
+        """Shut down the connected Maya session and reset state.
+
+        For *port* mode this kills the Maya process.  For *standalone*
+        mode it uninitialises the embedded interpreter.  *Interactive*
+        mode only resets the connection flag.
+        """
+        if not self.is_connected:
+            return
+
+        mode = self.mode
+
+        if mode == "port":
+            try:
+                self.close_instance(port=self.port)
+            except Exception as e:
+                print(f"[MayaConnection] Error closing Maya instance: {e}")
+
+        elif mode == "standalone":
+            try:
+                import maya.standalone
+
+                maya.standalone.uninitialize()
+            except Exception:
+                pass
+
+        # Interactive mode: never kill the user's Maya
+
+        self.is_connected = False
+        self.mode = None
+        print("[OK] Maya session closed")
+
     def disconnect(self):
-        """Disconnect from Maya."""
+        """Disconnect from Maya.
+
+        .. deprecated::
+            Use :meth:`shutdown` or the context-manager protocol instead.
+            ``disconnect`` resets connection state but does **not** close
+            the Maya process in port mode.
+        """
         if self.mode == "standalone":
             try:
                 import maya.standalone

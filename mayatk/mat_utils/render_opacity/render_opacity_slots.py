@@ -57,7 +57,6 @@ class RenderOpacitySlots:
 
     def header_init(self, widget):
         """Configure header menu."""
-        widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Render Opacity:")
 
         widget.menu.add("Separator", setTitle="Options")

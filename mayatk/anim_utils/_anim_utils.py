@@ -1110,7 +1110,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Returns:
             A list of ``(curve, [redundant_times])`` tuples.
         """
-        import numpy as np
         import maya.cmds as cmds
 
         curves = cls.objects_to_curves(objects, recursive=recursive, as_strings=True)
@@ -1127,34 +1126,9 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if len(values) != len(times):
                 continue
 
-            values = np.array(values)
-
-            # Vectorized flat-segment detection via numpy.
-            diffs = np.abs(np.diff(values))
-            is_flat = diffs < value_tolerance
-
-            # Find contiguous runs of flat diffs.
-            padded = np.concatenate(([False], is_flat, [False]))
-            transitions = np.diff(padded.astype(np.int8))
-            run_starts = np.where(transitions == 1)[0]
-            run_ends = np.where(transitions == -1)[0]
-
-            # Keep only segments with 3+ keys and guard against drift.
-            lengths = run_ends - run_starts
-            mask = lengths >= 2
-            span = np.abs(values[run_ends] - values[run_starts])
-            mask &= span < value_tolerance
-
-            seg_starts = run_starts[mask]
-            seg_lasts = run_ends[mask]
-
-            if len(seg_starts) == 0:
-                continue
-
-            remove_indices = np.concatenate(
-                [np.arange(s + 1, last) for s, last in zip(seg_starts, seg_lasts)]
+            remove_indices, seg_starts, seg_lasts = ptk.find_flat_interior_indices(
+                values, value_tolerance
             )
-
             if len(remove_indices) == 0:
                 continue
 
@@ -3626,76 +3600,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             avoid_overlap=avoid_overlap,
             preserve_gaps=preserve_gaps,
         )
-
-    @classmethod
-    def _get_active_animation_segments(
-        cls,
-        curves: List["pm.PyNode"],
-        tolerance: float = 1e-4,
-    ) -> List[Tuple[float, float]]:
-        """Identify segments of active animation, excluding static gaps.
-
-        A segment is considered active if at least one curve has changing values.
-        Static gaps (where all curves hold the same value) are excluded.
-
-        Parameters:
-            curves: List of animation curves to analyze.
-            tolerance: Value tolerance for detecting static segments.
-
-        Returns:
-            List of (start, end) tuples representing active animation segments.
-        """
-        if not curves:
-            return []
-
-        # Collect all active intervals from all curves
-        all_intervals = []
-
-        for curve in curves:
-            # Get all key times and values
-            # Note: We assume linear interpolation for "flatness" check.
-            # If tangents cause overshoot between identical keys, this simple check might miss it.
-            # But "completely flat keys" usually implies flat tangents.
-            times = pm.keyframe(curve, query=True, timeChange=True)
-            values = pm.keyframe(curve, query=True, valueChange=True)
-
-            if not times or len(times) < 2:
-                continue
-
-            # Identify segments where value changes
-            for i in range(len(times) - 1):
-                t1, t2 = times[i], times[i + 1]
-                v1, v2 = values[i], values[i + 1]
-
-                if abs(v1 - v2) > tolerance:
-                    all_intervals.append((t1, t2))
-
-        if not all_intervals:
-            return []
-
-        # Merge overlapping intervals
-        all_intervals.sort(key=lambda x: x[0])
-
-        merged = []
-        if not all_intervals:
-            return merged
-
-        current_start, current_end = all_intervals[0]
-
-        for i in range(1, len(all_intervals)):
-            next_start, next_end = all_intervals[i]
-
-            if next_start <= current_end:
-                # Overlap or adjacent, extend current segment
-                current_end = max(current_end, next_end)
-            else:
-                # Gap found, push current segment and start new one
-                merged.append((current_start, current_end))
-                current_start, current_end = next_start, next_end
-
-        merged.append((current_start, current_end))
-
-        return merged
 
     @staticmethod
     def _move_curve_keys(

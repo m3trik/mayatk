@@ -99,10 +99,10 @@ class MayaUiHandler(UiHandler):
 
         if header:
             self.logger.debug(
-                f"[{menu_key}] Adding header with config_buttons=('menu', 'collapse', 'pin')"
+                f"[{menu_key}] Adding header with config_buttons=('menu', 'collapse', 'minimize', 'pin')"
             )
             ui.header = self.sb.registered_widgets.Header(
-                config_buttons=("menu", "collapse", "pin"),
+                config_buttons=("menu", "collapse", "minimize", "pin"),
             )
             ui.header.setTitle(ui.objectName().upper())
             ui.header.attach_to(ui.centralWidget())

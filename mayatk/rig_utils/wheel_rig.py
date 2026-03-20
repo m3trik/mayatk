@@ -328,7 +328,6 @@ class WheelRigSlots:
 
     def header_init(self, widget):
         """Configure header menu with mode toggle and instructions."""
-        widget.config_buttons("menu", "pin")
         widget.menu.setTitle("Wheel Rig:")
 
         widget.menu.add("Separator", setTitle="Mode")
