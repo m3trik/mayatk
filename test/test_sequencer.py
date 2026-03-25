@@ -20,6 +20,7 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
 )
 from mayatk.anim_utils.shots._shots import ShotStore
+from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
 from mayatk.anim_utils.shots.behaviors import (
     load_behavior,
     resolve_keys,
@@ -337,14 +338,21 @@ class TestResolveKeys(unittest.TestCase):
 class TestLoadBehavior(unittest.TestCase):
     """Test YAML behavior loading."""
 
-    def test_load_fade_in_out(self):
-        t = load_behavior("fade_in_out")
+    def test_load_fade_in(self):
+        t = load_behavior("fade_in")
         self.assertIn("attributes", t)
         self.assertIn("visibility", t["attributes"])
         vis = t["attributes"]["visibility"]
         self.assertIn("in", vis)
-        self.assertIn("out", vis)
         self.assertEqual(vis["in"]["values"], [0.0, 1.0])
+
+    def test_load_fade_out(self):
+        t = load_behavior("fade_out")
+        self.assertIn("attributes", t)
+        self.assertIn("visibility", t["attributes"])
+        vis = t["attributes"]["visibility"]
+        self.assertIn("out", vis)
+        self.assertEqual(vis["out"]["values"], [1.0, 0.0])
 
     def test_missing_behavior_raises(self):
         with self.assertRaises(FileNotFoundError):
@@ -496,7 +504,7 @@ class TestSequencerMaya(unittest.TestCase):
     def test_apply_behavior_sets_keys(self):
         """apply_behavior should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
-        apply_behavior(str(cube), "fade_in_out", 0, 100, attrs=["visibility"])
+        apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
 
         # Visibility should now have keyframes
         vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
@@ -644,7 +652,7 @@ class TestSequencerMaya(unittest.TestCase):
 from unittest.mock import patch
 
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-    detect_behavior,
+    detect_behaviors,
     parse_csv,
     BuilderObject,
     BuilderStep,
@@ -655,28 +663,29 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 )
 
 
-class TestDetectBehavior(unittest.TestCase):
+class TestDetectBehaviors(unittest.TestCase):
     """Test behavior auto-detection from step-contents text."""
 
     def test_fade_in(self):
-        self.assertEqual(detect_behavior("Arrow fades in."), "fade_in")
+        self.assertEqual(detect_behaviors("Arrow fades in."), ["fade_in"])
 
     def test_fade_out(self):
-        self.assertEqual(detect_behavior("Checklist fades out."), "fade_out")
+        self.assertEqual(detect_behaviors("Checklist fades out."), ["fade_out"])
 
-    def test_fade_in_out(self):
+    def test_fade_in_and_out(self):
         self.assertEqual(
-            detect_behavior("Arrow fades in, then fades out."), "fade_in_out"
+            detect_behaviors("Arrow fades in, then fades out."),
+            ["fade_in", "fade_out"],
         )
 
     def test_no_behavior(self):
-        self.assertEqual(detect_behavior("User is teleported."), "")
+        self.assertEqual(detect_behaviors("User is teleported."), [])
 
     def test_empty(self):
-        self.assertEqual(detect_behavior(""), "")
+        self.assertEqual(detect_behaviors(""), [])
 
     def test_na(self):
-        self.assertEqual(detect_behavior("N/A"), "")
+        self.assertEqual(detect_behaviors("N/A"), [])
 
 
 class TestParseCSV(unittest.TestCase):
@@ -753,13 +762,13 @@ class TestParseCSV(unittest.TestCase):
         """Continuation-row objects inherit the parent step's behavior."""
         steps = parse_csv(self._csv_path)
         a01 = steps[0]
-        self.assertEqual(a01.objects[0].behavior, "fade_in")
-        self.assertEqual(a01.objects[1].behavior, "fade_in")  # inherited
+        self.assertEqual(a01.objects[0].behaviors, ["fade_in"])
+        self.assertEqual(a01.objects[1].behaviors, ["fade_in"])  # inherited
 
     def test_behavior_detected(self):
         steps = parse_csv(self._csv_path)
-        self.assertEqual(steps[0].objects[0].behavior, "fade_in")
-        self.assertEqual(steps[1].objects[0].behavior, "fade_out")
+        self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
+        self.assertEqual(steps[1].objects[0].behaviors, ["fade_out"])
 
     def test_na_objects_excluded(self):
         steps = parse_csv(self._csv_path)
@@ -838,9 +847,9 @@ class TestParseCSV(unittest.TestCase):
             self.assertEqual(len(steps), 2)
             self.assertEqual(steps[0].objects[0].name, "ARROW_01")
             self.assertEqual(steps[0].objects[1].name, "ARROW_02")
-            self.assertEqual(steps[0].objects[0].behavior, "fade_in")
+            self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
             self.assertEqual(steps[1].objects[0].name, "CHECK_01")
-            self.assertEqual(steps[1].objects[0].behavior, "fade_out")
+            self.assertEqual(steps[1].objects[0].behaviors, ["fade_out"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -862,6 +871,44 @@ class TestParseCSV(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_non_numbered_step_id_parsed(self):
+        """Non-numbered step IDs like SETUP are recognized as steps.
+
+        Bug: _STEP_RE only matched 'A01.)' format, silently dropping
+        SETUP rows from 'SECTION X: OPENING SETUP'.
+        Fixed: 2026-03-24
+        """
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "setup.csv")
+            import csv as csv_mod
+
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION X: OPENING SETUP", "", "", "", ""])
+                w.writerow(["Step", "Ref", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["SETUP", "N/A", "Hangar, doors closed", "", "Complete"])
+                w.writerow(["", "", "Stand in cargo hold", "PLATFORM_LOC", "Complete"])
+                w.writerow(["", "", "User starting position", "REGGIE_01", "Complete"])
+                w.writerow(["SECTION A: AILERON RIGGING", "", "", "", ""])
+                w.writerow(["Step", "Ref", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["A01.)", "", "Arrow fades in.", "ARROW_01", "Complete"])
+            steps = parse_csv(csv_path, columns=ColumnMap(exclude_steps=()))
+            self.assertEqual(len(steps), 2)  # SETUP + A01
+            setup = steps[0]
+            self.assertEqual(setup.step_id, "SETUP")
+            self.assertEqual(setup.section, "X")
+            self.assertEqual(setup.section_title, "OPENING SETUP")
+            self.assertEqual(len(setup.objects), 2)
+            self.assertEqual(setup.objects[0].name, "PLATFORM_LOC")
+            self.assertEqual(setup.objects[1].name, "REGGIE_01")
+            # A01 still parsed normally
+            self.assertEqual(steps[1].step_id, "A01")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class TestShotManifestPure(unittest.TestCase):
     """Test ShotManifest data-only features (no Maya)."""
@@ -874,8 +921,8 @@ class TestShotManifestPure(unittest.TestCase):
                 "SEC A",
                 "Arrow fades in.",
                 [
-                    BuilderObject("ARROW_01", "fade_in"),
-                    BuilderObject("ARROW_02", "fade_in"),
+                    BuilderObject("ARROW_01", ["fade_in"]),
+                    BuilderObject("ARROW_02", ["fade_in"]),
                 ],
             ),
             BuilderStep(
@@ -884,7 +931,7 @@ class TestShotManifestPure(unittest.TestCase):
                 "SEC A",
                 "Checklist fades out.",
                 [
-                    BuilderObject("CHECK_01", "fade_out"),
+                    BuilderObject("CHECK_01", ["fade_out"]),
                 ],
             ),
         ]
@@ -933,8 +980,8 @@ class TestShotManifestAssess(unittest.TestCase):
                 "SEC A",
                 "Arrow fades in.",
                 [
-                    BuilderObject("ARROW_01", "fade_in"),
-                    BuilderObject("ARROW_02", "fade_in"),
+                    BuilderObject("ARROW_01", ["fade_in"]),
+                    BuilderObject("ARROW_02", ["fade_in"]),
                 ],
             ),
             BuilderStep(
@@ -942,7 +989,7 @@ class TestShotManifestAssess(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Checklist fades out.",
-                [BuilderObject("CHECK_01", "fade_out")],
+                [BuilderObject("CHECK_01", ["fade_out"])],
             ),
         ]
 
@@ -1109,7 +1156,7 @@ class TestShotManifestAssess(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Static.",
-                [BuilderObject("BOX_01", "")],  # no behavior
+                [BuilderObject("BOX_01")],  # no behavior
             ),
         ]
         builder = self._build_seq(steps, built_ids={"A01"})
@@ -1127,10 +1174,14 @@ class TestShotManifestAssess(unittest.TestCase):
 class TestBehaviorYAMLAnchors(unittest.TestCase):
     """Verify YAML templates include explicit anchor fields."""
 
-    def test_fade_in_out_has_anchors(self):
-        t = load_behavior("fade_in_out")
+    def test_fade_in_has_anchor(self):
+        t = load_behavior("fade_in")
         vis = t["attributes"]["visibility"]
         self.assertEqual(vis["in"]["anchor"], "start")
+
+    def test_fade_out_has_anchor(self):
+        t = load_behavior("fade_out")
+        vis = t["attributes"]["visibility"]
         self.assertEqual(vis["out"]["anchor"], "end")
 
     def test_fade_in_template_exists(self):
@@ -1153,19 +1204,19 @@ class TestContentDrivenDuration(unittest.TestCase):
 
     def test_fade_in_duration(self):
         """Step with fade_in objects: duration = 15f (template phase)."""
-        entries = [BuilderObject("OBJ", "fade_in")]
+        entries = [BuilderObject("OBJ", ["fade_in"])]
         dur = compute_duration(entries, fallback=30)
         self.assertEqual(dur, 15)
 
-    def test_fade_in_out_duration(self):
-        """Step with fade_in_out: duration = 15 (in) + 15 (out) = 30f."""
-        entries = [BuilderObject("OBJ", "fade_in_out")]
+    def test_fade_in_and_out_duration(self):
+        """Step with fade_in + fade_out: duration = 15 + 15 = 30f."""
+        entries = [BuilderObject("OBJ", ["fade_in", "fade_out"])]
         dur = compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
 
     def test_no_behavior_uses_fallback(self):
         """Step with no behaviors -> fallback duration."""
-        entries = [BuilderObject("OBJ", "")]
+        entries = [BuilderObject("OBJ")]
         dur = compute_duration(entries, fallback=42)
         self.assertEqual(dur, 42)
 
@@ -1176,22 +1227,27 @@ class TestContentDrivenDuration(unittest.TestCase):
         self.assertEqual(dur, 50)
 
     def test_mixed_behaviors_takes_max(self):
-        """Max across objects: fade_in_out (30) > fade_in (15)."""
-        entries = [BuilderObject("A", "fade_in"), BuilderObject("B", "fade_in_out")]
+        """Max across objects: fade_in+fade_out (30) > fade_in (15)."""
+        entries = [
+            BuilderObject("A", ["fade_in"]),
+            BuilderObject("B", ["fade_in", "fade_out"]),
+        ]
         dur = compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
 
     def test_update_uses_content_duration(self):
         """Update should use content-driven per-step durations."""
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("X", "fade_in")]),
-            BuilderStep("A02", "A", "", "", [BuilderObject("Y", "fade_in_out")]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("X", ["fade_in"])]),
+            BuilderStep(
+                "A02", "A", "", "", [BuilderObject("Y", ["fade_in", "fade_out"])]
+            ),
         ]
         store = ShotStore()
         builder = ShotManifest(store)
         builder.update(steps)
         shots = store.sorted_shots()
-        # A01: fade_in=15f, A02: fade_in_out=30f
+        # A01: fade_in=15f, A02: fade_in+fade_out=30f
         self.assertAlmostEqual(shots[0].end - shots[0].start, 15)
         self.assertAlmostEqual(shots[1].end - shots[1].start, 30)
 
@@ -1202,14 +1258,18 @@ class TestSelectiveRebuild(unittest.TestCase):
     def _make_steps(self):
         return [
             BuilderStep(
-                "A01", "A", "SEC A", "fades in", [BuilderObject("ARROW_01", "fade_in")]
+                "A01",
+                "A",
+                "SEC A",
+                "fades in",
+                [BuilderObject("ARROW_01", ["fade_in"])],
             ),
             BuilderStep(
                 "A02",
                 "A",
                 "SEC A",
                 "fades out",
-                [BuilderObject("CHECK_01", "fade_out")],
+                [BuilderObject("CHECK_01", ["fade_out"])],
             ),
         ]
 
@@ -1238,7 +1298,7 @@ class TestSelectiveRebuild(unittest.TestCase):
         steps = self._make_steps()
         builder.update(steps)
         # Add a new object to A01
-        steps[0].objects.append(BuilderObject("ARROW_02", "fade_in"))
+        steps[0].objects.append(BuilderObject("ARROW_02", ["fade_in"]))
         actions = builder.update(steps)
         self.assertEqual(actions["A01"], "patched")
         # Shot should now have both objects
@@ -1285,8 +1345,8 @@ class TestAssessUserAnimated(unittest.TestCase):
                 "",
                 "static",
                 [
-                    BuilderObject("BOX_01", ""),  # no behavior = user-animated
-                    BuilderObject("ARROW_01", "fade_in"),
+                    BuilderObject("BOX_01"),  # no behavior = user-animated
+                    BuilderObject("ARROW_01", ["fade_in"]),
                 ],
             ),
         ]
@@ -1312,7 +1372,7 @@ class TestAssessUserAnimated(unittest.TestCase):
         store = ShotStore()
         store.define_shot(name="A01", start=1, end=100, objects=["BOX_01"])
         builder = ShotManifest(store)
-        steps = [BuilderStep("A01", "A", "", "", [BuilderObject("BOX_01", "")])]
+        steps = [BuilderStep("A01", "A", "", "", [BuilderObject("BOX_01")])]
         results = builder.assess(
             steps,
             exists_fn=lambda _n: True,
@@ -1328,7 +1388,7 @@ class TestAssessUserAnimated(unittest.TestCase):
         store.define_shot(name="A01", start=1, end=16, objects=["ARROW_01"])
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("ARROW_01", "fade_in")])
+            BuilderStep("A01", "A", "", "", [BuilderObject("ARROW_01", ["fade_in"])])
         ]
         results = builder.assess(
             steps,
@@ -1512,15 +1572,15 @@ class TestReconciliation(unittest.TestCase):
         store = ShotStore()
         builder = ShotManifest(store)
         steps_v1 = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", "fade_in")]),
-            BuilderStep("A02", "A", "", "", [BuilderObject("OBJ2", "fade_out")]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
+            BuilderStep("A02", "A", "", "", [BuilderObject("OBJ2", ["fade_out"])]),
         ]
         builder.update(steps_v1)
         self.assertEqual(len(store.shots), 2)
 
         # V2 of CSV removes A02
         steps_v2 = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", "fade_in")]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
         ]
         actions = builder.update(steps_v2)
         self.assertEqual(actions["A01"], "skipped")
@@ -1536,7 +1596,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Arrow fades in.",
-                [BuilderObject("ARROW_01", "fade_in")],
+                [BuilderObject("ARROW_01", ["fade_in"])],
             ),
         ]
         builder.update(steps)
@@ -1556,7 +1616,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Original content.",
-                [BuilderObject("OBJ1", "fade_in")],
+                [BuilderObject("OBJ1", ["fade_in"])],
             ),
         ]
         builder.update(steps_v1)
@@ -1569,7 +1629,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Updated content.",
-                [BuilderObject("OBJ1", "fade_in")],
+                [BuilderObject("OBJ1", ["fade_in"])],
             ),
         ]
         actions = builder.update(steps_v2)
@@ -1592,7 +1652,7 @@ class TestLockedAssess(unittest.TestCase):
         )
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", "fade_in")]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
         ]
         call_log = []
         results = builder.assess(
@@ -1617,7 +1677,7 @@ class TestLockedAssess(unittest.TestCase):
         )
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", "fade_in")]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
         ]
         results = builder.assess(
             steps,
@@ -1862,13 +1922,13 @@ class TestControllerColumnLayout(unittest.TestCase):
         cls.ctrl = ShotManifestController
 
     def test_headers_count(self):
-        """Unified layout should have exactly 5 columns."""
-        self.assertEqual(len(self.ctrl._HEADERS), 5)
+        """Unified layout should have exactly 6 columns."""
+        self.assertEqual(len(self.ctrl._HEADERS), 6)
 
     def test_headers_names(self):
         self.assertEqual(
             self.ctrl._HEADERS,
-            ["Step", "Section", "Content", "Behaviors", "Range"],
+            ["Step", "Section", "Description", "Behaviors", "Start", "End"],
         )
 
     def test_no_objects_column(self):
@@ -1879,21 +1939,23 @@ class TestControllerColumnLayout(unittest.TestCase):
         """Fixed column indices should match header positions."""
         self.assertEqual(self.ctrl._COL_STEP, 0)
         self.assertEqual(self.ctrl._COL_SECTION, 1)
-        self.assertEqual(self.ctrl._COL_CONTENT, 2)
+        self.assertEqual(self.ctrl._COL_DESC, 2)
         self.assertEqual(self.ctrl._COL_BEHAVIORS, 3)
-        self.assertEqual(self.ctrl._COL_RANGE, 4)
+        self.assertEqual(self.ctrl._COL_START, 4)
+        self.assertEqual(self.ctrl._COL_END, 5)
 
     def test_column_indices_match_headers(self):
         """Each _COL_* constant should match its header's index."""
         h = self.ctrl._HEADERS
         self.assertEqual(h[self.ctrl._COL_STEP], "Step")
-        self.assertEqual(h[self.ctrl._COL_CONTENT], "Content")
+        self.assertEqual(h[self.ctrl._COL_DESC], "Description")
         self.assertEqual(h[self.ctrl._COL_BEHAVIORS], "Behaviors")
-        self.assertEqual(h[self.ctrl._COL_RANGE], "Range")
+        self.assertEqual(h[self.ctrl._COL_START], "Start")
+        self.assertEqual(h[self.ctrl._COL_END], "End")
 
     def test_fmt_behavior(self):
         self.assertEqual(self.ctrl._fmt_behavior("fade_in"), "Fade In")
-        self.assertEqual(self.ctrl._fmt_behavior("fade_in_out"), "Fade In Out")
+        self.assertEqual(self.ctrl._fmt_behavior("fade_out"), "Fade Out")
         self.assertEqual(self.ctrl._fmt_behavior(""), "")
 
     def test_pastel_status_keys(self):
@@ -2457,12 +2519,12 @@ class TestRenderedRowColors(unittest.TestCase):
 
     def _item_fg_hex(self, key, col=None):
         """Get foreground color hex from the item model."""
-        col = col if col is not None else self._ctrl._COL_CONTENT
+        col = col if col is not None else self._ctrl._COL_DESC
         return self._items[key].foreground(col).color().name()
 
     def _item_bg_hex(self, key, col=None):
         """Get background color hex from the item model."""
-        col = col if col is not None else self._ctrl._COL_CONTENT
+        col = col if col is not None else self._ctrl._COL_DESC
         return self._items[key].background(col).color().name()
 
     def _sample_bg(self, item_key, col_index):
@@ -2496,7 +2558,7 @@ class TestRenderedRowColors(unittest.TestCase):
 
     def test_parent_row_lighter_than_child(self):
         """Parent rows should render brighter than child rows (white vs dark overlay)."""
-        col = self._ctrl._COL_CONTENT
+        col = self._ctrl._COL_DESC
         parent_b = self._brightness(self._sample_bg("valid_parent", col))
         child_b = self._brightness(self._sample_bg("valid_child", col))
         self.assertGreater(
@@ -2509,7 +2571,7 @@ class TestRenderedRowColors(unittest.TestCase):
         """Valid child rows (no status bg) should have no custom BackgroundRole,
         letting the delegate's childRowColor tint render uniformly.
         """
-        col = self._ctrl._COL_CONTENT
+        col = self._ctrl._COL_DESC
         valid_bg = self._items["valid_child"].background(col)
         # style() returns NoBrush enum when no per-item override was applied
         from qtpy.QtCore import Qt
@@ -2522,7 +2584,7 @@ class TestRenderedRowColors(unittest.TestCase):
 
     def test_missing_object_bg_redder_than_valid(self):
         """missing_object parent bg (#3D2828) should have more red than valid parent."""
-        col = self._ctrl._COL_CONTENT
+        col = self._ctrl._COL_DESC
         mobj_bg = self._items["missing_object_parent"].background(col).color()
         valid_bg = self._items["valid_parent"].background(col).color()
         # #3D2828: R=61 > G=B=40;  valid parent: no bg override
@@ -2535,7 +2597,7 @@ class TestRenderedRowColors(unittest.TestCase):
 
     def test_no_row_is_black_or_white(self):
         """Sanity: no row should render pure black or pure white."""
-        col = self._ctrl._COL_CONTENT
+        col = self._ctrl._COL_DESC
         for label in self._items:
             rgb = self._sample_bg(label, col)
             b = self._brightness(rgb)
@@ -2629,7 +2691,7 @@ class TestRenderedRowColors(unittest.TestCase):
     def test_column_tint_darkens_step_column(self):
         """Step column (tinted) should render darker than Content column (untinted)."""
         parent_step = self._sample_bg("valid_parent", self._ctrl._COL_STEP)
-        parent_content = self._sample_bg("valid_parent", self._ctrl._COL_CONTENT)
+        parent_content = self._sample_bg("valid_parent", self._ctrl._COL_DESC)
         self.assertLess(
             self._brightness(parent_step),
             self._brightness(parent_content),
@@ -2733,145 +2795,7 @@ class TestDetectShots(unittest.TestCase):
         self.assertIn("objects", params)
         self.assertIn("gap_threshold", params)
         self.assertIn("ignore", params)
-        self.assertIn("ignore_flat_keys", params)
         self.assertIn("motion_rate", params)
-
-    def test_gap_detection_importable_from_shots_module(self):
-        """detect_animation_gaps should be importable from canonical _shots module."""
-        from mayatk.anim_utils.shots._shots import detect_animation_gaps
-
-        self.assertTrue(callable(detect_animation_gaps))
-
-    def test_motion_frames_importable_from_shots_module(self):
-        """_motion_frames_for_curve should be importable from canonical _shots module."""
-        from mayatk.anim_utils.shots._shots import _motion_frames_for_curve
-
-        self.assertTrue(callable(_motion_frames_for_curve))
-
-    def test_manifest_reexports_gap_detection(self):
-        """Manifest module should re-export detect_animation_gaps for backward compat."""
-        from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-            detect_animation_gaps,
-        )
-
-        self.assertTrue(callable(detect_animation_gaps))
-
-    def test_collect_all_motion_frames_importable(self):
-        """_collect_all_motion_frames should be importable from _shots."""
-        from mayatk.anim_utils.shots._shots import _collect_all_motion_frames
-
-        self.assertTrue(callable(_collect_all_motion_frames))
-
-
-class TestMotionFramesForCurve(unittest.TestCase):
-    """Pure-Python tests for _motion_frames_for_curve (no Maya)."""
-
-    def setUp(self):
-        from mayatk.anim_utils.shots._shots import _motion_frames_for_curve
-
-        self.fn = _motion_frames_for_curve
-
-    def test_empty_input(self):
-        self.assertEqual(self.fn([], []), [])
-
-    def test_single_key(self):
-        self.assertEqual(self.fn([1.0], [5.0]), [1.0])
-
-    def test_all_flat(self):
-        """Constant curve -> no motion frames."""
-        self.assertEqual(self.fn([1, 2, 3, 4, 5], [10, 10, 10, 10, 10]), [])
-
-    def test_all_motion(self):
-        """Every pair changes -> all frames returned."""
-        result = self.fn([1, 2, 3], [0, 10, 20])
-        self.assertEqual(result, [1, 2, 3])
-
-    def test_mixed_flat_and_motion(self):
-        """Flat region followed by motion; only motion boundary frames."""
-        times = [1, 2, 3, 4, 5]
-        values = [0, 0, 0, 10, 20]
-        result = self.fn(times, values)
-        self.assertIn(3, result)
-        self.assertIn(4, result)
-        self.assertIn(5, result)
-        self.assertNotIn(1, result)
-        self.assertNotIn(2, result)
-
-    def test_tolerance_respected(self):
-        """Values within tolerance treated as flat."""
-        times = [1, 2, 3]
-        values = [0, 0.00001, 10]
-        result = self.fn(times, values, value_tolerance=1e-4)
-        self.assertNotIn(1, result)
-        self.assertIn(2, result)
-        self.assertIn(3, result)
-
-    def test_sparse_keys_drift_classified_as_static(self):
-        """Sparse keys with slow drift should be classified as static.
-
-        Regression: baked scenes have sparse keys (e.g., every 72 frames)
-        with tiny total drift. Absolute-diff wrongly classified these as
-        motion; rate-based detection (abs(dv)/dt) correctly classifies
-        them as static because the per-frame rate is negligible.
-        Fixed: 2026-03-19
-        """
-        # Simulate: 5 keys at 72-frame spacing, total drift of 0.5 over 288 frames
-        times = [0, 72, 144, 216, 288]
-        values = [10.0, 10.1, 10.2, 10.3, 10.5]
-        # Per-frame rate: ~0.001 to ~0.003 -- below default 1e-5 rate threshold
-        # With old absolute diff: all intervals > 1e-5, so all returned as motion
-        # With rate-based: 0.1/72 = 0.0014, which exceeds 1e-5 rate tolerance
-        # Use a higher rate tolerance to correctly classify as static
-        result = self.fn(times, values, value_tolerance=0.01)
-        self.assertEqual(
-            result, [], "Sparse slow-drift keys should return no motion frames"
-        )
-
-    def test_sparse_keys_real_motion_detected(self):
-        """Sparse keys with genuine motion should still be detected."""
-        # 3 static intervals, then a rapid change
-        times = [0, 72, 144, 145, 146]
-        values = [10.0, 10.01, 10.02, 25.0, 40.0]
-        result = self.fn(times, values, value_tolerance=0.01)
-        # The static drifts (0.01/72 = 0.00014) are below 0.01 rate
-        # The rapid changes (14.98/1 = 14.98) are well above
-        self.assertNotIn(0, result)
-        self.assertNotIn(72, result)
-        self.assertIn(144, result)
-        self.assertIn(145, result)
-        self.assertIn(146, result)
-
-
-class TestIsMotionInterval(unittest.TestCase):
-    """Tests for _is_motion_interval shared primitive."""
-
-    def setUp(self):
-        from mayatk.anim_utils.shots._shots import _is_motion_interval
-
-        self.fn = _is_motion_interval
-
-    def test_identical_values_is_static(self):
-        self.assertFalse(self.fn(5.0, 5.0, 0.0, 10.0))
-
-    def test_large_change_is_motion(self):
-        self.assertTrue(self.fn(0.0, 10.0, 0.0, 1.0))
-
-    def test_slow_drift_over_wide_interval_is_static(self):
-        """0.05 change over 72 frames = rate 0.00069, below default 1e-3."""
-        self.assertFalse(self.fn(10.0, 10.05, 0.0, 72.0))
-
-    def test_same_diff_over_one_frame_is_motion(self):
-        """0.1 change over 1 frame = rate 0.1, well above 1e-3."""
-        self.assertTrue(self.fn(10.0, 10.1, 0.0, 1.0))
-
-    def test_custom_threshold(self):
-        # Rate = 0.5/100 = 0.005; above 0.001, below 0.01
-        self.assertTrue(self.fn(0.0, 0.5, 0.0, 100.0, rate_threshold=0.001))
-        self.assertFalse(self.fn(0.0, 0.5, 0.0, 100.0, rate_threshold=0.01))
-
-    def test_zero_duration_uses_floor_of_one(self):
-        """When t1 == t2, dt is floored to 1 to avoid division by zero."""
-        self.assertTrue(self.fn(0.0, 1.0, 5.0, 5.0))
 
 
 class TestBoundaryFloatPrecision(unittest.TestCase):
@@ -3026,7 +2950,6 @@ class TestDetectNextShot(unittest.TestCase):
         params = list(sig.parameters.keys())
         self.assertIn("gap_threshold", params)
         self.assertIn("ignore", params)
-        self.assertIn("ignore_flat_keys", params)
 
 
 class TestShotStoreListeners(unittest.TestCase):
@@ -3044,25 +2967,29 @@ class TestShotStoreListeners(unittest.TestCase):
         ShotStore.clear_active()
 
     def test_listener_receives_shot_defined(self):
+        from mayatk.anim_utils.shots._shots import ShotDefined
+
         received = []
-        self.store.add_listener(lambda evt, p: received.append((evt, p)))
+        self.store.add_listener(lambda evt: received.append(evt))
         shot = self.store.define_shot(name="A", start=0, end=50)
         self.assertEqual(len(received), 1)
-        self.assertEqual(received[0][0], "shot_defined")
-        self.assertIs(received[0][1], shot)
+        self.assertIsInstance(received[0], ShotDefined)
+        self.assertIs(received[0].shot, shot)
 
     def test_listener_receives_shot_removed(self):
+        from mayatk.anim_utils.shots._shots import ShotRemoved
+
         received = []
         shot = self.store.define_shot(name="A", start=0, end=50)
-        self.store.add_listener(lambda evt, p: received.append((evt, p)))
+        self.store.add_listener(lambda evt: received.append(evt))
         self.store.remove_shot(shot.shot_id)
         self.assertEqual(len(received), 1)
-        self.assertEqual(received[0][0], "shot_removed")
-        self.assertEqual(received[0][1], shot.shot_id)
+        self.assertIsInstance(received[0], ShotRemoved)
+        self.assertEqual(received[0].shot_id, shot.shot_id)
 
     def test_remove_listener_stops_notifications(self):
         received = []
-        cb = lambda evt, p: received.append(evt)
+        cb = lambda evt: received.append(evt)
         self.store.add_listener(cb)
         self.store.define_shot(name="A", start=0, end=10)
         self.assertEqual(len(received), 1)
@@ -3071,48 +2998,57 @@ class TestShotStoreListeners(unittest.TestCase):
         self.assertEqual(len(received), 1)  # no new event
 
     def test_duplicate_listener_not_added(self):
-        cb = lambda evt, p: None
+        cb = lambda evt: None
         self.store.add_listener(cb)
         self.store.add_listener(cb)
         self.assertEqual(len(self.store._listeners), 1)
 
     def test_remove_nonexistent_listener_is_noop(self):
-        cb = lambda evt, p: None
+        cb = lambda evt: None
         self.store.remove_listener(cb)  # should not raise
 
     def test_listener_exception_does_not_break_others(self):
         """A failing listener should not prevent subsequent listeners from firing."""
+        from mayatk.anim_utils.shots._shots import ShotDefined
+
         received = []
 
-        def bad_listener(evt, p):
+        def bad_listener(evt):
             raise RuntimeError("boom")
 
         self.store.add_listener(bad_listener)
-        self.store.add_listener(lambda evt, p: received.append(evt))
+        self.store.add_listener(lambda evt: received.append(evt))
         self.store.define_shot(name="A", start=0, end=10)
-        self.assertEqual(received, ["shot_defined"])
+        self.assertEqual(len(received), 1)
+        self.assertIsInstance(received[0], ShotDefined)
 
     def test_multiple_listeners_all_notified(self):
+        from mayatk.anim_utils.shots._shots import ShotDefined
+
         received_a = []
         received_b = []
-        self.store.add_listener(lambda evt, p: received_a.append(evt))
-        self.store.add_listener(lambda evt, p: received_b.append(evt))
+        self.store.add_listener(lambda evt: received_a.append(evt))
+        self.store.add_listener(lambda evt: received_b.append(evt))
         self.store.define_shot(name="A", start=0, end=10)
-        self.assertEqual(received_a, ["shot_defined"])
-        self.assertEqual(received_b, ["shot_defined"])
+        self.assertEqual(len(received_a), 1)
+        self.assertIsInstance(received_a[0], ShotDefined)
+        self.assertEqual(len(received_b), 1)
+        self.assertIsInstance(received_b[0], ShotDefined)
 
     def test_update_shot_fires_event(self):
-        """update_shot should mutate in-place and fire 'shot_updated'."""
+        """update_shot should mutate in-place and fire ShotUpdated."""
+        from mayatk.anim_utils.shots._shots import ShotUpdated
+
         received = []
         shot = self.store.define_shot(name="A", start=0, end=50)
-        self.store.add_listener(lambda evt, p: received.append((evt, p)))
+        self.store.add_listener(lambda evt: received.append(evt))
         self.store.update_shot(shot.shot_id, start=10, end=60, name="B")
         self.assertEqual(shot.start, 10)
         self.assertEqual(shot.end, 60)
         self.assertEqual(shot.name, "B")
         self.assertEqual(len(received), 1)
-        self.assertEqual(received[0][0], "shot_updated")
-        self.assertIs(received[0][1], shot)
+        self.assertIsInstance(received[0], ShotUpdated)
+        self.assertIs(received[0].shot, shot)
 
     def test_update_shot_unknown_id_returns_none(self):
         result = self.store.update_shot("nonexistent", start=5)
@@ -3120,33 +3056,222 @@ class TestShotStoreListeners(unittest.TestCase):
 
     def test_batch_update_defers_notifications(self):
         """During batch_update, individual events are deferred; a single
-        'batch_complete' fires on exit."""
+        BatchComplete fires on exit."""
+        from mayatk.anim_utils.shots._shots import BatchComplete
+
         received = []
-        self.store.add_listener(lambda evt, p: received.append(evt))
+        self.store.add_listener(lambda evt: received.append(evt))
         with self.store.batch_update():
             self.store.define_shot(name="A", start=0, end=10)
             self.store.define_shot(name="B", start=20, end=30)
             self.assertEqual(received, [])  # nothing during batch
-        self.assertEqual(received, ["batch_complete"])
+        self.assertEqual(len(received), 1)
+        self.assertIsInstance(received[0], BatchComplete)
 
     def test_batch_update_nested(self):
         """Nested batch_update should only fire once on outermost exit."""
+        from mayatk.anim_utils.shots._shots import BatchComplete
+
         received = []
-        self.store.add_listener(lambda evt, p: received.append(evt))
+        self.store.add_listener(lambda evt: received.append(evt))
         with self.store.batch_update():
             self.store.define_shot(name="A", start=0, end=10)
             with self.store.batch_update():
                 self.store.define_shot(name="B", start=20, end=30)
             self.assertEqual(received, [])  # inner exit doesn't fire
-        self.assertEqual(received, ["batch_complete"])
+        self.assertEqual(len(received), 1)
+        self.assertIsInstance(received[0], BatchComplete)
 
     def test_batch_update_no_events_no_notification(self):
         """batch_update with no mutations should not fire anything."""
         received = []
-        self.store.add_listener(lambda evt, p: received.append(evt))
+        self.store.add_listener(lambda evt: received.append(evt))
         with self.store.batch_update():
             pass
         self.assertEqual(received, [])
+
+
+class TestColumnMap(unittest.TestCase):
+    """Test ColumnMap serialisation round-trip and custom-alias parsing."""
+
+    def test_to_dict_round_trip(self):
+        """to_dict → from_dict produces an identical ColumnMap."""
+        original = ColumnMap()
+        restored = ColumnMap.from_dict(original.to_dict())
+        self.assertEqual(original, restored)
+
+    def test_custom_aliases_round_trip(self):
+        """Custom header aliases survive serialisation."""
+        custom = ColumnMap(
+            step_id=("ID",),
+            content=("Description", "Desc"),
+            asset_name=("Object",),
+        )
+        restored = ColumnMap.from_dict(custom.to_dict())
+        self.assertEqual(restored.step_id, ("ID",))
+        self.assertEqual(restored.content, ("Description", "Desc"))
+        self.assertEqual(restored.asset_name, ("Object",))
+
+    def test_from_dict_ignores_unknown_keys(self):
+        """Unknown keys in the dict are silently dropped."""
+        data = ColumnMap().to_dict()
+        data["bogus_field"] = ["whatever"]
+        restored = ColumnMap.from_dict(data)
+        self.assertFalse(hasattr(restored, "bogus_field"))
+
+    def test_custom_column_map_parses_csv(self):
+        """parse_csv respects a ColumnMap with non-default aliases."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "custom.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["ID", "Description", "Object", "Status"])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
+            custom = ColumnMap(
+                step_id=("ID",),
+                content=("Description",),
+                asset_name=("Object",),
+            )
+            steps = parse_csv(csv_path, columns=custom)
+            self.assertEqual(len(steps), 1)
+            self.assertEqual(steps[0].step_id, "A01")
+            self.assertEqual(steps[0].objects[0].name, "ARROW_01")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_voice_column_populates_description(self):
+        """When Voice Support column exists, description shows voice text.
+
+        Bug: Description showed Step Contents instead of Voice Support,
+        causing voice-only steps (Contents=N/A) to display N/A and
+        silent-action steps (Voice=N/A) to show action text.
+        Fixed: 2026-03-24
+        """
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "voice.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", "", ""])
+                w.writerow(
+                    ["Step", "Voice Support", "Step Contents", "Asset Names", "Status"]
+                )
+                # A01: has both voice and contents
+                w.writerow(
+                    ["A01.)", "Welcome to training.", "Arrow fades in.", "ARROW_01", ""]
+                )
+                # A02: voice-only (Contents=N/A) — should show voice
+                w.writerow(["A02.)", "The clamps are removed.", "N/A", "N/A", ""])
+                # A03: silent action (Voice=N/A) — should show N/A
+                w.writerow(["A03.)", "N/A", "Poker chips push in.", "CHIPS_01", ""])
+            steps = parse_csv(csv_path)
+            self.assertEqual(len(steps), 3)
+
+            # A01: description = voice text
+            self.assertEqual(steps[0].description, "Welcome to training.")
+            self.assertEqual(steps[0].voice, "Welcome to training.")
+            self.assertEqual(steps[0].content, "Arrow fades in.")
+            # Behavior detection still from content
+            self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
+
+            # A02: description = voice (not N/A)
+            self.assertEqual(steps[1].description, "The clamps are removed.")
+            self.assertEqual(steps[1].content, "N/A")
+
+            # A03: description = N/A (from voice)
+            self.assertEqual(steps[2].description, "N/A")
+            self.assertEqual(steps[2].content, "Poker chips push in.")
+            # Behavior still detected from content, not voice
+            self.assertEqual(len(steps[2].objects), 1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_no_voice_column_falls_back_to_content(self):
+        """Without a Voice column, description falls back to content."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "novoice.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
+            steps = parse_csv(csv_path)
+            self.assertEqual(steps[0].voice, "")
+            self.assertEqual(steps[0].description, "Arrow fades in.")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_voice_round_trip_in_column_map(self):
+        """ColumnMap voice field survives to_dict/from_dict."""
+        custom = ColumnMap(voice=("Narration", "VO"))
+        restored = ColumnMap.from_dict(custom.to_dict())
+        self.assertEqual(restored.voice, ("Narration", "VO"))
+
+    def test_exclude_steps_default_excludes_setup(self):
+        """Default ColumnMap excludes SETUP."""
+        cm = ColumnMap()
+        self.assertIn("SETUP", cm.exclude_steps)
+
+    def test_exclude_steps_filters_parse_csv(self):
+        """Steps listed in exclude_steps are removed from parse results."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "excl.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["SETUP", "Setup step.", "N/A", ""])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
+                w.writerow(["A02.)", "Box fades out.", "BOX_01", ""])
+            # Default excludes SETUP
+            steps = parse_csv(csv_path)
+            ids = [s.step_id for s in steps]
+            self.assertNotIn("SETUP", ids)
+            self.assertIn("A01", ids)
+            self.assertIn("A02", ids)
+            self.assertEqual(len(steps), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_exclude_steps_empty_includes_all(self):
+        """Empty exclude_steps keeps all steps including SETUP."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "all.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["SETUP", "Setup step.", "N/A", ""])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", ""])
+            no_exclude = ColumnMap(exclude_steps=())
+            steps = parse_csv(csv_path, columns=no_exclude)
+            ids = [s.step_id for s in steps]
+            self.assertIn("SETUP", ids)
+            self.assertIn("A01", ids)
+            self.assertEqual(len(steps), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_exclude_steps_round_trip(self):
+        """exclude_steps survives to_dict/from_dict."""
+        cm = ColumnMap(exclude_steps=("SETUP", "INTRO"))
+        restored = ColumnMap.from_dict(cm.to_dict())
+        self.assertEqual(restored.exclude_steps, ("SETUP", "INTRO"))
 
 
 if __name__ == "__main__":

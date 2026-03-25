@@ -13,7 +13,7 @@ except ImportError as error:
     print(__file__, error)
 
 
-from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
+from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore, detect_shot_regions
 
 
 # ---------------------------------------------------------------------------
@@ -92,34 +92,24 @@ class ShotSequencer:
         """Return names of all transforms with non-flat animation in [start, end].
 
         Objects whose curves are entirely constant (all values within
-        *value_tolerance*) across the range are excluded.
+        *value_tolerance*) across the range are excluded.  Only standard
+        transform/visibility attributes are considered — custom user
+        attributes (e.g. ``audio_trigger``) are ignored so marker objects
+        don't appear as scene content.
         """
-        curves = pm.ls(type="animCurve")
-        if not curves:
+        import maya.cmds as cmds
+        from mayatk.anim_utils.shots._shots import _map_standard_curves_to_transforms
+
+        transform_curves = _map_standard_curves_to_transforms()
+        if not transform_curves:
             return []
 
-        # Map each transform to its curves that have keys in this range
-        from collections import defaultdict
-
-        transform_curves: dict = defaultdict(list)
-        for crv in curves:
-            keys = pm.keyframe(crv, q=True, time=(start, end))
-            if not keys:
-                continue
-            conns = pm.listConnections(crv, d=True, s=False) or []
-            for node in conns:
-                if node.type() == "transform":
-                    transform_curves[str(node)].append(crv)
-                else:
-                    parents = pm.listRelatives(node, parent=True, type="transform")
-                    if parents:
-                        transform_curves[str(parents[0])].append(crv)
-
         # Keep only transforms where at least one curve changes value
+        # within the requested range.
         result = []
         for xform, crvs in sorted(transform_curves.items()):
             for crv in crvs:
-                vals = pm.keyframe(crv, q=True, time=(start, end), valueChange=True)
+                vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
                 if vals and (max(vals) - min(vals)) > value_tolerance:
                     result.append(xform)
                     break
@@ -215,7 +205,6 @@ class ShotSequencer:
         self,
         shot_id: int,
         ignore: Optional[str] = None,
-        ignore_flat_keys: bool = False,
         motion_rate: float = 1e-3,
     ) -> List[Dict[str, Any]]:
         """Collect per-object animation segments within a shot's range.
@@ -224,13 +213,13 @@ class ShotSequencer:
         and ``"duration"`` keys — suitable for populating per-object
         tracks in the sequencer widget.
 
+        Flat/constant-value intervals are always excluded so only
+        actual motion is shown.
+
         Parameters:
             shot_id: The shot whose objects and range to query.
             ignore: Attribute pattern(s) to exclude.
-            ignore_flat_keys: When ``True``, flat/constant-value
-                segments are excluded so only actual motion is shown.
-            motion_rate: Rate threshold used when *ignore_flat_keys*
-                is ``True``.
+            motion_rate: Per-frame rate-of-change threshold.
 
         Returns:
             A list of segment dicts grouped by object.
@@ -241,7 +230,13 @@ class ShotSequencer:
 
         nodes = self._shot_nodes(shot)
         if not nodes:
-            return []
+            # Shot has no (valid) objects — auto-discover animated transforms
+            discovered = self._find_keyed_transforms(shot.start, shot.end)
+            if discovered:
+                shot.objects = sorted(set(discovered))
+                nodes = self._shot_nodes(shot)
+            if not nodes:
+                return []
 
         from mayatk.anim_utils.segment_keys import SegmentKeys
 
@@ -252,7 +247,7 @@ class ShotSequencer:
             time_range=(shot.start, shot.end),
             ignore_holds=True,
             ignore_visibility_holds=True,
-            motion_only=ignore_flat_keys,
+            motion_only=True,
             motion_rate=motion_rate,
         )
         # Normalise obj to str — defensive; values are already strings
@@ -268,14 +263,14 @@ class ShotSequencer:
         objects: Optional[List[str]] = None,
         gap_threshold: float = 5.0,
         ignore: Optional[str] = None,
-        ignore_flat_keys: bool = False,
         motion_rate: float = 1e-3,
+        min_duration: float = 2.0,
     ) -> List[Dict[str, Any]]:
         """Detect shot boundaries from existing animation on *objects*.
 
-        Scans the full timeline for per-object animation segments and
-        clusters them into contiguous groups separated by gaps of at
-        least *gap_threshold* frames.
+        Delegates to :func:`~mayatk.anim_utils.shots._shots.detect_shot_regions`
+        for the actual clustering.  Flat/constant-value intervals are
+        always excluded.
 
         Parameters:
             objects: Transform node names to scan.  If ``None``, all
@@ -283,95 +278,26 @@ class ShotSequencer:
             gap_threshold: Minimum gap (frames) between clusters to
                 split them into separate shots.
             ignore: Attribute pattern(s) to exclude.
-            ignore_flat_keys: When ``True``, flat/constant-value
-                intervals are excluded from segment collection,
-                revealing shot boundaries hidden by baked animation.
-                Delegates to ``SegmentKeys.collect_segments(motion_only=True)``.
-            motion_rate: Per-frame rate-of-change threshold used when
-                *ignore_flat_keys* is ``True``.  Passed through to
-                ``SegmentKeys.collect_segments(motion_rate=...)``.
+            motion_rate: Per-frame rate-of-change threshold.
+            min_duration: Minimum shot duration in frames.
 
         Returns:
             A list of candidate shot dicts, each with ``"name"``,
             ``"start"``, ``"end"``, and ``"objects"`` keys — suitable
             for passing to :meth:`define_shot`.
         """
-        from mayatk.anim_utils.segment_keys import SegmentKeys
-
-        # Discover objects if not provided
-        if objects is None:
-            curves = pm.ls(type="animCurve")
-            found = set()
-            for crv in curves:
-                conns = pm.listConnections(crv, d=True, s=False) or []
-                for node in conns:
-                    if node.type() == "transform":
-                        found.add(str(node))
-                    else:
-                        parents = pm.listRelatives(node, parent=True, type="transform")
-                        if parents:
-                            found.add(str(parents[0]))
-            objects = sorted(found)
-
-        if not objects:
-            return []
-
-        nodes = [pm.PyNode(o) for o in objects if pm.objExists(o)]
-        if not nodes:
-            return []
-
-        # Collect segments across full timeline (no time_range)
-        segments = SegmentKeys.collect_segments(
-            nodes,
-            split_static=True,
+        return detect_shot_regions(
+            objects=objects,
+            gap_threshold=gap_threshold,
             ignore=ignore,
-            ignore_holds=True,
-            ignore_visibility_holds=True,
-            motion_only=ignore_flat_keys,
             motion_rate=motion_rate,
+            min_duration=min_duration,
         )
-        if not segments:
-            return []
-
-        # Sort all segments by start time
-        segments.sort(key=lambda s: s["start"])
-
-        # Cluster segments into groups based on gap_threshold
-        clusters: List[List[Dict[str, Any]]] = []
-        current: List[Dict[str, Any]] = [segments[0]]
-        current_end = segments[0]["end"]
-
-        for seg in segments[1:]:
-            if seg["start"] - current_end > gap_threshold:
-                clusters.append(current)
-                current = [seg]
-                current_end = seg["end"]
-            else:
-                current.append(seg)
-                current_end = max(current_end, seg["end"])
-        clusters.append(current)
-
-        # Build candidate shots from clusters
-        candidates = []
-        for i, cluster in enumerate(clusters, 1):
-            start = min(s["start"] for s in cluster)
-            end = max(s["end"] for s in cluster)
-            objs = sorted({str(s["obj"]) for s in cluster})
-            candidates.append(
-                {
-                    "name": f"Shot {i}",
-                    "start": start,
-                    "end": end,
-                    "objects": objs,
-                }
-            )
-        return candidates
 
     def detect_next_shot(
         self,
         gap_threshold: float = 5.0,
         ignore: Optional[str] = None,
-        ignore_flat_keys: bool = False,
         motion_rate: float = 1e-3,
     ) -> Optional[Dict[str, Any]]:
         """Detect the first animation cluster after all existing shots.
@@ -383,8 +309,6 @@ class ShotSequencer:
         Parameters:
             gap_threshold: Minimum gap (frames) between clusters.
             ignore: Attribute pattern(s) to exclude.
-            ignore_flat_keys: When ``True``, only segments with actual
-                value change are considered (see :meth:`detect_shots`).
             motion_rate: Per-frame rate threshold (see :meth:`detect_shots`).
 
         Returns:
@@ -394,7 +318,6 @@ class ShotSequencer:
         candidates = self.detect_shots(
             gap_threshold=gap_threshold,
             ignore=ignore,
-            ignore_flat_keys=ignore_flat_keys,
             motion_rate=motion_rate,
         )
         if not candidates:
@@ -476,6 +399,81 @@ class ShotSequencer:
                 )
             except RuntimeError:
                 pass
+
+    def move_stepped_keys(
+        self,
+        obj: str,
+        old_time: float,
+        new_time: float,
+        attr_name: str | None = None,
+        eps: float = 1e-3,
+    ) -> None:
+        """Move stepped keys at *old_time* to *new_time* via delete-and-recreate.
+
+        If *attr_name* is given, only that attribute's curves are moved.
+        Otherwise all curves on *obj* with a stepped key at *old_time*.
+
+        Uses cutKey + setKeyframe instead of timeChange to avoid Maya
+        silently misplacing keys at large offsets.
+        """
+        import maya.cmds as cmds
+
+        if abs(new_time - old_time) < 1e-6:
+            return
+
+        matches = cmds.ls(obj, long=True)
+        if not matches:
+            return
+        obj_path = matches[0]
+        tr = (old_time - eps, old_time + eps)
+
+        # Resolve which curves to move
+        if attr_name:
+            plug = f"{obj_path}.{attr_name}"
+            if not cmds.objExists(plug):
+                return
+            raw = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+            curves = [(c, plug) for c in raw]
+        else:
+            all_curves = list(
+                set(
+                    cmds.listConnections(obj_path, type="animCurve", s=True, d=False)
+                    or []
+                )
+            )
+            curves = []
+            for crv in all_curves:
+                if not cmds.keyframe(crv, q=True, time=tr):
+                    continue
+                ot = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
+                if ot and ot[0] in ("step", "stepnext"):
+                    conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+                    curves.append((crv, conns[0] if conns else None))
+
+        # Delete-and-recreate each key
+        for crv, plug in curves:
+            vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
+            in_tan = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True)
+            out_tan = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
+            if not vals:
+                continue
+            val = vals[0]
+            itt = in_tan[0] if in_tan else "step"
+            ott = out_tan[0] if out_tan else "step"
+
+            cmds.cutKey(crv, time=tr, clear=True)
+            # cutKey may delete the curve node if it was the last key;
+            # fall back to the driven plug so setKeyframe recreates it.
+            target = crv if cmds.objExists(crv) else plug
+            if not target:
+                target = obj_path
+            cmds.setKeyframe(target, time=new_time, value=val)
+            cmds.keyTangent(
+                target,
+                time=(new_time, new_time),
+                inTangentType=itt,
+                outTangentType=ott,
+            )
 
     @staticmethod
     def _batch_move_keys(cmds, objects, old_start, old_end, new_start):
@@ -633,11 +631,13 @@ class ShotSequencer:
             new_start: Desired first frame.
             new_end: Desired last frame.
         """
-        if not pm.objExists(obj):
+        import maya.cmds as cmds
+
+        if not cmds.objExists(obj):
             return
         if abs(old_end - old_start) < 1e-6:
             return
-        pm.scaleKey(
+        cmds.scaleKey(
             obj,
             time=(old_start, old_end),
             newStartTime=new_start,
@@ -1013,8 +1013,9 @@ class ShotSequencer:
 
         Each shot keeps its current duration but is repositioned so the
         first shot starts at *start_frame* and subsequent shots follow
-        with *gap* frames between them.  Keyframes are moved with their
-        shots when Maya is available.
+        with *gap* frames between them.  Locked gaps preserve their
+        current width instead of using the uniform *gap* value.
+        Keyframes are moved with their shots when Maya is available.
 
         Parameters:
             gap: Frames of gap between consecutive shots.
@@ -1024,8 +1025,15 @@ class ShotSequencer:
         if not shots:
             return
 
+        # Capture locked gap widths before repositioning.
+        locked_widths: dict = {}
+        for i in range(len(shots) - 1):
+            left, right = shots[i], shots[i + 1]
+            if self.store.is_gap_locked(left.shot_id, right.shot_id):
+                locked_widths[i] = max(0, right.start - left.end)
+
         cursor = start_frame
-        for shot in shots:
+        for i, shot in enumerate(shots):
             duration = shot.end - shot.start
             new_start = cursor
             if abs(new_start - shot.start) > 1e-6:
@@ -1037,7 +1045,8 @@ class ShotSequencer:
                     )
                 shot.start = new_start
                 shot.end = new_start + duration
-            cursor = shot.end + gap
+            effective_gap = locked_widths.get(i, gap)
+            cursor = shot.end + effective_gap
 
         self._enforce_gap_holds()
 

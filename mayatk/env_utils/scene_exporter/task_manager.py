@@ -32,13 +32,13 @@ class _TaskDataMixin:
         return bool(self._get_all_keyframes())
 
     def _get_all_keyframes(self) -> List[float]:
-        """Return a sorted list of all unique keyframe times for the specified objects."""
+        """Return a sorted list of all unique keyframe times for the specified objects.
+
+        Delegates to ``AnimUtils.get_keyframe_times`` for the actual query and
+        caches the result set in ``_key_times`` for downstream consumers.
+        """
         if not self.objects:
             return []
-
-        import time
-
-        t0 = time.time()
 
         # Filter to objects that still exist (smart_bake may delete
         # constraints/expressions, removing nodes from the scene).
@@ -46,35 +46,12 @@ class _TaskDataMixin:
         if not existing:
             return []
 
-        # Optimization: Iterate curves instead of objects
-        # cmds.keyframe(objects) is slow (5s for 200 objects).
-        # Iterating curves is fast (0.02s for 200 curves).
+        times = AnimUtils.get_keyframe_times(existing)
+        if times is None:
+            return []
 
-        all_curves = (
-            cmds.listConnections(
-                existing, type="animCurve", source=True, destination=False
-            )
-            or []
-        )
-        # Ensure uniqueness
-        all_curves = list(set(all_curves))
-
-        times = []
-        for curve in all_curves:
-            t = cmds.keyframe(curve, query=True, timeChange=True)
-            if t:
-                times.extend(t)
-
-        t1 = time.time()
-        self.logger.info(
-            f"_get_all_keyframes query took: {t1-t0:.4f}s. Found {len(times)} keys."
-        )
-
-        key_times = set(times)
-
-        if key_times:
-            self._key_times = key_times
-        return sorted(key_times)
+        self._key_times = set(times)
+        return times
 
     def _get_all_materials(self) -> List[str]:
         """Return a list of all materials assigned to the specified objects.
@@ -245,10 +222,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             objects=self.objects,
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=True,  # Optimize baked layer curves internally
-            bake_inherited_visibility=getattr(
-                self, "_bake_visibility_enabled", False
-            ),
+            optimize_keys=False,  # Standalone optimize_keys task handles this
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )
@@ -269,11 +243,6 @@ class _TaskActionsMixin(_TaskDataMixin):
         # Store layer names and curves for cleanup after export
         if result.override_layer:
             self._bake_override_layer = result.override_layer
-        if result.visibility_curves:
-            self._bake_visibility_curves = result.visibility_curves
-        if result.visibility_originals:
-            self._bake_visibility_originals = result.visibility_originals
-
         # Build detailed log message
         log_parts = [
             f"Smart bake completed: {result.baked_count} objects baked",
@@ -971,12 +940,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Smart Bake",
                 "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.",
                 "setChecked": True,
-            },
-            "bake_visibility": {
-                "widget_type": "QCheckBox",
-                "setText": "Bake Inherited Visibility",
-                "setToolTip": "Bake ancestor visibility animation onto child mesh transforms.\nRequired when parent LOC nodes toggle visibility that child GEO inherits at runtime in Maya but is not written to FBX.",
-                "setChecked": False,
             },
             "optimize_keys": {
                 "widget_type": "QCheckBox",

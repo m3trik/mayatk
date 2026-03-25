@@ -24,8 +24,6 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Configure header menu with tool description and workflow instructions."""
-        widget.menu.setTitle("Naming:")
-
         widget.menu.add("Separator", setTitle="Scope")
         widget.menu.add(
             "QComboBox",

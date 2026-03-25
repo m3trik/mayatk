@@ -30,7 +30,7 @@ def load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, An
     build) avoid redundant disk I/O and YAML parsing.
 
     Parameters:
-        name: Template name without extension (e.g. ``"fade_in_out"``).
+        name: Template name without extension (e.g. ``"fade_in"``).
         search_path: Directory to search. Defaults to the built-in
             ``behaviors/`` directory next to this module.
 
@@ -126,9 +126,21 @@ def apply_behavior(
 ) -> None:
     """Apply a named behavior template to an object over a time range.
 
+    When the object has an ``opacity`` attribute (from :class:`RenderOpacity`),
+    this function automatically handles dual-keying:
+
+    - If the template targets ``visibility`` and the object has ``opacity``,
+      the value is keyed on **both** ``opacity`` and ``visibility``.
+    - If the template targets ``opacity`` directly, ``visibility`` is also
+      mirrored automatically.
+
+    This produces real animation curves on both channels so FBX export
+    gives game engines a native ``visibility`` track without baking, while
+    the ``opacity`` channel is available for engines that support it.
+
     Parameters:
         obj: Maya node name.
-        behavior_name: YAML template stem name (e.g. ``"fade_in_out"``).
+        behavior_name: YAML template stem name (e.g. ``"fade_in"``).
         start: First frame of the range.
         end: Last frame of the range.
         attrs: If given, only key these attributes. Otherwise key all
@@ -140,10 +152,24 @@ def apply_behavior(
 
     template = load_behavior(behavior_name, search_path)
     node = pm.PyNode(obj)
+    has_opacity = node.hasAttr("opacity")
 
     for attr_name, attr_def in template.get("attributes", {}).items():
         if attrs and attr_name not in attrs:
             continue
+
+        # Determine target attribute and whether to mirror to visibility.
+        # When the template targets visibility and the object has opacity,
+        # key opacity instead (smooth channel) and mirror to visibility
+        # (so FBX contains a real visibility curve for game engines).
+        target_attr = attr_name
+        mirror_to_vis = False
+
+        if attr_name == "visibility" and has_opacity:
+            target_attr = "opacity"
+            mirror_to_vis = True
+        elif attr_name == "opacity" and has_opacity:
+            mirror_to_vis = True
 
         for phase in ("in", "out"):
             block = attr_def.get(phase)
@@ -159,12 +185,23 @@ def apply_behavior(
             for k in keys:
                 pm.setKeyframe(
                     node,
-                    attribute=attr_name,
+                    attribute=target_attr,
                     time=k["time"],
                     value=k["value"],
                     inTangentType=k["tangent"],
                     outTangentType=k["tangent"],
                 )
+                # Mirror: set a matching visibility keyframe so FBX
+                # export produces a real visibility animation curve.
+                if mirror_to_vis:
+                    pm.setKeyframe(
+                        node,
+                        attribute="visibility",
+                        time=k["time"],
+                        value=k["value"],
+                        inTangentType=k["tangent"],
+                        outTangentType=k["tangent"],
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +273,14 @@ def compute_duration(
 ) -> float:
     """Derive duration from the behavior templates referenced in *behavior_entries*.
 
-    For each entry with a ``"behavior"`` key, the template's phase
-    durations are summed (``in`` + ``out``).  The result is the maximum
-    across all entries.
+    For each entry, the durations of all its behaviors are summed
+    (since all get applied to the same object).  The result is the
+    maximum across all entries.
 
     Parameters:
-        behavior_entries: List of dicts with at least a ``"behavior"``
-            key (e.g. shot metadata entries or ``BuilderObject``-like
-            objects with a ``.behavior`` attribute).
+        behavior_entries: List of dicts with a ``"behavior"``
+            key, or ``BuilderObject``-like objects with a
+            ``.behaviors`` list attribute.
         fallback: Duration when no behavior-driven duration exists.
 
     Returns:
@@ -252,26 +289,28 @@ def compute_duration(
     max_dur = 0.0
     has_any = False
     for entry in behavior_entries:
-        behavior = (
-            entry.get("behavior", "")
-            if isinstance(entry, dict)
-            else getattr(entry, "behavior", "")
-        )
-        if not behavior:
-            continue
-        try:
-            tmpl = load_behavior(behavior)
-        except FileNotFoundError:
-            continue
-        has_any = True
-        total = 0.0
-        for _attr_name, attr_def in tmpl.get("attributes", {}).items():
-            for phase in ("in", "out"):
-                block = attr_def.get(phase)
-                if block:
-                    total += block.get("duration", 0)
-        if total > max_dur:
-            max_dur = total
+        # Support both dict format {"behavior": "name"} and
+        # BuilderObject with .behaviors list
+        if isinstance(entry, dict):
+            behaviors = [entry.get("behavior", "")]
+        else:
+            behaviors = getattr(entry, "behaviors", [])
+        obj_total = 0.0
+        for behavior in behaviors:
+            if not behavior:
+                continue
+            try:
+                tmpl = load_behavior(behavior)
+            except FileNotFoundError:
+                continue
+            has_any = True
+            for _attr_name, attr_def in tmpl.get("attributes", {}).items():
+                for phase in ("in", "out"):
+                    block = attr_def.get(phase)
+                    if block:
+                        obj_total += block.get("duration", 0)
+        if obj_total > max_dur:
+            max_dur = obj_total
     if not has_any:
         return fallback
     return max_dur

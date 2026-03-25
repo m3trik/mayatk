@@ -13,7 +13,7 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>7</number>
+     <number>6</number>
     </property>
     <property name="leftMargin">
      <number>6</number>
@@ -53,57 +53,64 @@
      </widget>
     </item>
     <item>
-     <widget class="QGroupBox" name="shots">
-      <property name="maximumSize">
-       <size>
-        <width>16777215</width>
-        <height>40</height>
-       </size>
+     <layout class="QHBoxLayout" name="shots_layout">
+      <property name="spacing">
+       <number>1</number>
       </property>
-      <property name="title">
-       <string/>
-      </property>
-      <layout class="QHBoxLayout" name="horizontalLayout">
-       <property name="spacing">
-        <number>1</number>
-       </property>
-       <property name="leftMargin">
-        <number>0</number>
-       </property>
-       <property name="topMargin">
-        <number>0</number>
-       </property>
-       <property name="rightMargin">
-        <number>0</number>
-       </property>
-       <property name="bottomMargin">
-        <number>0</number>
-       </property>
-       <item>
-        <widget class="QLabel" name="lbl_cmb_mode">
-         <property name="text">
-          <string>Shots:</string>
-         </property>
-         <property name="alignment">
-          <set>Qt::AlignRight|Qt::AlignVCenter</set>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="ComboBox" name="cmb_shot">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-           <horstretch>1</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </widget>
+      <item>
+       <widget class="QLabel" name="lbl_cmb_mode">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="text">
+         <string>Shots:</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_shot">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>20</height>
+         </size>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </item>
     <item>
      <widget class="SequencerWidget" name="sequencer_widget">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="minimumSize">
        <size>
         <width>0</width>
@@ -146,15 +153,15 @@
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
    <class>SequencerWidget</class>
    <extends>QSplitter</extends>
    <header>uitk.widgets.sequencer._sequencer</header>
    <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>ComboBox</class>
-   <extends>QComboBox</extends>
-   <header>uitk.widgets.comboBox</header>
   </customwidget>
  </customwidgets>
  <resources/>

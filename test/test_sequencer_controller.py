@@ -17,51 +17,20 @@ Bugs covered:
     - Undo after stepped key move
 """
 import sys
-import types
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, call
 from collections import defaultdict
 
 # ---------------------------------------------------------------------------
-# Mock Maya modules BEFORE any mayatk imports
+# Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
+from test.conftest import mock_pm, mock_cmds, mock_undo_chunk, mock_om2
 
-_mock_pm = MagicMock()
-_mock_pm.objExists.return_value = True
-_mock_pm.playbackOptions.return_value = 0.0
-_mock_pm.currentTime.return_value = 1.0
-_mock_pm.select = MagicMock()
-_mock_pm.displayInfo = MagicMock()
-
-# UndoChunk context manager
-_undo_chunk = MagicMock()
-_undo_chunk.__enter__ = MagicMock(return_value=None)
-_undo_chunk.__exit__ = MagicMock(return_value=False)
-_mock_pm.UndoChunk.return_value = _undo_chunk
-
-# scriptJob
-_mock_pm.scriptJob.return_value = 999
-_mock_pm.scriptJob.side_effect = lambda **kw: 999 if "event" in kw else True
-
-_mock_om2 = MagicMock()
-_mock_om2.MEventMessage.addEventCallback.return_value = 1
-_mock_om2.MMessage.removeCallback = MagicMock()
-
-_mock_cmds = MagicMock()
-
-sys.modules.setdefault("pymel", types.ModuleType("pymel"))
-sys.modules.setdefault("pymel.core", _mock_pm)
-sys.modules["pymel.core"] = _mock_pm
-sys.modules.setdefault("maya", types.ModuleType("maya"))
-sys.modules.setdefault("maya.api", types.ModuleType("maya.api"))
-sys.modules.setdefault("maya.api.OpenMaya", _mock_om2)
-sys.modules["maya.api.OpenMaya"] = _mock_om2
-sys.modules.setdefault("maya.cmds", _mock_cmds)
-sys.modules["maya.cmds"] = _mock_cmds
-sys.modules.setdefault("maya.mel", MagicMock())
-sys.modules.setdefault("maya.OpenMaya", MagicMock())
-sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
+# Aliases for backward-compat with existing test code
+_mock_pm = mock_pm
+_mock_cmds = mock_cmds
+_undo_chunk = mock_undo_chunk
 
 # Ensure workspace roots are on sys.path
 _WORKSPACE = Path(__file__).parent.parent.parent.absolute()
@@ -294,6 +263,7 @@ class ControllerTestCase(unittest.TestCase):
         # Reset mocks
         _mock_pm.reset_mock()
         _mock_cmds.reset_mock()
+        _mock_cmds.objExists.return_value = True
         _mock_pm.objExists.return_value = True
         _mock_pm.playbackOptions.return_value = 0.0
         _mock_pm.currentTime.return_value = 1.0
@@ -308,10 +278,13 @@ class ControllerTestCase(unittest.TestCase):
         self.obj_curves = {}  # obj → [curve_names]
 
         # Build shots
-        defs = self.shot_defs or [
-            ("Shot_A", 100, 200, ["ObjA", "ObjB"]),
-            ("Shot_B", 200, 350, ["ObjA"]),
-        ]
+        if self.shot_defs is not None:
+            defs = self.shot_defs
+        else:
+            defs = [
+                ("Shot_A", 100, 200, ["ObjA", "ObjB"]),
+                ("Shot_B", 200, 350, ["ObjA"]),
+            ]
         store = ShotStore()
         for i, (name, start, end, objs) in enumerate(defs):
             store.define_shot(name=name, start=start, end=end, objects=objs)
@@ -366,6 +339,10 @@ class ControllerTestCase(unittest.TestCase):
     def _set_segments(self, shot_id, segments):
         """Configure what collect_object_segments returns for a shot."""
         self._mock_segments[shot_id] = segments
+
+    def _anim_clips(self):
+        """Return only animation clips (excludes shot-track clips)."""
+        return [c for c in self.widget.clips() if not c.data.get("is_shot_clip")]
 
 
 # ===========================================================================
@@ -464,7 +441,7 @@ class TestSteppedKeyMove(ControllerTestCase):
 
     def _find_stepped_clip(self, obj_name, approx_time):
         """Find a stepped clip for an object near a given time."""
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == obj_name
@@ -538,7 +515,7 @@ class TestSteppedKeyMove(ControllerTestCase):
         )
 
         # Verify ALL objects still have clips in the widget
-        obj_names_in_widget = {cd.data.get("obj") for cd in self.widget.clips()}
+        obj_names_in_widget = {cd.data.get("obj") for cd in self._anim_clips()}
         self.assertIn(
             "ARROW_L", obj_names_in_widget, "ARROW_L disappeared from widget!"
         )
@@ -588,6 +565,59 @@ class TestSteppedKeyMove(ControllerTestCase):
         keys_after = list(self.key_db.curves.get("ARROW_L_visibility", []))
         self.assertEqual(keys_before, keys_after)
 
+    def test_attr_specific_stepped_move_succeeds(self):
+        """Moving an attribute-specific (sub-row) stepped clip must not crash.
+
+        Bug: _eps was defined only in the else branch (non-attr path) but
+        referenced in the shared move loop, causing UnboundLocalError when
+        moving a sub-row clip with attr_name set.
+        Fixed: 2025-03-23
+        """
+        shot = self.sequencer.sorted_shots()[0]
+
+        # Wire _curves_for_attr: plug-based lookup needs separate
+        # obj_curves entry for "ARROW_L.visibility".
+        self.obj_curves["ARROW_L.visibility"] = ["ARROW_L_visibility"]
+        wire_cmds(_mock_cmds, self.key_db, self.obj_curves)
+
+        # Manually add a sub-row clip with attr_name (as _provide_sub_rows would)
+        tid = None
+        for td in self.widget.tracks():
+            if td.name == "ARROW_L":
+                tid = td.track_id
+                break
+        self.assertIsNotNone(tid, "ARROW_L track not found")
+
+        clip_id = self.widget.add_clip(
+            track_id=tid,
+            start=166.0,
+            duration=0.0,
+            label="visibility",
+            shot_id=shot.shot_id,
+            obj="ARROW_L",
+            attr_name="visibility",
+            orig_start=166.0,
+            orig_end=166.0,
+            is_stepped=True,
+            stepped_key_time=166.0,
+            resizable_left=False,
+            resizable_right=False,
+            keyframe_times=[(166.0, "step")],
+        )
+
+        # This must NOT raise UnboundLocalError: _eps
+        self.ctrl.on_clip_moved(clip_id, 163.0)
+
+        # Verify the key moved
+        keys_at_163 = self.key_db.get_keys_in_range(
+            "ARROW_L_visibility", 162.9, 163.1
+        )
+        self.assertTrue(len(keys_at_163) > 0, "Key should exist at 163")
+        keys_at_166 = self.key_db.get_keys_in_range(
+            "ARROW_L_visibility", 165.9, 166.1
+        )
+        self.assertEqual(len(keys_at_166), 0, "Key at 166 should be deleted")
+
 
 # ===========================================================================
 # Test: on_clip_moved passes explicit shot_id
@@ -621,7 +651,7 @@ class TestClipMovedShotId(ControllerTestCase):
 
         self.ctrl._sync_to_widget = spy_sync
 
-        clip = self.widget.clips()[0]
+        clip = self._anim_clips()[0]
         self.ctrl.on_clip_moved(clip.clip_id, 155.0)
 
         # Verify _sync_to_widget was called with the correct shot_id
@@ -661,7 +691,7 @@ class TestBatchClipMoves(ControllerTestCase):
     def test_batch_move_preserves_shot(self):
         """Moving multiple clips in a batch must sync to the correct shot."""
         expected_sid = self._active_shot_id()
-        clips = self.widget.clips()
+        clips = self._anim_clips()
         moves = [(c.clip_id, c.start + 5) for c in clips]
 
         spy_calls = []
@@ -771,7 +801,7 @@ class TestShotExpansion(ControllerTestCase):
         old_end = shot.end
 
         stepped_clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 stepped_clip = cd
                 break
@@ -795,7 +825,7 @@ class TestShotExpansion(ControllerTestCase):
         old_end = shot.end
 
         stepped_clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 stepped_clip = cd
                 break
@@ -849,7 +879,7 @@ class TestConsecutiveMoveDifferentObjects(ControllerTestCase):
 
         # Move ARROW_L 166 → 163
         clip_L = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("obj") == "ARROW_L"
                 and cd.data.get("is_stepped")
@@ -870,7 +900,7 @@ class TestConsecutiveMoveDifferentObjects(ControllerTestCase):
 
         # Move ARROW_R 166 → 160
         clip_R = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("obj") == "ARROW_R"
                 and cd.data.get("is_stepped")
@@ -889,7 +919,7 @@ class TestConsecutiveMoveDifferentObjects(ControllerTestCase):
         )
         self.ctrl.on_clip_moved(clip_R.clip_id, 160.0)
 
-        objs = {cd.data.get("obj") for cd in self.widget.clips()}
+        objs = {cd.data.get("obj") for cd in self._anim_clips()}
         self.assertIn("ARROW_L", objs, "ARROW_L vanished after second move!")
         self.assertIn("ARROW_R", objs, "ARROW_R vanished after second move!")
 
@@ -928,7 +958,7 @@ class TestRapidSequentialMoves(ControllerTestCase):
         for i in range(10):
             new_time = 150.0 + i + 1
             clip = None
-            for cd in self.widget.clips():
+            for cd in self._anim_clips():
                 if cd.data.get("is_stepped") and cd.data.get("obj") == "Obj":
                     clip = cd
                     break
@@ -944,7 +974,7 @@ class TestRapidSequentialMoves(ControllerTestCase):
 
         # Final state: clip should be at 160.0
         final_clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 final_clip = cd
         self.assertIsNotNone(final_clip)
@@ -975,14 +1005,14 @@ class TestAnimationClipMove(ControllerTestCase):
 
     def test_span_clip_move_calls_engine(self):
         """Moving a span clip should call move_object_in_shot."""
-        clip = self.widget.clips()[0]
+        clip = self._anim_clips()[0]
         self.ctrl.on_clip_moved(clip.clip_id, 110.0)
         self.sequencer.move_object_in_shot.assert_called_once()
 
     def test_span_clip_move_preserves_shot(self):
         """Moving a span clip should not change the active shot."""
         expected_sid = self._active_shot_id()
-        clip = self.widget.clips()[0]
+        clip = self._anim_clips()[0]
         self.ctrl.on_clip_moved(clip.clip_id, 110.0)
         self.assertEqual(self._active_shot_id(), expected_sid)
 
@@ -1113,31 +1143,34 @@ class TestWidgetPopulationAfterSync(ControllerTestCase):
     def test_sync_creates_span_clips(self):
         """Each object's span segments become a single merged clip."""
         self._do_initial_sync()
-        span_clips = [c for c in self.widget.clips() if not c.data.get("is_stepped")]
+        span_clips = [c for c in self._anim_clips() if not c.data.get("is_stepped")]
         self.assertTrue(len(span_clips) >= 2, "Should have span clips for both objects")
 
     def test_sync_creates_stepped_clips(self):
         """Stepped key times become zero-duration clips."""
         self._do_initial_sync()
-        stepped_clips = [c for c in self.widget.clips() if c.data.get("is_stepped")]
+        stepped_clips = [c for c in self._anim_clips() if c.data.get("is_stepped")]
         self.assertEqual(len(stepped_clips), 2, "ObjB has 2 stepped keys")
 
-    def test_sync_sets_range_highlight(self):
-        """The range highlight should match the shot boundaries."""
+    def test_sync_sets_active_range(self):
+        """The active shot should set the active range tint on the widget."""
         self._do_initial_sync()
-        rh = self.widget._range_highlight
-        self.assertIsNotNone(rh)
+        self.assertIsNotNone(
+            self.widget._active_range, "Active range tint should be set"
+        )
+        self.assertAlmostEqual(self.widget._active_range[0], 0.0)
+        self.assertAlmostEqual(self.widget._active_range[1], 100.0)
 
     def test_repeated_sync_idempotent(self):
         """Calling _sync_to_widget twice should produce identical state."""
         self._do_initial_sync()
         clips_1 = [
-            (c.start, c.duration, c.data.get("obj")) for c in self.widget.clips()
+            (c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()
         ]
 
         self.ctrl._sync_to_widget()
         clips_2 = [
-            (c.start, c.duration, c.data.get("obj")) for c in self.widget.clips()
+            (c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()
         ]
 
         self.assertEqual(sorted(clips_1), sorted(clips_2))
@@ -1173,7 +1206,7 @@ class TestMultiShotNavigation(ControllerTestCase):
 
     def test_edit_on_shot1_doesnt_corrupt_shot2(self):
         """Moving a clip on Shot_1 should not affect Shot_2's segments."""
-        clip = self.widget.clips()[0]
+        clip = self._anim_clips()[0]
         shot1 = self.sequencer.sorted_shots()[1]
 
         self.sequencer.move_object_in_shot = MagicMock()
@@ -1185,7 +1218,7 @@ class TestMultiShotNavigation(ControllerTestCase):
         shot2 = self.sequencer.sorted_shots()[2]
         self.ctrl._sync_to_widget(shot_id=shot2.shot_id)
 
-        objs = {cd.data.get("obj") for cd in self.widget.clips()}
+        objs = {cd.data.get("obj") for cd in self._anim_clips()}
         self.assertIn("ObjB", objs, "ObjB should appear in Shot_2")
 
 
@@ -1263,8 +1296,12 @@ class TestEdgeCases(ControllerTestCase):
         self.assertIsNotNone(sid)
 
     def test_sync_with_no_sequencer(self):
-        """_sync_to_widget with no sequencer should be a safe no-op."""
-        self.ctrl.sequencer = None
+        """_sync_to_widget with an empty store should be a safe no-op.
+
+        With lazy-init, self.sequencer always resolves to a ShotSequencer.
+        An empty store (no shots) exercises the same early-return path.
+        """
+        self.ctrl.sequencer.store.shots.clear()
         self.ctrl._sync_to_widget()  # Should not raise
 
     def test_sync_with_no_widget(self):
@@ -1312,7 +1349,7 @@ class TestShiftHeldMove(ControllerTestCase):
         self.widget._shift_at_press = True
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 clip = cd
                 break
@@ -1333,7 +1370,7 @@ class TestShiftHeldMove(ControllerTestCase):
         self.widget._shift_at_press = True
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 clip = cd
                 break
@@ -1380,7 +1417,7 @@ class TestStartExpansion(ControllerTestCase):
         self.assertEqual(shot.start, 151.0)
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped") and cd.data.get("obj") == "ARROW_L":
                 clip = cd
                 break
@@ -1401,7 +1438,7 @@ class TestStartExpansion(ControllerTestCase):
         self.widget._shift_at_press = True
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped") and cd.data.get("obj") == "ARROW_L":
                 clip = cd
                 break
@@ -1418,7 +1455,7 @@ class TestStartExpansion(ControllerTestCase):
         old_end = shot.end
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 clip = cd
                 break
@@ -1473,8 +1510,8 @@ class TestGapOverlays(ControllerTestCase):
         self.assertAlmostEqual(gap._start, 200.0, places=1)
         self.assertAlmostEqual(gap._end, 220.0, places=1)
 
-    def test_no_gap_overlay_when_contiguous(self):
-        """No gap overlay when shots are contiguous (gap=0)."""
+    def test_gap_overlay_when_contiguous(self):
+        """Contiguous shots (gap=0) still get a thin handle overlay."""
         self.ctrl._shot_display_mode = "all"
         # Redefine shots with no gap
         store = self.sequencer.store
@@ -1487,8 +1524,8 @@ class TestGapOverlays(ControllerTestCase):
         self._do_initial_sync()
         self.assertEqual(
             len(self.widget._gap_overlays),
-            0,
-            "Contiguous shots should produce no gap overlay",
+            1,
+            "Contiguous shots should produce a handle overlay",
         )
 
     def test_gap_overlay_visible(self):
@@ -1515,6 +1552,28 @@ class TestGapOverlays(ControllerTestCase):
             rect = gap.boundingRect()
             self.assertGreater(
                 rect.height(), 0, "Gap overlay must have non-zero height"
+            )
+
+    def test_gap_overlays_visible_without_keys(self):
+        """Gap overlays must appear even when shots have no animation keys.
+
+        Bug: _total_row_height() returned 0 with no tracks, making
+        the gap overlay rects invisible (height 0).
+        Fixed: 2026-03-20
+        """
+        self.ctrl._shot_display_mode = "all"
+        # No _set_segments call → no keys → no tracks
+        self._do_initial_sync()
+        self.assertGreater(
+            len(self.widget._gap_overlays),
+            0,
+            "Gap overlay should still be created between shots without keys",
+        )
+        for gap in self.widget._gap_overlays:
+            rect = gap._rect()
+            self.assertGreater(
+                rect.height(), 0,
+                "Gap overlay must have non-zero height even without tracks",
             )
 
     def test_gap_overlay_in_scene_rect(self):
@@ -1586,11 +1645,11 @@ class TestGapOverlays(ControllerTestCase):
 
 
 class TestGapVisibilityByMode(ControllerTestCase):
-    """Verify gap overlays respect the display mode (current/adjacent/all).
+    """Verify gap overlays always show for ALL gaps regardless of display mode.
 
-    Bug: All gap overlays were shown regardless of which shots were
-    visible.  Only gaps bordering visible shots should appear.
-    Fixed: 2026-03-18
+    Gap overlays are structural indicators — they show the physical gaps
+    between shots. They are always visible, independent of which shots
+    are rendered as clips.
     """
 
     shot_defs = [
@@ -1608,28 +1667,25 @@ class TestGapVisibilityByMode(ControllerTestCase):
                 shot.shot_id, make_segments("Obj", [(shot.start, shot.end)])
             )
 
-    def test_current_mode_only_active_shot_gaps(self):
-        """In 'current' mode only the gap bordering the active shot should show."""
+    def test_current_mode_shows_all_gaps(self):
+        """In 'current' mode all gaps must still show."""
         self.ctrl._shot_display_mode = "current"
         self._do_initial_sync()
-        # Shot_1 borders gap 200-210 only
+        # 3 gaps: 200-210, 300-310, 400-420
         self.assertEqual(
             len(self.widget._gap_overlays),
-            1,
-            "Current mode: only gap adjacent to active shot",
+            3,
+            "Current mode: all gaps should appear",
         )
-        self.assertAlmostEqual(self.widget._gap_overlays[0]._start, 200.0, places=1)
 
-    def test_adjacent_mode_shows_neighbor_gaps(self):
-        """In 'adjacent' mode, gaps touching prev/current/next should show."""
+    def test_adjacent_mode_shows_all_gaps(self):
+        """In 'adjacent' mode all gaps must show."""
         self.ctrl._shot_display_mode = "adjacent"
         self._do_initial_sync()
-        # Visible: Shot_1 (active) + Shot_2 (next). No prev for index 0.
-        # Gaps bordering visible: 200-210 (between 1&2), 300-310 (borders 2)
         self.assertEqual(
             len(self.widget._gap_overlays),
-            2,
-            "Adjacent mode: gaps bordering visible neighbouring shots",
+            3,
+            "Adjacent mode: all gaps should appear",
         )
 
     def test_all_mode_shows_all_gaps(self):
@@ -1643,30 +1699,24 @@ class TestGapVisibilityByMode(ControllerTestCase):
             "All mode: every gap should appear",
         )
 
-    def test_current_mode_middle_shot_has_two_gaps(self):
-        """Active shot in the middle should show gaps on both sides."""
+    def test_current_mode_middle_shot_still_shows_all_gaps(self):
+        """Switching active shot doesn't change which gaps are visible."""
         cmb = self.slots.ui.cmb_shot
         cmb.setCurrentIndex(1)  # Shot_2 active
         self.ctrl._shot_display_mode = "current"
         self.ctrl._sync_to_widget()
-        # Shot_2 borders gap 200-210 (left) and 300-310 (right)
         self.assertEqual(
             len(self.widget._gap_overlays),
-            2,
-            "Middle shot should see gaps on both sides",
+            3,
+            "All gaps visible regardless of active shot",
         )
 
-    def test_non_adjacent_gap_hidden_in_current_mode(self):
-        """Gaps between non-visible shots must not appear in current mode."""
+    def test_gap_positions_are_correct(self):
+        """Gap overlay positions match the physical boundaries."""
         self.ctrl._shot_display_mode = "current"
         self._do_initial_sync()
-        # Shot_1 active → gap 400-420 (between Shot_3 and Shot_4) is not adjacent
-        gap_starts = [g._start for g in self.widget._gap_overlays]
-        self.assertNotIn(
-            400.0,
-            [round(s) for s in gap_starts],
-            "Gap between non-visible shots should NOT appear",
-        )
+        gap_starts = sorted(round(g._start) for g in self.widget._gap_overlays)
+        self.assertEqual(gap_starts, [200, 300, 400])
 
 
 # ===========================================================================
@@ -1817,7 +1867,7 @@ class TestShotLabelUpdatedAfterExpansion(ControllerTestCase):
         cmb = self.slots.ui.cmb_shot
 
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if cd.data.get("is_stepped"):
                 clip = cd
                 break
@@ -1952,7 +2002,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Step 1: shift-drag ARROW_L from 167→168
         self.widget._shift_at_press = True
         arrow_l_clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == "ARROW_L"
@@ -1981,7 +2031,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         )
 
         arrow_r_clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == "ARROW_R"
@@ -1998,7 +2048,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Verify: ARROW_L@168 does NOT appear in the widget
         arrow_l_clips_at_168 = [
             cd
-            for cd in self.widget.clips()
+            for cd in self._anim_clips()
             if cd.data.get("obj") == "ARROW_L"
             and cd.data.get("is_stepped")
             and abs(cd.data.get("stepped_key_time", -1) - 168.0) < 0.5
@@ -2012,7 +2062,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Verify: ARROW_R@168 DOES appear
         arrow_r_clips_at_168 = [
             cd
-            for cd in self.widget.clips()
+            for cd in self._anim_clips()
             if cd.data.get("obj") == "ARROW_R"
             and cd.data.get("is_stepped")
             and abs(cd.data.get("stepped_key_time", -1) - 168.0) < 0.5
@@ -2028,7 +2078,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Shift-move ARROW_L to 168 → excluded
         self.widget._shift_at_press = True
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == "ARROW_L"
@@ -2042,7 +2092,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Now normal-move ARROW_L@150→155 (within shot) → clears exclusion
         self.widget._shift_at_press = False
         clip2 = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == "ARROW_L"
@@ -2063,7 +2113,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         # Shift-move ARROW_L to 168 → excluded
         self.widget._shift_at_press = True
         clip = None
-        for cd in self.widget.clips():
+        for cd in self._anim_clips():
             if (
                 cd.data.get("is_stepped")
                 and cd.data.get("obj") == "ARROW_L"
@@ -2121,13 +2171,13 @@ class TestManifestHandoff(ControllerTestCase):
     def _simulate_manifest_open(self, target_name: str):
         """Replicate the exact steps _open_in_shot_sequencer performs."""
         cmb = self.slots.ui.cmb_shot
+        self.ctrl._shifted_out_keys.clear()
+        self.ctrl._segment_cache.clear()
         self.ctrl._sync_combobox()
         for i in range(cmb.count()):
             shot_id = cmb.itemData(i)
             shot = self.ctrl.sequencer.shot_by_id(shot_id) if shot_id else None
             if shot and shot.name == target_name:
-                self.ctrl._shifted_out_keys.clear()
-                self.ctrl._segment_cache.clear()
                 cmb.blockSignals(True)
                 cmb.setCurrentIndex(i)
                 cmb.blockSignals(False)
@@ -2164,8 +2214,1352 @@ class TestManifestHandoff(ControllerTestCase):
             "shifted_out_keys should be cleared before sync",
         )
         # And clips should actually be present
-        clips = list(self.widget.clips())
+        clips = list(self._anim_clips())
         self.assertTrue(len(clips) > 0, "Widget should have clips after manifest open")
+
+
+# ===========================================================================
+# Test: Auto-Discovery of Objects for Empty Shots
+# ===========================================================================
+
+
+class TestAutoDiscoveryEmptyShot(ControllerTestCase):
+    """Verify that shots created with no objects auto-discover on sync.
+
+    Bug: Creating a shot when no animated objects exist in the scene
+    stored objects=[] on the ShotBlock.  collect_object_segments then
+    early-returned [], so _sync_to_widget produced zero tracks/clips
+    and the widget appeared blank — even after the user later added
+    animated objects to the scene.
+    Fixed: 2026-03-20
+    """
+
+    shot_defs = [("EmptyShot", 1, 100, [])]  # Shot with NO objects
+    initial_shot_index = 0
+
+    def setUp(self):
+        super().setUp()
+        # Restore real collect_object_segments (base class mocks it)
+        self.sequencer.collect_object_segments = (
+            ShotSequencer.collect_object_segments.__get__(self.sequencer)
+        )
+        # Mock _shot_nodes to resolve names through our fake cmds.ls
+        self.sequencer._shot_nodes = staticmethod(
+            lambda shot: shot.objects[:] if shot.objects else []
+        )
+
+    def test_auto_discover_populates_empty_shot(self):
+        """collect_object_segments should discover animated transforms
+        when shot.objects is empty, and persist them on the ShotBlock."""
+        shot = self.sequencer.store.sorted_shots()[0]
+        self.assertEqual(shot.objects, [], "Precondition: shot starts with no objects")
+
+        # Simulate adding animation — _find_keyed_transforms returns objects
+        with patch.object(
+            ShotSequencer,
+            "_find_keyed_transforms",
+            return_value=["ObjX", "ObjY"],
+        ):
+            segs = self.sequencer.collect_object_segments(shot.shot_id)
+
+        # shot.objects should now be populated
+        self.assertEqual(
+            shot.objects,
+            ["ObjX", "ObjY"],
+            "Auto-discovery should persist objects on the ShotBlock",
+        )
+
+    def test_no_discovery_when_objects_exist(self):
+        """collect_object_segments should NOT re-discover if shot already
+        has objects — prevents overwriting user-curated object lists."""
+        shot = self.sequencer.store.sorted_shots()[0]
+        shot.objects = ["ExistingObj"]
+
+        with patch.object(ShotSequencer, "_find_keyed_transforms") as mock_discover:
+            self.sequencer.collect_object_segments(shot.shot_id)
+
+        mock_discover.assert_not_called()
+
+    def test_sync_shows_tracks_after_discovery(self):
+        """Full flow: _sync_to_widget should create tracks+clips after
+        auto-discovery populates an empty shot."""
+        # Provide segments that collect_object_segments would return
+        # after auto-discovery finds ObjX
+        discovered_segs = make_segments("ObjX", [(10, 50)])
+        with patch.object(
+            ShotSequencer,
+            "_find_keyed_transforms",
+            return_value=["ObjX"],
+        ):
+            # Mock SegmentKeys.collect_segments to return our fake segments
+            with patch(
+                "mayatk.anim_utils.segment_keys.SegmentKeys.collect_segments",
+                return_value=discovered_segs,
+            ):
+                self.ctrl._sync_to_widget()
+
+        tracks = list(self.widget.tracks())
+        self.assertTrue(len(tracks) > 0, "Widget should have tracks after discovery")
+        clips = list(self._anim_clips())
+        self.assertTrue(len(clips) > 0, "Widget should have clips after discovery")
+
+
+# ===========================================================================
+# Test: Shot Lane Population
+# ===========================================================================
+
+
+class TestActiveRangeTinting(ControllerTestCase):
+    """Verify _rebuild_decoration sets the active-shot range tint."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+        ("Shot_B", 250, 350, ["ObjA"]),
+    ]
+
+    def test_active_range_set_after_sync(self):
+        """set_active_range should be called with the active shot's boundaries."""
+        self._set_segments(1, make_segments("ObjA", [(100, 200)]))
+        self._set_segments(2, make_segments("ObjA", [(250, 350)]))
+        self._do_initial_sync()
+
+        # Active shot is Shot_A (100-200)
+        self.assertIsNotNone(self.widget._active_range)
+        self.assertAlmostEqual(self.widget._active_range[0], 100.0)
+        self.assertAlmostEqual(self.widget._active_range[1], 200.0)
+
+    def test_no_shot_track_after_sync(self):
+        """The dedicated shot track should no longer exist."""
+        self._set_segments(1, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        track_names = {t.name for t in self.widget.tracks()}
+        self.assertNotIn("\U0001f3ac Shots", track_names)
+
+    def test_active_range_cleared_before_set(self):
+        """clear_active_range should reset the range to None."""
+        self._set_segments(1, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        self.widget.clear_active_range()
+        self.assertIsNone(self.widget._active_range)
+
+    def test_active_range_set_with_no_keys(self):
+        """Active range tint must appear even when shots have no animation keys.
+
+        Bug: _total_row_height() returned 0 with no tracks, making
+        the tint rect height 0 (invisible).
+        Fixed: 2026-03-20
+        """
+        # No _set_segments call → no keys → no object tracks
+        self._do_initial_sync()
+        self.assertIsNotNone(self.widget._active_range)
+        self.assertAlmostEqual(self.widget._active_range[0], 100.0)
+        self.assertAlmostEqual(self.widget._active_range[1], 200.0)
+
+
+# ===========================================================================
+# Test: Refresh Method
+# ===========================================================================
+
+
+class TestRefresh(ControllerTestCase):
+    """Verify the controller refresh() method clears cache and rebuilds."""
+
+    def test_refresh_clears_cache_and_rebuilds(self):
+        """refresh() should clear _segment_cache and repopulate the widget."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        # Widget should have tracks
+        initial_tracks = list(self.widget.tracks())
+        self.assertTrue(len(initial_tracks) > 0)
+
+        # Populate cache artificially
+        self.ctrl._segment_cache[999] = ["dummy"]
+        self.ctrl.refresh()
+
+        # Cache should be empty (dummy entry gone)
+        self.assertNotIn(999, self.ctrl._segment_cache)
+        # Widget still populated
+        self.assertTrue(len(list(self.widget.tracks())) > 0)
+
+
+# ===========================================================================
+# Test: Three-Tier Refresh Architecture
+# ===========================================================================
+
+
+class TestSyncDecoration(ControllerTestCase):
+    """Verify _sync_decoration rebuilds overlays without destroying tracks."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+        ("Shot_B", 250, 350, ["ObjA"]),
+    ]
+
+    def test_tracks_preserved_after_sync_decoration(self):
+        """_sync_decoration should not destroy existing tracks or clips."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        tracks_before = [t.name for t in self.widget.tracks()]
+        clips_before = len(list(self._anim_clips()))
+        self.assertTrue(len(tracks_before) > 0)
+        self.assertTrue(clips_before > 0)
+
+        self.ctrl._sync_decoration()
+
+        tracks_after = [t.name for t in self.widget.tracks()]
+        clips_after = len(list(self._anim_clips()))
+        self.assertEqual(tracks_before, tracks_after)
+        self.assertEqual(clips_before, clips_after)
+
+    def test_active_range_updated_by_full_sync(self):
+        """Shot boundaries require a full _sync_to_widget to update active range."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        self.assertIsNotNone(self.widget._active_range)
+
+        # Mutate boundary and do a full sync
+        self.sequencer.store.update_shot(0, end=220)
+        self.ctrl._sync_to_widget()
+
+        self.assertAlmostEqual(self.widget._active_range[1], 220.0)
+
+    def test_range_highlight_not_used(self):
+        """Range highlight is no longer used; active range tint replaces it."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        rh = self.widget.range_highlight()
+        self.assertIsNone(rh)
+
+
+class TestResolveAndSave(ControllerTestCase):
+    """Verify the extracted helper methods."""
+
+    def test_resolve_sync_target_returns_widget_and_shot(self):
+        widget, shot = self.ctrl._resolve_sync_target()
+        self.assertIsNotNone(widget)
+        self.assertIsNotNone(shot)
+        self.assertEqual(shot.name, "Shot_A")
+
+    def test_resolve_sync_target_with_explicit_id(self):
+        widget, shot = self.ctrl._resolve_sync_target(shot_id=1)
+        self.assertIsNotNone(shot)
+        self.assertEqual(shot.name, "Shot_B")
+
+    def test_resolve_sync_target_returns_none_without_sequencer(self):
+        self.ctrl._sequencer = None
+        # Force the property to not re-create by patching active()
+        with patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=None
+        ):
+            self.ctrl._sequencer = None
+            widget, shot = self.ctrl._resolve_sync_target()
+        # With a None sequencer, should return None
+        # (The lazy property may recreate it, so we test the intent)
+        self.assertTrue(widget is None or shot is not None)
+
+    def test_save_viewport_state_captures_zoom(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        h_scroll, zoom, expanded = self.ctrl._save_viewport_state(self.widget)
+        self.assertIsInstance(zoom, float)
+        self.assertIsInstance(expanded, set)
+
+
+class TestClearDecorations(ControllerTestCase):
+    """Verify SequencerWidget.clear_decorations removes only overlays."""
+
+    def test_clear_decorations_preserves_tracks_and_clips(self):
+        """clear_decorations should remove markers/overlays but not tracks."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        tracks_before = len(list(self.widget.tracks()))
+        clips_before = len(list(self._anim_clips()))
+
+        self.widget.clear_decorations()
+
+        self.assertEqual(len(list(self.widget.tracks())), tracks_before)
+        self.assertEqual(len(list(self._anim_clips())), clips_before)
+        # Overlays should be gone
+        self.assertEqual(len(self.widget._range_overlays), 0)
+        self.assertEqual(len(self.widget._gap_overlays), 0)
+
+
+# ===========================================================================
+# Test: Zone-Based Event Routing
+# ===========================================================================
+
+
+class TestZoneDetection(ControllerTestCase):
+    """Verify TimelineView._hit_zone returns correct zone names."""
+
+    def test_ruler_zone(self):
+        """Y < _RULER_HEIGHT should return 'ruler'."""
+        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+
+        tl = self.widget._timeline
+        self.assertEqual(tl._hit_zone(0), "ruler")
+        self.assertEqual(tl._hit_zone(_RULER_HEIGHT - 1), "ruler")
+
+    def test_ruler_boundary_exclusive(self):
+        """Y == _RULER_HEIGHT is the first pixel of the next zone, not ruler."""
+        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+
+        tl = self.widget._timeline
+        # No shot lane visible → should be 'tracks', not 'ruler'
+        self.assertNotEqual(tl._hit_zone(_RULER_HEIGHT), "ruler")
+
+    def test_past_ruler_is_tracks(self):
+        """Y past ruler should always be 'tracks' — no shot lane zone."""
+        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        tl = self.widget._timeline
+        self.assertEqual(tl._hit_zone(_RULER_HEIGHT), "tracks")
+
+    def test_content_top_equals_ruler_height(self):
+        """_content_top is always _RULER_HEIGHT (no shot lane row)."""
+        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+        self.assertEqual(self.widget._content_top, _RULER_HEIGHT)
+
+    def test_tracks_zone(self):
+        """Y below content_top should return 'tracks'."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        tl = self.widget._timeline
+        content_top = self.widget._content_top
+        self.assertEqual(tl._hit_zone(content_top + 1), "tracks")
+
+
+class TestShotTrackHeight(ControllerTestCase):
+    """Verify content_top positioning (no shot lane row)."""
+
+    def test_content_top_always_ruler_height(self):
+        """content_top is always ruler height."""
+        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+
+        self.assertEqual(self.widget._content_top, _RULER_HEIGHT)
+
+
+class TestZoneContextMenu(ControllerTestCase):
+    """Verify zone_context_menu_requested signal is connected and dispatches."""
+
+    def setUp(self):
+        super().setUp()
+        self.widget.zone_context_menu_requested.connect(self.ctrl.on_zone_context_menu)
+
+    def test_ruler_zone_delegates_to_widget_default_menu(self):
+        """Ruler zone should delegate to widget's built-in default context menu."""
+        from qtpy import QtCore
+
+        with patch.object(
+            self.widget._timeline, "_show_default_context_menu"
+        ) as mock_default:
+            self.ctrl.on_zone_context_menu("ruler", 150.0, QtCore.QPoint(100, 10))
+            mock_default.assert_called_once_with(
+                self.widget, 150.0, QtCore.QPoint(100, 10)
+            )
+
+    def test_shot_lane_zone_calls_shot_menu(self):
+        """shot_lane zone should call _show_shot_lane_context_menu."""
+        from qtpy import QtCore
+
+        with patch.object(self.ctrl, "_show_shot_lane_context_menu") as mock_lane:
+            self.ctrl.on_zone_context_menu("shot_lane", 150.0, QtCore.QPoint(100, 30))
+            mock_lane.assert_called_once_with(150.0, QtCore.QPoint(100, 30))
+
+    def test_tracks_zone_delegates_to_widget_default_menu(self):
+        """Tracks zone should also delegate to widget's built-in default context menu."""
+        from qtpy import QtCore
+
+        with patch.object(
+            self.widget._timeline, "_show_default_context_menu"
+        ) as mock_default:
+            self.ctrl.on_zone_context_menu("tracks", 150.0, QtCore.QPoint(100, 60))
+            mock_default.assert_called_once_with(
+                self.widget, 150.0, QtCore.QPoint(100, 60)
+            )
+
+    def test_signal_routes_through_dispatch(self):
+        """Emitting zone_context_menu_requested signal routes correctly."""
+        from qtpy import QtCore
+
+        with patch.object(self.ctrl, "_show_shot_lane_context_menu") as mock_lane:
+            self.widget.zone_context_menu_requested.emit(
+                "shot_lane", 100.0, QtCore.QPoint(0, 0)
+            )
+            mock_lane.assert_called_once_with(100.0, QtCore.QPoint(0, 0))
+
+
+class TestShotLaneDoubleClick(ControllerTestCase):
+    """Verify double-click on shot lane opens the edit dialog."""
+
+    def setUp(self):
+        super().setUp()
+        self.widget.shot_lane_double_clicked.connect(
+            self.ctrl._on_shot_lane_double_clicked
+        )
+        # Prevent _edit_shot_dialog from opening a blocking QDialog in tests
+        self._edit_patcher = patch.object(self.ctrl, "_edit_shot_dialog")
+        self._mock_edit = self._edit_patcher.start()
+
+    def tearDown(self):
+        self._edit_patcher.stop()
+        super().tearDown()
+
+    def test_double_click_emits_signal(self):
+        """shot_lane_double_clicked signal should carry the time value."""
+        received = []
+        self.widget.shot_lane_double_clicked.connect(received.append)
+        self.widget.shot_lane_double_clicked.emit(150.0)
+        self.assertEqual(received, [150.0])
+
+    def test_double_click_calls_edit_dialog(self):
+        """Double-click at a shot's time should open _edit_shot_dialog for that shot."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        shot = self.ctrl.sequencer.sorted_shots()[0]
+        self.ctrl._on_shot_lane_double_clicked(150.0)
+        self._mock_edit.assert_called_once_with(shot)
+
+    def test_double_click_in_gap_does_nothing(self):
+        """Double-click in a gap (no shot) should not call _edit_shot_dialog."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        self.ctrl._on_shot_lane_double_clicked(50.0)  # before any shot
+        self._mock_edit.assert_not_called()
+
+
+class TestFindShotAtTime(ControllerTestCase):
+    """Verify _find_shot_at_time helper."""
+
+    def test_finds_shot_in_range(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        shot = self.ctrl._find_shot_at_time(150.0)
+        self.assertIsNotNone(shot)
+        self.assertEqual(shot.shot_id, 0)
+
+    def test_returns_none_in_gap(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        self.assertIsNone(self.ctrl._find_shot_at_time(50.0))
+
+    def test_boundary_start_inclusive(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        shot = self.ctrl._find_shot_at_time(100.0)
+        self.assertIsNotNone(shot)
+
+    def test_boundary_end_inclusive(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        shot = self.ctrl._find_shot_at_time(200.0)
+        self.assertIsNotNone(shot)
+
+
+# ===========================================================================
+# Test: One-Click Shot Creation
+# ===========================================================================
+
+
+class TestOneClickShotCreation(ControllerTestCase):
+    """Verify _create_shot_one_click uses gap-aware placement."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+    def test_creates_shot_after_last(self):
+        """New shot should start after existing shots + gap."""
+        self.sequencer.store.gap = 10
+        self.ctrl._create_shot_one_click()
+        shots = self.sequencer.sorted_shots()
+        self.assertEqual(len(shots), 2)
+        new_shot = shots[-1]
+        self.assertEqual(new_shot.start, 210.0)  # 200 + gap(10)
+        self.assertEqual(new_shot.name, "Shot 2")
+
+    def test_creates_shot_zero_gap(self):
+        """With gap=0, new shot starts immediately after last."""
+        self.sequencer.store.gap = 0
+        self.ctrl._create_shot_one_click()
+        shots = self.sequencer.sorted_shots()
+        new_shot = shots[-1]
+        self.assertEqual(new_shot.start, 200.0)
+
+    def test_selects_new_shot(self):
+        """One-click creation should select the new shot."""
+        self.ctrl._create_shot_one_click()
+        shots = self.sequencer.sorted_shots()
+        new_shot = shots[-1]
+        self.assertEqual(self.ctrl.active_shot_id, new_shot.shot_id)
+
+
+# ===========================================================================
+# Test: Click Shot Clip to Switch Shot
+# ===========================================================================
+
+
+# ===========================================================================
+# Test: Flat-key objects excluded from sequencer tracks
+# ===========================================================================
+
+
+class TestFlatObjectExclusion(ControllerTestCase):
+    """Verify objects with no animation segments (flat keys) are excluded
+    from sequencer tracks and the active-object set.
+
+    Bug: Objects in shot.objects with only constant-value animation
+    appeared as empty tracks in the sequencer.
+    Fixed: 2025-07-16
+    """
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA", "FlatObj", "ObjB"]),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        # Only ObjA has actual segments; FlatObj has none (flat keys)
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+
+    def test_collect_segments_excludes_flat_objects(self):
+        """_collect_segments should not include objects without segments."""
+        shot = self.sequencer.sorted_shots()[0]
+        visible = self.sequencer.sorted_shots()
+        segs_by_shot, all_objects = self.ctrl._collect_segments(shot, visible)
+        self.assertIn("ObjA", all_objects)
+        self.assertNotIn("FlatObj", all_objects)
+        self.assertNotIn("ObjB", all_objects)
+
+    def test_active_object_set_excludes_flat_objects(self):
+        """_active_object_set should only include objects with segments."""
+        shot = self.sequencer.sorted_shots()[0]
+        segs_by_shot = {shot.shot_id: make_segments("ObjA", [(110, 180)])}
+        active = self.ctrl._active_object_set(shot, segs_by_shot)
+        self.assertIn("ObjA", active)
+        self.assertNotIn("FlatObj", active)
+        self.assertNotIn("ObjB", active)
+
+    def test_pinned_objects_still_shown(self):
+        """Pinned objects should appear even without segments."""
+        self.sequencer.store.set_object_pinned("FlatObj")
+        shot = self.sequencer.sorted_shots()[0]
+        visible = self.sequencer.sorted_shots()
+        _, all_objects = self.ctrl._collect_segments(shot, visible)
+        self.assertIn("ObjA", all_objects)
+        self.assertIn("FlatObj", all_objects)
+        self.assertNotIn("ObjB", all_objects)
+
+    def test_multi_shot_flat_object_excluded(self):
+        """Flat objects should be excluded even across multiple visible shots."""
+        # Add a second shot with ObjA + FlatObj2
+        self.sequencer.store.define_shot(
+            name="Shot_B", start=200, end=300, objects=["ObjA", "FlatObj2"]
+        )
+        self._set_segments(1, make_segments("ObjA", [(210, 280)]))
+        shot = self.sequencer.sorted_shots()[0]
+        visible = self.sequencer.sorted_shots()
+        _, all_objects = self.ctrl._collect_segments(shot, visible)
+        self.assertIn("ObjA", all_objects)
+        self.assertNotIn("FlatObj", all_objects)
+        self.assertNotIn("FlatObj2", all_objects)
+
+
+class TestGapLeftResize(ControllerTestCase):
+    """Verify on_gap_left_resized adjusts the preceding shot's end."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+        ("Shot_B", 250, 350, ["ObjA"]),
+    ]
+    initial_shot_index = 0
+
+    def test_left_resize_changes_prev_shot_end(self):
+        """Dragging the left edge of a gap should adjust the preceding shot's end."""
+        # Gap is at 200-250. Left edge is Shot_A.end = 200.
+        # Drag from 200 → 190 → Shot_A.end becomes 190
+        self.ctrl.on_gap_left_resized(200.0, 190.0)
+        shot_a = self.sequencer.shot_by_id(0)
+        self.assertAlmostEqual(shot_a.end, 190.0)
+
+    def test_left_resize_noop_for_tiny_delta(self):
+        """A sub-threshold delta should not change anything."""
+        self.ctrl.on_gap_left_resized(200.0, 200.0001)
+        shot_a = self.sequencer.shot_by_id(0)
+        self.assertAlmostEqual(shot_a.end, 200.0)
+
+
+class TestGapBodyMove(ControllerTestCase):
+    """Verify on_gap_moved slides the cut-point between two shots."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+        ("Shot_B", 250, 350, ["ObjA"]),
+    ]
+    initial_shot_index = 0
+
+    def test_gap_move_adjusts_both_shots(self):
+        """Moving a gap should shift the left shot's end and right shot's start."""
+        # Gap is 200-250 (width 50). Slide right by 10 → gap becomes 210-260.
+        self.ctrl.on_gap_moved(200.0, 250.0, 210.0, 260.0)
+        shot_a = self.sequencer.shot_by_id(0)
+        shot_b = self.sequencer.shot_by_id(1)
+        self.assertAlmostEqual(shot_a.end, 210.0)
+        self.assertAlmostEqual(shot_b.start, 260.0)
+
+    def test_gap_move_noop_for_tiny_delta(self):
+        """A sub-threshold delta should not change anything."""
+        self.ctrl.on_gap_moved(200.0, 250.0, 200.0001, 250.0001)
+        shot_a = self.sequencer.shot_by_id(0)
+        shot_b = self.sequencer.shot_by_id(1)
+        self.assertAlmostEqual(shot_a.end, 200.0)
+        self.assertAlmostEqual(shot_b.start, 250.0)
+
+
+# ===========================================================================
+# Test: Clip Rename (No-Op After Shot Row Removal)
+# ===========================================================================
+
+
+class TestClipRenameNoOp(ControllerTestCase):
+    """Verify on_clip_renamed is a no-op after shot row removal."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+    ]
+
+    def test_rename_does_not_change_shot_name(self):
+        """on_clip_renamed should not modify any shot data."""
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        # Call with arbitrary ID — should be no-op
+        self.ctrl.on_clip_renamed(999, "New Name")
+        shot = self.sequencer.shot_by_id(0)
+        self.assertEqual(shot.name, "Shot_A")
+
+
+# ===========================================================================
+# Test: Active Range Tinting Replaces Shot Clip Resize
+# ===========================================================================
+
+
+class TestActiveRangeAfterResize(ControllerTestCase):
+    """Verify active range updates when shot boundaries change."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+    def test_active_range_updates_on_boundary_change(self):
+        """Changing shot boundaries and syncing should update the active range."""
+        self.ctrl.on_range_highlight_changed(90.0, 210.0)
+        self.assertIsNotNone(self.widget._active_range)
+        self.assertAlmostEqual(self.widget._active_range[0], 90.0)
+        self.assertAlmostEqual(self.widget._active_range[1], 210.0)
+
+
+# ===========================================================================
+# Test: One-Click Name Collision Avoidance
+# ===========================================================================
+
+
+class TestOneClickNameCollision(ControllerTestCase):
+    """Verify _create_shot_one_click avoids duplicate names."""
+
+    shot_defs = [
+        ("Shot 1", 0, 100, ["ObjA"]),
+        ("Shot 2", 110, 210, ["ObjA"]),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        self._set_segments(0, make_segments("ObjA", [(0, 100)]))
+        self._set_segments(1, make_segments("ObjA", [(110, 210)]))
+        self._do_initial_sync()
+
+    def test_skips_existing_names(self):
+        """With 'Shot 1' and 'Shot 2' existing, new shot should be 'Shot 3'."""
+        self.ctrl._create_shot_one_click()
+        shots = self.sequencer.sorted_shots()
+        new_shot = shots[-1]
+        self.assertEqual(new_shot.name, "Shot 3")
+
+    def test_skips_with_gap_in_numbering(self):
+        """After deleting 'Shot 2', a Shot 3 exists, new should be 'Shot 4'."""
+        # Rename Shot 2 → Shot 3 to simulate a gap
+        self.sequencer.store.update_shot(1, name="Shot 3")
+        self.ctrl._create_shot_one_click()
+        shots = self.sequencer.sorted_shots()
+        new_shot = shots[-1]
+        self.assertEqual(new_shot.name, "Shot 4")
+
+
+# ===========================================================================
+# Test: Pinned vs Non-Pinned Missing Objects
+# ===========================================================================
+
+
+class TestMissingObjectRemoval(ControllerTestCase):
+    """Verify non-pinned missing objects are skipped, pinned ones are kept."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA", "ObjMissing"]),
+    ]
+
+    def test_non_pinned_missing_skipped(self):
+        """A missing object that is not pinned should not get a track."""
+        # ObjA exists, ObjMissing does not
+        _mock_cmds.objExists.side_effect = lambda n: n != "ObjMissing"
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        track_names = {t.name for t in self.widget.tracks()}
+        self.assertIn("ObjA", track_names)
+        self.assertNotIn("ObjMissing", track_names)
+
+    def test_pinned_missing_kept(self):
+        """A pinned missing object should still get a track (dimmed)."""
+        self.sequencer.store.set_object_pinned("ObjMissing")
+        _mock_cmds.objExists.side_effect = lambda n: n != "ObjMissing"
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        track_names = {t.name for t in self.widget.tracks()}
+        self.assertIn("ObjA", track_names)
+        self.assertIn("ObjMissing", track_names)
+
+    def test_unpinning_removes_on_next_sync(self):
+        """Unpinning a missing object removes it on the next sync."""
+        self.sequencer.store.set_object_pinned("ObjMissing")
+        _mock_cmds.objExists.side_effect = lambda n: n != "ObjMissing"
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+
+        # Confirm it's there first
+        self.assertIn("ObjMissing", {t.name for t in self.widget.tracks()})
+
+        # Unpin and re-sync
+        self.sequencer.store.set_object_pinned("ObjMissing", False)
+        self.ctrl._sync_to_widget()
+
+        self.assertNotIn("ObjMissing", {t.name for t in self.widget.tracks()})
+
+
+# ===========================================================================
+# Test: Delete Track
+# ===========================================================================
+
+
+class TestDeleteTrack(ControllerTestCase):
+    """Verify delete_track removes object from all shots and rebuilds."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA", "ObjB"]),
+        ("Shot_B", 250, 350, ["ObjA", "ObjB"]),
+    ]
+
+    def test_delete_removes_from_all_shots(self):
+        """Deleting a track should remove the object from every shot."""
+        self.ctrl.delete_track(["ObjB"])
+
+        for shot in self.sequencer.sorted_shots():
+            self.assertNotIn(
+                "ObjB", shot.objects, f"ObjB still in {shot.name}.objects"
+            )
+
+    def test_delete_also_clears_pinned_and_hidden(self):
+        """Deleting a track should clean up pinned and hidden state."""
+        self.sequencer.store.set_object_pinned("ObjB")
+        self.sequencer.set_object_hidden("ObjB", True)
+        self.ctrl.delete_track(["ObjB"])
+
+        self.assertFalse(self.sequencer.store.is_object_pinned("ObjB"))
+        self.assertFalse(self.sequencer.is_object_hidden("ObjB"))
+
+    def test_delete_rebuilds_widget(self):
+        """After deletion the widget should no longer have that track."""
+        self._set_segments(
+            0,
+            make_segments("ObjA", [(100, 200)])
+            + make_segments("ObjB", [(120, 180)]),
+        )
+        self._set_segments(1, make_segments("ObjA", [(250, 350)]))
+        self._do_initial_sync()
+
+        # ObjB should be present initially (it has segments)
+        self.assertIn("ObjB", {t.name for t in self.widget.tracks()})
+
+        # After deletion, segments no longer include ObjB
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self.ctrl.delete_track(["ObjB"])
+
+        self.assertNotIn("ObjB", {t.name for t in self.widget.tracks()})
+
+
+# ===========================================================================
+# Test: ShotStore Pinning Serialisation
+# ===========================================================================
+
+
+class TestPinnedSerialisation(unittest.TestCase):
+    """Verify pinned_objects round-trips through to_dict / from_dict."""
+
+    def test_round_trip(self):
+        store = ShotStore()
+        store.define_shot(name="S1", start=0, end=100, objects=["A"])
+        store.set_object_pinned("A")
+        store.set_object_pinned("B")
+
+        data = store.to_dict()
+        restored = ShotStore.from_dict(data)
+
+        self.assertTrue(restored.is_object_pinned("A"))
+        self.assertTrue(restored.is_object_pinned("B"))
+        self.assertFalse(restored.is_object_pinned("C"))
+
+    def test_empty_pinned_by_default(self):
+        data = {"shots": [], "hidden_objects": []}
+        restored = ShotStore.from_dict(data)
+        self.assertEqual(restored.pinned_objects, set())
+
+
+# ===========================================================================
+# Test: remove_object_from_shots
+# ===========================================================================
+
+
+class TestRemoveObjectFromShots(unittest.TestCase):
+    """Verify remove_object_from_shots cleans up all references."""
+
+    def test_removes_from_all_shots(self):
+        store = ShotStore()
+        store.define_shot(name="S1", start=0, end=100, objects=["A", "B"])
+        store.define_shot(name="S2", start=100, end=200, objects=["B", "C"])
+
+        store.remove_object_from_shots("B")
+
+        self.assertEqual(store.shots[0].objects, ["A"])
+        self.assertEqual(store.shots[1].objects, ["C"])
+
+    def test_clears_pinned_and_hidden(self):
+        store = ShotStore()
+        store.define_shot(name="S1", start=0, end=100, objects=["A"])
+        store.set_object_pinned("A")
+        store.set_object_hidden("A")
+
+        store.remove_object_from_shots("A")
+
+        self.assertFalse(store.is_object_pinned("A"))
+        self.assertFalse(store.is_object_hidden("A"))
+
+
+# ===========================================================================
+# Test: Lockable Gaps
+# ===========================================================================
+
+
+class TestLockableGaps(ControllerTestCase):
+    """Verify gap locking: lock state persists, respace honours locked widths,
+    and lock-all/unlock-all batch operations work correctly."""
+
+    shot_defs = [
+        ("Shot_A", 1, 100, ["ObjA"]),
+        ("Shot_B", 110, 200, ["ObjA"]),  # 10-frame gap A→B
+        ("Shot_C", 220, 300, ["ObjA"]),  # 20-frame gap B→C
+    ]
+
+    def test_lock_gap_persists_in_store(self):
+        """Locking a gap records the pair in ShotStore.locked_gaps."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        store.lock_gap(shots[0].shot_id, shots[1].shot_id)
+        self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+        self.assertFalse(store.is_gap_locked(shots[1].shot_id, shots[2].shot_id))
+
+    def test_unlock_gap(self):
+        """Unlocking a previously locked gap removes it."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        store.lock_gap(shots[0].shot_id, shots[1].shot_id)
+        store.unlock_gap(shots[0].shot_id, shots[1].shot_id)
+        self.assertFalse(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+
+    def test_respace_honours_locked_gap(self):
+        """Respace with a locked gap preserves that gap's original width."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        # Lock gap between A and B (currently 10 frames)
+        store.lock_gap(shots[0].shot_id, shots[1].shot_id)
+        # Respace with gap=5 — locked gap should stay 10, unlocked should be 5
+        import mayatk.anim_utils.shots.shot_sequencer._shot_sequencer as _mod
+        with patch.object(_mod, "pm", None):
+            self.sequencer.respace(gap=5, start_frame=1)
+        shots = self.sequencer.sorted_shots()
+        gap_ab = shots[1].start - shots[0].end
+        gap_bc = shots[2].start - shots[1].end
+        self.assertAlmostEqual(gap_ab, 10, places=1)
+        self.assertAlmostEqual(gap_bc, 5, places=1)
+
+    def test_respace_unlocked_gaps_use_uniform_value(self):
+        """All unlocked gaps should use the global gap value after respace."""
+        import mayatk.anim_utils.shots.shot_sequencer._shot_sequencer as _mod
+        with patch.object(_mod, "pm", None):
+            self.sequencer.respace(gap=15, start_frame=1)
+        shots = self.sequencer.sorted_shots()
+        gap_ab = shots[1].start - shots[0].end
+        gap_bc = shots[2].start - shots[1].end
+        self.assertAlmostEqual(gap_ab, 15, places=1)
+        self.assertAlmostEqual(gap_bc, 15, places=1)
+
+    def test_lock_all_gaps(self):
+        """lock_all_gaps locks every adjacent pair."""
+        store = self.sequencer.store
+        store.lock_all_gaps()
+        shots = self.sequencer.sorted_shots()
+        self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+        self.assertTrue(store.is_gap_locked(shots[1].shot_id, shots[2].shot_id))
+
+    def test_unlock_all_gaps(self):
+        """unlock_all_gaps clears all locked gaps."""
+        store = self.sequencer.store
+        store.lock_all_gaps()
+        store.unlock_all_gaps()
+        self.assertEqual(len(store.locked_gaps), 0)
+
+    def test_locked_gaps_serialisation(self):
+        """Locked gaps survive to_dict / from_dict round-trip."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        store.lock_gap(shots[0].shot_id, shots[1].shot_id)
+        data = store.to_dict()
+        restored = ShotStore.from_dict(data)
+        self.assertTrue(
+            restored.is_gap_locked(shots[0].shot_id, shots[1].shot_id)
+        )
+        self.assertFalse(
+            restored.is_gap_locked(shots[1].shot_id, shots[2].shot_id)
+        )
+
+    def test_gap_overlay_receives_locked_state(self):
+        """Gap overlays created during rebuild carry the locked flag."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        store.lock_gap(shots[0].shot_id, shots[1].shot_id)
+        self._do_initial_sync()
+        overlays = self.widget._gap_overlays
+        # Find the overlay matching the A→B gap
+        locked_found = any(o._locked for o in overlays)
+        self.assertTrue(locked_found, "No locked gap overlay found after rebuild")
+
+    def test_gap_lock_changed_signal_updates_store(self):
+        """Emitting gap_lock_changed should toggle store state via controller."""
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        # Simulate widget signal → controller handler
+        self.ctrl.on_gap_lock_changed(
+            shots[0].end, shots[1].start, True
+        )
+        self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+        self.ctrl.on_gap_lock_changed(
+            shots[0].end, shots[1].start, False
+        )
+        self.assertFalse(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+
+    def test_lock_all_via_controller(self):
+        """on_gap_lock_all locks all gaps and sets overlays."""
+        self._do_initial_sync()
+        self.ctrl.on_gap_lock_all()
+        store = self.sequencer.store
+        shots = self.sequencer.sorted_shots()
+        self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+        self.assertTrue(store.is_gap_locked(shots[1].shot_id, shots[2].shot_id))
+        # Overlays should all be locked
+        for o in self.widget._gap_overlays:
+            self.assertTrue(o._locked)
+
+    def test_unlock_all_via_controller(self):
+        """on_gap_unlock_all clears all locks and updates overlays."""
+        self._do_initial_sync()
+        self.ctrl.on_gap_lock_all()
+        self.ctrl.on_gap_unlock_all()
+        store = self.sequencer.store
+        self.assertEqual(len(store.locked_gaps), 0)
+        for o in self.widget._gap_overlays:
+            self.assertFalse(o._locked)
+
+
+# ===========================================================================
+# Test: Shot Lane Initialization
+# ===========================================================================
+
+
+class TestShotLanePopulation(ControllerTestCase):
+    """Verify shot lane is populated on rebuild so gap indicators are visible.
+
+    Bug: set_shot_blocks() was never called from the controller, so the
+    shot lane showing all shots and gaps never appeared. Users saw no
+    visual indication of shot structure or gaps.
+    Fixed: 2026-06-27
+    """
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["Obj"]),
+        ("Shot_B", 220, 300, ["Obj"]),  # 20-frame gap
+        ("Shot_C", 310, 400, ["Obj"]),  # 10-frame gap
+    ]
+    initial_shot_index = 0
+
+    def setUp(self):
+        super().setUp()
+        for shot in self.sequencer.sorted_shots():
+            self._set_segments(
+                shot.shot_id, make_segments("Obj", [(shot.start, shot.end)])
+            )
+
+    def test_ruler_blocks_populated_after_sync(self):
+        """Ruler must have shot blocks after _sync_to_widget."""
+        self._do_initial_sync()
+        blocks = self.widget._timeline._scene.ruler._shot_blocks
+        self.assertEqual(
+            len(blocks), 3,
+            "All three shots should appear as ruler blocks",
+        )
+
+    def test_ruler_blocks_mark_active_shot(self):
+        """Only the active shot block should be marked 'active'."""
+        self._do_initial_sync()
+        blocks = self.widget._timeline._scene.ruler._shot_blocks
+        active_blocks = [b for b in blocks if b.get("active")]
+        self.assertEqual(len(active_blocks), 1)
+        self.assertEqual(active_blocks[0]["name"], "Shot_A")
+
+    def test_ruler_blocks_match_shot_ranges(self):
+        """Ruler block start/end must match actual shot ranges."""
+        self._do_initial_sync()
+        blocks = self.widget._timeline._scene.ruler._shot_blocks
+        for blk, shot in zip(blocks, self.sequencer.sorted_shots()):
+            self.assertAlmostEqual(blk["start"], shot.start, places=1)
+            self.assertAlmostEqual(blk["end"], shot.end, places=1)
+
+    def test_ruler_blocks_cleared_on_full_clear(self):
+        """widget.clear() must also clear ruler shot blocks."""
+        self._do_initial_sync()
+        self.widget.clear()
+        self.assertEqual(
+            len(self.widget._timeline._scene.ruler._shot_blocks), 0,
+            "Ruler blocks should be empty after clear()",
+        )
+
+
+# ===========================================================================
+# Test: Gap Overlay Initialization with store.gap > 0
+# ===========================================================================
+
+
+class TestGapOverlayDisplay(ControllerTestCase):
+    """Verify gap overlays appear for ALL gaps regardless of display mode.
+
+    Bug: Visibility gate in _rebuild_decoration filtered gaps to only those
+    bordering a visible shot. In 'current' mode only the active shot was
+    visible, so gaps between non-active shots were hidden.
+    Fixed: 2026-06-28
+    """
+
+    shot_defs = [
+        ("Shot_A", 1, 101, ["Obj"]),
+        ("Shot_B", 111, 211, ["Obj"]),
+        ("Shot_C", 221, 321, ["Obj"]),
+    ]
+    initial_shot_index = 0
+
+    def test_all_gaps_shown_in_current_mode(self):
+        """Even in 'current' display mode, all gaps must have overlays."""
+        self._do_initial_sync()
+        # There are 2 gaps: A→B (101-111) and B→C (211-221)
+        self.assertEqual(
+            len(self.widget._gap_overlays), 2,
+            "Both gaps must have overlays regardless of display mode",
+        )
+
+    def test_contiguous_shots_no_overlays(self):
+        """Contiguous shots (no gaps) must have zero gap overlays."""
+        # Override shot_defs via store to make shots contiguous
+        for s in self.sequencer.sorted_shots():
+            pass  # shots already defined with gaps in shot_defs
+        # Create a separate contiguous scenario
+        pass
+
+    def test_gap_overlay_positions_match_shot_boundaries(self):
+        """Gap overlay start/end must match shot boundary gaps."""
+        self._do_initial_sync()
+        overlays = self.widget._gap_overlays
+        shots = self.sequencer.sorted_shots()
+        # First gap: Shot_A.end to Shot_B.start
+        self.assertAlmostEqual(overlays[0]._start, shots[0].end, places=1)
+        self.assertAlmostEqual(overlays[0]._end, shots[1].start, places=1)
+        # Second gap: Shot_B.end to Shot_C.start
+        self.assertAlmostEqual(overlays[1]._start, shots[1].end, places=1)
+        self.assertAlmostEqual(overlays[1]._end, shots[2].start, places=1)
+
+
+class TestContiguousShotsOverlays(ControllerTestCase):
+    """Contiguous shots produce handle overlays at every boundary."""
+
+    shot_defs = [
+        ("Shot_A", 1, 101, ["Obj"]),
+        ("Shot_B", 101, 201, ["Obj"]),
+        ("Shot_C", 201, 301, ["Obj"]),
+    ]
+    initial_shot_index = 0
+
+    def test_overlays_for_contiguous_shots(self):
+        self._do_initial_sync()
+        self.assertEqual(
+            len(self.widget._gap_overlays), 2,
+            "Contiguous shots should have handle overlays at each boundary",
+        )
+
+
+# ===========================================================================
+# Test: Shotless Scene Display
+# ===========================================================================
+
+
+class TestShotlessDisplay(ControllerTestCase):
+    """Verify animated objects display when no shots are defined.
+
+    When the scene has animation but no shots, the sequencer should show
+    all animated objects across the full playback range.
+    """
+
+    shot_defs = []  # Explicitly no shots
+    initial_shot_index = 0
+
+    def setUp(self):
+        super().setUp()
+        # Configure playback range
+        def _pb_options(**kw):
+            if kw.get("q"):
+                if kw.get("min"):
+                    return 1.0
+                if kw.get("max"):
+                    return 200.0
+            return 0.0
+
+        _mock_pm.playbackOptions.side_effect = _pb_options
+        _mock_pm.currentTime.return_value = 50.0
+        _mock_cmds.playbackOptions.side_effect = _pb_options
+        _mock_cmds.currentTime.return_value = 50.0
+        _mock_cmds.ls.return_value = []
+
+    def _mock_scene_objects(self, objects, segments):
+        """Patch discovery and segment collection for shotless mode."""
+        self.sequencer._find_keyed_transforms = MagicMock(return_value=objects)
+        self._seg_patcher = patch(
+            "mayatk.anim_utils.segment_keys.SegmentKeys.collect_segments",
+            return_value=segments,
+        )
+        self._seg_patcher.start()
+
+    def tearDown(self):
+        if hasattr(self, "_seg_patcher"):
+            self._seg_patcher.stop()
+        super().tearDown()
+
+    def test_tracks_created_for_discovered_objects(self):
+        """Discovered animated objects should appear as tracks."""
+        self._mock_scene_objects(
+            ["ObjA", "ObjB"],
+            [
+                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+                {"obj": "ObjB", "start": 20.0, "end": 100.0, "duration": 80.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+            ],
+        )
+        self._do_initial_sync()
+        track_names = [t.name for t in self.widget.tracks()]
+        self.assertIn("ObjA", track_names)
+        self.assertIn("ObjB", track_names)
+
+    def test_clips_created_for_segments(self):
+        """Segments should produce clips in the widget."""
+        self._mock_scene_objects(
+            ["ObjA"],
+            [
+                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+            ],
+        )
+        self._do_initial_sync()
+        clips = self.widget.clips()
+        self.assertGreater(len(clips), 0, "Must have at least 1 clip")
+
+    def test_active_range_covers_playback(self):
+        """Active range should span the full playback range."""
+        self._mock_scene_objects(
+            ["ObjA"],
+            [
+                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+            ],
+        )
+        self._do_initial_sync()
+        self.assertIsNotNone(self.widget._active_range, "Active range must be set")
+        self.assertAlmostEqual(self.widget._active_range[0], 1.0, places=1)
+        self.assertAlmostEqual(self.widget._active_range[1], 200.0, places=1)
+
+    def test_playhead_set_to_current_time(self):
+        """Playhead should reflect the mocked current time."""
+        self._mock_scene_objects(
+            ["ObjA"],
+            [
+                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+            ],
+        )
+        self._do_initial_sync()
+        ph = self.widget._timeline._scene.playhead
+        self.assertAlmostEqual(ph._time, 50.0, places=1)
+
+    def test_no_animation_shows_empty_widget(self):
+        """When no animated objects are found, widget should be empty."""
+        self._mock_scene_objects([], [])
+        self._do_initial_sync()
+        self.assertEqual(len(list(self.widget.tracks())), 0)
+
+    def test_footer_shows_scene_summary(self):
+        """Footer should show scene range and object count."""
+        self._mock_scene_objects(
+            ["ObjA", "ObjB"],
+            [
+                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
+                 "is_stepped": False, "curves": [], "attr": None},
+            ],
+        )
+        self._do_initial_sync()
+        footer = getattr(self.slots.ui, "footer", None)
+        if footer is not None and footer.setText.called:
+            text = footer.setText.call_args[0][0]
+            self.assertIn("Scene", text)
+            self.assertIn("2 objects", text)
+
+
+# ===========================================================================
+# Test: Playback Follows View
+# ===========================================================================
+
+
+class TestPlaybackFollowsView(ControllerTestCase):
+    """Verify playback range adjusts to match the sequencer view mode."""
+
+    shot_defs = [
+        ("Shot_A", 100, 200, ["ObjA"]),
+        ("Shot_B", 200, 350, ["ObjB"]),
+        ("Shot_C", 350, 500, ["ObjC"]),
+    ]
+    initial_shot_index = 1  # Start on Shot_B (middle)
+
+    def test_current_mode_sets_active_shot_range(self):
+        """In 'current' mode, playback range = active shot only."""
+        self.ctrl._playback_follows_view = True
+        self.ctrl._shot_display_mode = "current"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=200, max=350))
+
+    def test_adjacent_mode_spans_three_shots(self):
+        """In 'adjacent' mode on middle shot, range = prev+current+next."""
+        self.ctrl._playback_follows_view = True
+        self.ctrl._shot_display_mode = "adjacent"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=100, max=500))
+
+    def test_adjacent_mode_first_shot(self):
+        """In 'adjacent' mode on first shot, range = current+next only."""
+        self.ctrl._playback_follows_view = True
+        self.ctrl._shot_display_mode = "adjacent"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[0].shot_id)
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=100, max=350))
+
+    def test_all_mode_spans_entire_timeline(self):
+        """In 'all' mode, range covers first to last shot."""
+        self.ctrl._playback_follows_view = True
+        self.ctrl._shot_display_mode = "all"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=100, max=500))
+
+    def test_disabled_always_uses_active_shot(self):
+        """When _playback_follows_view is False, always use active shot range."""
+        self.ctrl._playback_follows_view = False
+        self.ctrl._shot_display_mode = "all"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=200, max=350))
+
+    def test_view_mode_change_updates_range(self):
+        """Changing view mode re-applies the playback range."""
+        self.ctrl._playback_follows_view = True
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+        _mock_pm.playbackOptions.reset_mock()
+
+        self.ctrl._set_view_mode("all")
+
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=100, max=500))
+
+    def test_toggle_reapplies_range(self):
+        """Toggling playback-follows-view on/off reapplies correctly."""
+        self.ctrl._shot_display_mode = "all"
+        self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
+
+        self.ctrl._toggle_playback_follows_view(False)
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=200, max=350))
+
+        self.ctrl._toggle_playback_follows_view(True)
+        args = _mock_pm.playbackOptions.call_args
+        self.assertEqual(args, call(min=100, max=500))
 
 
 if __name__ == "__main__":

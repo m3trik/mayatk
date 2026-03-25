@@ -260,3 +260,147 @@ class TestSharedMaterialExport(MayaTkTestCase):
             content,
             "Non-selected object should not appear in exported FBX",
         )
+
+
+class TestDualKeyVisibilityExport(MayaTkTestCase):
+    """Verify that the opacity→visibility keyframe mirroring produces
+    real animation curves on both channels in the exported FBX.
+
+    This is the core fix: Unity reads the native 'Visibility' track from
+    FBX. The old condition-node approach didn't export; the new dual-key
+    system keys both opacity and visibility so FBX contains both curves.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fbx_path = os.path.join(
+            r"O:/Cloud/Code/_scripts/mayatk/test", "debug_dual_key.fbx"
+        )
+        if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+            try:
+                pm.loadPlugin("fbxmaya")
+            except Exception:
+                self.skipTest("fbxmaya plugin not available")
+
+        self.cube = pm.polyCube(name="dual_key_cube")[0]
+
+    def tearDown(self):
+        super().tearDown()
+        if os.path.exists(self.fbx_path):
+            try:
+                os.remove(self.fbx_path)
+            except OSError:
+                pass
+
+    def _export_ascii_fbx(self):
+        pm.select(self.cube)
+        pm.mel.eval("FBXExportInAscii -v true")
+        pm.mel.eval("FBXExportBakeComplexAnimation -v false")
+        pm.mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
+        with open(self.fbx_path, "r") as f:
+            return f.read()
+
+    def test_sync_produces_visibility_curve_in_fbx(self):
+        """sync_visibility_from_opacity keys must appear as a real FBX
+        Visibility animation track alongside the opacity track.
+
+        Bug: Old condition-node driver was Maya-only and didn't export.
+        Unity saw no visibility animation, objects stayed permanently
+        visible or invisible.
+        Fixed: 2026-03-21
+        """
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+
+        # Key opacity 1→0→1
+        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=1.0)
+        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=0.0)
+        pm.setKeyframe(self.cube, attribute="opacity", time=30, value=1.0)
+
+        # Mirror to visibility
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        content = self._export_ascii_fbx()
+
+        # Both channels must have animation curves
+        self.assertIn(
+            '"AnimCurveNode::opacity"',
+            content,
+            "Opacity animation curve missing from FBX",
+        )
+        self.assertIn(
+            '"AnimCurveNode::Visibility"',
+            content,
+            "Visibility animation curve missing from FBX — "
+            "sync_visibility_from_opacity didn't produce real keys",
+        )
+
+    def test_behavior_dual_keys_both_channels(self):
+        """apply_behavior with a fade_in template on an opacity object
+        must key both opacity and visibility in the FBX.
+
+        This tests the behavior auto-redirect: the YAML targets
+        'visibility' but the object has 'opacity', so the behavior
+        system keys both channels.
+        """
+        from mayatk.anim_utils.shots.behaviors import apply_behavior
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+
+        # Apply the fade_in behavior (template targets 'visibility')
+        apply_behavior(self.cube.name(), "fade_in", start=1, end=30)
+
+        # Verify both channels are keyed in Maya
+        opacity_keys = pm.keyframe(self.cube, attribute="opacity", q=True, tc=True)
+        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
+        self.assertTrue(opacity_keys, "Opacity should have keyframes")
+        self.assertTrue(vis_keys, "Visibility should have keyframes")
+        # Visibility is boolean-typed; Maya may store keys differently
+        # (e.g. step tangents create extra entries). Just verify both
+        # channels were keyed, not exact count parity.
+        self.assertGreaterEqual(
+            len(vis_keys),
+            len(opacity_keys),
+            "Visibility should have at least as many keys as opacity",
+        )
+
+        content = self._export_ascii_fbx()
+
+        self.assertIn(
+            '"AnimCurveNode::opacity"',
+            content,
+            "Opacity animation curve missing from FBX",
+        )
+        self.assertIn(
+            '"AnimCurveNode::Visibility"',
+            content,
+            "Visibility animation curve missing from FBX after behavior",
+        )
+
+    def test_no_opacity_attr_falls_back_to_visibility_only(self):
+        """Objects without opacity attribute get visibility-only keys (unchanged).
+
+        This verifies we didn't break the standard path for non-opacity
+        objects.
+        """
+        from mayatk.anim_utils.shots.behaviors import apply_behavior
+
+        # No RenderOpacity.create — just plain object
+        apply_behavior(self.cube.name(), "fade_in", start=1, end=30)
+
+        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
+        self.assertTrue(vis_keys, "Visibility should have keyframes")
+
+        # Opacity attribute should NOT exist
+        self.assertFalse(
+            self.cube.hasAttr("opacity"),
+            "Object without opacity setup should not gain opacity attr",
+        )
+
+        content = self._export_ascii_fbx()
+        self.assertIn(
+            '"AnimCurveNode::Visibility"',
+            content,
+            "Visibility animation curve missing for non-opacity object",
+        )

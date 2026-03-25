@@ -163,12 +163,12 @@ def _write_test_script():
             def setUp(self):
                 pm.mel.file(new=True, force=True)
 
-            def test_fade_in_out_creates_keys(self):
+            def test_fade_in_creates_keys(self):
                 cube = pm.polyCube(name="fade_obj")[0]
                 pm.setKeyframe(cube, attribute="translateX", time=0, value=0)
                 pm.setKeyframe(cube, attribute="translateX", time=100, value=10)
 
-                apply_behavior(str(cube), "fade_in_out", 0, 100, attrs=["visibility"])
+                apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
 
                 vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
                 self.assertIsNotNone(vis_keys)
@@ -183,12 +183,18 @@ def _write_test_script():
 
 
         class TestLoadBehavior(unittest.TestCase):
-            def test_fade_in_out(self):
-                t = load_behavior("fade_in_out")
+            def test_fade_in(self):
+                t = load_behavior("fade_in")
                 self.assertIn("attributes", t)
                 self.assertIn("visibility", t["attributes"])
                 vis = t["attributes"]["visibility"]
                 self.assertEqual(vis["in"]["values"], [0.0, 1.0])
+
+            def test_fade_out(self):
+                t = load_behavior("fade_out")
+                self.assertIn("attributes", t)
+                self.assertIn("visibility", t["attributes"])
+                vis = t["attributes"]["visibility"]
                 self.assertEqual(vis["out"]["values"], [1.0, 0.0])
 
 

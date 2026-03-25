@@ -29,9 +29,6 @@ class TexturePathEditorSlots:
 
     def header_init(self, widget):
         """Initialize the header for the texture path editor."""
-        # Add a button to open the hypershade editor.
-        widget.menu.setTitle("Global Tasks:")
-
         widget.menu.add("Separator", setTitle="General")
         widget.menu.add(
             self.sb.registered_widgets.Label,
@@ -262,8 +259,6 @@ class TexturePathEditorSlots:
                 widget.itemSelectionChanged.connect(self._footer_controller.update)
 
             # Add context menu items using the existing menu system
-            widget.menu.setTitle("Context Tasks:")
-
             widget.menu.add("Separator", setTitle="Path Management")
             widget.menu.add(
                 "QPushButton",

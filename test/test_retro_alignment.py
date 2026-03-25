@@ -156,7 +156,7 @@ class TestParseCSVReal(unittest.TestCase):
 
     def test_behaviors_detected(self):
         """At least some objects should have behaviors detected."""
-        with_behavior = [o for s in self.steps for o in s.objects if o.behavior]
+        with_behavior = [o for s in self.steps for o in s.objects if o.behaviors]
         self.assertGreater(
             len(with_behavior),
             10,
@@ -173,7 +173,7 @@ class TestParseCSVReal(unittest.TestCase):
                 f.write(f"Content: {step.content[:100]}\n")
                 f.write(f"Objects ({len(step.objects)}):\n")
                 for obj in step.objects:
-                    f.write(f"  {obj.name:<40} behavior={obj.behavior}\n")
+                    f.write(f"  {obj.name:<40} behaviors={obj.behaviors}\n")
         # Always passes â€” just writes the report
         self.assertTrue(out.exists())
 
@@ -344,7 +344,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
         for r in results:
             for o in r.objects:
                 statuses.setdefault(o.status, []).append(
-                    (r.step_id, o.name, o.behavior)
+                    (r.step_id, o.name, o.behaviors)
                 )
 
         out = RESULTS_DIR / "full_pipeline.txt"

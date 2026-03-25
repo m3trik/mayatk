@@ -416,8 +416,6 @@ class ImageTracerSlots:
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        # Add a button to open the hypershade editor.
-        widget.menu.setTitle("Global Settings:")
         widget.menu.add(
             "QCheckBox",
             setText="Use Blue Pencil",

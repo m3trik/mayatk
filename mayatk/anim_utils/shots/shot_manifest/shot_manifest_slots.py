@@ -4,6 +4,11 @@
 
 Bridges the Shot Manifest dialog to the CSV parser and
 :class:`~mayatk.anim_utils.shot_manifest._shot_manifest.ShotManifest` engine.
+
+Presentation methods (tree population, formatting, assessment colouring)
+are inherited from :class:`~._table_presenter.ManifestTableMixin`.
+Constants and pure helpers live in :mod:`._manifest_data`.
+Range resolution is delegated to :func:`._range_resolver.resolve_ranges`.
 """
 from typing import Dict, List, Optional, Tuple
 
@@ -12,23 +17,29 @@ import pythontk as ptk
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
+    ColumnMap,
     ShotManifest,
     StepStatus,
     parse_csv,
-    detect_behavior,
-    detect_animation_gaps,
+    detect_shot_regions,
+    regions_from_selected_keys,
 )
-from mayatk.anim_utils.shots.behaviors import list_behaviors
+from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+    ERROR_COLOR,
+    SETTINGS_NS,
+    COL_STEP,
+    COL_DESC,
+    COL_START,
+    COL_END,
+    fmt_behavior,
+)
+from mayatk.anim_utils.shots.shot_manifest._range_resolver import resolve_ranges
+from mayatk.anim_utils.shots._shots import StoreEvent, SettingsChanged
+from mayatk.anim_utils.shots.shot_manifest._table_presenter import ManifestTableMixin
 
 
-# Pastel red used for error labels in the footer
-_ERROR_COLOR = "#D4908F"
-
-
-class ShotManifestController(ptk.LoggingMixin):
+class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     """Business logic for the Shot Manifest UI."""
-
-    _SETTINGS_NS = "ShotManifest"
 
     def __init__(self, slots_instance, log_level="WARNING"):
         super().__init__()
@@ -42,7 +53,7 @@ class ShotManifestController(ptk.LoggingMixin):
 
         from uitk.widgets.mixins.settings_manager import SettingsManager
 
-        self._settings = SettingsManager(namespace=self._SETTINGS_NS)
+        self._settings = SettingsManager(namespace=SETTINGS_NS)
 
         self._user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
@@ -53,16 +64,36 @@ class ShotManifestController(ptk.LoggingMixin):
         from qtpy.QtWidgets import QAbstractItemView
 
         tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tree.setExpandsOnDoubleClick(False)
         tree.setContextMenuPolicy(Qt.CustomContextMenu)
         tree.customContextMenuRequested.connect(self._show_item_menu)
         tree.itemDoubleClicked.connect(self._on_range_double_clicked)
         tree.itemChanged.connect(self._on_item_changed)
 
         self._building = False
+        self._built_this_round = False
         self._store_listener_bound = False
         self._cached_gaps: Optional[List[float]] = None
+        self._cached_gap_ends: Optional[Dict[float, float]] = None
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
         self._bind_store_listener()
+        self._column_map = ColumnMap()
+        self._setup_recent_csv()
+        self._setup_csv_toggle()
+        self._setup_header_menu()
+        self._setup_mapping_presets()
+        self.ui.on_first_show.connect(self._on_first_show)
+
+    # ---- first-show auto-populate ----------------------------------------
+
+    def _on_first_show(self) -> None:
+        """Auto-populate the table the first time the window is shown."""
+        if self.ui.chk_csv.isChecked():
+            path = self.ui.txt_csv_path.text().strip()
+            if path:
+                self._load_csv(path)
+                return
+        self.detect()
 
     # ---- built state -----------------------------------------------------
 
@@ -79,20 +110,159 @@ class ShotManifestController(ptk.LoggingMixin):
 
     # ---- range column editing --------------------------------------------
 
-    def _on_range_double_clicked(self, item, column) -> None:
-        """Allow editing only the Range column on parent rows pre-build."""
-        if column != self._COL_RANGE:
+    @property
+    def _is_detection_mode(self) -> bool:
+        """True when steps were populated via scene detection (no CSV)."""
+        return bool(self._steps) and not self._csv_path
+
+    def _all_ranges_complete(self) -> bool:
+        """True when every step has a user-supplied (start, end) pair."""
+        return bool(self._steps) and all(
+            (r := self._user_ranges.get(s.step_id)) is not None
+            and r[0] is not None
+            and r[1] is not None
+            for s in self._steps
+        )
+
+    # ---- store access -----------------------------------------------------
+
+    def _active_store(self):
+        """Return the cached ShotStore, or try ShotStore.active()."""
+        if self._store is not None:
+            return self._store
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            return ShotStore.active()
+        except Exception:
+            return None
+
+    # ---- scene detection -------------------------------------------------
+
+    def _detect_regions(self, gap_threshold: float) -> list:
+        """Return detected shot regions, respecting the selected-keys setting.
+
+        When *use_selected_keys* is active and no keys are selected,
+        shows a message-box warning and returns an empty list.
+        """
+        store = self._active_store()
+        use_sel = store.use_selected_keys if store is not None else False
+        if use_sel:
+            kf_mode = store.key_filter_mode if store is not None else "all"
+            regions = regions_from_selected_keys(
+                gap_threshold=gap_threshold, key_filter=kf_mode
+            )
+            if not regions:
+                self.sb.message_box(
+                    "<b>No keys selected.</b><br>"
+                    "Select keyframes in the Graph Editor first.",
+                    background_color="rgb(68, 44, 44)",
+                )
+            return regions
+        return detect_shot_regions(gap_threshold=gap_threshold)
+
+    def detect(self, gap: Optional[float] = None) -> None:
+        """Detect animation regions in the scene and populate the table.
+
+        Replaces any loaded CSV data.  Ranges are pre-filled from
+        detection results (user-editable).  Section and Behaviors
+        columns are minimal since detection doesn't provide that
+        metadata.
+
+        Parameters:
+            gap: Minimum gap (frames) between shots.  When ``None``,
+                reads from the active ShotStore's detection_threshold,
+                falling back to 5.0.
+        """
+        store = self._active_store()
+        if gap is None:
+            gap = store.detection_threshold if store is not None else 5.0
+
+        use_sel = store.use_selected_keys if store is not None else False
+        regions = self._detect_regions(gap)
+        if not regions:
+            footer = (
+                "No selected keys found (select keys in the Graph Editor)."
+                if use_sel
+                else "No animation detected in scene."
+            )
+            self._load_data([], footer=footer)
             return
-        if item.parent() is not None:
-            return  # child row
-        if self._is_built:
-            return  # read-only post-build
-        tree = self.ui.tbl_steps
-        tree.editItem(item, column)
+
+        steps, ranges = BuilderStep.from_detection(regions)
+        n_obj = sum(len(s.objects) for s in steps)
+        source = "selected keys" if use_sel else "scene"
+        self._load_data(
+            steps,
+            ranges=dict(ranges),
+            footer=f"Detected {len(steps)} shots, {n_obj} objects from {source}.",
+        )
+
+    def _on_range_double_clicked(self, item, column) -> None:
+        """Allow editing Step, Description, Start, and End on parent rows pre-build.
+
+        For non-editable columns or post-build state, toggle expand/collapse instead.
+        """
+        editable_cols = [COL_STEP, COL_DESC, COL_START, COL_END]
+        is_parent = item.parent() is None
+        if is_parent and not self._is_built and column in editable_cols:
+            tree = self.ui.tbl_steps
+            tree.editItem(item, column)
+            return
+        # Fallback: toggle expand/collapse for parent rows
+        if is_parent:
+            item.setExpanded(not item.isExpanded())
 
     def _on_item_changed(self, item, column) -> None:
-        """Capture user edits to the Range column into ``_user_ranges``."""
-        if column != self._COL_RANGE:
+        """Capture user edits to Step name, Description, Start, and End columns.
+
+        Validation rules (Start/End):
+        - Negative start values are rejected.
+        - End must be > start when both are given.
+        - Start must not precede the previous step's resolved end.
+
+        After a valid range edit, downstream user ranges are cleared so
+        the resolver can re-flow them from the new anchor, and the full
+        table is refreshed.
+
+        Step name edits rename the step and re-key _user_ranges.
+        Description edits update the step's content field (which maps
+        to ShotBlock.description) without triggering range resolution.
+        """
+        # Step name edit
+        if column == COL_STEP:
+            if item.parent() is not None:
+                return
+            from qtpy.QtCore import Qt
+
+            step_data = item.data(0, Qt.UserRole)
+            if not isinstance(step_data, BuilderStep):
+                return
+            new_name = item.text(COL_STEP).strip()
+            if not new_name or new_name == step_data.step_id:
+                return
+            old_name = step_data.step_id
+            step_data.step_id = new_name
+            # Re-key user ranges
+            if old_name in self._user_ranges:
+                self._user_ranges[new_name] = self._user_ranges.pop(old_name)
+            return
+
+        # Description column edit
+        if column == COL_DESC:
+            if item.parent() is not None:
+                return
+            from qtpy.QtCore import Qt
+
+            step_data = item.data(0, Qt.UserRole)
+            if isinstance(step_data, BuilderStep):
+                if step_data.voice:
+                    step_data.voice = item.text(COL_DESC)
+                else:
+                    step_data.content = item.text(COL_DESC)
+            return
+
+        if column not in (COL_START, COL_END):
             return
         if item.parent() is not None:
             return
@@ -102,85 +272,92 @@ class ShotManifestController(ptk.LoggingMixin):
         if not isinstance(step_data, BuilderStep):
             return
 
-        raw = item.text(column).strip()
-        if not raw:
+        start_raw = item.text(COL_START).strip()
+        end_raw = item.text(COL_END).strip()
+
+        # Both empty — clear user range
+        if not start_raw and not end_raw:
             self._user_ranges.pop(step_data.step_id, None)
-            self._validate_range_collisions()
+            self._refresh_ranges()
             return
 
-        self._parse_and_store_range(step_data.step_id, raw)
-        self._validate_range_collisions()
-
-    def _parse_and_store_range(self, step_id: str, raw: str) -> None:
-        """Parse a range string and store it in ``_user_ranges``.
-
-        Accepts ``"120"`` (start only) or ``"120-250"`` / ``"120\u2013250"``.
-        """
-        raw = raw.replace("\u2013", "-")  # en-dash to hyphen
-        parts = [p.strip() for p in raw.split("-", 1)]
-        try:
-            start = float(parts[0])
-        except (ValueError, IndexError):
-            return
+        # Parse values
+        start: Optional[float] = None
         end: Optional[float] = None
-        if len(parts) == 2 and parts[1]:
-            try:
-                end = float(parts[1])
-            except ValueError:
-                pass
-        self._user_ranges[step_id] = (start, end)
-
-    def _restore_user_ranges(self, tree) -> None:
-        """Write ``_user_ranges`` values back into Range cells after a table rebuild."""
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        dim = QBrush(QColor("#888888"))
-        tree.blockSignals(True)
         try:
-            for i in range(tree.topLevelItemCount()):
-                parent = tree.topLevelItem(i)
-                step_data = parent.data(0, Qt.UserRole)
-                if not isinstance(step_data, BuilderStep):
-                    continue
-                user_range = self._user_ranges.get(step_data.step_id)
-                if user_range is None:
-                    # Auto-filled values appear dim (set by assess/auto-fill later)
-                    if parent.text(self._COL_RANGE):
-                        parent.setForeground(self._COL_RANGE, dim)
-                    continue
-                start, end = user_range
-                if end is not None:
-                    parent.setText(self._COL_RANGE, f"{start:.0f}\u2013{end:.0f}")
-                else:
-                    parent.setText(self._COL_RANGE, f"{start:.0f}")
-        finally:
-            tree.blockSignals(False)
+            if start_raw:
+                start = float(start_raw)
+        except ValueError:
+            self._revert_range_cell(item, step_data.step_id)
+            return
+        try:
+            if end_raw:
+                end = float(end_raw)
+        except ValueError:
+            self._revert_range_cell(item, step_data.step_id)
+            return
+
+        if start is None:
+            # Can't store a range without a start value
+            self._revert_range_cell(item, step_data.step_id)
+            return
+
+        # Reject negative start.
+        if start < 0:
+            self._revert_range_cell(item, step_data.step_id)
+            return
+
+        # Reject end <= start when end is given.
+        if end is not None and end <= start:
+            self._revert_range_cell(item, step_data.step_id)
+            return
+
+        # Reject start before previous step's resolved end.
+        step_idx = self._step_index(step_data.step_id)
+        if step_idx < 0:
+            return
+        if step_idx > 0 and self._last_resolved:
+            if step_idx <= len(self._last_resolved):
+                _, _, prev_end, _ = self._last_resolved[step_idx - 1]
+                if prev_end is not None and start < prev_end:
+                    self._revert_range_cell(item, step_data.step_id)
+                    return
+
+        # Valid — store, clear downstream, and refresh.
+        self._user_ranges[step_data.step_id] = (start, end)
+        self._cascade_from(step_idx)
+        self._refresh_ranges(from_step_idx=step_idx)
+
+    def _step_index(self, step_id: str) -> int:
+        """Return the list index for *step_id*, or -1 if not found."""
+        return next((i for i, s in enumerate(self._steps) if s.step_id == step_id), -1)
+
+    def _refresh_ranges(self, from_step_idx: int = 0) -> list:
+        """Re-resolve, auto-fill, and validate all ranges.
+
+        This is the single entry point for updating the Range column
+        after any edit, cascade, or clear operation.
+
+        Parameters
+        ----------
+        from_step_idx
+            Passed to :meth:`_resolve_ranges` so steps before this
+            index keep their last-resolved positions.
+
+        Returns the resolved ranges list.
+        """
+        resolved = self._auto_fill_ranges(
+            resolved=self._resolve_ranges(from_step_idx=from_step_idx)
+        )
+        self._validate_range_collisions(resolved)
+        return resolved
+
+    def _cascade_from(self, step_idx: int) -> None:
+        """Clear user ranges on all steps after *step_idx* so they re-flow."""
+        for s in self._steps[step_idx + 1 :]:
+            self._user_ranges.pop(s.step_id, None)
 
     # ---- auto-fill logic -------------------------------------------------
-
-    @staticmethod
-    def _prune_to_top_boundaries(
-        region_starts: List[float], n_steps: int
-    ) -> List[float]:
-        """Keep only *n_steps* region starts by selecting the largest gaps.
-
-        Picks the *n_steps - 1* largest consecutive differences in
-        *region_starts* as the primary shot boundaries, then returns
-        the first region plus the region after each selected boundary.
-        """
-        if len(region_starts) <= n_steps:
-            return region_starts
-        diffs = [
-            (region_starts[i + 1] - region_starts[i], i)
-            for i in range(len(region_starts) - 1)
-        ]
-        diffs.sort(key=lambda x: -x[0])
-        top_indices = sorted(d[1] for d in diffs[: n_steps - 1])
-        selected = [region_starts[0]]
-        for idx in top_indices:
-            selected.append(region_starts[idx + 1])
-        return selected
 
     def _resolve_ranges(
         self,
@@ -188,238 +365,45 @@ class ShotManifestController(ptk.LoggingMixin):
     ) -> List[Tuple[str, float, Optional[float], bool]]:
         """Compute a resolved (start, end) for every step.
 
-        Merges user-entered ranges with gap-detected auto-fill.
-
-        Parameters:
-            from_step_idx: Only re-resolve from this step index onward.
-                Steps before this index retain their last-resolved
-                positions (stored in ``_last_resolved``).
-
-        Returns:
-            List of ``(step_id, start, end_or_None, is_user)`` in CSV order.
+        Detects/caches animation regions, then delegates to the
+        standalone :func:`._range_resolver.resolve_ranges` algorithm.
         """
         if not self._steps:
             return []
 
-        from mayatk.anim_utils.shots.behaviors import compute_duration
+        store = self._active_store()
+        gap = store.gap if store else 0.0
+        det_threshold = store.detection_threshold if store else 5.0
+        use_sel = store.use_selected_keys if store else False
 
-        # Gap value from the store (single source of truth)
-        try:
-            from mayatk.anim_utils.shots._shots import ShotStore
-
-            gap = ShotStore.active().gap
-        except Exception:
-            gap = 0.0
-
-        # Detect animation gaps for auto-fill (cached per assess cycle).
-        # Two-phase detection: fast pass first, then motion-aware retry
-        # when the scene has baked keys hiding the real shot boundaries.
+        # Detect animation regions for auto-fill (cached per assess cycle).
         if self._cached_gaps is not None:
             gap_starts = self._cached_gaps
         else:
-            min_gap_val = max(gap + 1, 2.0)
-            gap_starts = detect_animation_gaps(min_gap=min_gap_val)
-            n_steps = len(self._steps)
-            if len(gap_starts) < n_steps:
-                # Not enough regions for all steps — try motion-based
-                # detection (handles baked / flat-key scenes).
-                motion_gaps = detect_animation_gaps(
-                    min_gap=min_gap_val, ignore_flat_keys=True
-                )
-                if len(motion_gaps) > len(gap_starts):
-                    gap_starts = motion_gaps
-                    if gap_starts:
-                        self._set_footer(
-                            f"Baked animation detected — "
-                            f"{len(gap_starts) - 1} gaps found after "
-                            f"ignoring flat keys.  Consider running "
-                            f"Optimize Keys to clean the curves.",
-                            color="#D4B878",
-                        )
+            regions = self._detect_regions(det_threshold)
+            gap_starts = [r["start"] for r in regions] if regions else []
             self._cached_gaps = gap_starts
+            self._cached_gap_ends = (
+                {r["start"]: r["end"] for r in regions if r.get("end") is not None}
+                if regions
+                else {}
+            )
 
-        # When more regions than steps, keep only the largest
-        # boundaries so each step maps to a major animation section.
-        if len(gap_starts) > len(self._steps):
-            gap_starts = self._prune_to_top_boundaries(gap_starts, len(self._steps))
+        if use_sel and not gap_starts:
+            return []
 
-        # Build the resolved list
-        resolved: List[Tuple[str, float, Optional[float], bool]] = []
-        gap_idx = 0
-        cursor = 1.0  # default start when no animation or no gaps
-
-        # Frozen prefix: reuse last-resolved values for steps before from_step_idx
-        last = getattr(self, "_last_resolved", None) or []
-        if from_step_idx > 0 and last:
-            for i in range(min(from_step_idx, len(last), len(self._steps))):
-                resolved.append(last[i])
-            # Advance cursor past the frozen prefix
-            if resolved:
-                _, _, prev_end, _ = resolved[-1]
-                if prev_end is not None:
-                    cursor = prev_end + gap
-            # Advance gap_idx past gaps consumed by the frozen prefix
-            for gs in gap_starts:
-                if gs < cursor:
-                    gap_idx += 1
-                else:
-                    break
-
-        for i, step in enumerate(self._steps):
-            if i < len(resolved):
-                continue  # already in frozen prefix
-
-            user = self._user_ranges.get(step.step_id)
-            if user is not None:
-                start, end = user
-                resolved.append((step.step_id, start, end, True))
-                # Advance cursor past this user-defined range
-                if end is not None:
-                    cursor = end + gap
-                else:
-                    cursor = start + compute_duration(step.objects) + gap
-            elif gap_starts and gap_idx < len(gap_starts):
-                # Use next region start for this step
-                start = gap_starts[gap_idx]
-                gap_idx += 1
-                resolved.append((step.step_id, start, None, False))
-                cursor = start + compute_duration(step.objects) + gap
-            else:
-                # Sequential placement from cursor
-                start = cursor
-                resolved.append((step.step_id, start, None, False))
-                cursor = start + compute_duration(step.objects) + gap
-
-        # Second pass: resolve None ends as next_start - gap (or last key)
-        for i in range(len(resolved)):
-            step_id, start, end, is_user = resolved[i]
-            if end is None:
-                if i + 1 < len(resolved):
-                    end = resolved[i + 1][1] - gap
-                else:
-                    end = start + compute_duration(self._steps[i].objects)
-            resolved[i] = (step_id, start, end, is_user)
-
+        resolved = resolve_ranges(
+            steps=self._steps,
+            user_ranges=self._user_ranges,
+            gap_starts=gap_starts,
+            gap_end_map=self._cached_gap_ends or {},
+            gap=gap,
+            use_selected_keys=use_sel,
+            last_resolved=self._last_resolved,
+            from_step_idx=from_step_idx,
+        )
         self._last_resolved = resolved
         return resolved
-
-    def _auto_fill_ranges(self, resolved=None) -> list:
-        """Auto-fill the Range column using resolved ranges.
-
-        User-entered values are preserved; auto-filled values appear dim
-        and italic.
-
-        Parameters:
-            resolved: Pre-computed resolved ranges.  When ``None``,
-                :meth:`_resolve_ranges` is called internally.
-
-        Returns:
-            The resolved ranges list (for reuse by collision validation).
-        """
-        if resolved is None:
-            resolved = self._resolve_ranges()
-        if not resolved:
-            return resolved
-
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush, QFont
-
-        tree = self.ui.tbl_steps
-        dim = QBrush(QColor("#888888"))
-        step_map = {r[0]: r for r in resolved}
-
-        tree.blockSignals(True)
-        try:
-            for i in range(tree.topLevelItemCount()):
-                parent = tree.topLevelItem(i)
-                step_data = parent.data(0, Qt.UserRole)
-                if not isinstance(step_data, BuilderStep):
-                    continue
-                entry = step_map.get(step_data.step_id)
-                if entry is None:
-                    continue
-                step_id, start, end, is_user = entry
-                if end is not None:
-                    parent.setText(self._COL_RANGE, f"{start:.0f}\u2013{end:.0f}")
-                else:
-                    parent.setText(self._COL_RANGE, f"{start:.0f}")
-                font = parent.font(self._COL_RANGE)
-                if not is_user:
-                    parent.setForeground(self._COL_RANGE, dim)
-                    font.setItalic(True)
-                else:
-                    font.setItalic(False)
-                parent.setFont(self._COL_RANGE, font)
-        finally:
-            tree.blockSignals(False)
-        return resolved
-
-    def _validate_range_collisions(self, resolved=None) -> int:
-        """Check adjacent ranges for ordering violations and color conflicts.
-
-        Resets Range-column foreground on all items, then recolors
-        collision participants in pastel red.
-
-        Parameters:
-            resolved: Pre-computed resolved ranges.  When ``None``,
-                :meth:`_resolve_ranges` is called internally.
-
-        Returns the number of collisions found.
-        """
-        if resolved is None:
-            resolved = self._resolve_ranges()
-        if len(resolved) < 2:
-            return 0
-
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        tree = self.ui.tbl_steps
-        collision_brush = QBrush(QColor("#D4908F"))  # pastel red
-        dim = QBrush(QColor("#888888"))
-        collisions = 0
-
-        # Build a map of step_id → tree item for quick lookup
-        item_map: dict = {}
-        resolved_map: dict = {}
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep):
-                item_map[step_data.step_id] = parent
-        for r in resolved:
-            resolved_map[r[0]] = r
-
-        # Block signals to prevent _on_item_changed from firing
-        # recursively while we update foregrounds/tooltips.
-        tree.blockSignals(True)
-        try:
-            # First pass: reset foreground and tooltip for all range cells
-            for sid, item in item_map.items():
-                entry = resolved_map.get(sid)
-                is_user = entry[3] if entry else False
-                item.setForeground(self._COL_RANGE, QBrush() if is_user else dim)
-                item.setToolTip(self._COL_RANGE, "")
-
-            # Second pass: mark collision items
-            for i in range(len(resolved) - 1):
-                curr_id, curr_start, curr_end, _ = resolved[i]
-                next_id, next_start, _, _ = resolved[i + 1]
-                effective_end = curr_end if curr_end is not None else curr_start
-                if effective_end >= next_start:
-                    collisions += 1
-                    for sid in (curr_id, next_id):
-                        item = item_map.get(sid)
-                        if item is not None:
-                            item.setForeground(self._COL_RANGE, collision_brush)
-                            item.setToolTip(
-                                self._COL_RANGE,
-                                "Range collision: overlaps with adjacent step",
-                            )
-        finally:
-            tree.blockSignals(False)
-
-        return collisions
 
     # ---- ShotStore observer ----------------------------------------------
 
@@ -454,13 +438,27 @@ class ShotManifestController(ptk.LoggingMixin):
         """Remove ShotStore listener (call on teardown)."""
         self._unbind_store_listener()
 
-    def _on_store_event(self, event: str, payload=None) -> None:
+    def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations — refresh tree timing if steps are loaded."""
-        if not self._steps or self._building:
+
+        if self._building:
+            return
+        if isinstance(event, SettingsChanged):
+            # Detection settings changed — invalidate cache and re-detect
+            # when the manifest is in detection mode (no CSV).
+            self._cached_gaps = None
+            self._cached_gap_ends = None
+            if self._steps and not self._csv_path:
+                self.detect()
+            return
+        if not self._steps:
             return
         self._last_results = []  # invalidate stale assessment
         store = getattr(self, "_bound_store", None)
-        if store is not None:
+        # Only overwrite tree timing from the store when shots have
+        # been built for the current round.  Before build, detection
+        # ranges in _user_ranges are authoritative.
+        if store is not None and self._built_this_round:
             self._refresh_timing(store)
         self._update_build_button()
 
@@ -480,8 +478,10 @@ class ShotManifestController(ptk.LoggingMixin):
                 shot = timing_map.get(step_data.step_id)
                 if shot is None:
                     continue
-                parent.setText(self._COL_RANGE, f"{shot.start:.0f}\u2013{shot.end:.0f}")
-                parent.setToolTip(self._COL_RANGE, f"{shot.end - shot.start:.0f}f")
+                parent.setText(COL_START, f"{shot.start:.0f}")
+                parent.setText(COL_END, f"{shot.end:.0f}")
+                parent.setToolTip(COL_START, f"{shot.end - shot.start:.0f}f")
+                parent.setToolTip(COL_END, f"{shot.end - shot.start:.0f}f")
         finally:
             tree.blockSignals(False)
 
@@ -507,7 +507,16 @@ class ShotManifestController(ptk.LoggingMixin):
 
         tree = self.ui.tbl_steps
         item = tree.itemAt(pos)
+
+        # Right-click on empty space — show excluded steps menu
         if item is None:
+            excluded = self._column_map.exclude_steps
+            if excluded:
+                menu = QMenu(tree)
+                sub = menu.addMenu(f"Show Excluded ({len(excluded)})")
+                for sid in sorted(excluded):
+                    sub.addAction(sid, lambda n=sid: self._include_step(n))
+                menu.exec_(tree.viewport().mapToGlobal(pos))
             return
 
         # Resolve to parent step row
@@ -517,18 +526,47 @@ class ShotManifestController(ptk.LoggingMixin):
         if not isinstance(step_data, BuilderStep):
             return
 
+        # Collect all selected parent step IDs for multi-selection actions
+        selected_step_ids = []
+        for sel_item in tree.selectedItems():
+            parent_item = (
+                sel_item.parent() if sel_item.parent() is not None else sel_item
+            )
+            sel_data = parent_item.data(0, Qt.UserRole)
+            if (
+                isinstance(sel_data, BuilderStep)
+                and sel_data.step_id not in selected_step_ids
+            ):
+                selected_step_ids.append(sel_data.step_id)
+
         menu = QMenu(tree)
         act_open = menu.addAction(f"Open '{step_data.step_id}' in Shot Sequencer")
         if not self._is_built:
             act_open.setEnabled(False)
             act_open.setToolTip("Build shots first")
 
+        # Exclude step action (parent rows, pre-build only)
+        act_exclude = None
+        if not self._is_built and selected_step_ids:
+            menu.addSeparator()
+            if len(selected_step_ids) == 1:
+                act_exclude = menu.addAction(f"Exclude '{selected_step_ids[0]}'")
+            else:
+                act_exclude = menu.addAction(f"Exclude {len(selected_step_ids)} Steps")
+
+        # Show excluded submenu when exclusions exist
+        excluded = self._column_map.exclude_steps
+        if excluded:
+            sub = menu.addMenu(f"Show Excluded ({len(excluded)})")
+            for sid in sorted(excluded):
+                sub.addAction(sid, lambda n=sid: self._include_step(n))
+
         # Range column actions (parent rows, pre-build only)
         act_set_frame = None
         act_auto_fill = None
         act_clear_range = None
         column = tree.columnAt(pos.x())
-        if not is_child and not self._is_built and column == self._COL_RANGE:
+        if not is_child and not self._is_built and column in (COL_START, COL_END):
             menu.addSeparator()
             act_set_frame = menu.addAction("Set Start to Current Frame")
             act_auto_fill = menu.addAction("Auto-fill from Gaps")
@@ -537,6 +575,7 @@ class ShotManifestController(ptk.LoggingMixin):
 
         # Object-level actions (child rows only)
         act_outliner = None
+        act_reapply = None
         if is_child:
             obj_data = item.data(0, Qt.UserRole)
             obj_name = (
@@ -547,37 +586,61 @@ class ShotManifestController(ptk.LoggingMixin):
             if obj_name:
                 menu.addSeparator()
                 act_outliner = menu.addAction(f"Show '{obj_name}' in Outliner")
+                if self._is_built and obj_data.behaviors:
+                    names = ", ".join(fmt_behavior(b) for b in obj_data.behaviors)
+                    act_reapply = menu.addAction(f"Re-apply [{names}]")
 
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen is act_open:
             self._open_in_shot_sequencer(step_data.step_id)
+        elif chosen is act_exclude and act_exclude is not None:
+            self._exclude_steps(selected_step_ids)
         elif chosen is not None and chosen is act_outliner:
             self._show_in_outliner(obj_name)
+        elif chosen is act_reapply and act_reapply is not None:
+            self._reapply_behavior(step_data.step_id, obj_data)
         elif chosen is act_set_frame and act_set_frame is not None:
             self._set_range_to_current_frame(step_item, step_data.step_id)
         elif chosen is act_auto_fill and act_auto_fill is not None:
-            step_idx = next(
-                (
-                    i
-                    for i, s in enumerate(self._steps)
-                    if s.step_id == step_data.step_id
-                ),
-                0,
-            )
+            step_idx = self._step_index(step_data.step_id)
             # Clear user ranges from clicked step onward so they re-resolve
-            for s in self._steps[step_idx:]:
-                self._user_ranges.pop(s.step_id, None)
-            resolved = self._auto_fill_ranges(
-                resolved=self._resolve_ranges(from_step_idx=step_idx)
-            )
-            self._validate_range_collisions(resolved)
+            self._user_ranges.pop(step_data.step_id, None)
+            self._cascade_from(step_idx)
+            self._refresh_ranges(from_step_idx=step_idx)
         elif chosen is act_clear_range and act_clear_range is not None:
             self._user_ranges.pop(step_data.step_id, None)
-            tree.blockSignals(True)
-            step_item.setText(self._COL_RANGE, "")
-            tree.blockSignals(False)
-            resolved = self._auto_fill_ranges()
-            self._validate_range_collisions(resolved)
+            self._refresh_ranges()
+
+    # ---- exclude / include steps -----------------------------------------
+
+    def _exclude_steps(self, step_ids) -> None:
+        """Add one or more step IDs to the exclude list."""
+        if isinstance(step_ids, str):
+            step_ids = [step_ids]
+        current = set(self._column_map.exclude_steps)
+        current.update(step_ids)
+        self._column_map.exclude_steps = tuple(sorted(current))
+        exclude_set = set(step_ids)
+        self._steps = [s for s in self._steps if s.step_id not in exclude_set]
+        for sid in step_ids:
+            self._user_ranges.pop(sid, None)
+        self._populate_table()
+        self._update_build_button()
+        n = len(self._column_map.exclude_steps)
+        names = ", ".join(step_ids)
+        self._set_footer(f"Excluded {names} ({n} total excluded).")
+
+    def _include_step(self, step_id: str) -> None:
+        """Remove *step_id* from the exclude list and re-parse the CSV."""
+        current = set(self._column_map.exclude_steps)
+        current.discard(step_id)
+        self._column_map.exclude_steps = tuple(sorted(current))
+        # Re-parse to restore the step
+        path = self._csv_path or self.ui.txt_csv_path.text().strip()
+        if path:
+            self._load_csv(path)
+        else:
+            self._set_footer(f"Restored '{step_id}'. Reload CSV to populate.")
 
     def _set_range_to_current_frame(self, item, step_id: str) -> None:
         """Set the range start for *step_id* to the current Maya timeline frame.
@@ -592,20 +655,9 @@ class ShotManifestController(ptk.LoggingMixin):
         frame = float(_cmds.currentTime(q=True))
         self._user_ranges[step_id] = (frame, None)
 
-        # Clear subsequent user ranges so they re-flow from this anchor
-        step_idx = next(
-            (i for i, s in enumerate(self._steps) if s.step_id == step_id),
-            0,
-        )
-        for s in self._steps[step_idx + 1 :]:
-            self._user_ranges.pop(s.step_id, None)
-
-        tree = self.ui.tbl_steps
-        tree.blockSignals(True)
-        item.setText(self._COL_RANGE, f"{frame:.0f}")
-        tree.blockSignals(False)
-        resolved = self._auto_fill_ranges()
-        self._validate_range_collisions(resolved)
+        step_idx = self._step_index(step_id)
+        self._cascade_from(step_idx)
+        self._refresh_ranges(from_step_idx=step_idx)
 
     def _show_in_outliner(self, obj_name: str) -> None:
         """Select *obj_name* and reveal it in Maya's Outliner."""
@@ -622,7 +674,11 @@ class ShotManifestController(ptk.LoggingMixin):
         UiUtils.reveal_in_outliner([obj_name])
 
     def _open_in_shot_sequencer(self, step_id: str) -> None:
-        """Open the Shot Sequencer UI and navigate to the shot matching *step_id*."""
+        """Open the Shot Sequencer UI and navigate to the shot matching *step_id*.
+
+        The sequencer controller lazily wraps ``ShotStore.active()`` via
+        its ``sequencer`` property — no manual wiring needed here.
+        """
         from mayatk.anim_utils.shots._shots import ShotStore
 
         store = ShotStore.active()
@@ -640,16 +696,10 @@ class ShotManifestController(ptk.LoggingMixin):
         if controller is None:
             return
 
-        # The shot sequencer wraps the shared store
-        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
-
-        controller.sequencer = ShotSequencer(store=store)
-
-        # Do NOT auto-respace here.  _sync_header_settings (called by
-        # _sync_to_widget) will flow the spinner value into store.gap
-        # for display/metadata, but actual keyframe respacing must be
-        # explicitly triggered by the user via the gap spinner.
-
+        # Clear stale session state so prior shifted-out keys
+        # and cached segments don't suppress the new display.
+        controller._shifted_out_keys.clear()
+        controller._segment_cache.clear()
         controller._sync_combobox()
 
         # Select the shot matching step_id
@@ -659,10 +709,6 @@ class ShotManifestController(ptk.LoggingMixin):
                 shot_id = cmb.itemData(i)
                 shot = controller.sequencer.shot_by_id(shot_id) if shot_id else None
                 if shot and shot.name == step_id:
-                    # Clear stale session state so prior shifted-out keys
-                    # and cached segments don't suppress the new display.
-                    controller._shifted_out_keys.clear()
-                    controller._segment_cache.clear()
                     cmb.blockSignals(True)
                     cmb.setCurrentIndex(i)
                     cmb.blockSignals(False)
@@ -671,6 +717,132 @@ class ShotManifestController(ptk.LoggingMixin):
                     break
 
     # ---- CSV loading -----------------------------------------------------
+
+    def _setup_recent_csv(self) -> None:
+        """Attach a RecentValuesOption to the CSV path widget."""
+        from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
+
+        txt = self.ui.txt_csv_path
+        self._recent_csv_option = RecentValuesOption(
+            wrapped_widget=txt,
+            settings_key="shot_manifest_csv_paths",
+            max_recent=10,
+        )
+        txt.option_box.add_option(self._recent_csv_option)
+
+    def _setup_csv_toggle(self) -> None:
+        """Connect the CSV checkbox to enable/disable the path and browse widgets."""
+        chk = self.ui.chk_csv
+        chk.toggled.connect(self._on_csv_toggled)
+        self._sync_csv_widgets(False)
+
+    def _setup_header_menu(self) -> None:
+        """Configure the header option menu.
+
+        Detection settings (threshold, use-selected-keys) now live in
+        the shared ``shots.ui`` panel, opened via the Settings button.
+        """
+        menu = self.ui.header.menu
+        menu.setTitle("Options")
+        menu.add(
+            "QPushButton",
+            setText="Shot Settings\u2026",
+            setObjectName="btn_settings",
+            setToolTip="Open shared shot detection, gap, and editing settings.",
+        )
+
+    def _setup_mapping_presets(self) -> None:
+        """Wire a PresetManager for column-mapping presets."""
+        from uitk.widgets.mixins.preset_manager import PresetManager
+        from uitk.widgets.widgetComboBox import WidgetComboBox
+
+        self._mapping_presets = PresetManager(
+            preset_dir="mayatk/shot_manifest/mappings",
+            widgets=[],  # metadata-only: no widgets, just ColumnMap in _meta
+        )
+        self._mapping_presets.metadata_provider = lambda: {
+            "column_map": self._column_map.to_dict()
+        }
+        self._mapping_presets.on_metadata_loaded = self._on_mapping_loaded
+
+        menu = self.ui.header.menu
+        cmb = menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_mapping",
+            setToolTip="Select a column-mapping preset for CSV parsing.",
+        )
+        self._mapping_presets.wire_combo(cmb, on_loaded=self._on_mapping_applied)
+
+    def _on_mapping_loaded(self, meta: dict) -> None:
+        """Restore ColumnMap from preset metadata."""
+        cm_data = meta.get("column_map")
+        self._column_map = ColumnMap.from_dict(cm_data) if cm_data else ColumnMap()
+
+    def _on_mapping_applied(self) -> None:
+        """Re-parse the current CSV after a mapping preset is applied."""
+        path = self._csv_path or self.ui.txt_csv_path.text().strip()
+        if path:
+            self._load_csv(path)
+
+    # ---- mode switching (single source of truth) -------------------------
+
+    def _sync_csv_widgets(self, csv_mode: bool) -> None:
+        """Sync checkbox and CSV-related widgets to match the active mode."""
+        chk = self.ui.chk_csv
+        chk.blockSignals(True)
+        chk.setChecked(csv_mode)
+        chk.blockSignals(False)
+        txt = self.ui.txt_csv_path
+        txt.setEnabled(csv_mode)
+        txt.style().unpolish(txt)
+        txt.style().polish(txt)
+        self.ui.b001.setEnabled(csv_mode)
+
+    def _load_data(
+        self,
+        steps: List[BuilderStep],
+        *,
+        ranges: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
+        csv_path: str = "",
+        footer: str = "",
+    ) -> None:
+        """Single source of truth for mode switching.
+
+        Every code path that changes table contents (detect, CSV load,
+        CSV toggle-off) funnels through here so that state, widgets,
+        and the table are always consistent.
+        """
+        self._steps = steps
+        self._csv_path = csv_path
+        self._user_ranges = dict(ranges) if ranges else {}
+        self._last_results = []
+        self._built_this_round = False
+        self._cached_gaps = None
+        self._cached_gap_ends = None
+
+        self._sync_csv_widgets(bool(csv_path))
+        self._populate_table()
+        self._update_build_button()
+
+        if footer:
+            self._set_footer(footer)
+
+    def _on_csv_toggled(self, enabled: bool) -> None:
+        """Handle the CSV checkbox toggle.
+
+        When checked with a remembered path, reloads CSV data.
+        When checked without a path, enables widgets for browsing.
+        When unchecked, clears data so detection can be used.
+        """
+        if enabled:
+            path = self.ui.txt_csv_path.text().strip()
+            if path:
+                self._load_csv(path)
+            else:
+                self._sync_csv_widgets(True)
+        else:
+            self._sync_csv_widgets(False)
+            self.detect()
 
     def browse_csv(self) -> None:
         """Open a file dialog and load the selected CSV."""
@@ -681,178 +853,67 @@ class ShotManifestController(ptk.LoggingMixin):
         )
         if not path:
             return
-        self._csv_path = path
+        self._sync_csv_widgets(True)
         self.ui.txt_csv_path.setText(path)
         self._load_csv(path)
 
     def _load_csv(self, path: str) -> None:
-        """Parse the CSV, populate the table, and update the summary."""
+        """Parse the CSV and load it via :meth:`_load_data`."""
         import os
 
         if not os.path.isfile(path):
             self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"File not found: {path}", color=_ERROR_COLOR)
+            self._set_footer(f"File not found: {path}", color=ERROR_COLOR)
             return
 
         try:
-            self._steps = parse_csv(path)
+            steps = parse_csv(path, columns=self._column_map)
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
             self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"Error: {exc}", color=_ERROR_COLOR)
+            self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
             return
 
         self.ui.txt_csv_path.reset_action_color()
-        self._populate_table()
-        self._last_results = []  # stale after new CSV
-        self._update_build_button()
-        n_obj = sum(len(s.objects) for s in self._steps)
-        self._set_footer(f"{len(self._steps)} steps, {n_obj} objects loaded.")
-
-    # ---- table population ------------------------------------------------
-
-    _HEADERS = ["Step", "Section", "Content", "Behaviors", "Range"]
-
-    # Foreground colors for behavior names on child rows (pastel)
-    _BEHAVIOR_COLORS = {
-        "fade_in": ("#8ECFBF", None),  # soft teal
-        "fade_out": ("#E0B880", None),  # soft amber
-        "fade_in_out": ("#A3C4E0", None),  # soft sky blue
-    }
-
-    _STEP_ICON_COLOR = "#8E8E8E"  # neutral dark grey for parent step rows
-
-    @staticmethod
-    def _fmt_behavior(name: str) -> str:
-        """'fade_in_out' -> 'Fade In Out'."""
-        return name.replace("_", " ").title() if name else ""
-
-    @staticmethod
-    def _try_load_maya_icons():
-        """Return the :class:`NodeIcons` class if Maya is available, else ``None``."""
-        try:
-            from mayatk.ui_utils.node_icons import NodeIcons
-            import maya.cmds as cmds  # noqa: F401 — availability check
-        except ImportError:
-            return None
-        return NodeIcons
-
-    # Fixed column indices for the unified 5-column layout
-    _COL_STEP = 0
-    _COL_SECTION = 1
-    _COL_CONTENT = 2  # parent: description, child: object name
-    _COL_BEHAVIORS = 3
-    _COL_RANGE = 4
-
-    def _apply_formatting(self, tree) -> None:
-        """Set column/row tints, behavior colors, icons, and column widths."""
-        from qtpy.QtGui import QColor
-
-        content_col = self._COL_CONTENT
-        beh_col = self._COL_BEHAVIORS
-
-        # Row tints via delegate (fillRect bypasses Maya QSS stripping).
-        tree._child_row_color = QColor(0, 0, 0, 55)
-
-        # Column tints — darken Step and Behaviors columns
-        tree.clear_column_tints()
-        tree.set_column_tint(self._COL_STEP, QColor(0, 0, 0, 45))
-        tree.set_column_tint(self._COL_BEHAVIORS, QColor(0, 0, 0, 45))
-
-        # Behavior column formatter
-        display_colors = {
-            self._fmt_behavior(k).lower(): v for k, v in self._BEHAVIOR_COLORS.items()
-        }
-        formatter = tree.make_color_map_formatter(display_colors)
-        tree.set_column_formatter(beh_col, formatter)
-
-        # Icons: step icon on parents, type-coded icon on child Content column
-        node_icons_cls = self._try_load_maya_icons()
-        not_found_color = self._PASTEL_STATUS.get("missing_object", ("#D4908F",))[0]
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            tree.set_item_icon(parent, "step", color=self._STEP_ICON_COLOR)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                obj_name = child.text(content_col)
-                if not obj_name:
-                    continue
-                maya_icon = (
-                    node_icons_cls.get_icon(obj_name) if node_icons_cls else None
-                )
-                if maya_icon is not None:
-                    child.setIcon(content_col, maya_icon)
-                else:
-                    tree.set_item_type_icon(
-                        child, "close", column=content_col, color=not_found_color
-                    )
-
-        # Column widths
-        header = tree.header()
-        header.resizeSection(self._COL_STEP, 60)
-        header.resizeSection(beh_col, 110)
-        header.resizeSection(self._COL_RANGE, 80)
-
-        # Run registered formatters
-        tree.apply_formatting()
-
-    def _populate_table(self) -> None:
-        """Fill the TreeWidget with parsed steps and expandable object rows."""
-        tree = self.ui.tbl_steps
-        tree.clear()
-        tree.setHeaderLabels(self._HEADERS)
-        tree.setColumnCount(len(self._HEADERS))
-
-        for step in self._steps:
-            section = (
-                f"{step.section}: {step.section_title}"
-                if step.section_title
-                else step.section
-            )
-
-            parent = tree.create_item(
-                [step.step_id, section, step.content, "", ""],
-                data=step,
-            )
-            # Child rows: object name in Content column, behavior in Behaviors
-            for obj in step.objects:
-                tree.create_item(
-                    ["", "", obj.name, self._fmt_behavior(obj.behavior), ""],
-                    data=obj,
-                    parent=parent,
-                )
-
-        # Restrict editability: only Range column on parent rows, pre-build
-        from qtpy.QtCore import Qt as _Qt
-
-        editable = not self._is_built
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            if editable:
-                parent.setFlags(parent.flags() | _Qt.ItemIsEditable)
-            else:
-                parent.setFlags(parent.flags() & ~_Qt.ItemIsEditable)
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                child.setFlags(child.flags() & ~_Qt.ItemIsEditable)
-
-        # Restore user-entered range values that survive table rebuilds
-        self._restore_user_ranges(tree)
-
-        self._apply_formatting(tree)
-        tree.set_stretch_column(2)  # Stretch "Content" column
-        tree.restore_column_state()  # Persist user header changes
+        self._recent_csv_option.record(path)
+        n_obj = sum(len(s.objects) for s in steps)
+        self._load_data(
+            steps,
+            csv_path=path,
+            footer=f"{len(steps)} steps, {n_obj} objects loaded.",
+        )
 
     # ---- helpers ---------------------------------------------------------
 
     def _ensure_steps(self) -> bool:
-        """Load CSV from the text field if steps are empty. Returns True if steps are available."""
+        """Ensure steps are available, auto-detecting from scene if needed.
+
+        Priority order:
+        1. If steps are already loaded, return True immediately.
+        2. If CSV checkbox is on and a path exists, load the CSV.
+        3. Otherwise, run scene detection.
+
+        Returns True if steps are now available.
+        """
+        if self._steps:
+            return True
+
+        # Try CSV first when enabled
+        path = self.ui.txt_csv_path.text().strip()
+        if path and self.ui.chk_csv.isChecked():
+            self._load_csv(path)
+            if self._steps:
+                return True
+
+        # Fall back to scene detection
+        try:
+            self.detect()
+        except Exception as exc:
+            self.logger.error("Auto-detect failed: %s", exc)
+            self._set_footer(f"Detection error: {exc}", color=ERROR_COLOR)
+
         if not self._steps:
-            path = self.ui.txt_csv_path.text().strip()
-            if path:
-                self._load_csv(path)
-        if not self._steps:
-            self._set_footer("Load a CSV first.")
+            self._set_footer("No animation detected in scene.")
             return False
         return True
 
@@ -894,14 +955,15 @@ class ShotManifestController(ptk.LoggingMixin):
             if shot is None:
                 return True  # new shot
             # Check for object or behavior changes (same logic as update())
-            csv_obj_map = {o.name: o.behavior for o in step.objects}
+            csv_obj_map = {o.name: sorted(o.behaviors) for o in step.objects}
             if set(csv_obj_map) != set(shot.objects):
                 return True  # objects added or removed
-            old_beh = {
-                e["name"]: e.get("behavior", "")
-                for e in shot.metadata.get("behaviors", [])
-            }
-            if any(csv_obj_map.get(n, "") != old_beh.get(n, "") for n in csv_obj_map):
+            old_beh: dict = {}
+            for e in shot.metadata.get("behaviors", []):
+                old_beh.setdefault(e["name"], []).append(e.get("behavior", ""))
+            for k in old_beh:
+                old_beh[k] = sorted(old_beh[k])
+            if any(csv_obj_map.get(n, []) != old_beh.get(n, []) for n in csv_obj_map):
                 return True  # behavior changed
         return False
 
@@ -917,7 +979,7 @@ class ShotManifestController(ptk.LoggingMixin):
         try:
             import pymel.core as pm
         except ImportError:
-            self._set_footer("Maya is required to build shots.", color=_ERROR_COLOR)
+            self._set_footer("Maya is required to build shots.", color=ERROR_COLOR)
             return
 
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -926,18 +988,57 @@ class ShotManifestController(ptk.LoggingMixin):
             store = ShotStore.active()
             builder = ShotManifest(store)
 
-            # Resolve ranges (gap-detected + user overrides) into a map
-            resolved = self._resolve_ranges()
-            range_map = {
-                sid: (s, e) for sid, s, e, _ in resolved if e is not None
-            } or None
+            # When use_selected_keys is active, verify keys exist
+            # before proceeding — even if user ranges are complete.
+            use_sel = store.use_selected_keys if store else False
+            if use_sel:
+                self._cached_gaps = None
+                regions = self._detect_regions(
+                    store.detection_threshold if store else 5.0
+                )
+                if not regions:
+                    self._set_footer(
+                        "No selected keys found \u2014 select keyframes first.",
+                        color=ERROR_COLOR,
+                    )
+                    return
+
+            # Resolve ranges — short-circuit when all ranges are
+            # already complete (detection mode provides full ranges).
+            if self._all_ranges_complete():
+                range_map = dict(self._user_ranges)
+            else:
+                resolved = self._resolve_ranges()
+                range_map = {
+                    sid: (s, e) for sid, s, e, _ in resolved if e is not None
+                } or None
+
+            # In selected-keys mode, restrict the step list to steps
+            # that actually received a range from the detected regions.
+            # This prevents update() from creating shots via its own
+            # sequential cursor fallback for unresolved steps.
+            build_steps = self._steps
+            if use_sel and range_map:
+                resolved_ids = set(range_map)
+                build_steps = [s for s in self._steps if s.step_id in resolved_ids]
+                if not build_steps:
+                    self._set_footer(
+                        "Selected keys don't map to any CSV steps.",
+                        color=ERROR_COLOR,
+                    )
+                    return
+
+            # Detection mode: don't remove existing shots not in steps
+            remove = not self._is_detection_mode
 
             pm.undoInfo(openChunk=True, chunkName="ShotManifest_build")
             self._building = True
             try:
                 with store.batch_update():
                     actions, beh, assessment = builder.sync(
-                        self._steps, ranges=range_map
+                        build_steps,
+                        ranges=range_map,
+                        remove_missing=remove,
                     )
             finally:
                 self._building = False
@@ -945,6 +1046,7 @@ class ShotManifestController(ptk.LoggingMixin):
 
             # Store the store for later handoff to Shot Sequencer UI
             self._store = store
+            self._built_this_round = True
 
             n_created = sum(1 for a in actions.values() if a == "created")
             n_patched = sum(1 for a in actions.values() if a == "patched")
@@ -972,7 +1074,7 @@ class ShotManifestController(ptk.LoggingMixin):
             self._update_build_button()
         except Exception as exc:
             self.logger.error("Build failed: %s", exc)
-            self._set_footer(f"Build error: {exc}", color=_ERROR_COLOR)
+            self._set_footer(f"Build error: {exc}", color=ERROR_COLOR)
 
     def _apply_post_build(self, results: list, store) -> None:
         """Refresh tree with timing from the store and assessment results."""
@@ -983,18 +1085,6 @@ class ShotManifestController(ptk.LoggingMixin):
 
     # ---- assess ----------------------------------------------------------
 
-    # Soft pastel assessment colors: (foreground, background)
-    # Distinct hues on dark themes — visible but not harsh.
-    _PASTEL_STATUS = {
-        "valid": (None, None),  # no change — default appearance
-        "missing_shot": ("#D4B878", "#3D3528"),  # warm gold fg + subtle amber bg
-        "missing_object": ("#E0A0A0", "#3D2828"),  # pastel rose fg + subtle rose bg
-        "missing_behavior": ("#80C8E8", "#28323D"),  # sky fg + subtle blue bg
-        "user_animated": ("#C8A8E8", "#32283D"),  # lavender fg + subtle purple bg
-        "locked": ("#888888", None),  # dimmed grey fg, no bg
-        "additional": ("#A8C8A0", "#2D3D28"),  # soft green fg + subtle green bg
-    }
-
     def assess(self) -> None:
         """Compare CSV steps against the live Maya shots and color the tree."""
         if not self._ensure_steps():
@@ -1003,7 +1093,7 @@ class ShotManifestController(ptk.LoggingMixin):
         try:
             import pymel.core as pm
         except ImportError:
-            self._set_footer("Maya is required to assess shots.", color=_ERROR_COLOR)
+            self._set_footer("Maya is required to assess shots.", color=ERROR_COLOR)
             return
 
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -1013,14 +1103,26 @@ class ShotManifestController(ptk.LoggingMixin):
 
         # Invalidate cached gaps so _resolve_ranges rescans the scene
         self._cached_gaps = None
+        self._cached_gap_ends = None
 
         results = builder.assess(self._steps)
+
+        # Write per-object statuses back to shot metadata so that
+        # both the manifest and sequencer share the same classification.
+        built_map = {s.name: s for s in store.sorted_shots()}
+        for r in results:
+            shot = built_map.get(r.step_id)
+            if shot is None:
+                continue
+            obj_status = {o.name: o.status for o in r.objects}
+            for extra in r.additional_objects:
+                obj_status.setdefault(extra, "additional")
+            shot.metadata["object_status"] = obj_status
 
         # Rebuild tree and enrich with timing from store + status
         self._populate_table()
         if not self._is_built:
-            resolved = self._auto_fill_ranges()
-            self._validate_range_collisions(resolved)
+            self._refresh_ranges()
         self._refresh_timing(store)
         self._apply_assessment(results)
         self._last_results = results
@@ -1050,201 +1152,6 @@ class ShotManifestController(ptk.LoggingMixin):
             parts.append(f"{n_shrinkable} shrinkable")
         self._set_footer(f"Assessment: {', '.join(parts)}")
         self._update_build_button()
-
-    def expand_missing(self) -> None:
-        """Expand all step rows that have missing objects, behaviors, or additional objects."""
-        from qtpy.QtCore import Qt
-
-        if not self._last_results:
-            self._set_footer("Build first to detect issues.")
-            return
-
-        problem_ids = set()
-        lines: list[str] = []
-        for r in self._last_results:
-            issues: list[str] = []
-            if r.status == "missing_shot":
-                issues.append("shot not built")
-            elif r.status == "missing_object":
-                missing = [o.name for o in r.objects if not o.exists]
-                if missing:
-                    issues.append(f"missing objects: {', '.join(missing)}")
-            elif r.status == "missing_behavior":
-                no_beh = [o.name for o in r.objects if o.status == "missing_behavior"]
-                if no_beh:
-                    issues.append(f"missing behaviors: {', '.join(no_beh)}")
-            if r.additional_objects:
-                issues.append(f"additional objects: {', '.join(r.additional_objects)}")
-            if issues:
-                problem_ids.add(r.step_id)
-                lines.append(f"  {r.step_id}: {'; '.join(issues)}")
-
-        if not problem_ids:
-            self._set_footer("No issues found.")
-            return
-
-        print(f"\n--- Expand Missing ({len(lines)} steps) ---")
-        for line in lines:
-            print(line)
-        print("---")
-
-        tree = self.ui.tbl_steps
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep) and step_data.step_id in problem_ids:
-                parent.setExpanded(True)
-
-    def expand_extra(self) -> None:
-        """Expand all step rows that have scene-discovered extra objects."""
-        from qtpy.QtCore import Qt
-
-        if not self._last_results:
-            self._set_footer("Assess or build first to detect extra objects.")
-            return
-
-        extra_ids = {r.step_id for r in self._last_results if r.additional_objects}
-        if not extra_ids:
-            self._set_footer("No extra objects found.")
-            return
-
-        tree = self.ui.tbl_steps
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep) and step_data.step_id in extra_ids:
-                parent.setExpanded(True)
-
-    def _apply_assessment(self, results: list) -> None:
-        """Walk tree items and apply pastel colors + tooltips from results."""
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        tree = self.ui.tbl_steps
-        col_count = tree.columnCount()
-        content_col = self._COL_CONTENT
-        beh_col = self._COL_BEHAVIORS
-
-        status_map = {r.step_id: r for r in results}
-
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if not isinstance(step_data, BuilderStep):
-                continue
-            step_status = status_map.get(step_data.step_id)
-            if step_status is None:
-                continue
-
-            # Parent tooltip
-            if step_status.status == "missing_shot":
-                parent.setToolTip(0, "Shot not built in sequencer")
-            elif step_status.status == "missing_object":
-                names = [o.name for o in step_status.objects if not o.exists]
-                parent.setToolTip(0, f"Missing: {', '.join(names)}")
-            elif step_status.status == "missing_behavior":
-                names = [
-                    o.name
-                    for o in step_status.objects
-                    if o.status == "missing_behavior"
-                ]
-                parent.setToolTip(0, f"Missing behavior keys: {', '.join(names)}")
-
-            if step_status.shrinkable_frames > 0:
-                existing_tip = parent.toolTip(0) or ""
-                shrink_tip = f"{step_status.shrinkable_frames:.0f}f unused"
-                parent.setToolTip(
-                    0, f"{existing_tip}\n{shrink_tip}" if existing_tip else shrink_tip
-                )
-
-            # Recolor step icon to reflect status
-            fg_hex, _ = self._PASTEL_STATUS.get(step_status.status, (None, None))
-            icon_color = fg_hex or self._STEP_ICON_COLOR
-            tree.set_item_icon(parent, "step", color=icon_color)
-
-            # Color parent behavior column if any child has a behavior issue
-            beh_issues = [
-                o for o in step_status.objects if o.status == "missing_behavior"
-            ]
-            if beh_issues:
-                b_fg, b_bg = self._PASTEL_STATUS["missing_behavior"]
-                if b_fg:
-                    parent.setForeground(beh_col, QBrush(QColor(b_fg)))
-                if b_bg:
-                    parent.setBackground(beh_col, QBrush(QColor(b_bg)))
-                parent.setText(
-                    beh_col,
-                    f"{len(beh_issues)} missing",
-                )
-                lines = [
-                    f"{o.name}  \u2192  {self._fmt_behavior(o.behavior)}"
-                    for o in beh_issues
-                ]
-                parent.setToolTip(beh_col, "\n".join(lines))
-
-            # Color child rows — only problem statuses
-            obj_status_map = {o.name: o for o in step_status.objects}
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                child_data = child.data(0, Qt.UserRole)
-                if not isinstance(child_data, BuilderObject):
-                    continue
-                obj_st = obj_status_map.get(child_data.name)
-                if obj_st is None or obj_st.status == "valid":
-                    continue
-
-                c_fg, c_bg = self._PASTEL_STATUS.get(obj_st.status, (None, None))
-                if c_fg:
-                    brush = QBrush(QColor(c_fg))
-                    for c in range(col_count):
-                        child.setForeground(c, brush)
-                if c_bg:
-                    bg = QBrush(QColor(c_bg))
-                    for c in range(col_count):
-                        child.setBackground(c, bg)
-
-                if obj_st.status == "missing_object":
-                    child.setToolTip(content_col, "Object not found in Maya")
-                elif obj_st.status == "missing_behavior":
-                    child.setToolTip(
-                        content_col, f"Expected '{obj_st.behavior}' keys not found"
-                    )
-                elif obj_st.status == "user_animated" and obj_st.key_range:
-                    child.setToolTip(
-                        content_col,
-                        f"User-animated: keys {obj_st.key_range[0]:.0f}-{obj_st.key_range[1]:.0f}",
-                    )
-
-            # Additional objects (in shot but not in CSV)
-            if step_status.additional_objects:
-                a_fg, a_bg = self._PASTEL_STATUS.get("additional", (None, None))
-                node_icons_cls = self._try_load_maya_icons()
-                for extra_name in step_status.additional_objects:
-                    extra_item = tree.create_item(
-                        ["", "", extra_name, "scene", ""],
-                        parent=parent,
-                    )
-                    extra_item.setToolTip(
-                        content_col,
-                        "Scene-discovered: this object is in the shot but not listed in the CSV.",
-                    )
-                    # Italic font to visually distinguish from CSV objects
-                    font = extra_item.font(content_col)
-                    font.setItalic(True)
-                    for c in range(col_count):
-                        extra_item.setFont(c, font)
-                    if a_fg:
-                        brush = QBrush(QColor(a_fg))
-                        for c in range(col_count):
-                            extra_item.setForeground(c, brush)
-                    if a_bg:
-                        bg = QBrush(QColor(a_bg))
-                        for c in range(col_count):
-                            extra_item.setBackground(c, bg)
-                    if node_icons_cls:
-                        maya_icon = node_icons_cls.get_icon(extra_name)
-                        if maya_icon is not None:
-                            extra_item.setIcon(content_col, maya_icon)
 
 
 class ShotManifestSlots(ptk.LoggingMixin):
@@ -1285,6 +1192,10 @@ class ShotManifestSlots(ptk.LoggingMixin):
         """Expand all step rows that have scene-discovered extra objects."""
         self.controller.expand_extra()
 
+    def btn_settings(self):
+        """Open the shared shots settings panel."""
+        self.sb.handlers.marking_menu.show("shots")
+
     # ---- buttons ---------------------------------------------------------
 
     def b001(self):
@@ -1296,5 +1207,5 @@ class ShotManifestSlots(ptk.LoggingMixin):
         self.controller.assess()
 
     def b003(self):
-        """Build shots from loaded CSV."""
+        """Build shots from loaded steps (or auto-detect from scene)."""
         self.controller.build()

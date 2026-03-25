@@ -12,7 +12,17 @@ backend that implements ``save(data)`` / ``load() -> dict | None``.
 available.
 """
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    runtime_checkable,
+)
 from contextlib import contextmanager
 
 try:
@@ -20,8 +30,28 @@ try:
 except ImportError:
     pm = None
 
+try:
+    from qtpy.QtCore import QSettings
+except ImportError:
+    QSettings = None  # type: ignore[misc,assignment]
+
 NODE_NAME = "shotStore"
 ATTR_NAME = "shotData"
+
+__all__ = [
+    "SHOT_PALETTE",
+    "ShotBlock",
+    "ShotStore",
+    "StoreEvent",
+    "ShotDefined",
+    "ShotUpdated",
+    "ShotRemoved",
+    "ActiveShotChanged",
+    "SettingsChanged",
+    "BatchComplete",
+    "ScenePersistence",
+    "MayaScenePersistence",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +110,29 @@ class MayaScenePersistence:
 
 
 # ---------------------------------------------------------------------------
+# Shared shot palette (single source of truth for both UIs)
+# ---------------------------------------------------------------------------
+
+try:
+    from pythontk import Palette
+
+    SHOT_PALETTE = Palette.status().alias(
+        {
+            "csv_object": "valid",  # expected — no color
+            "scene_discovered": "info",  # found in scene, not in CSV
+            "missing_object": "error",  # referenced but missing
+            "missing_behavior": "warn",  # expected behaviour keys absent
+            "user_animated": "info",  # custom user animation detected
+            "additional": "warn",  # unexpected scene objects
+            "collision": "error",  # timing overlap
+            "missing_shot": "info",  # shot not yet built
+        }
+    )
+except ImportError:
+    SHOT_PALETTE = {}  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
 # Data Structure
 # ---------------------------------------------------------------------------
 
@@ -113,6 +166,96 @@ class ShotBlock:
     def duration(self) -> float:
         return self.end - self.start
 
+    def classify_objects(self) -> Dict[str, str]:
+        """Return ``{obj_name: status_key}`` using stored metadata.
+
+        Resolution order per object:
+
+        1. ``metadata["object_status"][obj]`` — written by manifest
+           assessment (richest: missing_object / missing_behavior /
+           user_animated / valid).
+        2. ``metadata["csv_objects"]`` membership — if present and the
+           object is *not* listed → ``"scene_discovered"``.
+        3. Fallback → ``"valid"``.
+
+        Both the manifest and sequencer use this method so that
+        classification logic lives in one place.
+        """
+        statuses = self.metadata.get("object_status", {})
+        csv_objs = set(self.metadata.get("csv_objects", []))
+        result: Dict[str, str] = {}
+        for obj in self.objects:
+            if obj in statuses:
+                result[obj] = statuses[obj]
+            elif csv_objs and obj not in csv_objs:
+                result[obj] = "scene_discovered"
+            else:
+                result[obj] = "valid"
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Store events
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StoreEvent:
+    """Base class for typed :class:`ShotStore` events.
+
+    Each subclass carries event-specific payload as typed fields.
+    The ``name`` class variable matches the legacy string event name
+    for backward compatibility with the Qt ``app_event`` signal.
+    """
+
+    name: ClassVar[str] = ""
+
+
+@dataclass(frozen=True)
+class ShotDefined(StoreEvent):
+    """A new shot was created and added to the store."""
+
+    name: ClassVar[str] = "shot_defined"
+    shot: ShotBlock
+
+
+@dataclass(frozen=True)
+class ShotUpdated(StoreEvent):
+    """An existing shot's fields were modified."""
+
+    name: ClassVar[str] = "shot_updated"
+    shot: ShotBlock
+
+
+@dataclass(frozen=True)
+class ShotRemoved(StoreEvent):
+    """A shot was removed from the store."""
+
+    name: ClassVar[str] = "shot_removed"
+    shot_id: int = 0
+
+
+@dataclass(frozen=True)
+class ActiveShotChanged(StoreEvent):
+    """The active (selected) shot changed."""
+
+    name: ClassVar[str] = "active_shot_changed"
+    shot_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class SettingsChanged(StoreEvent):
+    """Detection-relevant settings were modified."""
+
+    name: ClassVar[str] = "settings_changed"
+
+
+@dataclass(frozen=True)
+class BatchComplete(StoreEvent):
+    """A :meth:`ShotStore.batch_update` context has exited."""
+
+    name: ClassVar[str] = "batch_complete"
+
 
 # ---------------------------------------------------------------------------
 # ShotStore
@@ -129,6 +272,7 @@ class ShotStore:
 
     _active: Optional["ShotStore"] = None
     _persistence: Optional[ScenePersistence] = None
+    _QSETTINGS_PREFIX = "ShotStore"
 
     def __init__(
         self,
@@ -137,40 +281,78 @@ class ShotStore:
     ):
         self.shots: List[ShotBlock] = list(shots) if shots else []
         self.hidden_objects: set = set()
+        self.pinned_objects: set = set()
         self.markers: List[Dict[str, Any]] = []
         self.gap: float = 0.0
+        self.detection_threshold: float = 5.0
+        self.use_selected_keys: bool = False
+        self.key_filter_mode: str = "all"  # "all", "skip_zero", "zero_as_end"
+        self.default_duration: float = 0.0  # 0 = auto-compute from objects
+        self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.anim_layer: Optional[str] = anim_layer
-        self._listeners: List[Callable[[str, Optional[Any]], None]] = []
+        self._active_shot_id: Optional[int] = None  # session-only, not persisted
+        self._listeners: List[Callable[[StoreEvent], None]] = []
         self._batch_depth: int = 0
         self._batch_events: List[tuple] = []
 
+    # ---- active shot (session state, not persisted) ----------------------
+
+    @property
+    def active_shot_id(self) -> Optional[int]:
+        """The currently selected shot, or ``None``."""
+        return self._active_shot_id
+
+    def set_active_shot(self, shot_id: Optional[int]) -> None:
+        """Set the active shot and notify listeners."""
+        if shot_id == self._active_shot_id:
+            return
+        self._active_shot_id = shot_id
+        self._notify(ActiveShotChanged(shot_id=shot_id))
+
     # ---- observer --------------------------------------------------------
 
-    def add_listener(self, callback: Callable[[str, Optional[Any]], None]) -> None:
+    def notify_settings_changed(self) -> None:
+        """Fire a ``"settings_changed"`` event.
+
+        Call after modifying detection-relevant settings such as
+        ``key_filter_mode``, ``use_selected_keys``, ``detection_threshold``,
+        or ``gap`` so downstream consumers (e.g. the Shot Manifest) can
+        invalidate cached results and re-detect.
+        """
+        self._notify(SettingsChanged())
+
+    def add_listener(self, callback: Callable[[StoreEvent], None]) -> None:
         """Register a listener called on store mutations.
 
-        The callback receives ``(event_name, payload)`` where
-        *event_name* is one of ``"shot_defined"``, ``"shot_removed"``,
-        ``"shot_updated"``.
+        The callback receives a single :class:`StoreEvent` instance.
+        Use ``isinstance()`` to dispatch on event type::
+
+            def on_event(event: StoreEvent) -> None:
+                if isinstance(event, ShotDefined):
+                    print(event.shot)
+
+        Event types: :class:`ShotDefined`, :class:`ShotUpdated`,
+        :class:`ShotRemoved`, :class:`ActiveShotChanged`,
+        :class:`SettingsChanged`, :class:`BatchComplete`.
         """
         if callback not in self._listeners:
             self._listeners.append(callback)
 
-    def remove_listener(self, callback: Callable[[str, Optional[Any]], None]) -> None:
+    def remove_listener(self, callback: Callable[[StoreEvent], None]) -> None:
         """Remove a previously registered listener."""
         try:
             self._listeners.remove(callback)
         except ValueError:
             pass
 
-    def _notify(self, event: str, payload: Optional[Any] = None) -> None:
+    def _notify(self, event: StoreEvent) -> None:
         """Fire all registered listeners (deferred during :meth:`batch_update`)."""
         if self._batch_depth > 0:
-            self._batch_events.append((event, payload))
+            self._batch_events.append(event)
             return
         for cb in self._listeners:
             try:
-                cb(event, payload)
+                cb(event)
             except Exception:
                 pass
 
@@ -188,11 +370,36 @@ class ShotStore:
             self._batch_depth -= 1
             if self._batch_depth == 0 and self._batch_events:
                 self._batch_events.clear()
+                _evt = BatchComplete()
                 for cb in self._listeners:
                     try:
-                        cb("batch_complete", None)
+                        cb(_evt)
                     except Exception:
                         pass
+
+    # ---- gap locking -----------------------------------------------------
+
+    def is_gap_locked(self, left_id: str, right_id: str) -> bool:
+        """Return whether the gap between two adjacent shots is locked."""
+        return (left_id, right_id) in self.locked_gaps
+
+    def lock_gap(self, left_id: str, right_id: str) -> None:
+        """Lock a gap so its width is preserved during global respace."""
+        self.locked_gaps.add((left_id, right_id))
+
+    def unlock_gap(self, left_id: str, right_id: str) -> None:
+        """Unlock a gap so it follows the global gap value."""
+        self.locked_gaps.discard((left_id, right_id))
+
+    def lock_all_gaps(self) -> None:
+        """Lock every adjacent gap."""
+        sorted_shots = self.sorted_shots()
+        for i in range(len(sorted_shots) - 1):
+            self.locked_gaps.add((sorted_shots[i].shot_id, sorted_shots[i + 1].shot_id))
+
+    def unlock_all_gaps(self) -> None:
+        """Unlock every gap."""
+        self.locked_gaps.clear()
 
     # ---- singleton / persistence -----------------------------------------
 
@@ -219,9 +426,14 @@ class ShotStore:
                 cls._persistence = persistence
             if persistence is not None:
                 data = persistence.load()
-                cls._active = cls.from_dict(data) if data else cls()
+                if data:
+                    cls._active = cls.from_dict(data)
+                else:
+                    cls._active = cls()
+                    cls._active._restore_user_prefs()
             else:
                 cls._active = cls()
+                cls._active._restore_user_prefs()
         return cls._active
 
     @classmethod
@@ -234,6 +446,46 @@ class ShotStore:
         """Reset the active store and persistence backend."""
         cls._active = None
         cls._persistence = None
+
+    # ---- cross-scene user preferences ------------------------------------
+
+    def _restore_user_prefs(self) -> None:
+        """Apply detection preferences from QSettings (cross-scene).
+
+        Called when a fresh store is created (no per-scene persistence)
+        so that ``use_selected_keys`` and ``key_filter_mode`` survive
+        scene changes without requiring the shots settings panel to be
+        opened.
+        """
+        if QSettings is None:
+            return
+        try:
+            s = QSettings()
+            val = s.value(f"{self._QSETTINGS_PREFIX}/use_selected_keys")
+            if val is not None:
+                self.use_selected_keys = val in (True, "true", 1, "1")
+            kf = s.value(f"{self._QSETTINGS_PREFIX}/key_filter_mode")
+            if kf is not None:
+                self.key_filter_mode = str(kf)
+        except Exception:
+            pass
+
+    def _save_user_prefs(self) -> None:
+        """Persist detection preferences to QSettings (cross-scene)."""
+        if QSettings is None:
+            return
+        try:
+            s = QSettings()
+            s.setValue(
+                f"{self._QSETTINGS_PREFIX}/use_selected_keys",
+                self.use_selected_keys,
+            )
+            s.setValue(
+                f"{self._QSETTINGS_PREFIX}/key_filter_mode",
+                self.key_filter_mode,
+            )
+        except Exception:
+            pass
 
     # ---- CRUD ------------------------------------------------------------
 
@@ -291,7 +543,7 @@ class ShotStore:
             description=description,
         )
         self.shots.append(block)
-        self._notify("shot_defined", block)
+        self._notify(ShotDefined(shot=block))
         return block
 
     def update_shot(
@@ -324,7 +576,7 @@ class ShotStore:
             shot.locked = locked
         if metadata is not None:
             shot.metadata = dict(metadata)
-        self._notify("shot_updated", shot)
+        self._notify(ShotUpdated(shot=shot))
         return shot
 
     def remove_shot(self, shot_id: int) -> bool:
@@ -332,7 +584,7 @@ class ShotStore:
         for i, s in enumerate(self.shots):
             if s.shot_id == shot_id:
                 self.shots.pop(i)
-                self._notify("shot_removed", shot_id)
+                self._notify(ShotRemoved(shot_id=shot_id))
                 return True
         return False
 
@@ -388,6 +640,34 @@ class ShotStore:
         else:
             self.hidden_objects.discard(obj_name)
 
+    # ---- pinning ---------------------------------------------------------
+
+    def is_object_pinned(self, obj_name: str) -> bool:
+        """Return True if *obj_name* is pinned (kept even when missing)."""
+        return obj_name in self.pinned_objects
+
+    def set_object_pinned(self, obj_name: str, pinned: bool = True) -> None:
+        """Pin or unpin *obj_name*.
+
+        Pinned objects remain visible in the sequencer with a
+        'missing' indicator when they no longer exist in the scene.
+        Non-pinned objects are silently removed from tracks.
+        """
+        if pinned:
+            self.pinned_objects.add(obj_name)
+        else:
+            self.pinned_objects.discard(obj_name)
+
+    # ---- object removal --------------------------------------------------
+
+    def remove_object_from_shots(self, obj_name: str) -> None:
+        """Remove *obj_name* from every shot's object list."""
+        for shot in self.shots:
+            if obj_name in shot.objects:
+                shot.objects.remove(obj_name)
+        self.pinned_objects.discard(obj_name)
+        self.hidden_objects.discard(obj_name)
+
     # ---- serialisation ---------------------------------------------------
 
     def to_dict(self) -> Dict[str, Any]:
@@ -407,8 +687,14 @@ class ShotStore:
                 for s in self.sorted_shots()
             ],
             "hidden_objects": sorted(self.hidden_objects),
+            "pinned_objects": sorted(self.pinned_objects),
             "markers": list(self.markers),
             "gap": self.gap,
+            "detection_threshold": self.detection_threshold,
+            "use_selected_keys": self.use_selected_keys,
+            "key_filter_mode": self.key_filter_mode,
+            "default_duration": self.default_duration,
+            "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
         }
 
     @classmethod
@@ -421,6 +707,7 @@ class ShotStore:
         """
         shot_list = data.get("shots", [])
         hidden = data.get("hidden_objects", [])
+        pinned = data.get("pinned_objects", [])
         shots = [
             ShotBlock(
                 shot_id=d["shot_id"],
@@ -436,183 +723,402 @@ class ShotStore:
         ]
         store = cls(shots)
         store.hidden_objects = set(hidden)
+        store.pinned_objects = set(pinned)
         store.markers = data.get("markers", [])
         store.gap = float(data.get("gap", 0.0))
+        store.detection_threshold = float(data.get("detection_threshold", 5.0))
+        store.use_selected_keys = bool(data.get("use_selected_keys", False))
+        store.key_filter_mode = str(data.get("key_filter_mode", "all"))
+        store.default_duration = float(data.get("default_duration", 0.0))
+        store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
         return store
 
     # ---- persistence convenience -----------------------------------------
 
     def save(self) -> None:
-        """Persist via the configured backend (no-op if none set)."""
+        """Persist via the configured backend (no-op if none set).
+
+        Also writes detection preferences to QSettings so they survive
+        across scenes even when the shots settings panel is not opened.
+        """
         if self._persistence is not None:
             self._persistence.save(self.to_dict())
+        self._save_user_prefs()
 
 
 # ---------------------------------------------------------------------------
-# Gap detection
+# Standard attribute filtering  (shared by sequencer + manifest)
+# ---------------------------------------------------------------------------
+
+STANDARD_TRANSFORM_ATTRS = frozenset(
+    {
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotateX",
+        "rotateY",
+        "rotateZ",
+        "scaleX",
+        "scaleY",
+        "scaleZ",
+        "visibility",
+    }
+)
+"""Attributes considered genuine scene content.
+
+Objects animated only on attributes *outside* this set (e.g.
+``audio_trigger``) are treated as boundary markers and excluded
+from shot object lists.
+"""
+
+
+def _map_standard_curves_to_transforms(curves=None):
+    """Map each transform to anim curves driving standard attrs.
+
+    Returns ``dict[str, list[str]]`` — *transform_name* → [*curve_names*].
+    Curves that only drive custom/user-defined attributes are skipped.
+    Intermediate nodes (e.g. ``unitConversion``, ``pairBlend``) are
+    resolved to their parent transform.
+    """
+    import maya.cmds as cmds
+    from collections import defaultdict
+
+    if curves is None:
+        curves = cmds.ls(type="animCurve") or []
+
+    result = defaultdict(list)
+    for crv in curves:
+        plugs = cmds.listConnections(crv, d=True, s=False, plugs=True) or []
+        for plug_str in plugs:
+            attr = plug_str.rsplit(".", 1)[-1] if "." in plug_str else ""
+            if attr not in STANDARD_TRANSFORM_ATTRS:
+                continue
+            node = plug_str.split(".")[0]
+            if cmds.nodeType(node) == "transform":
+                result[node].append(crv)
+            else:
+                parents = cmds.listRelatives(node, parent=True, type="transform") or []
+                if parents:
+                    result[parents[0]].append(crv)
+            break  # one standard destination per curve is sufficient
+    return dict(result)
+
+
+# ---------------------------------------------------------------------------
+# Shot-region detection  (shared by sequencer + manifest)
 # ---------------------------------------------------------------------------
 
 
-def _is_motion_interval(
-    v1: float,
-    v2: float,
-    t1: float,
-    t2: float,
-    rate_threshold: float = 1e-3,
-) -> bool:
-    """Decide whether a key-pair represents actual motion.
+def detect_shot_regions(
+    objects: Optional[List[str]] = None,
+    gap_threshold: float = 5.0,
+    ignore: Optional[str] = None,
+    motion_rate: float = 1e-3,
+    min_duration: float = 2.0,
+) -> List[Dict[str, Any]]:
+    """Detect animation regions by clustering per-object segments.
 
-    Uses a rate-based check: ``abs(v2 - v1) / max(t2 - t1, 1) > rate_threshold``.
-    Normalising by interval duration prevents sparse/baked keys that drift
-    slowly from being classified as motion.
+    Scans the full timeline using ``SegmentKeys`` and groups contiguous
+    segments into regions separated by gaps of at least *gap_threshold*
+    frames.  This is the single source of truth for shot-boundary
+    detection — used by both the shot sequencer and the shot manifest.
 
-    Parameters:
-        v1, v2: Value at start and end of the interval.
-        t1, t2: Time at start and end of the interval.
-        rate_threshold: Minimum value-change per frame to qualify as motion.
-
-    Returns:
-        ``True`` if the interval contains meaningful motion.
-    """
-    dt = max(t2 - t1, 1.0)
-    return abs(v2 - v1) / dt > rate_threshold
-
-
-def _motion_frames_for_curve(
-    times: list,
-    values: list,
-    value_tolerance: float = 1e-5,
-) -> list:
-    """Return frames where a curve's value actually changes.
-
-    For each consecutive key pair where the rate of change exceeds
-    *value_tolerance* (normalised per frame via :func:`_is_motion_interval`),
-    both the source and destination frame are included.  This identifies
-    where real motion occurs, ignoring the flat/baked regions entirely.
+    Flat/constant-value intervals are always excluded so that
+    boundaries hidden by baked animation are correctly detected.
 
     Parameters:
-        times: Sorted key times.
-        values: Corresponding key values.
-        value_tolerance: Per-frame rate threshold to consider values changing.
+        objects: Transform names to scan.  ``None`` discovers all
+            transforms driven by animation curves.
+        gap_threshold: Minimum gap (frames) between clusters.
+        ignore: Attribute pattern(s) to exclude from segment collection.
+        motion_rate: Per-frame rate-of-change threshold.  Intervals
+            whose per-frame rate falls below this are treated as static.
+        min_duration: Minimum shot duration in frames.  Clusters
+            shorter than this are discarded.  Default ``2.0``.
 
     Returns:
-        List of frames where the curve has actual motion.
-    """
-    import numpy as np
-
-    if len(times) < 2 or len(values) != len(times):
-        return list(times)
-
-    t_arr = np.array(times)
-    v_arr = np.array(values)
-    dt_arr = np.maximum(np.diff(t_arr), 1.0)
-    rates = np.abs(np.diff(v_arr)) / dt_arr
-    motion_idx = np.where(rates > value_tolerance)[0]
-
-    if len(motion_idx) == 0:
-        return []
-
-    # Both "from" and "to" keys of each transition are motion frames
-    result = set()
-    for idx in motion_idx:
-        result.add(float(t_arr[idx]))
-        result.add(float(t_arr[idx + 1]))
-    return sorted(result)
-
-
-def _collect_all_motion_frames(value_tolerance: float = 1e-5) -> List[float]:
-    """Return sorted frames where any animation curve has actual motion.
-
-    Iterates every ``animCurve`` node via ``maya.cmds`` and delegates to
-    :func:`_motion_frames_for_curve` for each.  Frames where the value
-    difference between consecutive keys is within *value_tolerance* are
-    excluded, revealing motion hidden by baked/constant-value keys.
-
-    This is the shared primitive used by both :func:`detect_animation_gaps`
-    and :meth:`ShotSequencer.detect_shots` when flat-key filtering is
-    enabled.
-
-    Parameters:
-        value_tolerance: Max difference to consider values equal.
-
-    Returns:
-        Sorted list of frames with actual value change, or ``[]``.
+        List of dicts with ``"name"``, ``"start"``, ``"end"``, and
+        ``"objects"`` keys, sorted by start time.
     """
     try:
         import maya.cmds as cmds
     except ImportError:
         return []
 
-    curves = cmds.ls(type="animCurve")
-    if not curves:
+    from mayatk.anim_utils.segment_keys import SegmentKeys
+
+    # Discover objects if not provided
+    if objects is None:
+        curves = cmds.ls(type="animCurve") or []
+        found: set = set()
+        for crv in curves:
+            conns = cmds.listConnections(crv, d=True, s=False) or []
+            for node in conns:
+                node_type = cmds.nodeType(node)
+                if node_type == "transform":
+                    found.add(node)
+                else:
+                    parents = (
+                        cmds.listRelatives(node, parent=True, type="transform") or []
+                    )
+                    if parents:
+                        found.add(parents[0])
+        objects = sorted(found)
+
+    if not objects:
         return []
 
-    motion: set = set()
-    for crv in curves:
-        times = cmds.keyframe(crv, q=True, tc=True) or []
-        values = cmds.keyframe(crv, q=True, vc=True) or []
-        motion.update(_motion_frames_for_curve(times, values, value_tolerance))
-    return sorted(motion)
+    # Validate existence — cmds.ls filters to existing nodes only
+    valid = cmds.ls(objects) or []
+    if not valid:
+        return []
+
+    segments = SegmentKeys.collect_segments(
+        valid,
+        split_static=True,
+        ignore=ignore,
+        ignore_holds=True,
+        ignore_visibility_holds=True,
+        motion_only=True,
+        motion_rate=motion_rate,
+    )
+    if not segments:
+        return []
+
+    segments.sort(key=lambda s: s["start"])
+
+    # Cluster segments by gap_threshold
+    clusters: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = [segments[0]]
+    current_end = segments[0]["end"]
+
+    for seg in segments[1:]:
+        if seg["start"] - current_end > gap_threshold:
+            clusters.append(current)
+            current = [seg]
+            current_end = seg["end"]
+        else:
+            current.append(seg)
+            current_end = max(current_end, seg["end"])
+    clusters.append(current)
+
+    candidates: List[Dict[str, Any]] = []
+    for cluster in clusters:
+        start = min(s["start"] for s in cluster)
+        end = max(s["end"] for s in cluster)
+        if (end - start) < min_duration:
+            continue
+        objs = sorted({str(s["obj"]) for s in cluster})
+        candidates.append(
+            {
+                "name": f"Shot {len(candidates) + 1}",
+                "start": start,
+                "end": end,
+                "objects": objs,
+            }
+        )
+    return candidates
 
 
-def detect_animation_gaps(
-    min_gap: float = 2.0,
-    ignore_flat_keys: bool = False,
-    value_tolerance: float = 1e-5,
-) -> List[float]:
-    """Scan all animation curves and return animation-region start frames.
+def _filter_flat_objects(
+    candidates: List[Dict[str, Any]], value_tolerance: float = 1e-4
+) -> List[Dict[str, Any]]:
+    """Remove objects whose animation is flat or only on custom trigger attributes.
 
-    An animation region is a contiguous block of keyed (or motion-bearing)
-    frames.  Regions are separated by gaps of at least *min_gap* frames.
+    An object is considered genuine animated content if it has at least
+    one animation curve that drives a standard transform or visibility
+    attribute **and** that curve has changing values within the shot's
+    range.  Objects animated only on custom attributes (e.g.
+    ``audio_trigger``) are treated as boundary markers and excluded.
 
-    The first entry is always the earliest key / motion frame; each
-    subsequent entry is the first frame where animation resumes after a
-    qualifying gap.  Returns an empty list when no qualifying gaps exist
-    or no animation is present.
+    Candidates with no remaining objects are kept (the shot boundary
+    is still valid); only the ``"objects"`` list is pruned.
+    """
+    try:
+        import maya.cmds as cmds
+    except ImportError:
+        return candidates
 
-    Uses ``maya.cmds`` for performance (avoids PyMEL node wrapping).
+    if not candidates:
+        return candidates
+
+    try:
+        transform_curves = _map_standard_curves_to_transforms()
+    except (AttributeError, RuntimeError):
+        return candidates
+    if not transform_curves:
+        return candidates
+
+    for cand in candidates:
+        start, end = cand["start"], cand["end"]
+        filtered = []
+        for obj in cand["objects"]:
+            crvs = transform_curves.get(obj)
+            if not crvs:
+                continue
+            for crv in crvs:
+                vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
+                if vals and (max(vals) - min(vals)) > value_tolerance:
+                    filtered.append(obj)
+                    break
+        cand["objects"] = filtered
+    return candidates
+
+
+def regions_from_selected_keys(
+    gap_threshold: float = 5.0,
+    key_filter: str = "all",
+) -> List[Dict[str, Any]]:
+    """Build shot regions from currently selected keyframes.
+
+    Each unique selected key time is treated as an explicit shot
+    boundary.  Keys closer than *gap_threshold* are merged into a
+    single boundary.  This is designed for stepped / marker keys
+    (e.g. audio triggers) where each key marks the start of a shot
+    rather than representing continuous animation.
+
+    Objects with flat/constant animation within a shot's range are
+    automatically excluded from that shot's ``"objects"`` list.
 
     Parameters:
-        min_gap: Minimum span of empty frames to qualify as a gap.
-        ignore_flat_keys: When ``True``, only frames where at least one
-            curve has an actual value change are considered.  This
-            reveals gaps hidden by baked/constant-value animation.
-        value_tolerance: Value tolerance for motion detection
-            (only used when *ignore_flat_keys* is ``True``).
+        gap_threshold: Keys within this many frames are merged
+            into one boundary.
+        key_filter: How to interpret key values:
+
+            ``"all"``
+                Every key is a boundary (contiguous shots).
+            ``"skip_zero"``
+                Keys with value 0 are ignored; only non-zero keys
+                become boundaries.
+            ``"zero_as_end"``
+                Non-zero keys start shots; zero-value keys end the
+                preceding shot (allows gaps between shots).
 
     Returns:
-        Sorted list of animation-region start frames, or ``[]`` when
-        no qualifying gaps are found.
+        List of dicts with ``"name"``, ``"start"``, ``"end"``, and
+        ``"objects"`` keys, sorted by start time.
     """
-    if ignore_flat_keys:
-        sorted_keys = _collect_all_motion_frames(value_tolerance)
-    else:
-        try:
-            import maya.cmds as cmds
-        except ImportError:
-            return []
-
-        curves = cmds.ls(type="animCurve")
-        if not curves:
-            return []
-
-        all_keys: set = set()
-        for crv in curves:
-            keys = cmds.keyframe(crv, q=True)
-            if keys:
-                all_keys.update(keys)
-        sorted_keys = sorted(all_keys)
-
-    if len(sorted_keys) < 2:
+    try:
+        import maya.cmds as cmds
+    except ImportError:
         return []
 
-    region_starts: List[float] = [sorted_keys[0]]
-    for i in range(len(sorted_keys) - 1):
-        span = sorted_keys[i + 1] - sorted_keys[i]
-        if span >= min_gap:
-            region_starts.append(sorted_keys[i + 1])
-
-    # Only one entry means no qualifying gaps were found
-    if len(region_starts) <= 1:
+    sel_curves = cmds.keyframe(query=True, selected=True, name=True) or []
+    if not sel_curves:
         return []
-    return region_starts
+
+    # Collect (time, value, object) triples from selected keys
+    entries: List[Tuple[float, float, str]] = []
+    for crv in set(sel_curves):
+        times = cmds.keyframe(crv, query=True, selected=True, timeChange=True) or []
+        values = cmds.keyframe(crv, query=True, selected=True, valueChange=True) or []
+        conns = cmds.listConnections(crv, d=True, s=False) or []
+        obj_name = crv  # fallback
+        for node in conns:
+            node_type = cmds.nodeType(node)
+            if node_type == "transform":
+                obj_name = node
+                break
+            parents = cmds.listRelatives(node, parent=True, type="transform") or []
+            if parents:
+                obj_name = parents[0]
+                break
+        for t, v in zip(times, values):
+            if v is None:
+                continue
+            entries.append((t, v, obj_name))
+
+    if not entries:
+        return []
+
+    def _is_zero(v) -> bool:
+        """Treat None and near-zero floats as 'zero'."""
+        return v is None or abs(v) < 1e-9
+
+    # Stable sort: same-time entries have zeros first so that in
+    # ``zero_as_end`` mode a closing zero is processed before the
+    # opening non-zero trigger at the same frame.
+    entries.sort(key=lambda e: (e[0], 0 if _is_zero(e[1]) else 1))
+
+    # ---- "zero_as_end" mode: pair non-zero starts with zero ends ---------
+    if key_filter == "zero_as_end":
+        candidates: List[Dict[str, Any]] = []
+        current_start: Optional[float] = None
+        current_objs: set = set()
+        for t, v, obj in entries:
+            if not _is_zero(v):
+                if current_start is None:
+                    current_start = t
+                    current_objs = {obj}
+                else:
+                    current_objs.add(obj)
+            else:
+                # Zero-value key ends the current shot
+                if current_start is not None:
+                    candidates.append(
+                        {
+                            "name": f"Shot {len(candidates) + 1}",
+                            "start": current_start,
+                            "end": t,
+                            "objects": sorted(str(o) for o in current_objs),
+                        }
+                    )
+                    current_start = None
+                    current_objs = set()
+        # Trailing shot with no closing zero key
+        if current_start is not None:
+            candidates.append(
+                {
+                    "name": f"Shot {len(candidates) + 1}",
+                    "start": current_start,
+                    "end": current_start + 1.0,
+                    "objects": sorted(str(o) for o in current_objs),
+                }
+            )
+        return _filter_flat_objects(candidates)
+
+    # ---- "skip_zero" mode: filter zeros, then use boundary logic below -----
+    if key_filter == "skip_zero":
+        entries = [(t, v, obj) for t, v, obj in entries if not _is_zero(v)]
+        if not entries:
+            return []
+        # Fall through to "all" mode boundary logic.
+
+    # ---- "all" mode: merge keys within gap_threshold into boundary points
+    boundaries: List[Tuple[float, set]] = []  # (time, {objects})
+    first_time = entries[0][0]
+    cur_time = entries[0][0]
+    cur_objs: set = {entries[0][2]}
+
+    for t, _v, obj in entries[1:]:
+        if t - cur_time <= gap_threshold:
+            cur_objs.add(obj)
+            cur_time = t
+        else:
+            boundaries.append((first_time, cur_objs))
+            first_time = t
+            cur_time = t
+            cur_objs = {obj}
+    boundaries.append((first_time, cur_objs))
+
+    if not boundaries:
+        return []
+
+    # Build contiguous regions: each boundary starts a shot that ends
+    # at the next boundary.  The last shot gets a nominal 1-frame end
+    # (the manifest's range resolver will compute the real end).
+    candidates = []
+    for i, (start, objs) in enumerate(boundaries):
+        if i + 1 < len(boundaries):
+            end = boundaries[i + 1][0]
+        else:
+            end = start + 1.0
+        candidates.append(
+            {
+                "name": f"Shot {len(candidates) + 1}",
+                "start": start,
+                "end": end,
+                "objects": sorted(str(o) for o in objs),
+            }
+        )
+    return _filter_flat_objects(candidates)

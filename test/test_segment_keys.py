@@ -30,17 +30,25 @@ if QApplication and not QApplication.instance():
 
 try:
     import pymel.core as pm
+
+    # Detect if pymel is a mock (e.g. when collected alongside controller tests
+    # that inject sys.modules["pymel.core"] = MagicMock()).
+    if not hasattr(pm, "__file__"):
+        pm = None
 except ImportError:
     pm = None
 
-# Force reload of modules to pick up changes
-# This is needed because Maya caches modules aggressively
-if "mayatk.anim_utils.segment_keys" in sys.modules:
-    del sys.modules["mayatk.anim_utils.segment_keys"]
-if "mayatk.anim_utils._anim_utils" in sys.modules:
-    del sys.modules["mayatk.anim_utils._anim_utils"]
-if "mayatk.anim_utils" in sys.modules:
-    del sys.modules["mayatk.anim_utils"]
+# Force reload of modules to pick up changes.
+# Only do this when running against real Maya — the delete pollutes
+# sys.modules when other test files have already imported these modules
+# with mocked Maya dependencies.
+if pm is not None:
+    if "mayatk.anim_utils.segment_keys" in sys.modules:
+        del sys.modules["mayatk.anim_utils.segment_keys"]
+    if "mayatk.anim_utils._anim_utils" in sys.modules:
+        del sys.modules["mayatk.anim_utils._anim_utils"]
+    if "mayatk.anim_utils" in sys.modules:
+        del sys.modules["mayatk.anim_utils"]
 
 # Import directly from module
 from mayatk.anim_utils.segment_keys import SegmentKeys
@@ -60,6 +68,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         result = SegmentKeys.collect_segments([])
         self.assertEqual(result, [])
 
+    @unittest.skipIf(pm is None, "Requires Maya")
     def test_segment_keyframe_isolation_default_absorbs_trailing_holds(self):
         """Verify trailing holds are absorbed into segments by default.
 
@@ -107,6 +116,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
             f"Segment 2 should only have keys [20, 30], got {seg2['keyframes']}",
         )
 
+    @unittest.skipIf(pm is None, "Requires Maya")
     def test_segment_keyframe_isolation_ignore_holds_active_only(self):
         """Verify ignore_holds=True keeps active-only segments (no trailing holds)."""
         cube = pm.polyCube(name="TestCubeIgnoreHolds")[0]
@@ -134,6 +144,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(seg2["end"], 30)
         self.assertEqual(seg2["keyframes"], [20.0, 30.0])
 
+    @unittest.skipIf(pm is None, "Requires Maya")
     def test_print_scene_info(self):
         """Test print_scene_info runs without error."""
         cube = pm.polyCube(name="print_test")[0]

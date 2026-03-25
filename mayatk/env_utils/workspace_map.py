@@ -450,7 +450,6 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.itemSelectionChanged.connect(self.controller.handle_tree_selection)
 
             # Add context menu
-            widget.menu.setTitle("Workspace Options:")
             widget.menu.add(
                 "QPushButton",
                 setText="Open Workspace",

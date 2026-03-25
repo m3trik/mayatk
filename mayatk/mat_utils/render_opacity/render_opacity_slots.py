@@ -57,8 +57,6 @@ class RenderOpacitySlots:
 
     def header_init(self, widget):
         """Configure header menu."""
-        widget.menu.setTitle("Render Opacity:")
-
         widget.menu.add("Separator", setTitle="Options")
         widget.menu.add(
             "QCheckBox",

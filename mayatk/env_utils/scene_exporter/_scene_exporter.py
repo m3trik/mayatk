@@ -207,35 +207,6 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 self.task_manager._bake_override_layer = None
 
-            # Clean up base-layer visibility curves baked by SmartBake.
-            # Deleting these and restoring the original .visibility
-            # values returns the scene to its pre-bake state.
-            _vis_curves = getattr(
-                self.task_manager, "_bake_visibility_curves", None
-            )
-            _vis_originals = getattr(
-                self.task_manager, "_bake_visibility_originals", {}
-            )
-            if _vis_curves:
-                for obj, curve in _vis_curves.items():
-                    if cmds.objExists(curve):
-                        cmds.delete(curve)
-                    # Restore original visibility (not just True).
-                    if cmds.objExists(obj):
-                        orig = _vis_originals.get(obj, 1.0)
-                        try:
-                            cmds.setAttr(
-                                f"{obj}.visibility", bool(orig)
-                            )
-                        except RuntimeError:
-                            pass
-                self.logger.info(
-                    f"Deleted {len(_vis_curves)} base-layer visibility "
-                    f"curves — scene restored."
-                )
-                self.task_manager._bake_visibility_curves = None
-                self.task_manager._bake_visibility_originals = None
-
         if not export_succeeded:
             return False
 
@@ -520,7 +491,6 @@ class SceneExporterSlots(SceneExporter):
         widget.menu.presets.metadata_provider = self._fbx_preset_metadata_provider
         widget.menu.presets.on_metadata_loaded = self._on_fbx_preset_metadata_loaded
 
-        widget.menu.setTitle("Global Settings:")
         widget.menu.add(
             "QCheckBox",
             setText="Create Log File",

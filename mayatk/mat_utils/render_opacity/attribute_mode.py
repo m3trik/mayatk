@@ -19,27 +19,39 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     This mode adds a custom ``opacity`` float attribute (0-1) to each object's
     transform.  Recommended for per-object control in Game Engines.
 
-    .. note:: Keyframing logic has been removed to serve as a pure attribute framework.
+    Visibility is managed through **direct keyframe mirroring** rather than
+    a condition-node driver.  When opacity is keyed (either manually or via
+    the behavior system), a matching visibility keyframe is set at the same
+    time.  This produces real animation curves on both channels that FBX can
+    export and game engines can read natively.
+
+    The behavior system in ``shots.behaviors`` performs this mirroring
+    automatically: when a template targets ``visibility`` and the object
+    has an ``opacity`` attribute, the behavior keys ``opacity`` and mirrors
+    the value to ``visibility`` at the same time.
     """
 
     ATTR_NAME = "opacity"
     """Custom attribute name used in ``"attribute"`` mode."""
 
     _VIS_DRIVER_RE = re.compile(r"_VisDriver\d*$")
-    """Matches condition node names including Maya auto-incremented variants."""
+    """Matches legacy condition node names including Maya auto-incremented variants."""
 
     @classmethod
     def create(cls, objects) -> Dict[str, Dict]:
-        """Add 'opacity' attribute on each transform (no keyframes)."""
+        """Add 'opacity' attribute on each transform (no keyframes).
+
+        No condition-node driver is created.  Visibility mirroring is
+        handled by the behavior system or by calling
+        :meth:`sync_visibility_from_opacity` explicitly after keying.
+        """
         results = {}
 
         Attributes.apply_preset("opacity", objects)
 
         for obj in pm.ls(objects):
-            # Drive Visibility from Opacity
-            # Logic: If Opacity > 0 -> Visibility = 1. Else 0.
-            # This allows the engine/viewport to cull the object completely when fully transparent.
-            cls._connect_visibility_driver(obj)
+            # Remove any legacy condition-node driver left from older versions
+            cls._remove_legacy_vis_driver(obj)
 
             results[obj.name()] = {"attrs_created": [f"{obj.name()}.{cls.ATTR_NAME}"]}
             cls.logger.info(f"Verified {cls.ATTR_NAME} on {obj}")
@@ -47,46 +59,97 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         return results
 
     @classmethod
-    def _connect_visibility_driver(cls, obj):
-        """Connect opacity -> condition -> visibility."""
+    def _remove_legacy_vis_driver(cls, obj):
+        """Disconnect and delete any condition-node visibility driver.
+
+        Handles condition nodes created by older versions of this module
+        so that visibility is free for direct keyframing.
+        """
         if obj.visibility.isLocked():
             return
 
-        # Check if already driven
         inputs = obj.visibility.inputs()
-        if inputs:
-            if isinstance(inputs[0], pm.nt.Condition) and cls._VIS_DRIVER_RE.search(
-                inputs[0].name()
-            ):
-                return  # Already our setup
+        if (
+            inputs
+            and isinstance(inputs[0], pm.nt.Condition)
+            and cls._VIS_DRIVER_RE.search(inputs[0].name())
+        ):
+            pm.delete(inputs[0])
+            try:
+                obj.visibility.set(True)
+            except Exception:
+                pass
 
-            # Driven by something else (foreign Condition, animator, etc.)
-            cls.logger.info(
-                f"[{obj.name()}] Visibility already driven by {inputs[0]}. "
-                "Skipping auto-hide setup."
+        # Also clean orphaned VisDrivers still connected via opacity
+        if obj.hasAttr(cls.ATTR_NAME):
+            conds = (
+                pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
             )
-            return
+            for c in conds:
+                if cls._VIS_DRIVER_RE.search(c.name()):
+                    pm.delete(c)
 
-        # Create Condition Node
-        # if opacity > 0: visibility = 1
-        # else: visibility = 0
-        cond = pm.createNode("condition", name=f"{obj.nodeName()}_VisDriver")
-        cond.operation.set(2)  # Greater Than
-        cond.secondTerm.set(0.0)
-        cond.colorIfTrueR.set(1.0)
-        cond.colorIfFalseR.set(0.0)
+    @classmethod
+    def sync_visibility_from_opacity(cls, objects) -> None:
+        """Create visibility keyframes that mirror the opacity animation curve.
 
-        pm.connectAttr(obj.attr(cls.ATTR_NAME), cond.firstTerm)
-        pm.connectAttr(cond.outColorR, obj.visibility, force=True)
+        For each keyframe on ``opacity``, a matching keyframe is set on
+        ``visibility`` with the same value and tangent type.  This produces
+        real animation curves that FBX can export and game engines can read
+        natively — unlike the deprecated condition-node approach which was
+        Maya-only.
+
+        Safe to call repeatedly; existing visibility keyframes at the same
+        times are overwritten with the current opacity values.
+        """
+        for obj in pm.ls(objects):
+            if not obj.hasAttr(cls.ATTR_NAME):
+                continue
+            if obj.visibility.isLocked():
+                continue
+
+            # Remove any legacy condition-node driver first
+            cls._remove_legacy_vis_driver(obj)
+
+            times = pm.keyframe(obj, attribute=cls.ATTR_NAME, q=True, tc=True)
+            if not times:
+                continue
+
+            values = pm.keyframe(obj, attribute=cls.ATTR_NAME, q=True, vc=True)
+            in_tans = pm.keyTangent(
+                obj, attribute=cls.ATTR_NAME, q=True, inTangentType=True
+            )
+            out_tans = pm.keyTangent(
+                obj, attribute=cls.ATTR_NAME, q=True, outTangentType=True
+            )
+
+            # Clear existing visibility keys so repeated calls don't
+            # accumulate duplicates (visibility is boolean-typed and
+            # pm.keyframe queries can return double entries).
+            pm.cutKey(obj, attribute="visibility", clear=True)
+
+            for t, v, it, ot in zip(times, values, in_tans, out_tans):
+                pm.setKeyframe(
+                    obj,
+                    attribute="visibility",
+                    time=t,
+                    value=v,
+                    inTangentType=it,
+                    outTangentType=ot,
+                )
 
     @classmethod
     def ensure_connections(cls, objects) -> None:
-        """Re-establish the opacity → visibility driver for objects that
-        already have the ``opacity`` attribute but are missing the
-        condition-node connection (e.g. after a duplicate operation)."""
+        """Ensure opacity → visibility mirroring for objects that already
+        have the ``opacity`` attribute (e.g. after a duplicate operation).
+
+        Removes any legacy condition-node drivers and syncs visibility
+        keyframes from opacity keyframes.
+        """
         for obj in pm.ls(objects):
             if obj.hasAttr(cls.ATTR_NAME):
-                cls._connect_visibility_driver(obj)
+                cls._remove_legacy_vis_driver(obj)
+        cls.sync_visibility_from_opacity(objects)
 
     @classmethod
     def remove(cls, objects):
@@ -94,28 +157,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             if not obj.hasAttr(cls.ATTR_NAME):
                 continue
 
-            # Clean up Visibility Driver (via visibility input)
-            inputs = obj.visibility.inputs()
-            if (
-                inputs
-                and isinstance(inputs[0], pm.nt.Condition)
-                and cls._VIS_DRIVER_RE.search(inputs[0].name())
-            ):
-                pm.delete(inputs[0])
-                # Reset visibility to default (guard against locked attr)
-                try:
-                    if not obj.visibility.isLocked():
-                        obj.visibility.set(True)
-                except Exception:
-                    pass
-
-            # Fallback: find orphaned VisDrivers still connected via
-            # opacity → condition.firstTerm (e.g. visibility connection
-            # was broken externally but condition node still exists).
-            conds = pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
-            for c in conds:
-                if cls._VIS_DRIVER_RE.search(c.name()):
-                    pm.delete(c)
+            # Clean up any legacy condition-node visibility driver
+            cls._remove_legacy_vis_driver(obj)
 
             # Delete anim curves first (deleteAttr errors on connected attrs)
             curves = pm.listConnections(obj.attr(cls.ATTR_NAME), type="animCurve")

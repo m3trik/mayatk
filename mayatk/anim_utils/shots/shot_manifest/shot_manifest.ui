@@ -58,7 +58,19 @@
        <number>1</number>
       </property>
       <item>
-       <widget class="QLabel" name="lbl_file">
+       <widget class="QCheckBox" name="chk_csv">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>20</height>
+         </size>
+        </property>
         <property name="text">
          <string>CSV:</string>
         </property>
@@ -72,6 +84,18 @@
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>20</height>
+         </size>
+        </property>
         <property name="readOnly">
          <bool>true</bool>
         </property>
@@ -82,10 +106,16 @@
       </item>
       <item>
        <widget class="PushButton" name="b001">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
         <property name="maximumSize">
          <size>
           <width>70</width>
-          <height>16777215</height>
+          <height>20</height>
          </size>
         </property>
         <property name="text">
@@ -130,8 +160,20 @@
       </item>
       <item>
        <widget class="PushButton" name="b002">
+        <property name="minimumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
         <property name="toolTip">
-         <string>Compare CSV steps against live Maya shots.
+         <string>Compare loaded steps against live Maya shots.
 Shows timing, missing objects, missing behaviors,
 and additional objects in the tree.</string>
         </property>
@@ -142,8 +184,20 @@ and additional objects in the tree.</string>
       </item>
       <item>
        <widget class="PushButton" name="b003">
+        <property name="minimumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
         <property name="toolTip">
-         <string>Build or update shots from the loaded CSV.
+         <string>Build or update shots from the loaded steps.
 New shots are created, changed shots are patched,
 unchanged shots are skipped. Behaviors are applied
 automatically. Assesses the scene after completion.</string>

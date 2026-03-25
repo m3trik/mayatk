@@ -125,6 +125,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         super().__init__()
         self.set_log_level(log_level)
         self._filter_text = ""
+        self._filter_enabled = True
         self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
 
     @property
@@ -1040,11 +1041,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         filter_text = self.ui.txt001.text().strip()
 
-        # Check if filtering is enabled via checkbox
-        filter_enabled = getattr(self.ui, "chk004", None)
-        filter_enabled = (
-            filter_enabled.isChecked() if filter_enabled else True
-        )  # Default to True if checkbox doesn't exist
+        # Check if filtering is enabled via option box action toggle
+        filter_enabled = self._filter_enabled
 
         # Check if ignore case is enabled via checkbox
         ignore_case = getattr(self.ui, "chk_ignore_case", None)
@@ -1750,7 +1748,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
-        widget.menu.setTitle("Global Settings:")
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "~/.mayatk/presets/reference_manager"
         widget.menu.add(
@@ -2333,12 +2330,20 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def txt001_init(self, widget):
         """Initialize the filter text input with filtering options."""
         if not widget.is_initialized:
-            widget.option_box.menu.add(
-                "QCheckBox",
-                setText="Enable Filter",
-                setObjectName="chk004",
-                setChecked=True,
-                setToolTip="Filter the file list by the text entered above.",
+            widget.option_box.set_action(
+                states=[
+                    {
+                        "icon": "filter",
+                        "tooltip": "Filter enabled. Click to disable.",
+                        "callback": lambda: self._toggle_filter(False),
+                    },
+                    {
+                        "icon": "filter",
+                        "color": "#555555",
+                        "tooltip": "Filter disabled. Click to enable.",
+                        "callback": lambda: self._toggle_filter(True),
+                    },
+                ],
             )
             widget.option_box.menu.add(
                 "QCheckBox",
@@ -2477,10 +2482,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # Use the centralized workspace combo update method
         self.controller._update_workspace_combo()
 
-    def chk004(self, checked):
-        """Handle the filter enable checkbox."""
-        self.logger.debug(f"chk004 filter enable changed: {checked}")
-        # Refresh the file list when filter enable state changes
+    def _toggle_filter(self, enabled):
+        """Toggle filter enabled state via the option box action."""
+        self.logger.debug(f"Filter toggled: {enabled}")
+        self.controller._filter_enabled = enabled
         self.controller.refresh_file_list(invalidate=False)
 
     def chk_ignore_case(self, checked):

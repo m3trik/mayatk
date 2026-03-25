@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>shots</class>
+ <widget class="QMainWindow" name="shots">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>265</width>
+    <height>328</height>
+   </rect>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="spacing">
+     <number>1</number>
+    </property>
+    <property name="leftMargin">
+     <number>1</number>
+    </property>
+    <property name="topMargin">
+     <number>1</number>
+    </property>
+    <property name="rightMargin">
+     <number>1</number>
+    </property>
+    <property name="bottomMargin">
+     <number>1</number>
+    </property>
+    <item>
+     <widget class="Header" name="header" native="true">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>20</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>20</height>
+       </size>
+      </property>
+      <property name="font">
+       <font>
+        <weight>75</weight>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text" stdset="0">
+       <string>SHOTS</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="CollapsableGroup" name="detection">
+      <property name="title">
+       <string>Detection</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_2">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>1</number>
+       </property>
+       <property name="topMargin">
+        <number>1</number>
+       </property>
+       <property name="rightMargin">
+        <number>1</number>
+       </property>
+       <property name="bottomMargin">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="QCheckBox" name="chk_selected_keys">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Derive shot boundaries from the currently selected
+keyframes instead of scanning all scene animation.</string>
+         </property>
+         <property name="text">
+          <string>Use Selected Keys</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="ComboBox" name="cmb_key_filter">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>How to interpret key values when building shot boundaries.
+• All Values – every selected key is a boundary (contiguous shots).
+• Skip Zero-Value – ignore keys with value 0.
+• Zero = Shot End – non-zero keys start shots, zero keys end them.</string>
+         </property>
+         <item>
+          <property name="text">
+           <string>All Values</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Skip Zero-Value</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Zero = Shot End</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="SpinBox" name="spn_detection">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Minimum gap (frames) between detected shots.
+Used during auto-detection when no CSV is loaded.</string>
+         </property>
+         <property name="prefix">
+          <string>Min Gap:	</string>
+         </property>
+         <property name="decimals">
+          <number>1</number>
+         </property>
+         <property name="minimum">
+          <double>0.100000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>1000.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>5.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="CollapsableGroup" name="editing">
+      <property name="title">
+       <string>Editing</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_3">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>1</number>
+       </property>
+       <property name="topMargin">
+        <number>1</number>
+       </property>
+       <property name="rightMargin">
+        <number>1</number>
+       </property>
+       <property name="bottomMargin">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="SpinBox" name="spn_gap">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Frame gap between shots. Changing this respaces
+all shots on the timeline.</string>
+         </property>
+         <property name="prefix">
+          <string>Gap:	</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="SpinBox" name="spn_default_duration">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Default shot duration (frames) when creating shots
+without explicit ranges. 0 = auto-compute from objects.</string>
+         </property>
+         <property name="prefix">
+          <string>Duration:	</string>
+         </property>
+         <property name="decimals">
+          <number>1</number>
+         </property>
+         <property name="minimum">
+          <double>0.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>0.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="CollapsableGroup" name="shot_editor">
+      <property name="title">
+       <string>Shot Editor</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_4">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>1</number>
+       </property>
+       <property name="topMargin">
+        <number>1</number>
+       </property>
+       <property name="rightMargin">
+        <number>1</number>
+       </property>
+       <property name="bottomMargin">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="ComboBox" name="cmb_shot_select">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Select a shot to view or edit its properties.</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLineEdit" name="txt_shot_name">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Shot name.</string>
+         </property>
+         <property name="placeholderText">
+          <string>Name</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="shot_range_layout">
+         <property name="spacing">
+          <number>1</number>
+         </property>
+         <item>
+          <widget class="SpinBox" name="spn_shot_start">
+           <property name="minimumSize">
+            <size>
+             <width>70</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Shot start frame.</string>
+           </property>
+           <property name="prefix">
+            <string>Start:	</string>
+           </property>
+           <property name="decimals">
+            <number>1</number>
+           </property>
+           <property name="minimum">
+            <double>-100000.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="SpinBox" name="spn_shot_end">
+           <property name="minimumSize">
+            <size>
+             <width>70</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Shot end frame.</string>
+           </property>
+           <property name="prefix">
+            <string>End:	</string>
+           </property>
+           <property name="decimals">
+            <number>1</number>
+           </property>
+           <property name="minimum">
+            <double>-100000.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="chk_scale_keys">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>When checked, changing start/end scales keyframes
+to fit the new range. When unchecked, only the
+shot boundaries move.</string>
+         </property>
+         <property name="text">
+          <string>Scale Keys</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLineEdit" name="txt_shot_desc">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Shot description or notes.</string>
+         </property>
+         <property name="placeholderText">
+          <string>Description</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="PushButton" name="b000">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Remove the selected shot from the store.</string>
+         </property>
+         <property name="text">
+          <string>Delete</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <spacer name="verticalSpacer">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="sizeHint" stdset="0">
+       <size>
+        <width>20</width>
+        <height>40</height>
+       </size>
+      </property>
+     </spacer>
+    </item>
+    <item>
+     <widget class="Footer" name="footer" native="true">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>20</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>20</height>
+       </size>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Header</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
+  </customwidget>
+  <customwidget>
+   <class>Footer</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.footer</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>CollapsableGroup</class>
+   <extends>QGroupBox</extends>
+   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>SpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>uitk.widgets.spinBox</header>
+  </customwidget>
+  <customwidget>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>uitk.widgets.pushButton</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

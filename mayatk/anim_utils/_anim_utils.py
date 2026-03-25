@@ -5710,6 +5710,58 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         except RuntimeError:
             return False
 
+    @staticmethod
+    def fit_playback_range(
+        objects=None,
+        padding: float = 0,
+    ) -> bool:
+        """Set the playback range to encompass keyframes on all (or given) scene objects.
+
+        Queries every keyed object in the scene (or a supplied list) and adjusts
+        Maya's playback-range and animation-range to span from the earliest to
+        the latest keyframe, optionally padded.
+
+        Parameters:
+            objects: Objects to consider. If None, all keyed DAG transforms are used.
+            padding: Extra frames to add before the first and after the last key.
+
+        Returns:
+            True if the range was updated, False if no keyframes were found.
+        """
+        import maya.cmds as cmds
+
+        if objects is None:
+            curves = cmds.ls(type="animCurve")
+            if not curves:
+                pm.warning("No animation curves in the scene.")
+                return False
+            connected = (
+                cmds.listConnections(curves, destination=True, source=False) or []
+            )
+            objects = list(
+                set(cmds.ls(connected, long=True, dagObjects=True, transforms=True))
+            )
+            if not objects:
+                pm.warning("No keyed DAG objects found.")
+                return False
+
+        result = AnimUtils.get_keyframe_times(objects, as_range=True)
+        if result is None:
+            pm.warning("No keyframes found on the given objects.")
+            return False
+
+        start, end = result
+        start -= padding
+        end += padding
+
+        cmds.playbackOptions(
+            minTime=start,
+            maxTime=end,
+            animationStartTime=start,
+            animationEndTime=end,
+        )
+        return True
+
 
 # -----------------------------------------------------------------------------
 

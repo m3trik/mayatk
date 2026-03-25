@@ -975,8 +975,6 @@ class AttributeManagerSlots:
 
     def header_init(self, widget):
         """Populate the header menu with global actions."""
-        widget.menu.setTitle("Actions:")
-
         # --- Create Attribute ---
         widget.menu.add("Separator", setTitle="Create")
         widget.menu.add(
@@ -1322,7 +1320,6 @@ class AttributeManagerSlots:
     def _setup_context_menu(self, widget):
         """Build the table's right-click context menu and bind handlers."""
         menu = widget.menu
-        menu.setTitle("Attribute Actions:")
 
         # fmt: off
         _items = [
