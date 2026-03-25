@@ -1474,7 +1474,6 @@ class GameShaderSlots(GameShader):
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        widget.menu.setTitle("Global Options")
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setObjectName="lbl_graph_material",

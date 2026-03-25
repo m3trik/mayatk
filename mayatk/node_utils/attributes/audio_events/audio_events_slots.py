@@ -70,8 +70,6 @@ class AudioEventsSlots:
 
     def header_init(self, widget):
         """Configure header menu with tool description and workflow instructions."""
-        widget.menu.setTitle("Audio Events:")
-
         widget.menu.add("Separator", setTitle="Create")
         btn_new = widget.menu.add(
             "QPushButton",

@@ -1,10 +1,26 @@
 # coding=utf-8
+import logging
 from typing import List, Dict, Optional, Union, Any, Tuple
 
 try:
     import pymel.core as pm
 except ImportError as error:
     print(__file__, error)
+
+# Module-level loggers — avoid per-call getLogger + handler creation
+_log_segments = logging.getLogger("mayatk.segment_keys.active_segments")
+if not _log_segments.handlers:
+    _h = logging.StreamHandler()
+    _h.setLevel(logging.WARNING)
+    _log_segments.addHandler(_h)
+_log_segments.setLevel(logging.WARNING)
+
+_log_shift = logging.getLogger("mayatk.segment_keys.shift_curves")
+if not _log_shift.handlers:
+    _h2 = logging.StreamHandler()
+    _h2.setLevel(logging.WARNING)
+    _log_shift.addHandler(_h2)
+_log_shift.setLevel(logging.WARNING)
 
 
 class SegmentKeysInfo:
@@ -240,7 +256,7 @@ class SegmentKeys(SegmentKeysInfo):
     @classmethod
     def collect_segments(
         cls,
-        objects: List["pm.PyNode"],
+        objects: List[Any],
         ignore: Optional[Union[str, List[str]]] = None,
         split_static: bool = False,
         selected_keys_only: bool = False,
@@ -999,15 +1015,9 @@ class SegmentKeys(SegmentKeysInfo):
             across all curves (useful to avoid a redundant query in the
             caller).
         """
-        import logging
         import maya.cmds as cmds
 
-        _log = logging.getLogger("mayatk.segment_keys.active_segments")
-        if not _log.handlers:
-            _h = logging.StreamHandler()
-            _h.setLevel(logging.WARNING)
-            _log.addHandler(_h)
-        _log.setLevel(logging.WARNING)
+        _log = _log_segments
 
         if not curves:
             return ([], [], [])
@@ -1071,10 +1081,9 @@ class SegmentKeys(SegmentKeysInfo):
                 # unless ignore_visibility_holds is True.
                 # Static intervals (same value) are also kept as zero-duration
                 # points so the object still appears in the sequencer.
-                from mayatk.anim_utils.shots._shots import _is_motion_interval
-
                 if motion_only:
-                    is_value_change = _is_motion_interval(v1, v2, t1, t2, motion_rate)
+                    dt = max(t2 - t1, 1.0)
+                    is_value_change = abs(v2 - v1) / dt > motion_rate
                 else:
                     is_value_change = abs(v1 - v2) > tolerance
 
@@ -1165,14 +1174,7 @@ class SegmentKeys(SegmentKeysInfo):
                 destination range before moving.  This prevents collisions with
                 keys that aren't part of active animation.
         """
-        import logging
-
-        _log = logging.getLogger("mayatk.segment_keys.shift_curves")
-        if not _log.handlers:
-            _h = logging.StreamHandler()
-            _h.setLevel(logging.WARNING)
-            _log.addHandler(_h)
-        _log.setLevel(logging.WARNING)
+        _log = _log_shift
 
         _log.debug(
             "[SHIFT] curves=%s offset=%s range=%s remove_flat=%s",

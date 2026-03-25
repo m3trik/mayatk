@@ -160,8 +160,6 @@ class TaskFactory:
 
         # Forward optimize_keys state so smart_bake can read it
         self._optimize_keys_enabled = bool(tasks_only.get("optimize_keys", False))
-        # Forward bake_visibility state so smart_bake can read it
-        self._bake_visibility_enabled = bool(tasks_only.get("bake_visibility", False))
 
         # Run tasks first
         if tasks_only:

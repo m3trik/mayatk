@@ -1568,7 +1568,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        widget.menu.setTitle("Hierarchy Settings:")
         widget.menu.add(
             "QCheckBox",
             setText="Dry Run Mode",
@@ -1620,7 +1619,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
             )
 
-            widget.menu.setTitle("Reference Hierarchy:")
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Reference",
@@ -1779,7 +1777,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
             )
 
-            widget.menu.setTitle("Current Scene Hierarchy:")
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Current Scene",

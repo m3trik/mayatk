@@ -388,161 +388,123 @@ class TestOpacityMaterialMode(MayaTkTestCase):
 
 
 class TestOpacityVisibilityDriver(MayaTkTestCase):
-    """Tests for the auto-hide visibility logic."""
+    """Tests for the keyframe-mirroring visibility logic.
+
+    Replaced the condition-node driver with direct keyframe mirroring
+    (sync_visibility_from_opacity / behavior dual-keying) so that FBX
+    export produces real visibility animation curves for game engines.
+    """
 
     def setUp(self):
         super().setUp()
         self.cube = pm.polyCube(name="vis_cube")[0]
 
-    def test_opacity_drives_visibility(self):
-        """Opacity <= 0 should turn off visibility."""
+    def test_no_condition_node_created(self):
+        """create(mode='attribute') must NOT create a condition-node driver.
+
+        The old condition-node approach broke FBX export because the
+        DG graph doesn't survive the export round-trip.
+        """
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
-        self.cube.opacity.set(1.0)
-        self.assertEqual(self.cube.visibility.get(), True)
+        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
+        conds = [n for n in (vis_inputs or []) if isinstance(n, pm.nt.Condition)]
+        self.assertFalse(
+            conds, "No condition node should drive visibility after create"
+        )
 
-        self.cube.opacity.set(0.0)
-        self.assertEqual(self.cube.visibility.get(), False)
+    def test_sync_mirrors_opacity_to_visibility(self):
+        """sync_visibility_from_opacity copies opacity keys to visibility."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        self.cube.opacity.set(0.5)
-        self.assertEqual(self.cube.visibility.get(), True)
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+
+        # Set opacity keyframes
+        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+
+        # Sync
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        # Verify visibility keyframes match (use full attr path to avoid
+        # picking up the shape's visibility attribute in the query).
+        vis_times = pm.keyframe(
+            f"{self.cube}.visibility", q=True, tc=True
+        )
+        vis_values = pm.keyframe(
+            f"{self.cube}.visibility", q=True, vc=True
+        )
+        self.assertEqual(vis_times, [1.0, 15.0])
+        self.assertAlmostEqual(vis_values[0], 0.0)
+        self.assertAlmostEqual(vis_values[1], 1.0)
+
+    def test_sync_is_idempotent(self):
+        """Calling sync_visibility_from_opacity twice doesn't duplicate keys."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        vis_times = pm.keyframe(
+            f"{self.cube}.visibility", q=True, tc=True
+        )
+        self.assertEqual(len(vis_times), 2, "Should still be exactly 2 keys")
 
     def test_remove_restores_visibility(self):
-        """Removing fade should remove the visibility driver and reset visibility."""
+        """Removing opacity should reset visibility to True with no drivers."""
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.cube.opacity.set(0.0)  # Hidden
 
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
 
         self.assertTrue(self.cube.visibility.get(), "Visibility should reset to True")
-        # Visibility should not be driven (no input connections)
         vis_inputs = pm.listConnections(self.cube.visibility, source=True)
         self.assertFalse(
             vis_inputs,
             "Visibility should not be driven after remove",
         )
-        self.assertFalse(
-            pm.listConnections(self.cube.visibility, source=True),
-            "Visibility should have no input connections",
-        )
 
-    def test_visibility_driver_survives_name_collision(self):
-        """Visibility driver works even when Maya auto-increments the
-        condition node name (e.g. cube_VisDriver1).
+    def test_legacy_condition_node_cleaned_on_create(self):
+        """Creating opacity on an object with an old condition-node driver
+        should remove the legacy node.
 
-        Bug: endswith('_VisDriver') check failed on auto-incremented
-        names, causing remove() to orphan the condition and leaving
-        visibility stuck.
-        Fixed: 2026-02-20
+        Ensures backward compatibility with scenes that used the old
+        condition-node approach.
         """
-        # 1. Create opacity → builds vis_cube_VisDriver
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.cube.opacity.set(0.0)
-        self.assertEqual(self.cube.visibility.get(), False)
-
-        # 2. Orphan the condition node by creating a name conflict.
-        #    Create a standalone condition with the same name so the next
-        #    create cycle gets an auto-incremented name.
-        orphan = pm.createNode(
+        # Simulate legacy state: create a condition node manually
+        cond = pm.createNode(
             "condition", name=f"{self.cube.nodeName()}_VisDriver"
-        )  # steals the name; the real one becomes vis_cube_VisDriver1
-
-        # 3. Remove and re-create — remove must clean up the auto-named
-        #    condition, and create must re-establish the driver.
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
-        # Visibility must be restored after remove
-        self.assertTrue(
-            self.cube.visibility.get(),
-            "Visibility should reset after remove (name-collision case)",
         )
-        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
-        self.assertFalse(
-            vis_inputs,
-            "Visibility should have no driver after remove (name-collision case)",
-        )
+        cond.operation.set(2)
+        cond.secondTerm.set(0.0)
+        cond.colorIfTrueR.set(1.0)
+        cond.colorIfFalseR.set(0.0)
+        pm.connectAttr(cond.outColorR, self.cube.visibility, force=True)
 
-        # 4. Re-create — the orphan still occupies the clean name, so our
-        #    new condition will be auto-incremented.
+        # Now create opacity (new code) — should clean up the legacy node
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.cube.opacity.set(1.0)
-        self.assertEqual(
-            self.cube.visibility.get(),
-            True,
-            "Visibility should be True when opacity=1 (name-collision case)",
-        )
-        self.cube.opacity.set(0.0)
-        self.assertEqual(
-            self.cube.visibility.get(),
-            False,
-            "Visibility should be False when opacity=0 (name-collision case)",
+
+        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
+        conds = [n for n in (vis_inputs or []) if isinstance(n, pm.nt.Condition)]
+        self.assertFalse(
+            conds,
+            "Legacy condition node should be removed on create",
         )
 
-        # Clean up the orphan
-        if pm.objExists(orphan):
-            pm.delete(orphan)
-
-    def test_remove_cleans_up_after_object_recreate(self):
-        """Remove + re-create cycle works when original object was deleted
-        but its VisDriver condition node persisted.
-
-        Bug: delete object → create new object with same name → apply
-        opacity → VisDriver gets auto-incremented name → remove fails
-        to find it.
-        Fixed: 2026-02-20
-        """
-        name = "reuse_cube"
-        cube1 = pm.polyCube(name=name)[0]
-        RenderOpacity.create(objects=[cube1], mode="attribute")
-
-        # Delete the object but leave the condition node orphaned
-        cond_name = f"{cube1.nodeName()}_VisDriver"
-        self.assertTrue(pm.objExists(cond_name))
-        pm.delete(cube1)
-        # The condition node is now orphaned (disconnected but exists)
-        self.assertTrue(
-            pm.objExists(cond_name),
-            "Orphaned VisDriver should still exist after object deletion",
-        )
-
-        # Re-create with the same name
-        cube2 = pm.polyCube(name=name)[0]
-        RenderOpacity.create(objects=[cube2], mode="attribute")
-
-        # The new condition should still drive visibility
-        cube2.opacity.set(0.0)
-        self.assertEqual(
-            cube2.visibility.get(),
-            False,
-            "Visibility should follow opacity on re-created object",
-        )
-
-        # Remove should fully clean up
-        RenderOpacity.remove(objects=[cube2], mode="attribute")
-        self.assertTrue(cube2.visibility.get(), "Visibility should reset")
-        vis_inputs = pm.listConnections(cube2.visibility, source=True)
-        self.assertFalse(vis_inputs, "No driver should remain after remove")
-
-        # Cleanup orphan if still around
-        if pm.objExists(cond_name):
-            pm.delete(cond_name)
-
-    def test_foreign_condition_not_overridden(self):
-        """A foreign Condition driving visibility must not be overridden.
-
-        Bug: The original guard only skipped non-Condition drivers. A
-        Condition node that didn't match _VisDriver was silently replaced.
-        Fixed: 2026-02-20
-        """
-        # Wire a foreign condition to visibility
+    def test_foreign_condition_not_removed(self):
+        """A non-VisDriver condition driving visibility must not be touched."""
         foreign = pm.createNode("condition", name="foreign_cond")
-        foreign.operation.set(0)  # Equal
+        foreign.operation.set(0)
         foreign.colorIfTrueR.set(1.0)
         foreign.colorIfFalseR.set(0.0)
         pm.connectAttr(foreign.outColorR, self.cube.visibility, force=True)
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
-        # Visibility should still be driven by the foreign condition
+        # Foreign condition should still be there
         inputs = self.cube.visibility.inputs()
         self.assertTrue(inputs, "Visibility should still have a driver")
         self.assertEqual(
@@ -563,7 +525,6 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         Fixed: 2026-02-20
         """
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.cube.opacity.set(0.0)
 
         # Lock visibility between create and remove
         self.cube.visibility.lock()
@@ -575,33 +536,3 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         self.assertFalse(self.cube.hasAttr("opacity"))
         # Unlock for teardown
         self.cube.visibility.unlock()
-
-    def test_orphaned_vis_driver_cleaned_via_opacity_connection(self):
-        """remove() cleans VisDriver nodes found through the opacity attr
-        even when the visibility connection is already broken.
-
-        Bug: If the visibility → condition connection was externally broken,
-        the condition persisted as an orphan forever.
-        Fixed: 2026-02-20
-        """
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-
-        # Manually break the visibility connection (simulates external tool)
-        inputs = self.cube.visibility.inputs(plugs=True)
-        if inputs:
-            pm.disconnectAttr(inputs[0], self.cube.visibility)
-
-        # The condition still exists, connected to opacity via firstTerm
-        conds = pm.listConnections(self.cube.opacity, type="condition")
-        self.assertTrue(conds, "VisDriver should still exist via opacity")
-
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
-
-        # The condition should now be gone
-        self.assertFalse(self.cube.hasAttr("opacity"))
-        # All VisDriver nodes should be deleted
-        all_conds = pm.ls("*_VisDriver*", type="condition")
-        self.assertFalse(
-            all_conds,
-            "Orphaned VisDriver condition should be cleaned up",
-        )

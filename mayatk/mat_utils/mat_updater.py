@@ -607,8 +607,6 @@ class MatUpdaterSlots(MatUpdater):
 
     def header_init(self, widget):
         """Format global options in the header menu."""
-        widget.menu.setTitle("Global Settings:")
-
         # Selection Mode
         widget.menu.add(
             "QComboBox",

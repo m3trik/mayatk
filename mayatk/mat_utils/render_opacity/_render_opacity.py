@@ -150,6 +150,23 @@ class RenderOpacity(ptk.LoggingMixin):
         OpacityMaterialMode.ensure_connections(objects)
 
     @classmethod
+    def sync_visibility_from_opacity(cls, objects=None) -> None:
+        """Create visibility keyframes mirroring opacity animation curves.
+
+        Delegates to :meth:`OpacityAttributeMode.sync_visibility_from_opacity`.
+        Call after manually keying ``opacity`` to ensure the ``visibility``
+        channel has matching keyframes for FBX export.
+
+        Parameters:
+            objects: Objects to sync. If *None*, uses the current selection.
+        """
+        if objects is None:
+            objects = pm.selected()
+        if not objects:
+            return
+        OpacityAttributeMode.sync_visibility_from_opacity(objects)
+
+    @classmethod
     def remove(
         cls,
         objects=None,

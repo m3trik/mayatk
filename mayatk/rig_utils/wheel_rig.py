@@ -328,8 +328,6 @@ class WheelRigSlots:
 
     def header_init(self, widget):
         """Configure header menu with mode toggle and instructions."""
-        widget.menu.setTitle("Wheel Rig:")
-
         widget.menu.add("Separator", setTitle="Mode")
         chk_ws = widget.menu.add(
             "QCheckBox",

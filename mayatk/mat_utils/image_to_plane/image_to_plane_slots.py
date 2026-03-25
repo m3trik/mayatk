@@ -46,8 +46,6 @@ class ImageToPlaneSlots:
 
     def header_init(self, widget):
         """Configure header menu."""
-        widget.menu.setTitle("Image to Plane:")
-
         widget.menu.add(
             "QCheckBox",
             setText="Group Result",
