@@ -1213,6 +1213,80 @@ class TestAnimUtils(MayaTkTestCase):
             msg="Segment between predecessor and target should be stepped (hold predecessor value)",
         )
 
+    def test_step_tangent_as_in_tangent_is_invalid(self):
+        """Verify that Maya rejects 'step' as an in-tangent type.
+
+        ``pm.setKeyframe(inTangentType="step")`` silently fails — Maya
+        only accepts 'stepnext' for in-tangents.  The behaviors system
+        was passing 'step' for both in and out tangent types, which
+        produced warnings and left in-tangents unchanged.
+
+        Bug: ``apply_behavior`` passed ``inTangentType="step"`` directly
+        instead of using ``step_keys`` or ``"stepnext"``.
+        Fixed: 2026-03-25
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        # Start with auto tangents so we have a known baseline
+        cmds.keyTangent(plug, edit=True, inTangentType="auto", outTangentType="auto")
+
+        # Attempt to set inTangentType="step" — this is what the bug did
+        cmds.keyTangent(plug, edit=True, time=(1, 1), inTangentType="step")
+        itt = cmds.keyTangent(plug, q=True, time=(1, 1), inTangentType=True)
+        # Maya silently refuses — the in-tangent stays "auto", NOT "step"
+        self.assertNotEqual(
+            itt[0],
+            "step",
+            "'step' is not a valid in-tangent type; Maya should reject it",
+        )
+
+        # Correct usage: inTangentType="stepnext"
+        cmds.keyTangent(plug, edit=True, time=(1, 1), inTangentType="stepnext")
+        itt2 = cmds.keyTangent(plug, q=True, time=(1, 1), inTangentType=True)
+        self.assertEqual(
+            itt2[0], "stepnext", "stepnext should be accepted as valid in-tangent"
+        )
+
+    def test_apply_behavior_visibility_mirror_uses_stepnext(self):
+        """Visibility mirror in apply_behavior must use stepnext for in-tangent.
+
+        Bug: apply_behavior hardcoded inTangentType="step" on visibility
+        mirror keys, producing Maya warnings and silently failing to set
+        the tangent.
+        Fixed: 2026-03-25
+        """
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
+
+        # Add opacity attribute to trigger the visibility mirror path
+        pm.addAttr(self.cube, ln="opacity", at="float", min=0, max=1, dv=1, k=True)
+
+        apply_behavior(str(self.cube), "fade_in", start=1, end=30)
+
+        import maya.cmds as cmds
+
+        vis_keys = cmds.keyframe(f"{self.cube}.visibility", q=True, timeChange=True)
+        self.assertTrue(vis_keys, "Visibility should have keys from mirror")
+        for t in vis_keys:
+            ott = cmds.keyTangent(
+                f"{self.cube}.visibility",
+                q=True,
+                time=(t, t),
+                outTangentType=True,
+            )
+            itt = cmds.keyTangent(
+                f"{self.cube}.visibility",
+                q=True,
+                time=(t, t),
+                inTangentType=True,
+            )
+            self.assertEqual(ott[0], "step", f"Out-tangent at {t} should be 'step'")
+            self.assertEqual(
+                itt[0],
+                "stepnext",
+                f"In-tangent at {t} should be 'stepnext', not 'step'",
+            )
+
     # =========================================================================
     # Special Features
     # =========================================================================
@@ -1679,11 +1753,13 @@ class TestAnimUtils(MayaTkTestCase):
         kv = dict(zip(keys, vals))
 
         # Pre-infinity for constant (default) should give 0.0 at t=0
-        self.assertAlmostEqual(kv[0.0], 0.0, places=3,
-            msg=f"Bookend at t=0 has wrong value: {kv[0.0]}")
+        self.assertAlmostEqual(
+            kv[0.0], 0.0, places=3, msg=f"Bookend at t=0 has wrong value: {kv[0.0]}"
+        )
         # Post-infinity for constant should give 10.0 at t=20
-        self.assertAlmostEqual(kv[20.0], 10.0, places=3,
-            msg=f"Bookend at t=20 has wrong value: {kv[20.0]}")
+        self.assertAlmostEqual(
+            kv[20.0], 10.0, places=3, msg=f"Bookend at t=20 has wrong value: {kv[20.0]}"
+        )
 
     def test_tie_keyframes_idempotent(self):
         """Verify calling tie_keyframes twice doesn't produce duplicate keys
@@ -1712,11 +1788,18 @@ class TestAnimUtils(MayaTkTestCase):
             str(self.cube), attribute="translateX", q=True, valueChange=True
         )
 
-        self.assertEqual(keys_first, keys_second,
-            f"Key times changed on second tie: {keys_first} -> {keys_second}")
+        self.assertEqual(
+            keys_first,
+            keys_second,
+            f"Key times changed on second tie: {keys_first} -> {keys_second}",
+        )
         for v1, v2 in zip(vals_first, vals_second):
-            self.assertAlmostEqual(v1, v2, places=6,
-                msg=f"Values changed on second tie: {vals_first} -> {vals_second}")
+            self.assertAlmostEqual(
+                v1,
+                v2,
+                places=6,
+                msg=f"Values changed on second tie: {vals_first} -> {vals_second}",
+            )
 
     def test_tie_keyframes_bookend_tangent_is_flat(self):
         """Verify non-stepped bookend keys have flat tangent types for clean holds."""
@@ -1742,16 +1825,20 @@ class TestAnimUtils(MayaTkTestCase):
         kv = dict(zip(keys, zip(in_types, out_types)))
 
         # Bookend at start (t=1) should be flat
-        self.assertEqual(kv[1.0][0], "flat",
-            f"Start bookend in-tangent should be flat: {kv[1.0]}")
-        self.assertEqual(kv[1.0][1], "flat",
-            f"Start bookend out-tangent should be flat: {kv[1.0]}")
+        self.assertEqual(
+            kv[1.0][0], "flat", f"Start bookend in-tangent should be flat: {kv[1.0]}"
+        )
+        self.assertEqual(
+            kv[1.0][1], "flat", f"Start bookend out-tangent should be flat: {kv[1.0]}"
+        )
 
         # Bookend at end (t=10) should be flat
-        self.assertEqual(kv[10.0][0], "flat",
-            f"End bookend in-tangent should be flat: {kv[10.0]}")
-        self.assertEqual(kv[10.0][1], "flat",
-            f"End bookend out-tangent should be flat: {kv[10.0]}")
+        self.assertEqual(
+            kv[10.0][0], "flat", f"End bookend in-tangent should be flat: {kv[10.0]}"
+        )
+        self.assertEqual(
+            kv[10.0][1], "flat", f"End bookend out-tangent should be flat: {kv[10.0]}"
+        )
 
     def test_snap_keys_to_frames(self):
         """Test snapping keys to whole frame values."""

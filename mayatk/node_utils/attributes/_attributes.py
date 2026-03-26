@@ -90,6 +90,69 @@ class Attributes(ptk.HelpMixin):
         }
     )
 
+    # ------------------------------------------------------------------
+    # Attribute name abbreviation  (long → short)
+    # ------------------------------------------------------------------
+    # Overrides for names that don't follow the camelCase pattern
+    # (e.g. "shear" needs "sh" to avoid collision with "scale").
+    _ATTR_SHORT_OVERRIDES: Dict[str, str] = {
+        "shearXY": "shxy",
+        "shearXZ": "shxz",
+        "shearYZ": "shyz",
+    }
+
+    @staticmethod
+    def attr_short_name(long_name: str, node: str = "") -> str:
+        """Return the short attribute name for a long attribute name.
+
+        Resolution order:
+
+        1. ``cmds.attributeQuery(shortName=True)`` if Maya is running and
+           *node* is provided.
+        2. Hardcoded overrides for names that break the camelCase pattern.
+        3. Algorithmic: first char + every subsequent uppercase letter,
+           lowercased (e.g. ``"translateX"`` → ``"tx"``).
+
+        Parameters:
+            long_name: Long attribute name (e.g. ``"translateX"``).
+            node: Optional node name for the ``attributeQuery`` path.
+
+        Returns:
+            Short name string (e.g. ``"tx"``).
+        """
+        if node:
+            try:
+                import maya.cmds as cmds
+
+                short = cmds.attributeQuery(long_name, node=node, shortName=True)
+                if short:
+                    return short
+            except Exception:
+                pass
+        override = Attributes._ATTR_SHORT_OVERRIDES.get(long_name)
+        if override is not None:
+            return override
+        if not long_name:
+            return long_name
+        short = long_name[0] + "".join(c for c in long_name[1:] if c.isupper())
+        return short.lower()
+
+    @classmethod
+    def abbreviate_attrs(cls, attrs: List[str]) -> str:
+        """Return a compact summary string for a list of attribute names.
+
+        Each attribute is abbreviated via :meth:`attr_short_name`.
+        Results are sorted alphabetically.
+
+        Parameters:
+            attrs: List of long attribute names.
+
+        Returns:
+            Space-separated abbreviated string.
+        """
+        abbrevs = sorted({cls.attr_short_name(a) for a in attrs})
+        return " ".join(abbrevs)
+
     # ======================================================================
     # YAML preset system
     # ======================================================================

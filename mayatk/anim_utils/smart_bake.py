@@ -139,20 +139,6 @@ class SmartBake:
         "visibility",
     }
 
-    # Long-to-short attribute name mappings for bakeResults
-    ATTR_SHORT_NAMES: Dict[str, str] = {
-        "translateX": "tx",
-        "translateY": "ty",
-        "translateZ": "tz",
-        "rotateX": "rx",
-        "rotateY": "ry",
-        "rotateZ": "rz",
-        "scaleX": "sx",
-        "scaleY": "sy",
-        "scaleZ": "sz",
-        "visibility": "v",
-    }
-
     # Intermediate node types to trace through when finding drivers
     # These are utility nodes that pass values through without being true "drivers"
     PASSTHROUGH_TYPES: Set[str] = {
@@ -266,7 +252,11 @@ class SmartBake:
 
     def _get_attr_short_name(self, long_name: str) -> str:
         """Convert long attribute name to short name for bakeResults."""
-        return self.ATTR_SHORT_NAMES.get(long_name, long_name)
+        from mayatk.node_utils.attributes._attributes import (
+            Attributes,
+        )
+
+        return Attributes.attr_short_name(long_name)
 
     # -------------------------------------------------------------------------
     # Analysis
@@ -440,8 +430,7 @@ class SmartBake:
             if obj in existing_results:
                 existing = existing_results[obj]
                 vis_driven = any(
-                    "v" in ch_list
-                    for ch_list in existing.driven_channels.values()
+                    "v" in ch_list for ch_list in existing.driven_channels.values()
                 )
                 if vis_driven:
                     continue
@@ -452,9 +441,7 @@ class SmartBake:
             ancestor_plugs: List[str] = []
             current = obj
             while True:
-                parents = cmds.listRelatives(
-                    current, parent=True, fullPath=True
-                )
+                parents = cmds.listRelatives(current, parent=True, fullPath=True)
                 if not parents:
                     break
                 parent = parents[0]
@@ -496,9 +483,7 @@ class SmartBake:
                 analysis.driven_channels["inherited_visibility"] = ["v"]
                 analysis.source_nodes["inherited_visibility"] = ancestor_curves
                 # Store all ancestor plugs for the bake phase to reuse.
-                analysis.source_nodes["inherited_visibility_plugs"] = (
-                    ancestor_plugs
-                )
+                analysis.source_nodes["inherited_visibility_plugs"] = ancestor_plugs
                 results[obj] = analysis
 
         return results
@@ -722,9 +707,7 @@ class SmartBake:
                 sample_times: Set[float] = {float(start), float(end)}
                 for curve in ancestor_curves:
                     if cmds.objExists(curve):
-                        times = cmds.keyframe(
-                            curve, query=True, timeChange=True
-                        ) or []
+                        times = cmds.keyframe(curve, query=True, timeChange=True) or []
                         for t in times:
                             if start <= t <= end:
                                 sample_times.add(t)
@@ -740,9 +723,7 @@ class SmartBake:
                     or []
                 )
                 for cvc in child_vis_curves:
-                    times = cmds.keyframe(
-                        cvc, query=True, timeChange=True
-                    ) or []
+                    times = cmds.keyframe(cvc, query=True, timeChange=True) or []
                     for t in times:
                         if start <= t <= end:
                             sample_times.add(t)
@@ -754,9 +735,7 @@ class SmartBake:
                 # the curve, later getAttr reads would return values
                 # from the modified curve rather than the original.
                 child_vis_snapshot = {
-                    frame: float(
-                        cmds.getAttr(f"{obj}.visibility", time=frame)
-                    )
+                    frame: float(cmds.getAttr(f"{obj}.visibility", time=frame))
                     for frame in sorted_times
                 }
 
@@ -802,8 +781,7 @@ class SmartBake:
             except Exception as e:
                 result.skipped.append(obj)
                 cmds.warning(
-                    f"SmartBake: Failed to bake inherited visibility "
-                    f"for {obj}: {e}"
+                    f"SmartBake: Failed to bake inherited visibility " f"for {obj}: {e}"
                 )
 
     def _create_override_layer(self, to_bake: Dict[str, Any]) -> str:
@@ -1057,10 +1035,7 @@ class SmartBake:
             # listConnections(plug) won't traverse animBlendNodes.
             if override_layer and cmds.objExists(override_layer):
                 layer_curves = (
-                    cmds.animLayer(
-                        override_layer, query=True, animCurves=True
-                    )
-                    or []
+                    cmds.animLayer(override_layer, query=True, animCurves=True) or []
                 )
                 baked_curves = list(set(layer_curves))
 

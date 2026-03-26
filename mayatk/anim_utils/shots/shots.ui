@@ -74,30 +74,7 @@
         <number>1</number>
        </property>
        <item>
-        <widget class="QCheckBox" name="chk_selected_keys">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Derive shot boundaries from the currently selected
-keyframes instead of scanning all scene animation.</string>
-         </property>
-         <property name="text">
-          <string>Use Selected Keys</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="ComboBox" name="cmb_key_filter">
+        <widget class="ComboBox" name="cmb_detection_mode">
          <property name="minimumSize">
           <size>
            <width>70</width>
@@ -111,14 +88,20 @@ keyframes instead of scanning all scene animation.</string>
           </size>
          </property>
          <property name="toolTip">
-          <string>How to interpret key values when building shot boundaries.
-• All Values – every selected key is a boundary (contiguous shots).
+          <string>How to detect shot boundaries.
+• Auto-Detect – scan scene animation and cluster by gap.
+• All Keys – every selected key is a boundary (contiguous shots).
 • Skip Zero-Value – ignore keys with value 0.
 • Zero = Shot End – non-zero keys start shots, zero keys end them.</string>
          </property>
          <item>
           <property name="text">
-           <string>All Values</string>
+           <string>Auto-Detect</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>All Keys</string>
           </property>
          </item>
          <item>
@@ -143,7 +126,9 @@ keyframes instead of scanning all scene animation.</string>
          </property>
          <property name="toolTip">
           <string>Minimum gap (frames) between detected shots.
-Used during auto-detection when no CSV is loaded.</string>
+In Auto-Detect mode, clusters animation by this gap.
+In All Keys / Skip Zero mode, merges keys within this distance.
+Unused in Zero = Shot End mode.</string>
          </property>
          <property name="prefix">
           <string>Min Gap:	</string>
@@ -204,31 +189,25 @@ all shots on the timeline.</string>
         </widget>
        </item>
        <item>
-        <widget class="SpinBox" name="spn_default_duration">
+        <widget class="QCheckBox" name="chk_select_on_load">
          <property name="minimumSize">
           <size>
-           <width>70</width>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
            <height>20</height>
           </size>
          </property>
          <property name="toolTip">
-          <string>Default shot duration (frames) when creating shots
-without explicit ranges. 0 = auto-compute from objects.</string>
+          <string>Select all objects belonging to the shot
+when navigating to it in the sequencer.</string>
          </property>
-         <property name="prefix">
-          <string>Duration:	</string>
-         </property>
-         <property name="decimals">
-          <number>1</number>
-         </property>
-         <property name="minimum">
-          <double>0.000000000000000</double>
-         </property>
-         <property name="maximum">
-          <double>100000.000000000000000</double>
-         </property>
-         <property name="value">
-          <double>0.000000000000000</double>
+         <property name="text">
+          <string>Select Members on Load</string>
          </property>
         </widget>
        </item>
@@ -348,24 +327,7 @@ without explicit ranges. 0 = auto-compute from objects.</string>
          </item>
         </layout>
        </item>
-       <item>
-        <widget class="QCheckBox" name="chk_scale_keys">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>When checked, changing start/end scales keyframes
-to fit the new range. When unchecked, only the
-shot boundaries move.</string>
-         </property>
-         <property name="text">
-          <string>Scale Keys</string>
-         </property>
-        </widget>
-       </item>
+
        <item>
         <widget class="QLineEdit" name="txt_shot_desc">
          <property name="minimumSize">
@@ -379,6 +341,37 @@ shot boundaries move.</string>
          </property>
          <property name="placeholderText">
           <string>Description</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="SpinBox" name="spn_move_to">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Move the selected shot to this position in the timeline order (option box ▸ to apply).</string>
+         </property>
+         <property name="prefix">
+          <string>Move To:	</string>
+         </property>
+         <property name="minimum">
+          <double>1.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>1.000000000000000</double>
          </property>
         </widget>
        </item>

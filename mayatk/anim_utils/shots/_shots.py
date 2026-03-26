@@ -273,6 +273,7 @@ class ShotStore:
     _active: Optional["ShotStore"] = None
     _persistence: Optional[ScenePersistence] = None
     _QSETTINGS_PREFIX = "ShotStore"
+    DETECTION_MODES = ("auto", "all", "skip_zero", "zero_as_end")
 
     def __init__(
         self,
@@ -285,9 +286,8 @@ class ShotStore:
         self.markers: List[Dict[str, Any]] = []
         self.gap: float = 0.0
         self.detection_threshold: float = 5.0
-        self.use_selected_keys: bool = False
-        self.key_filter_mode: str = "all"  # "all", "skip_zero", "zero_as_end"
-        self.default_duration: float = 0.0  # 0 = auto-compute from objects
+        self.detection_mode: str = "auto"  # "auto", "all", "skip_zero", "zero_as_end"
+        self.select_on_load: bool = False
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.anim_layer: Optional[str] = anim_layer
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
@@ -315,9 +315,9 @@ class ShotStore:
         """Fire a ``"settings_changed"`` event.
 
         Call after modifying detection-relevant settings such as
-        ``key_filter_mode``, ``use_selected_keys``, ``detection_threshold``,
-        or ``gap`` so downstream consumers (e.g. the Shot Manifest) can
-        invalidate cached results and re-detect.
+        ``detection_mode``, ``detection_threshold``, or ``gap`` so
+        downstream consumers (e.g. the Shot Manifest) can invalidate
+        cached results and re-detect.
         """
         self._notify(SettingsChanged())
 
@@ -453,20 +453,32 @@ class ShotStore:
         """Apply detection preferences from QSettings (cross-scene).
 
         Called when a fresh store is created (no per-scene persistence)
-        so that ``use_selected_keys`` and ``key_filter_mode`` survive
-        scene changes without requiring the shots settings panel to be
-        opened.
+        so that ``detection_mode`` survives scene changes without
+        requiring the shots settings panel to be opened.
+
+        Handles migration from the legacy ``use_selected_keys`` +
+        ``key_filter_mode`` pair.
         """
         if QSettings is None:
             return
         try:
             s = QSettings()
-            val = s.value(f"{self._QSETTINGS_PREFIX}/use_selected_keys")
-            if val is not None:
-                self.use_selected_keys = val in (True, "true", 1, "1")
-            kf = s.value(f"{self._QSETTINGS_PREFIX}/key_filter_mode")
-            if kf is not None:
-                self.key_filter_mode = str(kf)
+            # New key first
+            dm = s.value(f"{self._QSETTINGS_PREFIX}/detection_mode")
+            if dm is not None and str(dm) in self.DETECTION_MODES:
+                self.detection_mode = str(dm)
+            else:
+                # Migrate legacy keys
+                val = s.value(f"{self._QSETTINGS_PREFIX}/use_selected_keys")
+                if val is not None and val in (True, "true", 1, "1"):
+                    kf = s.value(f"{self._QSETTINGS_PREFIX}/key_filter_mode")
+                    self.detection_mode = (
+                        str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
+                    )
+                # else leave at default "auto"
+            sol = s.value(f"{self._QSETTINGS_PREFIX}/select_on_load")
+            if sol is not None and sol in (True, "true", 1, "1"):
+                self.select_on_load = True
         except Exception:
             pass
 
@@ -477,15 +489,36 @@ class ShotStore:
         try:
             s = QSettings()
             s.setValue(
-                f"{self._QSETTINGS_PREFIX}/use_selected_keys",
-                self.use_selected_keys,
+                f"{self._QSETTINGS_PREFIX}/detection_mode",
+                self.detection_mode,
             )
             s.setValue(
-                f"{self._QSETTINGS_PREFIX}/key_filter_mode",
-                self.key_filter_mode,
+                f"{self._QSETTINGS_PREFIX}/select_on_load",
+                self.select_on_load,
             )
         except Exception:
             pass
+
+    # ---- derived queries --------------------------------------------------
+
+    def compute_gap(self) -> float:
+        """Derive the predominant inter-shot gap from current shot positions.
+
+        Returns the median gap between consecutive shots (rounded to the
+        nearest integer).  When fewer than two shots exist the current
+        ``self.gap`` value is returned unchanged.
+        """
+        shots = self.sorted_shots()
+        if len(shots) < 2:
+            return self.gap
+        gaps = [
+            max(0, round(shots[i + 1].start - shots[i].end))
+            for i in range(len(shots) - 1)
+        ]
+        gaps.sort()
+        mid = len(gaps) // 2
+        median = gaps[mid] if len(gaps) % 2 else round((gaps[mid - 1] + gaps[mid]) / 2)
+        return float(median)
 
     # ---- CRUD ------------------------------------------------------------
 
@@ -531,6 +564,8 @@ class ShotStore:
         """
         if objects is None:
             objects = []
+        else:
+            objects = _resolve_long_names(objects) or list(objects)
         new_id = max((s.shot_id for s in self.shots), default=-1) + 1
         block = ShotBlock(
             shot_id=new_id,
@@ -569,7 +604,8 @@ class ShotStore:
         if name is not None:
             shot.name = name
         if objects is not None:
-            shot.objects = sorted(set(objects))
+            resolved = _resolve_long_names(objects)
+            shot.objects = sorted(set(resolved or objects))
         if description is not None:
             shot.description = description
         if locked is not None:
@@ -691,9 +727,8 @@ class ShotStore:
             "markers": list(self.markers),
             "gap": self.gap,
             "detection_threshold": self.detection_threshold,
-            "use_selected_keys": self.use_selected_keys,
-            "key_filter_mode": self.key_filter_mode,
-            "default_duration": self.default_duration,
+            "detection_mode": self.detection_mode,
+            "select_on_load": self.select_on_load,
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
         }
 
@@ -727,9 +762,16 @@ class ShotStore:
         store.markers = data.get("markers", [])
         store.gap = float(data.get("gap", 0.0))
         store.detection_threshold = float(data.get("detection_threshold", 5.0))
-        store.use_selected_keys = bool(data.get("use_selected_keys", False))
-        store.key_filter_mode = str(data.get("key_filter_mode", "all"))
-        store.default_duration = float(data.get("default_duration", 0.0))
+        # Migrate legacy use_selected_keys + key_filter_mode if present
+        dm = data.get("detection_mode")
+        if dm is not None:
+            store.detection_mode = str(dm)
+        elif data.get("use_selected_keys"):
+            kf = data.get("key_filter_mode", "all")
+            store.detection_mode = (
+                str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
+            )
+        store.select_on_load = bool(data.get("select_on_load", False))
         store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
         return store
 
@@ -772,6 +814,22 @@ from shot object lists.
 """
 
 
+def _resolve_long_names(names):
+    """Resolve object names to long DAG paths.
+
+    Returns only names that exist in the scene.  This is the single
+    source of truth for disambiguation — all code paths that store or
+    query Maya objects should go through this helper.
+    """
+    try:
+        import maya.cmds as cmds
+    except ImportError:
+        return list(names) if names else []
+    if not names:
+        return []
+    return cmds.ls(names, long=True) or []
+
+
 def _map_standard_curves_to_transforms(curves=None):
     """Map each transform to anim curves driving standard attrs.
 
@@ -795,9 +853,15 @@ def _map_standard_curves_to_transforms(curves=None):
                 continue
             node = plug_str.split(".")[0]
             if cmds.nodeType(node) == "transform":
-                result[node].append(crv)
+                long = cmds.ls(node, long=True)
+                result[long[0] if long else node].append(crv)
             else:
-                parents = cmds.listRelatives(node, parent=True, type="transform") or []
+                parents = (
+                    cmds.listRelatives(
+                        node, parent=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
                 if parents:
                     result[parents[0]].append(crv)
             break  # one standard destination per curve is sufficient
@@ -856,10 +920,14 @@ def detect_shot_regions(
             for node in conns:
                 node_type = cmds.nodeType(node)
                 if node_type == "transform":
-                    found.add(node)
+                    long = cmds.ls(node, long=True)
+                    found.add(long[0] if long else node)
                 else:
                     parents = (
-                        cmds.listRelatives(node, parent=True, type="transform") or []
+                        cmds.listRelatives(
+                            node, parent=True, type="transform", fullPath=True
+                        )
+                        or []
                     )
                     if parents:
                         found.add(parents[0])
@@ -868,8 +936,8 @@ def detect_shot_regions(
     if not objects:
         return []
 
-    # Validate existence — cmds.ls filters to existing nodes only
-    valid = cmds.ls(objects) or []
+    # Validate existence — use long names to avoid ambiguity
+    valid = cmds.ls(objects, long=True) or []
     if not valid:
         return []
 
@@ -1017,9 +1085,13 @@ def regions_from_selected_keys(
         for node in conns:
             node_type = cmds.nodeType(node)
             if node_type == "transform":
-                obj_name = node
+                long = cmds.ls(node, long=True)
+                obj_name = long[0] if long else node
                 break
-            parents = cmds.listRelatives(node, parent=True, type="transform") or []
+            parents = (
+                cmds.listRelatives(node, parent=True, type="transform", fullPath=True)
+                or []
+            )
             if parents:
                 obj_name = parents[0]
                 break

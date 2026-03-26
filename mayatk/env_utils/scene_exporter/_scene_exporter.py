@@ -49,6 +49,7 @@ class SceneExporter(ptk.LoggingMixin):
     ) -> List:
         """Initialize objects for the scene, including all descendants that will be exported."""
         from maya import cmds
+        from mayatk.cam_utils._cam_utils import CamUtils
 
         if objects is None:
             self.logger.debug(
@@ -66,6 +67,24 @@ class SceneExporter(ptk.LoggingMixin):
         # Use cmds.ls to ensure we have a list of full path strings
         # This handles PyNodes, strings, or mixed lists
         objs = cmds.ls(objects, long=True, flatten=True) or []
+
+        # Exclude default Maya cameras from export
+        default_cams = CamUtils.DEFAULT_CAMERAS
+        filtered = []
+        for obj in objs:
+            short_name = obj.rsplit("|", 1)[-1]
+            if short_name in default_cams:
+                shapes = cmds.listRelatives(obj, shapes=True, fullPath=True) or []
+                if any(cmds.nodeType(s) == "camera" for s in shapes):
+                    continue
+            filtered.append(obj)
+
+        excluded_count = len(objs) - len(filtered)
+        if excluded_count:
+            self.logger.debug(
+                f"Excluded {excluded_count} default camera(s) from export."
+            )
+        objs = filtered
 
         if hasattr(self, "task_manager"):
             self.task_manager.objects = objs

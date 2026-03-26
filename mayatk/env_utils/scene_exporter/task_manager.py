@@ -222,7 +222,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             objects=self.objects,
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=False,  # Standalone optimize_keys task handles this
+            optimize_keys=False,  # Handled by the separate optimize_keys task in _task_config()
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )

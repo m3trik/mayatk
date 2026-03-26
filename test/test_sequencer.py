@@ -21,7 +21,7 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
 )
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
-from mayatk.anim_utils.shots.behaviors import (
+from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     load_behavior,
     resolve_keys,
     apply_behavior,
@@ -797,7 +797,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["A02.)", "", "", "", "second", "OBJ3", "", ""])
             steps = parse_csv(csv_path)
             self.assertEqual(len(steps), 2)  # A01 + A02 only
-            self.assertEqual(steps[0].content, "first")
+            self.assertEqual(steps[0].description, "first")
             self.assertEqual(steps[1].step_id, "A02")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -818,7 +818,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["A01.)", "", "", "", "First line.", "OBJ1", "", ""])
                 w.writerow(["", "", "", "", "Second line.", "OBJ2", "", ""])
             steps = parse_csv(csv_path)
-            self.assertIn("Second line.", steps[0].content)
+            self.assertIn("Second line.", steps[0].description)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1533,6 +1533,77 @@ class TestShotStore(unittest.TestCase):
         # Mutations through sequencer are visible on store
         seq.define_shot(name="Added", start=60, end=100, objects=[])
         self.assertEqual(len(store.shots), 2)
+
+    # ---- compute_gap -----------------------------------------------------
+
+    def test_compute_gap_uniform(self):
+        """Uniform gaps → compute_gap returns the common gap value."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=50)
+        store.define_shot(name="B", start=60, end=100)
+        store.define_shot(name="C", start=110, end=150)
+        self.assertAlmostEqual(store.compute_gap(), 10.0)
+
+    def test_compute_gap_zero(self):
+        """Abutting shots → compute_gap returns 0."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=50)
+        store.define_shot(name="B", start=50, end=100)
+        self.assertAlmostEqual(store.compute_gap(), 0.0)
+
+    def test_compute_gap_single_shot(self):
+        """With fewer than 2 shots, returns current store.gap."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.gap = 5.0
+        store.define_shot(name="Only", start=0, end=50)
+        self.assertAlmostEqual(store.compute_gap(), 5.0)
+
+    def test_compute_gap_mixed_returns_median(self):
+        """Mixed gap sizes → returns the median."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=50)
+        store.define_shot(name="B", start=55, end=100)  # gap=5
+        store.define_shot(name="C", start=110, end=150)  # gap=10
+        store.define_shot(name="D", start=160, end=200)  # gap=10
+        # Sorted gaps: [5, 10, 10] → median = 10
+        self.assertAlmostEqual(store.compute_gap(), 10.0)
+
+    def test_compute_gap_overlapping_clamps_to_zero(self):
+        """Overlapping shots produce negative raw gaps; compute_gap clamps to 0.
+
+        Bug: overlapping shots returned negative gap values.
+        Fixed: 2026-03-25
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=60)
+        store.define_shot(name="B", start=50, end=110)  # overlap → raw gap -10
+        self.assertAlmostEqual(store.compute_gap(), 0.0)
+
+    def test_compute_gap_even_count_rounds_to_int(self):
+        """Even number of gaps → median is rounded to nearest integer.
+
+        Bug: even-count median could return a fractional .5 value.
+        Fixed: 2026-03-25
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=50)
+        store.define_shot(name="B", start=55, end=100)  # gap=5
+        store.define_shot(name="C", start=110, end=150)  # gap=10
+        # Sorted gaps: [5, 10] → raw mean = 7.5 → rounded = 8
+        result = store.compute_gap()
+        self.assertEqual(result, result // 1)  # is a whole number
 
 
 class TestExpandShot(unittest.TestCase):
@@ -3104,13 +3175,13 @@ class TestColumnMap(unittest.TestCase):
         """Custom header aliases survive serialisation."""
         custom = ColumnMap(
             step_id=("ID",),
-            content=("Description", "Desc"),
-            asset_name=("Object",),
+            description=("Description", "Desc"),
+            assets=("Object",),
         )
         restored = ColumnMap.from_dict(custom.to_dict())
         self.assertEqual(restored.step_id, ("ID",))
-        self.assertEqual(restored.content, ("Description", "Desc"))
-        self.assertEqual(restored.asset_name, ("Object",))
+        self.assertEqual(restored.description, ("Description", "Desc"))
+        self.assertEqual(restored.assets, ("Object",))
 
     def test_from_dict_ignores_unknown_keys(self):
         """Unknown keys in the dict are silently dropped."""
@@ -3133,8 +3204,8 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
             custom = ColumnMap(
                 step_id=("ID",),
-                content=("Description",),
-                asset_name=("Object",),
+                description=("Description",),
+                assets=("Object",),
             )
             steps = parse_csv(csv_path, columns=custom)
             self.assertEqual(len(steps), 1)
@@ -3173,27 +3244,27 @@ class TestColumnMap(unittest.TestCase):
             steps = parse_csv(csv_path)
             self.assertEqual(len(steps), 3)
 
-            # A01: description = voice text
-            self.assertEqual(steps[0].description, "Welcome to training.")
-            self.assertEqual(steps[0].voice, "Welcome to training.")
-            self.assertEqual(steps[0].content, "Arrow fades in.")
-            # Behavior detection still from content
+            # A01: display_text = audio text
+            self.assertEqual(steps[0].display_text, "Welcome to training.")
+            self.assertEqual(steps[0].audio, "Welcome to training.")
+            self.assertEqual(steps[0].description, "Arrow fades in.")
+            # Behavior detection still from description
             self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
 
-            # A02: description = voice (not N/A)
-            self.assertEqual(steps[1].description, "The clamps are removed.")
-            self.assertEqual(steps[1].content, "N/A")
+            # A02: display_text = audio (not N/A)
+            self.assertEqual(steps[1].display_text, "The clamps are removed.")
+            self.assertEqual(steps[1].description, "N/A")
 
-            # A03: description = N/A (from voice)
-            self.assertEqual(steps[2].description, "N/A")
-            self.assertEqual(steps[2].content, "Poker chips push in.")
-            # Behavior still detected from content, not voice
+            # A03: display_text = N/A (from audio)
+            self.assertEqual(steps[2].display_text, "N/A")
+            self.assertEqual(steps[2].description, "Poker chips push in.")
+            # Behavior still detected from description, not audio
             self.assertEqual(len(steps[2].objects), 1)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_no_voice_column_falls_back_to_content(self):
-        """Without a Voice column, description falls back to content."""
+    def test_no_audio_column_falls_back_to_description(self):
+        """Without an Audio column, display_text falls back to description."""
         import tempfile, shutil, csv as csv_mod
 
         tmp = tempfile.mkdtemp()
@@ -3205,16 +3276,16 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
             steps = parse_csv(csv_path)
-            self.assertEqual(steps[0].voice, "")
-            self.assertEqual(steps[0].description, "Arrow fades in.")
+            self.assertEqual(steps[0].audio, "")
+            self.assertEqual(steps[0].display_text, "Arrow fades in.")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_voice_round_trip_in_column_map(self):
-        """ColumnMap voice field survives to_dict/from_dict."""
-        custom = ColumnMap(voice=("Narration", "VO"))
+    def test_audio_round_trip_in_column_map(self):
+        """ColumnMap audio field survives to_dict/from_dict."""
+        custom = ColumnMap(audio=("Narration", "VO"))
         restored = ColumnMap.from_dict(custom.to_dict())
-        self.assertEqual(restored.voice, ("Narration", "VO"))
+        self.assertEqual(restored.audio, ("Narration", "VO"))
 
     def test_exclude_steps_default_excludes_setup(self):
         """Default ColumnMap excludes SETUP."""

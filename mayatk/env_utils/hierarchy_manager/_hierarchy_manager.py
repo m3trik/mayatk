@@ -10,14 +10,15 @@ import pythontk as ptk
 
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
+from mayatk.cam_utils._cam_utils import CamUtils
 
 
 # ---------------------------------------------------------------------------
 # Node name utilities (module-level functions, no class wrapper needed)
 # ---------------------------------------------------------------------------
 
-# Maya default cameras that should be excluded from analysis
-MAYA_DEFAULT_CAMERAS = frozenset({"persp", "top", "front", "side"})
+# Centralised in CamUtils — keep a module alias for backward compatibility.
+MAYA_DEFAULT_CAMERAS = CamUtils.DEFAULT_CAMERAS
 
 
 def get_clean_node_name(node) -> str:

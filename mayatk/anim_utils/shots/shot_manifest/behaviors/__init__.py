@@ -183,24 +183,29 @@ def apply_behavior(
 
             keys = resolve_keys(block, start, end)
             for k in keys:
+                tan = k["tangent"]
+                # Maya's in-tangent doesn't accept "step" —
+                # the equivalent is "stepnext".
+                itt = "stepnext" if tan == "step" else tan
                 pm.setKeyframe(
                     node,
                     attribute=target_attr,
                     time=k["time"],
                     value=k["value"],
-                    inTangentType=k["tangent"],
-                    outTangentType=k["tangent"],
+                    inTangentType=itt,
+                    outTangentType=tan,
                 )
                 # Mirror: set a matching visibility keyframe so FBX
                 # export produces a real visibility animation curve.
+                # Use explicit attr path to target the transform only —
+                # the kwarg form also hits the shape node.
                 if mirror_to_vis:
                     pm.setKeyframe(
-                        node,
-                        attribute="visibility",
+                        f"{node}.visibility",
                         time=k["time"],
-                        value=k["value"],
-                        inTangentType=k["tangent"],
-                        outTangentType=k["tangent"],
+                        value=1.0 if k["value"] > 0 else 0.0,
+                        inTangentType="stepnext",
+                        outTangentType="step",
                     )
 
 

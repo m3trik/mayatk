@@ -12,7 +12,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
 )
-from mayatk.anim_utils.shots.behaviors import list_behaviors
+from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
 from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
     ERROR_COLOR,
     HEADERS,
@@ -94,7 +94,7 @@ class ManifestTableMixin:
         """Re-apply all behaviors for a single object on its built shot."""
         try:
             from mayatk.anim_utils.shots._shots import ShotStore
-            from mayatk.anim_utils.shots.behaviors import apply_behavior
+            from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
             shot = next(
                 (s for s in ShotStore.active().shots if s.name == step_id), None
@@ -135,7 +135,7 @@ class ManifestTableMixin:
             )
 
             parent = tree.create_item(
-                [step.step_id, section, step.description, "", "", ""],
+                [step.step_id, section, step.display_text, "", "", ""],
                 data=step,
             )
             # Child rows: object name in Description column, behavior label

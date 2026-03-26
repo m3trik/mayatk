@@ -1,4 +1,4 @@
-# !/usr/bin/python
+#!/usr/bin/python
 # coding=utf-8
 """Tests for the Shot Manifest align-mode features.
 
@@ -66,6 +66,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
     ShotManifest,
+    ColumnMap,
     parse_csv,
     detect_behaviors,
     detect_shot_regions,
@@ -87,7 +88,7 @@ def _make_steps(*names, behaviors=None):
             step_id=name,
             section="A",
             section_title="Section A",
-            content=f"Content for {name}",
+            description=f"Content for {name}",
         )
         step.objects.append(
             BuilderObject(name=f"obj_{name}", behaviors=list(behaviors))
@@ -125,19 +126,19 @@ class TestDetectBehaviors(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests: ShotManifest.update (baseline â€” no ranges)
+# Tests: ShotManifest.update (baseline Ã¢â‚¬â€ no ranges)
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateBaseline(unittest.TestCase):
-    """Test update() without ranges â€” sequential cursor placement."""
+    """Test update() without ranges Ã¢â‚¬â€ sequential cursor placement."""
 
     def setUp(self):
         self.store = _fresh_store()
         self.assembler = ShotManifest(self.store)
         self.steps = _make_steps("A01", "A02", "A03")
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_creates_shots_sequentially(self, mock_dur):
         mock_dur.return_value = 30.0
         actions = self.assembler.update(self.steps)
@@ -153,7 +154,7 @@ class TestUpdateBaseline(unittest.TestCase):
         self.assertEqual(shots[1].start, 31)
         self.assertEqual(shots[1].end, 61)
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_removes_shots_not_in_csv(self, mock_dur):
         mock_dur.return_value = 30.0
         self.assembler.update(self.steps)
@@ -164,7 +165,7 @@ class TestUpdateBaseline(unittest.TestCase):
         names = {s.name for s in self.store.shots}
         self.assertNotIn("A02", names)
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_skips_locked_shots(self, mock_dur):
         mock_dur.return_value = 30.0
         self.assembler.update(self.steps)
@@ -189,7 +190,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assembler = ShotManifest(self.store)
         self.steps = _make_steps("A01", "A02", "A03")
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_new_shots_use_provided_ranges(self, mock_dur):
         mock_dur.return_value = 30.0
         ranges = {
@@ -205,7 +206,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assertEqual(shots["A02"].start, 250.0)
         self.assertEqual(shots["A02"].end, 350.0)
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_existing_shots_repositioned_by_ranges(self, mock_dur):
         """Existing shots should be repositioned when ranges differ.
 
@@ -218,7 +219,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assembler.update(self.steps)
         shots_before = {s.name: (s.start, s.end) for s in self.store.shots}
 
-        # Rebuild with ranges â€” should reposition
+        # Rebuild with ranges Ã¢â‚¬â€ should reposition
         ranges = {
             "A01": (500.0, 600.0),
             "A02": (700.0, 800.0),
@@ -229,10 +230,10 @@ class TestUpdateWithRanges(unittest.TestCase):
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 500.0)
         self.assertEqual(shots["A01"].end, 600.0)
-        # repositioned â†’ patched
+        # repositioned Ã¢â€ â€™ patched
         self.assertEqual(actions["A01"], "patched")
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_partial_ranges_fallback_to_cursor(self, mock_dur):
         """Steps without explicit ranges should use cursor placement."""
         mock_dur.return_value = 30.0
@@ -246,7 +247,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assertEqual(shots["A02"].start, 200.0)
         self.assertEqual(shots["A02"].end, 230.0)
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_locked_shots_not_repositioned(self, mock_dur):
         """Locked shots must not be repositioned even with ranges."""
         mock_dur.return_value = 30.0
@@ -341,7 +342,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_user_pin_overrides_auto_fill(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = []
@@ -357,7 +358,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_gap_detection_used_for_auto_fill(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = [
@@ -378,12 +379,12 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_many_regions_pruned_to_step_count(self, mock_dur, mock_regions):
         """When more regions than steps, largest gaps become boundaries."""
         mock_dur.return_value = 30.0
         # 6 region starts (5 gaps) but only 3 steps.
-        # Diffs: 5, 5, 90, 5, 95 â†’ top 2 are 95 (idx 4) and 90 (idx 2)
+        # Diffs: 5, 5, 90, 5, 95 Ã¢â€ â€™ top 2 are 95 (idx 4) and 90 (idx 2)
         # Selected regions: [0, 100, 200]
         mock_regions.return_value = [
             {"name": "S", "start": 0.0, "end": 30.0, "objects": []},
@@ -402,7 +403,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_end_derived_from_next_start(self, mock_dur, mock_regions):
         """End of step N = start of step N+1 minus gap."""
         mock_dur.return_value = 30.0
@@ -417,7 +418,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_from_step_idx_freezes_prefix(self, mock_dur, mock_regions):
         """from_step_idx preserves earlier steps and re-resolves later ones."""
         mock_dur.return_value = 30.0
@@ -427,7 +428,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
             {"name": "S", "start": 200.0, "end": 230.0, "objects": []},
         ]
 
-        # First full resolve â€” gaps assigned to all 3 steps
+        # First full resolve Ã¢â‚¬â€ gaps assigned to all 3 steps
         resolved_full = self.ctrl._resolve_ranges()
         self.assertEqual(resolved_full[0][1], 10.0)  # A01 at gap 1
         self.assertEqual(resolved_full[1][1], 100.0)  # A02 at gap 2
@@ -437,13 +438,13 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         resolved_partial = self.ctrl._resolve_ranges(from_step_idx=2)
         self.assertEqual(resolved_partial[0], resolved_full[0])  # A01 frozen
         self.assertEqual(resolved_partial[1], resolved_full[1])  # A02 frozen
-        # A03 re-resolves â€” gap 200 is past A02's end, so it uses it
+        # A03 re-resolves Ã¢â‚¬â€ gap 200 is past A02's end, so it uses it
         self.assertEqual(resolved_partial[2][1], 200.0)
 
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_set_start_cascades_subsequent(self, mock_dur, mock_regions):
         """Setting a user pin clears subsequent user ranges so they re-flow."""
         mock_dur.return_value = 30.0
@@ -477,7 +478,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_no_collision_when_ranges_are_ordered(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = []
@@ -494,7 +495,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_collision_detected_when_ranges_overlap(self, mock_dur, mock_regions):
         """Overlapping ranges should be flagged as collisions.
 
@@ -515,7 +516,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_no_collision_when_ranges_are_contiguous(self, mock_dur, mock_regions):
         """Adjacent ranges where end == next_start should NOT collide.
 
@@ -537,7 +538,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_collision_applies_background_color(self, mock_dur, mock_regions):
         """Collision cells should have both foreground and background color set."""
         from qtpy.QtCore import Qt
@@ -552,7 +553,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.ctrl._populate_table()
         self.ctrl._validate_range_collisions()
 
-        # Find A01 item — should have collision background
+        # Find A01 item â€” should have collision background
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             step_data = item.data(0, Qt.UserRole)
@@ -667,7 +668,7 @@ class TestRangeAbsorption(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_user_end_past_next_gap_pushes_downstream(self, mock_dur, mock_regions):
         """Step 2 must start at or after step 1's user-end + gap, not at gap boundary."""
         mock_dur.return_value = 30.0
@@ -738,7 +739,7 @@ class TestFromDetection(unittest.TestCase):
             {"name": "Shot 1", "start": 1.0, "end": 10.0, "objects": ["a", "b", "c"]},
         ]
         steps, _ = BuilderStep.from_detection(candidates)
-        self.assertEqual(steps[0].content, "")
+        self.assertEqual(steps[0].description, "")
 
     def test_zero_objects(self):
         """Candidate with no objects produces a step with empty objects list."""
@@ -746,7 +747,7 @@ class TestFromDetection(unittest.TestCase):
         steps, ranges = BuilderStep.from_detection(candidates)
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0].objects, [])
-        self.assertEqual(steps[0].content, "")
+        self.assertEqual(steps[0].description, "")
         self.assertEqual(ranges["S1"], (0.0, 10.0))
 
 
@@ -756,7 +757,10 @@ class TestRemoveMissing(unittest.TestCase):
     def setUp(self):
         self.store = _fresh_store()
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration", return_value=30.0)
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30.0,
+    )
     def test_remove_missing_true_deletes_absent(self, mock_dur):
         """Default behavior: shots not in steps are removed."""
         builder = ShotManifest(self.store)
@@ -764,13 +768,16 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 — A02 should be removed
+        # Now update with only A01 â€” A02 should be removed
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=True)
         self.assertEqual(actions.get("A02"), "removed")
         self.assertEqual(len(self.store.shots), 1)
 
-    @patch("mayatk.anim_utils.shots.behaviors.compute_duration", return_value=30.0)
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30.0,
+    )
     def test_remove_missing_false_preserves_absent(self, mock_dur):
         """Detection mode: existing shots not in steps are preserved."""
         builder = ShotManifest(self.store)
@@ -778,7 +785,7 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 — A02 should be kept
+        # Now update with only A01 â€” A02 should be kept
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=False)
         self.assertNotIn("A02", actions)
@@ -931,7 +938,7 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
     def test_description_edit_detection_mode(self, mock_regions):
-        """Editing Description column in detection mode updates step.content."""
+        """Editing Description column in detection mode updates step.description."""
         mock_regions.return_value = [
             {"name": "S1", "start": 0.0, "end": 10.0, "objects": ["a"]},
         ]
@@ -944,12 +951,12 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
         tree.blockSignals(False)
 
         self.ctrl._on_item_changed(parent, COL_DESC)
-        self.assertEqual(self.ctrl._steps[0].content, "My description")
+        self.assertEqual(self.ctrl._steps[0].description, "My description")
 
     def test_description_edit_csv_mode(self):
-        """Editing Description column in CSV mode updates step.content."""
+        """Editing Description column in CSV mode updates step.description."""
         # Steps from setup_controller (CSV mode: _csv_path is empty but
-        # steps exist — simulate CSV mode by setting a path)
+        # steps exist â€” simulate CSV mode by setting a path)
         self.ctrl._csv_path = "/some/file.csv"
 
         tree = self.ui.tbl_steps
@@ -961,7 +968,7 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
         tree.blockSignals(False)
 
         self.ctrl._on_item_changed(parent, COL_DESC)
-        self.assertEqual(self.ctrl._steps[0].content, "Updated description")
+        self.assertEqual(self.ctrl._steps[0].description, "Updated description")
 
 
 class TestStepNameEdit(unittest.TestCase, _ControllerHarness):
@@ -1153,8 +1160,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
     def setUp(self):
         self.setup_controller()
         store = _fresh_store()
-        store.use_selected_keys = True
-        store.key_filter_mode = "all"
+        store.detection_mode = "all"
         store.detection_threshold = 5.0
         store.gap = 0.0
         self.ui.spn_gap = MagicMock(value=MagicMock(return_value=5.0))
@@ -1198,8 +1204,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
     ):
         """build() must not call sync() when use_selected_keys yields no regions."""
         mock_active.return_value = _fresh_store()
-        mock_active.return_value.use_selected_keys = True
-        mock_active.return_value.key_filter_mode = "all"
+        mock_active.return_value.detection_mode = "all"
 
         mock_builder = MagicMock()
         mock_manifest_cls.return_value = mock_builder
@@ -1238,8 +1243,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertTrue(self.ctrl._all_ranges_complete())
 
         mock_store = _fresh_store()
-        mock_store.use_selected_keys = True
-        mock_store.key_filter_mode = "all"
+        mock_store.detection_mode = "all"
         mock_active.return_value = mock_store
 
         mock_builder = MagicMock()
@@ -1274,7 +1278,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ctrl._cached_gaps = None
         resolved = self.ctrl._resolve_ranges()
 
-        # Only 1 detected region → at most 1 step should have a range.
+        # Only 1 detected region â†’ at most 1 step should have a range.
         self.assertEqual(len(resolved), 1, "Extra steps received fallback ranges")
         self.assertEqual(resolved[0][0], "A01")
 
@@ -1298,8 +1302,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         ]
 
         mock_store = _fresh_store()
-        mock_store.use_selected_keys = True
-        mock_store.key_filter_mode = "all"
+        mock_store.detection_mode = "all"
         mock_active.return_value = mock_store
 
         mock_builder = MagicMock()
@@ -1331,7 +1334,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
 
 
 class TestCrossScenePrefs(unittest.TestCase):
-    """Verify use_selected_keys survives across scenes via QSettings.
+    """Verify detection_mode survives across scenes via QSettings.
 
     Bug: use_selected_keys was only persisted per-scene via MayaScenePersistence.
     Opening a new scene without opening the shots settings panel caused the
@@ -1348,60 +1351,87 @@ class TestCrossScenePrefs(unittest.TestCase):
         ShotStore._persistence = None
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
-    def test_fresh_store_restores_use_selected_keys_from_qsettings(self, mock_qs_cls):
-        """active() must apply use_selected_keys from QSettings when no per-scene data."""
+    def test_fresh_store_restores_detection_mode_from_qsettings(self, mock_qs_cls):
+        """active() must apply detection_mode from QSettings when no per-scene data."""
         mock_qs = MagicMock()
         mock_qs.value.side_effect = lambda key, *a: {
+            "ShotStore/detection_mode": "skip_zero",
+        }.get(key)
+        mock_qs_cls.return_value = mock_qs
+
+        store = ShotStore()
+        store._restore_user_prefs()
+
+        self.assertEqual(store.detection_mode, "skip_zero")
+
+    @patch("mayatk.anim_utils.shots._shots.QSettings")
+    def test_legacy_qsettings_migrated_to_detection_mode(self, mock_qs_cls):
+        """Legacy use_selected_keys + key_filter_mode QSettings are migrated."""
+        mock_qs = MagicMock()
+        mock_qs.value.side_effect = lambda key, *a: {
+            "ShotStore/detection_mode": None,
             "ShotStore/use_selected_keys": True,
             "ShotStore/key_filter_mode": "skip_zero",
         }.get(key)
         mock_qs_cls.return_value = mock_qs
 
-        # No persistence backend → fresh default store
         store = ShotStore()
         store._restore_user_prefs()
 
-        self.assertTrue(store.use_selected_keys)
-        self.assertEqual(store.key_filter_mode, "skip_zero")
+        self.assertEqual(store.detection_mode, "skip_zero")
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
-    def test_save_writes_prefs_to_qsettings(self, mock_qs_cls):
-        """save() must persist use_selected_keys to QSettings."""
+    def test_save_writes_detection_mode_to_qsettings(self, mock_qs_cls):
+        """save() must persist detection_mode to QSettings."""
         mock_qs = MagicMock()
         mock_qs_cls.return_value = mock_qs
 
         store = ShotStore()
-        store.use_selected_keys = True
-        store.key_filter_mode = "zero_as_end"
+        store.detection_mode = "zero_as_end"
         store._save_user_prefs()
 
-        mock_qs.setValue.assert_any_call("ShotStore/use_selected_keys", True)
-        mock_qs.setValue.assert_any_call("ShotStore/key_filter_mode", "zero_as_end")
+        mock_qs.setValue.assert_any_call("ShotStore/detection_mode", "zero_as_end")
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_qsettings_ignored_when_persistence_has_data(self, mock_qs_cls):
         """QSettings must NOT override values loaded from per-scene persistence."""
-        # Simulate a scene with persisted data (use_selected_keys=False)
         mock_persistence = MagicMock()
         mock_persistence.load.return_value = {
             "shots": [],
-            "use_selected_keys": False,
-            "key_filter_mode": "all",
+            "detection_mode": "auto",
         }
 
-        # QSettings says True — but per-scene persistence should win
         mock_qs = MagicMock()
-        mock_qs.value.return_value = True
+        mock_qs.value.return_value = "skip_zero"
         mock_qs_cls.return_value = mock_qs
 
         ShotStore._persistence = mock_persistence
         store = ShotStore.active()
 
-        self.assertFalse(store.use_selected_keys)
+        self.assertEqual(store.detection_mode, "auto")
+
+    @patch("mayatk.anim_utils.shots._shots.QSettings")
+    def test_legacy_persistence_data_migrated(self, mock_qs_cls):
+        """Legacy per-scene data with use_selected_keys is migrated to detection_mode."""
+        mock_persistence = MagicMock()
+        mock_persistence.load.return_value = {
+            "shots": [],
+            "use_selected_keys": True,
+            "key_filter_mode": "zero_as_end",
+        }
+
+        mock_qs = MagicMock()
+        mock_qs.value.return_value = None
+        mock_qs_cls.return_value = mock_qs
+
+        ShotStore._persistence = mock_persistence
+        store = ShotStore.active()
+
+        self.assertEqual(store.detection_mode, "zero_as_end")
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_fresh_store_no_qsettings_data_uses_default(self, mock_qs_cls):
-        """When QSettings has no saved value, default (False) is used."""
+        """When QSettings has no saved value, default (auto) is used."""
         mock_qs = MagicMock()
         mock_qs.value.return_value = None
         mock_qs_cls.return_value = mock_qs
@@ -1409,8 +1439,94 @@ class TestCrossScenePrefs(unittest.TestCase):
         store = ShotStore()
         store._restore_user_prefs()
 
-        self.assertFalse(store.use_selected_keys)
-        self.assertEqual(store.key_filter_mode, "all")
+        self.assertEqual(store.detection_mode, "auto")
+
+
+class TestCsvLayoutPresets(unittest.TestCase, _ControllerHarness):
+    """Integration tests for CSV layout preset save/load on the controller."""
+
+    def setUp(self):
+        self.setup_controller()
+
+    def test_preset_manager_wired_on_construction(self):
+        """Controller has a _csv_layout_presets PresetManager after init."""
+        self.assertTrue(hasattr(self.ctrl, "_csv_layout_presets"))
+        self.assertIsNotNone(self.ctrl._csv_layout_presets)
+
+    def test_metadata_provider_serializes_column_map(self):
+        """metadata_provider returns the current ColumnMap as a dict."""
+        self.ctrl._column_map = ColumnMap(
+            description=("Desc",), assets=("Obj",), audio=("VO",)
+        )
+        meta = self.ctrl._csv_layout_presets.metadata_provider()
+        cm = meta["column_map"]
+        self.assertEqual(cm["description"], ["Desc"])
+        self.assertEqual(cm["assets"], ["Obj"])
+        self.assertEqual(cm["audio"], ["VO"])
+
+    def test_on_csv_layout_loaded_restores_column_map(self):
+        """_on_csv_layout_loaded restores a ColumnMap from metadata."""
+        meta = {
+            "column_map": {
+                "step_id": ["ID"],
+                "description": ["Body"],
+                "assets": ["Thing"],
+                "audio": ["Narration"],
+                "exclude_steps": [],
+            }
+        }
+        self.ctrl._on_csv_layout_loaded(meta)
+        cm = self.ctrl._column_map
+        self.assertEqual(cm.step_id, ("ID",))
+        self.assertEqual(cm.description, ("Body",))
+        self.assertEqual(cm.assets, ("Thing",))
+        self.assertEqual(cm.audio, ("Narration",))
+        self.assertEqual(cm.exclude_steps, ())
+
+    def test_on_csv_layout_loaded_missing_key_uses_defaults(self):
+        """Empty metadata falls back to default ColumnMap."""
+        self.ctrl._column_map = ColumnMap(description=("Custom",))
+        self.ctrl._on_csv_layout_loaded({})
+        # Should reset to defaults
+        cm = self.ctrl._column_map
+        self.assertEqual(cm.description, ("Step Contents", "Contents"))
+
+    def test_on_csv_layout_applied_reparses_csv(self):
+        """Applying a preset re-parses the active CSV file."""
+        self.ctrl._csv_path = "/fake/path.csv"
+        self.ctrl._load_csv = MagicMock()
+        self.ctrl._on_csv_layout_applied()
+        self.ctrl._load_csv.assert_called_once_with("/fake/path.csv")
+
+    def test_on_csv_layout_applied_no_path_is_noop(self):
+        """Applying a preset with no CSV path does nothing."""
+        self.ctrl._csv_path = ""
+        self.ui.txt_csv_path.text.return_value = ""
+        self.ctrl._load_csv = MagicMock()
+        self.ctrl._on_csv_layout_applied()
+        self.ctrl._load_csv.assert_not_called()
+
+    def test_round_trip_through_callbacks(self):
+        """Saving then loading via callbacks preserves the ColumnMap."""
+        original = ColumnMap(
+            step_id=("ID",),
+            description=("Desc",),
+            assets=("Obj",),
+            audio=("VO",),
+            exclude_steps=("INTRO",),
+        )
+        self.ctrl._column_map = original
+        # Simulate save: capture what metadata_provider returns
+        meta = self.ctrl._csv_layout_presets.metadata_provider()
+        # Simulate load: feed it back through the load callback
+        self.ctrl._column_map = ColumnMap()  # Reset first
+        self.ctrl._on_csv_layout_loaded(meta)
+        restored = self.ctrl._column_map
+        self.assertEqual(restored.step_id, ("ID",))
+        self.assertEqual(restored.description, ("Desc",))
+        self.assertEqual(restored.assets, ("Obj",))
+        self.assertEqual(restored.audio, ("VO",))
+        self.assertEqual(restored.exclude_steps, ("INTRO",))
 
 
 # ---------------------------------------------------------------------------

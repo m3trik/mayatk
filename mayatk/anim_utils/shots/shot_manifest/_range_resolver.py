@@ -58,7 +58,7 @@ def resolve_ranges(
     if not steps:
         return []
 
-    from mayatk.anim_utils.shots.behaviors import compute_duration
+    from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
 
     # When use_selected_keys is active and no regions were found,
     # abort instead of falling through to sequential placement.

@@ -101,6 +101,10 @@ class GapManagerMixin:
         Shifts the shot starting at *original_next_start* and all
         downstream shots by the same delta so that every shot keeps
         its original duration.  Only the gap size changes.
+
+        By default the keyframes inside each shifted shot are moved
+        so they stay aligned.  Holding **Shift** moves boundaries only,
+        leaving keyframes in place.
         """
         if self.sequencer is None:
             return
@@ -120,18 +124,35 @@ class GapManagerMixin:
         if target_idx is None:
             return
 
+        widget = self._get_sequencer_widget()
+        shift_held = getattr(widget, "_shift_at_press", False)
+
         self._save_shot_state()
 
         self._syncing = True
         try:
             with pm.UndoChunk():
-                for shot in sorted_shots[target_idx:]:
-                    duration = shot.end - shot.start
-                    self.sequencer.store.update_shot(
-                        shot.shot_id,
-                        start=shot.start + delta,
-                        end=shot.start + delta + duration,
-                    )
+                if shift_held:
+                    for shot in sorted_shots[target_idx:]:
+                        duration = shot.end - shot.start
+                        self.sequencer.store.update_shot(
+                            shot.shot_id,
+                            start=shot.start + delta,
+                            end=shot.start + delta + duration,
+                        )
+                else:
+                    for shot in sorted_shots[target_idx:]:
+                        new_start = shot.start + delta
+                        for obj in shot.objects:
+                            self.sequencer.move_object_keys(
+                                obj, shot.start, shot.end, new_start
+                            )
+                        duration = shot.end - shot.start
+                        self.sequencer.store.update_shot(
+                            shot.shot_id,
+                            start=new_start,
+                            end=new_start + duration,
+                        )
         finally:
             self._syncing = False
         self._sync_to_widget()
@@ -143,7 +164,11 @@ class GapManagerMixin:
         """Handle left-edge gap drag — resize the preceding shot's end.
 
         The gap's left edge is the previous shot's end frame.
-        Dragging it adjusts only that shot's duration (ripple-free).
+        Dragging it adjusts that shot's duration.
+
+        By default, keyframes inside the shot are scaled to fit the
+        new range.  Holding **Shift** changes the boundary only,
+        leaving keyframes in place.
         """
         if self.sequencer is None:
             return
@@ -163,11 +188,21 @@ class GapManagerMixin:
         if target is None:
             return
 
+        widget = self._get_sequencer_widget()
+        shift_held = getattr(widget, "_shift_at_press", False)
+
         self._save_shot_state()
         self._syncing = True
         try:
             with pm.UndoChunk():
-                self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
+                if shift_held:
+                    self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
+                else:
+                    for obj in target.objects:
+                        self.sequencer.scale_object_keys(
+                            obj, target.start, target.end, target.start, new_prev_end
+                        )
+                    self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
         finally:
             self._syncing = False
         self._sync_to_widget()

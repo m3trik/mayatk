@@ -438,6 +438,54 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         self.assertAlmostEqual(vis_values[0], 0.0)
         self.assertAlmostEqual(vis_values[1], 1.0)
 
+    def test_sync_coerces_visibility_to_boolean(self):
+        """Visibility mirror should use stepped 0/1 values, not raw opacity."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.7)
+        pm.setKeyframe(self.cube, attribute="opacity", time=10, value=0.0)
+
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        vis_values = pm.keyframe(
+            f"{self.cube}.visibility", q=True, vc=True
+        )
+        self.assertAlmostEqual(vis_values[0], 1.0, msg="0.7 should coerce to 1")
+        self.assertAlmostEqual(vis_values[1], 0.0, msg="0.0 should stay 0")
+
+        out_tans = pm.keyTangent(
+            f"{self.cube}.visibility", q=True, outTangentType=True
+        )
+        self.assertTrue(
+            all(t == "step" for t in out_tans),
+            f"Visibility tangents should be stepped, got {out_tans}",
+        )
+
+    def test_sync_does_not_key_shape_visibility(self):
+        """Shape node visibility must not receive keyframes.
+
+        Bug: pm.setKeyframe(obj, attribute='visibility') propagated to
+        both transform AND shape.  Fixed by using explicit attr path.
+        Fixed: 2026-03-25
+        """
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        shape = self.cube.getShape()
+        shape_vis_keys = pm.keyframe(
+            f"{shape}.visibility", q=True, tc=True
+        )
+        self.assertFalse(
+            shape_vis_keys,
+            f"Shape node should have 0 visibility keys, got {shape_vis_keys}",
+        )
+
     def test_sync_is_idempotent(self):
         """Calling sync_visibility_from_opacity twice doesn't duplicate keys."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode

@@ -170,7 +170,7 @@ class TestParseCSVReal(unittest.TestCase):
             for step in self.steps:
                 f.write(f"\n{'='*60}\n")
                 f.write(f"Step: {step.step_id}  Section: {step.section}\n")
-                f.write(f"Content: {step.content[:100]}\n")
+                f.write(f"Content: {step.description[:100]}\n")
                 f.write(f"Objects ({len(step.objects)}):\n")
                 for obj in step.objects:
                     f.write(f"  {obj.name:<40} behaviors={obj.behaviors}\n")
