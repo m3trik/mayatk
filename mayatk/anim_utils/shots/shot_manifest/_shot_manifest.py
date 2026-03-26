@@ -36,17 +36,17 @@ class BuilderStep:
     step_id: str  # e.g. "A04"
     section: str  # e.g. "A"
     section_title: str  # e.g. "AILERON RIGGING"
-    content: str  # merged step-contents text (used for behavior detection)
+    description: str  # merged step-contents text (used for behavior detection)
     objects: List[BuilderObject] = field(default_factory=list)
-    voice: str = ""  # narration/voice-over text (display priority over content)
+    audio: str = ""  # narration/voice-over text (display priority over description)
 
     @property
-    def description(self) -> str:
+    def display_text(self) -> str:
         """Text shown in the tree Description column.
 
-        Returns *voice* when available, otherwise *content*.
+        Returns *audio* when available, otherwise *description*.
         """
-        return self.voice if self.voice else self.content
+        return self.audio if self.audio else self.description
 
     @classmethod
     def from_detection(
@@ -86,7 +86,7 @@ class BuilderStep:
                 step_id=step_id,
                 section="",
                 section_title="",
-                content="",
+                description="",
                 objects=objects,
             )
             steps.append(step)
@@ -189,9 +189,9 @@ class ColumnMap:
     """
 
     step_id: Tuple[str, ...] = ("Step",)
-    content: Tuple[str, ...] = ("Step Contents", "Contents")
-    asset_name: Tuple[str, ...] = ("Asset Names", "Asset")
-    voice: Tuple[str, ...] = ("Voice Support", "Voice")
+    description: Tuple[str, ...] = ("Step Contents", "Contents")
+    assets: Tuple[str, ...] = ("Asset Names", "Asset")
+    audio: Tuple[str, ...] = ("Voice Support", "Voice")
     exclude_steps: Tuple[str, ...] = ("SETUP",)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -216,9 +216,9 @@ class _ResolvedColumns:
     """Integer column indices resolved from a header row."""
 
     step_id: int
-    content: int
-    asset_name: int
-    voice: Optional[int] = None
+    description: int
+    assets: int
+    audio: Optional[int] = None
 
 
 def _resolve_columns(header: List[str], col_map: ColumnMap) -> _ResolvedColumns:
@@ -250,9 +250,9 @@ def _resolve_columns(header: List[str], col_map: ColumnMap) -> _ResolvedColumns:
 
     return _ResolvedColumns(
         step_id=_find(col_map.step_id, "step_id"),
-        content=_find(col_map.content, "content"),
-        asset_name=_find(col_map.asset_name, "asset_name"),
-        voice=_find_optional(col_map.voice) if col_map.voice else None,
+        description=_find(col_map.description, "description"),
+        assets=_find(col_map.assets, "assets"),
+        audio=_find_optional(col_map.audio) if col_map.audio else None,
     )
 
 
@@ -321,13 +321,15 @@ def parse_csv(
 
             # --- step row ---
             step_match = _STEP_RE.match(first) or _ALT_STEP_RE.match(first)
-            content = _strip_cell(row[cols.content]) if len(row) > cols.content else ""
-            asset = (
-                _strip_cell(row[cols.asset_name]) if len(row) > cols.asset_name else ""
+            description = (
+                _strip_cell(row[cols.description])
+                if len(row) > cols.description
+                else ""
             )
-            voice = (
-                _strip_cell(row[cols.voice])
-                if cols.voice is not None and len(row) > cols.voice
+            asset = _strip_cell(row[cols.assets]) if len(row) > cols.assets else ""
+            audio = (
+                _strip_cell(row[cols.audio])
+                if cols.audio is not None and len(row) > cols.audio
                 else ""
             )
 
@@ -338,13 +340,13 @@ def parse_csv(
                     current_step = None
                     continue
                 seen_ids.add(step_id)
-                step_behaviors = detect_behaviors(content)
+                step_behaviors = detect_behaviors(description)
                 current_step = BuilderStep(
                     step_id=step_id,
                     section=current_section,
                     section_title=current_section_title,
-                    content=content,
-                    voice=voice,
+                    description=description,
+                    audio=audio,
                 )
                 steps.append(current_step)
 
@@ -358,14 +360,16 @@ def parse_csv(
 
             # --- continuation row (belongs to previous step) ---
             if current_step is not None:
-                # Merge continuation content into the parent step
-                if content:
-                    current_step.content += " " + content
+                # Merge continuation description into the parent step
+                if description:
+                    current_step.description += " " + description
 
                 if asset and asset not in ("N/A",):
-                    # Own content overrides, otherwise inherit from parent step
-                    row_behaviors = detect_behaviors(content) if content else []
-                    behaviors = row_behaviors or detect_behaviors(current_step.content)
+                    # Own description overrides, otherwise inherit from parent step
+                    row_behaviors = detect_behaviors(description) if description else []
+                    behaviors = row_behaviors or detect_behaviors(
+                        current_step.description
+                    )
                     obj = BuilderObject(
                         name=asset,
                         behaviors=list(behaviors),
@@ -453,7 +457,7 @@ class ShotManifest:
 
         behavior_result: Dict[str, list] = {"applied": [], "skipped": []}
         if apply_behaviors:
-            from mayatk.anim_utils.shots.behaviors import (
+            from mayatk.anim_utils.shots.shot_manifest.behaviors import (
                 apply_behavior,
                 apply_to_shots,
             )
@@ -505,7 +509,7 @@ class ShotManifest:
             (``"created"`` | ``"patched"`` | ``"skipped"``
             | ``"locked"`` | ``"removed"``).
         """
-        from mayatk.anim_utils.shots.behaviors import compute_duration
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
 
         sorted_shots = self.store.sorted_shots()
         built_map = {s.name: s for s in sorted_shots}
@@ -542,7 +546,7 @@ class ShotManifest:
                     end=end,
                     objects=obj_names,
                     metadata=meta,
-                    description=step.description,
+                    description=step.display_text,
                 )
                 for n in obj_names:
                     self.store.set_object_pinned(n)
@@ -597,7 +601,7 @@ class ShotManifest:
 
                 # Update metadata and description from CSV
                 existing.metadata = self._step_metadata(step)
-                existing.description = step.description or ""
+                existing.description = step.display_text or ""
 
                 if not new_objs and not removed_objs and not changed_beh:
                     if repositioned:
@@ -615,7 +619,11 @@ class ShotManifest:
                         )
                     )
                 # Merge CSV objects with preserved scene-discovered objects
-                existing.objects = sorted(csv_objs | scene_objs)
+                from mayatk.anim_utils.shots._shots import _resolve_long_names
+
+                merged = sorted(csv_objs | scene_objs)
+                resolved = _resolve_long_names(merged)
+                existing.objects = resolved if resolved else merged
                 for n in csv_objs:
                     self.store.set_object_pinned(n)
                 actions[step.step_id] = "patched"
@@ -651,7 +659,7 @@ class ShotManifest:
             verify_fn: Callable ``(obj, behavior, start, end) -> bool``
                 that returns ``True`` when the expected behaviour keys
                 exist.  Defaults to
-                :func:`~mayatk.anim_utils.shots.behaviors.verify_behavior`.
+                :func:`~mayatk.anim_utils.shots.shot_manifest.behaviors.verify_behavior`.
             keyframe_range_fn: Callable ``(obj) -> (min_time, max_time)``
                 returning the full keyframe extent for a user-animated
                 object, or ``None`` if no keys exist.
@@ -665,7 +673,7 @@ class ShotManifest:
             exists_fn = _cmds.objExists
 
         if verify_fn is None:
-            from mayatk.anim_utils.shots.behaviors import verify_behavior
+            from mayatk.anim_utils.shots.shot_manifest.behaviors import verify_behavior
 
             verify_fn = lambda obj, beh, s, e: verify_behavior(obj, beh, s, e)
 
@@ -870,7 +878,7 @@ class ShotManifest:
         obj_statuses: List[ObjectStatus],
     ) -> float:
         """Return the latest frame used by content in this step."""
-        from mayatk.anim_utils.shots.behaviors import load_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import load_behavior
 
         latest = scene.start  # at minimum, content starts at scene start
         for obj, obj_st in zip(step.objects, obj_statuses):

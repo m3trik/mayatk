@@ -99,8 +99,12 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         natively — unlike the deprecated condition-node approach which was
         Maya-only.
 
-        Safe to call repeatedly; existing visibility keyframes at the same
-        times are overwritten with the current opacity values.
+        Safe to call repeatedly; existing visibility keys are cleared and
+        rebuilt from the current opacity curve each time.
+
+        .. warning:: This replaces **all** visibility keyframes with those
+           derived from opacity.  Any hand-keyed visibility animation that
+           does not correspond to an opacity key will be lost.
         """
         for obj in pm.ls(objects):
             if not obj.hasAttr(cls.ATTR_NAME):
@@ -124,18 +128,18 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             )
 
             # Clear existing visibility keys so repeated calls don't
-            # accumulate duplicates (visibility is boolean-typed and
-            # pm.keyframe queries can return double entries).
-            pm.cutKey(obj, attribute="visibility", clear=True)
+            # accumulate duplicates.  Use explicit attr path to target
+            # the transform only — the kwarg form also hits the shape.
+            vis_attr = f"{obj}.visibility"
+            pm.cutKey(vis_attr, clear=True)
 
             for t, v, it, ot in zip(times, values, in_tans, out_tans):
                 pm.setKeyframe(
-                    obj,
-                    attribute="visibility",
+                    vis_attr,
                     time=t,
-                    value=v,
-                    inTangentType=it,
-                    outTangentType=ot,
+                    value=1.0 if v > 0 else 0.0,
+                    inTangentType="step",
+                    outTangentType="step",
                 )
 
     @classmethod
@@ -146,9 +150,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Removes any legacy condition-node drivers and syncs visibility
         keyframes from opacity keyframes.
         """
-        for obj in pm.ls(objects):
-            if obj.hasAttr(cls.ATTR_NAME):
-                cls._remove_legacy_vis_driver(obj)
+        # sync_visibility_from_opacity already calls _remove_legacy_vis_driver
+        # per-object, so no separate loop is needed here.
         cls.sync_visibility_from_opacity(objects)
 
     @classmethod

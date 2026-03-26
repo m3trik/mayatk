@@ -186,20 +186,16 @@ class ShotSequencer:
 
     @staticmethod
     def _shot_nodes(shot: ShotBlock) -> list:
-        """Return node name strings for a shot's objects.
+        """Return long DAG path strings for a shot's objects.
 
-        Uses ``cmds.ls`` to validate each name exists in the scene.
-        Returns the shortest unique name (matching the format stored in
-        ``shot.objects``) to avoid long/short name mismatches downstream.
+        Uses ``cmds.ls`` with ``long=True`` to validate each name exists
+        in the scene and return unambiguous DAG paths.
         """
         import maya.cmds as cmds
 
         if not shot.objects:
             return []
-        # Batch-resolve all names in a single cmds.ls call.
-        # Do NOT use long=True — shot.objects stores short names (from CSV)
-        # and the rest of the pipeline (e.g. _build_clips) matches by name.
-        return cmds.ls(shot.objects) or []
+        return cmds.ls(shot.objects, long=True) or []
 
     def collect_object_segments(
         self,
@@ -458,7 +454,7 @@ class ShotSequencer:
             if not vals:
                 continue
             val = vals[0]
-            itt = in_tan[0] if in_tan else "step"
+            itt = in_tan[0] if in_tan else "stepnext"
             ott = out_tan[0] if out_tan else "step"
 
             cmds.cutKey(crv, time=tr, clear=True)
@@ -1004,6 +1000,88 @@ class ShotSequencer:
                             self.move_object_keys(obj, s.start, s.end, s.start + delta)
                     s.start += delta
                     s.end += delta
+        self._enforce_gap_holds()
+
+    def move_shot_to_position(self, shot_id: int, target_pos: int) -> None:
+        """Move a shot to a new 1-based position in the timeline order.
+
+        Other shots shift to accommodate.  Keyframes move with their
+        shots.  Durations are preserved; gaps use the store's current
+        gap setting (locked gaps are honoured).
+
+        Parameters:
+            shot_id:    The shot to relocate.
+            target_pos: Desired 1-based position (clamped to valid range).
+
+        Raises:
+            ValueError: If *shot_id* does not exist.
+        """
+        shots = self.sorted_shots()
+        n = len(shots)
+        if n < 2:
+            return
+
+        current_idx = next(
+            (i for i, s in enumerate(shots) if s.shot_id == shot_id), None
+        )
+        if current_idx is None:
+            raise ValueError(f"No shot with id {shot_id}")
+
+        target_idx = max(0, min(target_pos - 1, n - 1))
+        if current_idx == target_idx:
+            return
+
+        # Build new ordering
+        new_order = list(shots)
+        moving = new_order.pop(current_idx)
+        new_order.insert(target_idx, moving)
+
+        # Capture locked gap widths from the *old* ordering before we move
+        # anything.  After reorder the pair identities change, so we
+        # preserve any locked width that still applies between adjacent
+        # shots in the new order.
+        locked_widths: dict = {}
+        for i in range(len(new_order) - 1):
+            left, right = new_order[i], new_order[i + 1]
+            if self.store.is_gap_locked(left.shot_id, right.shot_id):
+                # Use the gap as it was in the old timeline
+                locked_widths[i] = max(0, right.start - left.end)
+
+        # Compute new positions preserving each shot's duration
+        gap = self.store.gap
+        start_frame = shots[0].start
+        cursor = start_frame
+        new_positions = {}
+        for i, s in enumerate(new_order):
+            dur = s.duration
+            new_positions[s.shot_id] = (cursor, cursor + dur)
+            effective_gap = locked_widths.get(i, gap)
+            cursor += dur + effective_gap
+
+        # Move keyframes via park technique to avoid collisions
+        _PARK_BASE = 500000.0
+        if pm is not None:
+            park_offset = _PARK_BASE
+            parked = {}
+            for s in new_order:
+                old_start, old_end = s.start, s.end
+                new_start = new_positions[s.shot_id][0]
+                if abs(old_start - new_start) > 1e-6:
+                    for obj in s.objects:
+                        self.move_object_keys(obj, old_start, old_end, park_offset)
+                    parked[s.shot_id] = (park_offset, park_offset + s.duration)
+                    park_offset += s.duration + 1000
+
+            for sid, (park_s, park_e) in parked.items():
+                shot = self.shot_by_id(sid)
+                new_start = new_positions[sid][0]
+                for obj in shot.objects:
+                    self.move_object_keys(obj, park_s, park_e, new_start)
+
+        # Update ShotBlock ranges
+        for s in new_order:
+            s.start, s.end = new_positions[s.shot_id]
+
         self._enforce_gap_holds()
 
     # ---- timing redistribution -------------------------------------------

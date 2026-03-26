@@ -46,7 +46,7 @@ def _write_test_script():
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             SceneBlock, ShotSequencer as Sequencer,
         )
-        from mayatk.anim_utils.shots.behaviors import (
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
             load_behavior, resolve_keys, apply_behavior,
         )
         import pymel.core as pm

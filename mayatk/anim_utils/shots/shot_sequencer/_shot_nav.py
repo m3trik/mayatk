@@ -26,7 +26,7 @@ class ShotNavMixin:
     * ``sequencer`` — :class:`ShotSequencer` instance
     * ``ui`` — loaded UI with ``cmb_shot`` combobox
     * ``active_shot_id`` — property
-    * ``_playback_follows_view`` / ``_shot_display_mode``
+    * ``_playback_range_mode`` / ``_shot_display_mode``
     * ``_shifted_out_keys`` — dict
     * ``_cmb_mode`` / ``_cmb_label``
     * ``_prev_action`` / ``_next_action``
@@ -44,6 +44,10 @@ class ShotNavMixin:
             return
         self.sequencer.store.set_active_shot(shot_id)
         self._apply_view_playback_range(shot)
+
+        if not self.sequencer.store.select_on_load:
+            return
+
         import maya.cmds as cmds
 
         long_names = []
@@ -57,13 +61,14 @@ class ShotNavMixin:
             pm.select(clear=True)
 
     def _apply_view_playback_range(self, shot=None) -> None:
-        """Set Maya's playback range based on the current view mode.
+        """Set Maya's playback range based on the current playback-range mode.
 
-        When ``_playback_follows_view`` is True the range covers all
-        shots returned by :meth:`_visible_shots` so looping playback
-        stays within whatever the sequencer is currently displaying.
-        When False (or as fallback) only the active shot is used.
+        * ``"off"`` — no change to Maya's playback range.
+        * ``"follows_view"`` — range covers all visible shots.
+        * ``"locked"`` — range covers only the active shot.
         """
+        if self._playback_range_mode == "off":
+            return
         if self.sequencer is None:
             return
         if shot is None:
@@ -72,7 +77,7 @@ class ShotNavMixin:
         if shot is None:
             return
 
-        if self._playback_follows_view:
+        if self._playback_range_mode == "follows_view":
             visible = self._visible_shots(shot)
             rng_start = min(s.start for s in visible)
             rng_end = max(s.end for s in visible)

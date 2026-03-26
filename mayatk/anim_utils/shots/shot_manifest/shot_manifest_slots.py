@@ -81,7 +81,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._setup_recent_csv()
         self._setup_csv_toggle()
         self._setup_header_menu()
-        self._setup_mapping_presets()
+        self._setup_csv_layout_presets()
         self.ui.on_first_show.connect(self._on_first_show)
 
     # ---- first-show auto-populate ----------------------------------------
@@ -140,17 +140,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     # ---- scene detection -------------------------------------------------
 
     def _detect_regions(self, gap_threshold: float) -> list:
-        """Return detected shot regions, respecting the selected-keys setting.
+        """Return detected shot regions, respecting the detection mode.
 
-        When *use_selected_keys* is active and no keys are selected,
+        When a selected-keys mode is active and no keys are selected,
         shows a message-box warning and returns an empty list.
         """
         store = self._active_store()
-        use_sel = store.use_selected_keys if store is not None else False
-        if use_sel:
-            kf_mode = store.key_filter_mode if store is not None else "all"
+        mode = store.detection_mode if store is not None else "auto"
+        if mode != "auto":
             regions = regions_from_selected_keys(
-                gap_threshold=gap_threshold, key_filter=kf_mode
+                gap_threshold=gap_threshold, key_filter=mode
             )
             if not regions:
                 self.sb.message_box(
@@ -178,7 +177,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if gap is None:
             gap = store.detection_threshold if store is not None else 5.0
 
-        use_sel = store.use_selected_keys if store is not None else False
+        use_sel = (store.detection_mode != "auto") if store is not None else False
         regions = self._detect_regions(gap)
         if not regions:
             footer = (
@@ -256,10 +255,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             step_data = item.data(0, Qt.UserRole)
             if isinstance(step_data, BuilderStep):
-                if step_data.voice:
-                    step_data.voice = item.text(COL_DESC)
+                if step_data.audio:
+                    step_data.audio = item.text(COL_DESC)
                 else:
-                    step_data.content = item.text(COL_DESC)
+                    step_data.description = item.text(COL_DESC)
             return
 
         if column not in (COL_START, COL_END):
@@ -374,7 +373,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store = self._active_store()
         gap = store.gap if store else 0.0
         det_threshold = store.detection_threshold if store else 5.0
-        use_sel = store.use_selected_keys if store else False
+        use_sel = (store.detection_mode != "auto") if store else False
 
         # Detect animation regions for auto-fill (cached per assess cycle).
         if self._cached_gaps is not None:
@@ -751,35 +750,35 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             setToolTip="Open shared shot detection, gap, and editing settings.",
         )
 
-    def _setup_mapping_presets(self) -> None:
-        """Wire a PresetManager for column-mapping presets."""
+    def _setup_csv_layout_presets(self) -> None:
+        """Wire a PresetManager for CSV layout presets."""
         from uitk.widgets.mixins.preset_manager import PresetManager
         from uitk.widgets.widgetComboBox import WidgetComboBox
 
-        self._mapping_presets = PresetManager(
-            preset_dir="mayatk/shot_manifest/mappings",
+        self._csv_layout_presets = PresetManager(
+            preset_dir="mayatk/shot_manifest/csv_layouts",
             widgets=[],  # metadata-only: no widgets, just ColumnMap in _meta
         )
-        self._mapping_presets.metadata_provider = lambda: {
+        self._csv_layout_presets.metadata_provider = lambda: {
             "column_map": self._column_map.to_dict()
         }
-        self._mapping_presets.on_metadata_loaded = self._on_mapping_loaded
+        self._csv_layout_presets.on_metadata_loaded = self._on_csv_layout_loaded
 
         menu = self.ui.header.menu
         cmb = menu.add(
             WidgetComboBox,
-            setObjectName="cmb_mapping",
-            setToolTip="Select a column-mapping preset for CSV parsing.",
+            setObjectName="cmb_csv_layout",
+            setToolTip="Select a CSV layout preset for parsing.",
         )
-        self._mapping_presets.wire_combo(cmb, on_loaded=self._on_mapping_applied)
+        self._csv_layout_presets.wire_combo(cmb, on_loaded=self._on_csv_layout_applied)
 
-    def _on_mapping_loaded(self, meta: dict) -> None:
+    def _on_csv_layout_loaded(self, meta: dict) -> None:
         """Restore ColumnMap from preset metadata."""
         cm_data = meta.get("column_map")
         self._column_map = ColumnMap.from_dict(cm_data) if cm_data else ColumnMap()
 
-    def _on_mapping_applied(self) -> None:
-        """Re-parse the current CSV after a mapping preset is applied."""
+    def _on_csv_layout_applied(self) -> None:
+        """Re-parse the current CSV after a layout preset is applied."""
         path = self._csv_path or self.ui.txt_csv_path.text().strip()
         if path:
             self._load_csv(path)
@@ -988,9 +987,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             store = ShotStore.active()
             builder = ShotManifest(store)
 
-            # When use_selected_keys is active, verify keys exist
+            # When selected-keys mode is active, verify keys exist
             # before proceeding — even if user ranges are complete.
-            use_sel = store.use_selected_keys if store else False
+            use_sel = (store.detection_mode != "auto") if store else False
             if use_sel:
                 self._cached_gaps = None
                 regions = self._detect_regions(
@@ -1068,6 +1067,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             if n_beh_skipped:
                 parts.append(f"{n_beh_skipped} behaviors kept (existing keys)")
             self._set_footer(f"Build complete: {', '.join(parts)}.")
+
+            # Sync store.gap from actual shot positions so the spinbox
+            # reflects the gap the manifest produced.
+            actual_gap = store.compute_gap()
+            if abs(actual_gap - store.gap) > 0.5:
+                store.gap = actual_gap
+                store.save()
+                store.notify_settings_changed()
 
             # Refresh tree with post-build assessment
             self._apply_post_build(assessment, store)
@@ -1182,6 +1189,55 @@ class ShotManifestSlots(ptk.LoggingMixin):
             setText="Expand All Extra",
             setObjectName="btn_expand_extra",
             setToolTip="Expand every step row that has scene-discovered objects not in the CSV.",
+        )
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Shot Manifest \u2014 Build and validate shots from a CSV\n"
+                "file or by auto-detecting animation in the scene.\n\n"
+                "Quick Start (CSV):\n"
+                "  1. Check the CSV checkbox and browse to a CSV file.\n"
+                "  2. Review parsed steps in the table; edit ranges\n"
+                "     or exclude steps as needed.\n"
+                "  3. Click Build to create shots with behaviors applied.\n"
+                "  4. Click Assess to verify completeness.\n\n"
+                "Quick Start (Scene Detection):\n"
+                "  1. Uncheck CSV \u2014 animation is auto-detected using\n"
+                "     the settings in Shot Settings.\n"
+                "  2. Refine ranges in the table if needed.\n"
+                "  3. Click Build, then Assess.\n\n"
+                "Table Columns:\n"
+                "  Step \u2014 Step ID (e.g. A01).\n"
+                "  Section \u2014 Read-only grouping label from CSV.\n"
+                "  Description \u2014 Audio narration or step notes.\n"
+                "  Behaviors \u2014 Per-object actions (fade in/out, etc.).\n"
+                "    Click the label on a child row to toggle behaviors.\n"
+                "  Start / End \u2014 Frame range per step.\n"
+                "    Solid text = user-entered; dim italic = auto-filled.\n\n"
+                "Editing Ranges:\n"
+                "  \u2022 Double-click Start or End to type a frame or range\n"
+                "    (e.g. '120-250'). Downstream steps re-flow.\n"
+                "  \u2022 Right-click a range cell:\n"
+                "    \u2013 Set Start to Current Frame\n"
+                "    \u2013 Auto-fill from Gaps (re-detect and reflow)\n"
+                "    \u2013 Clear Range (revert to auto-fill)\n\n"
+                "Buttons:\n"
+                "  \u2022 Assess \u2014 Read-only comparison against live shots.\n"
+                "    Rows are color-tinted: red = missing, normal = valid.\n"
+                "  \u2022 Build \u2014 Create or update shots from loaded steps.\n"
+                "    Behaviors are applied automatically. Locked shots\n"
+                "    are never modified.\n\n"
+                "Right-Click Actions:\n"
+                "  \u2022 Step row: Exclude step, Open in Shot Sequencer\n"
+                "    (post-build), Show Excluded.\n"
+                "  \u2022 Child row: Show in Outliner, Re-apply Behaviors\n"
+                "    (post-build).\n\n"
+                "Tip: Red tint = missing objects or behaviors,\n"
+                "grey = locked shots, normal = valid steps."
+            ),
         )
 
     def btn_expand_missing(self):

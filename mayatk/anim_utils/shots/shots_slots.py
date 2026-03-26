@@ -9,6 +9,7 @@ Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 import pythontk as ptk
 
 from mayatk.anim_utils.shots._shots import (
+    ShotStore,
     StoreEvent,
     BatchComplete,
     ActiveShotChanged,
@@ -28,12 +29,6 @@ class ShotsController(ptk.LoggingMixin):
         self._store_listener_bound = False
         self._refreshing_editor = False
 
-        # Allow the checkbox signal to fire during uitk state restore
-        # so that dependent enable/disable states are synced correctly.
-        chk = getattr(self.ui, "chk_selected_keys", None)
-        if chk is not None:
-            chk.block_signals_on_restore = False
-
         # Shot editor widgets get their values from the store, not QSettings.
         for name in (
             "cmb_shot_select",
@@ -41,6 +36,7 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_start",
             "spn_shot_end",
             "txt_shot_desc",
+            "spn_move_to",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -49,10 +45,7 @@ class ShotsController(ptk.LoggingMixin):
         self._sync_from_store()
         self._bind_store_listener()
         self._setup_delete_menu()
-
-        spn_dur = getattr(self.ui, "spn_default_duration", None)
-        if spn_dur is not None:
-            spn_dur.setCustomDisplayValues({0: "Auto"})
+        self._setup_move_menu()
 
         # Remove the collapse button from the header and enable
         # hide-on-mouse-leave so the window behaves like a quick-access panel.
@@ -145,18 +138,18 @@ class ShotsController(ptk.LoggingMixin):
 
     # ---- index ↔ mode mapping ---------------------------------------------
 
-    _FILTER_MODES = ("all", "skip_zero", "zero_as_end")
+    _DETECTION_MODES = ShotStore.DETECTION_MODES
 
     def _mode_to_index(self, mode: str) -> int:
         try:
-            return self._FILTER_MODES.index(mode)
+            return self._DETECTION_MODES.index(mode)
         except ValueError:
             return 0
 
     def _index_to_mode(self, index: int) -> str:
-        if 0 <= index < len(self._FILTER_MODES):
-            return self._FILTER_MODES[index]
-        return "all"
+        if 0 <= index < len(self._DETECTION_MODES):
+            return self._DETECTION_MODES[index]
+        return "auto"
 
     # ---- footer ----------------------------------------------------------
 
@@ -207,42 +200,32 @@ class ShotsController(ptk.LoggingMixin):
             spn_det.setValue(store.detection_threshold)
             spn_det.blockSignals(False)
 
-        chk = getattr(self.ui, "chk_selected_keys", None)
-        if chk is not None:
-            chk.blockSignals(True)
-            chk.setChecked(store.use_selected_keys)
-            chk.blockSignals(False)
+        cmb_mode = getattr(self.ui, "cmb_detection_mode", None)
+        if cmb_mode is not None:
+            cmb_mode.blockSignals(True)
+            cmb_mode.setCurrentIndex(self._mode_to_index(store.detection_mode))
+            cmb_mode.blockSignals(False)
 
-        cmb = getattr(self.ui, "cmb_key_filter", None)
-        if cmb is not None:
-            cmb.blockSignals(True)
-            cmb.setCurrentIndex(self._mode_to_index(store.key_filter_mode))
-            cmb.blockSignals(False)
-
-        # Disable detection spinner when selected-keys mode is active
-        # (auto-detection threshold is irrelevant in that mode).
-        # Enable key-filter combobox only in selected-keys mode.
-        sel_active = chk.isChecked() if chk is not None else False
+        # Disable Min Gap spinner in zero_as_end mode (unused there).
+        mode = store.detection_mode
         if spn_det is not None:
-            spn_det.setEnabled(not sel_active)
-        if cmb is not None:
-            cmb.setEnabled(sel_active)
+            spn_det.setEnabled(mode != "zero_as_end")
 
         # ---- Editing group ----
+        has_shots = bool(store.shots)
+
         spn_gap = getattr(self.ui, "spn_gap", None)
         if spn_gap is not None:
             spn_gap.blockSignals(True)
             spn_gap.setValue(int(store.gap))
             spn_gap.blockSignals(False)
+            spn_gap.setEnabled(has_shots)
 
-        spn_dur = getattr(self.ui, "spn_default_duration", None)
-        if spn_dur is not None:
-            spn_dur.blockSignals(True)
-            spn_dur.setValue(store.default_duration)
-            spn_dur.blockSignals(False)
-            # Disabled when shots already have explicit ranges
-            has_shots = bool(store.shots)
-            spn_dur.setEnabled(not has_shots)
+        chk_sol = getattr(self.ui, "chk_select_on_load", None)
+        if chk_sol is not None:
+            chk_sol.blockSignals(True)
+            chk_sol.setChecked(store.select_on_load)
+            chk_sol.blockSignals(False)
 
         self._populate_shot_combobox(store)
         self._sync_footer(store)
@@ -294,21 +277,23 @@ class ShotsController(ptk.LoggingMixin):
             txt_desc = getattr(self.ui, "txt_shot_desc", None)
             btn_del = getattr(self.ui, "b000", None)
             cmb = getattr(self.ui, "cmb_shot_select", None)
-            chk_scale = getattr(self.ui, "chk_scale_keys", None)
-
             shot = None
             if store is not None and store.active_shot_id is not None:
                 shot = store.shot_by_id(store.active_shot_id)
+
+            spn_move = getattr(self.ui, "spn_move_to", None)
 
             has_shot = shot is not None
             has_any_shots = cmb is not None and cmb.count() > 0
             if cmb is not None:
                 cmb.setEnabled(has_any_shots)
-            for w in (txt_name, spn_start, spn_end, txt_desc, chk_scale):
+            for w in (txt_name, spn_start, spn_end, txt_desc):
                 if w is not None:
                     w.setEnabled(has_shot)
             if btn_del is not None:
                 btn_del.setEnabled(has_shot)
+            if spn_move is not None:
+                spn_move.setEnabled(has_shot and has_any_shots)
 
             if shot is None:
                 if txt_name is not None:
@@ -348,6 +333,24 @@ class ShotsController(ptk.LoggingMixin):
                         f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]",
                     )
                     cmb.blockSignals(False)
+
+            # Sync move-to spinbox range and current position
+            if spn_move is not None and store is not None:
+                sorted_ = store.sorted_shots()
+                n = len(sorted_)
+                spn_move.blockSignals(True)
+                spn_move.setMaximum(max(n, 1))
+                if shot is not None:
+                    pos = next(
+                        (
+                            i + 1
+                            for i, s in enumerate(sorted_)
+                            if s.shot_id == shot.shot_id
+                        ),
+                        1,
+                    )
+                    spn_move.setValue(pos)
+                spn_move.blockSignals(False)
         finally:
             self._refreshing_editor = False
 
@@ -376,27 +379,17 @@ class ShotsController(ptk.LoggingMixin):
             store.save()
             store.notify_settings_changed()
 
-    def on_selected_keys_changed(self, checked: bool) -> None:
+    def on_detection_mode_changed(self, index: int) -> None:
         store = self._active_store()
+        mode = self._index_to_mode(index)
         if store is not None:
-            store.use_selected_keys = checked
+            store.detection_mode = mode
             store.save()
             store.notify_settings_changed()
-        # Disable detection spinner in selected-keys mode.
-        # Enable key-filter combobox only in selected-keys mode.
+        # Disable Min Gap spinner in zero_as_end mode (unused there).
         spn = getattr(self.ui, "spn_detection", None)
         if spn is not None:
-            spn.setEnabled(not checked)
-        cmb = getattr(self.ui, "cmb_key_filter", None)
-        if cmb is not None:
-            cmb.setEnabled(checked)
-
-    def on_key_filter_changed(self, index: int) -> None:
-        store = self._active_store()
-        if store is not None:
-            store.key_filter_mode = self._index_to_mode(index)
-            store.save()
-            store.notify_settings_changed()
+            spn.setEnabled(mode != "zero_as_end")
 
     def on_gap_changed(self, value: int) -> None:
         store = self._active_store()
@@ -414,10 +407,10 @@ class ShotsController(ptk.LoggingMixin):
                 seq.respace(gap=float(value))
             store.notify_settings_changed()
 
-    def on_default_duration_changed(self, value: float) -> None:
+    def on_select_on_load_changed(self, state: int) -> None:
         store = self._active_store()
         if store is not None:
-            store.default_duration = float(value)
+            store.select_on_load = bool(state)
             store.save()
 
     # ---- shot editor actions ---------------------------------------------
@@ -445,53 +438,13 @@ class ShotsController(ptk.LoggingMixin):
         self._push_shot_field(name=text)
 
     def on_shot_start_changed(self, value: float) -> None:
-        if self._should_scale_keys():
-            self._resize_shot_keys(start=value)
-        else:
-            self._push_shot_field(start=value)
+        self._push_shot_field(start=value)
 
     def on_shot_end_changed(self, value: float) -> None:
-        if self._should_scale_keys():
-            self._resize_shot_keys(end=value)
-        else:
-            self._push_shot_field(end=value)
+        self._push_shot_field(end=value)
 
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)
-
-    def _should_scale_keys(self) -> bool:
-        """Return True if the Scale Keys checkbox is checked."""
-        chk = getattr(self.ui, "chk_scale_keys", None)
-        return chk is not None and chk.isChecked()
-
-    def _resize_shot_keys(self, start: float = None, end: float = None) -> None:
-        """Scale keys to fit modified shot range, then update boundaries."""
-        if self._refreshing_editor:
-            return
-        store = self._active_store()
-        if store is None or store.active_shot_id is None:
-            return
-        shot = store.shot_by_id(store.active_shot_id)
-        if shot is None:
-            return
-
-        old_start, old_end = shot.start, shot.end
-        new_start = start if start is not None else old_start
-        new_end = end if end is not None else old_end
-
-        if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
-            return
-
-        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
-            ShotSequencer,
-        )
-        import pymel.core as pm
-
-        seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
-            for obj in shot.objects:
-                seq.scale_object_keys(obj, old_start, old_end, new_start, new_end)
-        store.update_shot(shot.shot_id, start=new_start, end=new_end)
 
     def _setup_delete_menu(self) -> None:
         """Attach an option box menu to the delete button."""
@@ -504,6 +457,19 @@ class ShotsController(ptk.LoggingMixin):
             setText="Delete All Shots",
             setObjectName="btn_delete_all_shots",
             setToolTip="Remove every shot from the store.",
+        )
+
+    def _setup_move_menu(self) -> None:
+        """Attach an option box action to the move-to spinbox."""
+        spn = getattr(self.ui, "spn_move_to", None)
+        if spn is None:
+            return
+        menu = spn.option_box.menu
+        menu.add(
+            "QPushButton",
+            setText="Move Shot",
+            setObjectName="btn_move_shot",
+            setToolTip="Move the selected shot to the specified position.",
         )
 
     def on_delete_shot(self) -> None:
@@ -550,6 +516,31 @@ class ShotsController(ptk.LoggingMixin):
             store.remove_shot(shot.shot_id)
         store.set_active_shot(None)
 
+    def on_move_shot(self) -> None:
+        """Move the active shot to the position specified by spn_move_to."""
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+
+        spn = getattr(self.ui, "spn_move_to", None)
+        if spn is None:
+            return
+
+        target_pos = int(spn.value())
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+        import pymel.core as pm
+
+        seq = ShotSequencer(store=store)
+        with pm.UndoChunk():
+            seq.move_shot_to_position(store.active_shot_id, target_pos)
+
+        store.save()
+        self._populate_shot_combobox(store)
+        store.notify_settings_changed()
+
 
 class ShotsSlots(ptk.LoggingMixin):
     """Switchboard slot class — routes UI events to the controller."""
@@ -562,27 +553,66 @@ class ShotsSlots(ptk.LoggingMixin):
 
         self.controller = ShotsController(self)
 
-    # ---- widget slots (objectName → method) ------------------------------
+    # ---- header ----------------------------------------------------------
+
+    def header_init(self, widget):
+        """Configure header menu."""
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Shots \u2014 Detection settings, shot properties, and gap\n"
+                "control for the Shot Manifest and Shot Sequencer.\n\n"
+                "Quick Start:\n"
+                "  1. Choose a Detection Mode and set Min Gap.\n"
+                "  2. Open the Shot Manifest or Shot Sequencer to trigger\n"
+                "     detection (settings here are shared by both tools).\n"
+                "  3. Edit individual shot properties in the Shot Editor\n"
+                "     section below, or adjust the Gap spinner to respace\n"
+                "     all shots at once.\n\n"
+                "Detection:\n"
+                "  \u2022 Auto-Detect \u2014 Scans all scene animation and groups\n"
+                "    contiguous segments separated by gaps larger than\n"
+                "    the Min Gap threshold.\n"
+                "  \u2022 All Keys \u2014 Each selected keyframe becomes a shot\n"
+                "    boundary. Select keys in the Graph Editor first.\n"
+                "  \u2022 Skip Zero-Value \u2014 Like All Keys but ignores any\n"
+                "    keys with a value of 0.\n"
+                "  \u2022 Zero = Shot End \u2014 Non-zero keys start shots,\n"
+                "    zero-value keys end them (Min Gap is disabled).\n\n"
+                "  Min Gap: Minimum frame gap that separates segments into\n"
+                "  distinct shots, or merges nearby keys into one boundary.\n\n"
+                "Gap (Editing):\n"
+                "  Sets the frame gap between consecutive shots. Adjusting\n"
+                "  this spinner immediately respaces all shots and moves\n"
+                "  their keyframes. The operation is undoable (Ctrl+Z).\n\n"
+                "Shot Editor:\n"
+                "  Select a shot from the dropdown to view or edit:\n"
+                "  \u2022 Name \u2014 Human-readable shot label.\n"
+                "  \u2022 Start / End \u2014 Frame range (syncs with Sequencer).\n"
+                "  \u2022 Description \u2014 Free-text notes.\n"
+                "  \u2022 Move To \u2014 Set position and click option box \u25b8 to reorder.\n"
+                "  \u2022 Delete \u2014 Remove shot (option box \u25b8 for Delete All).\n\n"
+                "Footer: Shot count, total duration, object count, and\n"
+                "overall frame range at a glance."
+            ),
+        )
+
+    # ---- widget slots (objectName \u2192 method) ------------------------------
 
     def spn_detection(self, value):
         """Detection threshold changed."""
         self.controller.on_detection_changed(value)
 
-    def chk_selected_keys(self, state):
-        """Use-selected-keys checkbox toggled."""
-        self.controller.on_selected_keys_changed(bool(state))
-
-    def cmb_key_filter(self, index):
-        """Key-filter mode combobox changed."""
-        self.controller.on_key_filter_changed(index)
+    def cmb_detection_mode(self, index):
+        """Detection mode combobox changed."""
+        self.controller.on_detection_mode_changed(index)
 
     def spn_gap(self, value):
         """Global gap spinner changed."""
         self.controller.on_gap_changed(value)
-
-    def spn_default_duration(self, value):
-        """Default duration spinner changed."""
-        self.controller.on_default_duration_changed(value)
 
     # ---- shot editor slots -----------------------------------------------
 
@@ -617,3 +647,7 @@ class ShotsSlots(ptk.LoggingMixin):
     def btn_delete_all_shots(self):
         """Delete all shots."""
         self.controller.on_delete_all_shots()
+
+    def btn_move_shot(self):
+        """Move shot to the position in spn_move_to."""
+        self.controller.on_move_shot()

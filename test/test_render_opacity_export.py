@@ -344,7 +344,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         'visibility' but the object has 'opacity', so the behavior
         system keys both channels.
         """
-        from mayatk.anim_utils.shots.behaviors import apply_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
@@ -384,7 +384,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         This verifies we didn't break the standard path for non-opacity
         objects.
         """
-        from mayatk.anim_utils.shots.behaviors import apply_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
         # No RenderOpacity.create — just plain object
         apply_behavior(self.cube.name(), "fade_in", start=1, end=30)

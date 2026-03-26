@@ -14,6 +14,22 @@ from mayatk.ui_utils._ui_utils import UiUtils
 class CamUtils(ptk.HelpMixin):
     """ """
 
+    # Maya's built-in startup cameras plus common orthographic views
+    # created on-demand by CamUtils helpers.
+    DEFAULT_CAMERAS = frozenset(
+        {
+            "persp",
+            "top",
+            "front",
+            "side",
+            "back",
+            "bottom",
+            "left",
+            "right",
+            "alignToPoly",
+        }
+    )
+
     @staticmethod
     @CoreUtils.undoable
     def group_cameras(
@@ -38,16 +54,6 @@ class CamUtils(ptk.HelpMixin):
         group = pm.group(empty=True, name=name)
         group.visibility.set(not hide_group)
 
-        default_cameras = (
-            "side",
-            "front",
-            "top",
-            "persp",
-            "back",
-            "bottom",
-            "left",
-            "alignToPoly",
-        )  # List of default cameras
         all_cameras = pm.ls(type="camera")  # Get all cameras in the scene
         all_camera_transforms = [
             cam.getParent() for cam in all_cameras
@@ -62,7 +68,10 @@ class CamUtils(ptk.HelpMixin):
         for cam in all_camera_transforms:
             if non_default:
                 if not any(
-                    [cam.name().endswith(def_cam) for def_cam in default_cameras]
+                    [
+                        cam.name().endswith(def_cam)
+                        for def_cam in CamUtils.DEFAULT_CAMERAS
+                    ]
                 ):
                     pm.parent(cam, group)
             else:
