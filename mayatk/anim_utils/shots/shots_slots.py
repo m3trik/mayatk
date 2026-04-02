@@ -15,6 +15,7 @@ from mayatk.anim_utils.shots._shots import (
     ActiveShotChanged,
     ShotUpdated,
     ShotRemoved,
+    SceneChanged,
 )
 
 
@@ -36,7 +37,6 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_start",
             "spn_shot_end",
             "txt_shot_desc",
-            "spn_move_to",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -123,10 +123,27 @@ class ShotsController(ptk.LoggingMixin):
         store = self._active_store()
         if store is not None:
             store.add_listener(self._on_store_event)
+            self._bound_store = store
             self._store_listener_bound = True
+
+    def _unbind_store_listener(self) -> None:
+        """Remove the ShotStore listener."""
+        if not self._store_listener_bound:
+            return
+        store = getattr(self, "_bound_store", None)
+        if store is not None:
+            try:
+                store.remove_listener(self._on_store_event)
+            except Exception:
+                pass
+            self._bound_store = None
+        self._store_listener_bound = False
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """Re-sync widgets when the store changes externally."""
+        if isinstance(event, SceneChanged):
+            self._reinitialize_from_store()
+            return
         if isinstance(event, BatchComplete):
             self._sync_from_store()
         elif isinstance(event, (ActiveShotChanged, ShotUpdated)):
@@ -135,6 +152,33 @@ class ShotsController(ptk.LoggingMixin):
         elif isinstance(event, ShotRemoved):
             self._populate_shot_combobox()
             self._sync_footer()
+
+    def _reinitialize_from_store(self) -> None:
+        """Reset and re-bind when the Maya scene changes."""
+        self._unbind_store_listener()
+        self._refreshing_editor = False
+        self._bind_store_listener()
+        self._sync_from_store()
+        self._sync_group_state()
+
+    def _sync_group_state(self) -> None:
+        """Collapse/expand groups to match whether shots exist.
+
+        Detection is only useful before shots exist; editing and
+        shot_editor are only useful once shots have been built.
+        Called once on scene change, not on every store mutation.
+        """
+        store = self._active_store()
+        has_shots = bool(store.shots) if store is not None else False
+        grp_detection = getattr(self.ui, "detection", None)
+        grp_editing = getattr(self.ui, "editing", None)
+        grp_editor = getattr(self.ui, "shot_editor", None)
+        if grp_detection is not None and grp_detection.isChecked() == has_shots:
+            grp_detection.setChecked(not has_shots)
+        if grp_editing is not None and grp_editing.isChecked() != has_shots:
+            grp_editing.setChecked(has_shots)
+        if grp_editor is not None and grp_editor.isChecked() != has_shots:
+            grp_editor.setChecked(has_shots)
 
     # ---- index ↔ mode mapping ---------------------------------------------
 
@@ -206,10 +250,10 @@ class ShotsController(ptk.LoggingMixin):
             cmb_mode.setCurrentIndex(self._mode_to_index(store.detection_mode))
             cmb_mode.blockSignals(False)
 
-        # Disable Min Gap spinner in zero_as_end mode (unused there).
+        # Disable Min Gap spinner in off/zero_as_end modes (unused there).
         mode = store.detection_mode
         if spn_det is not None:
-            spn_det.setEnabled(mode != "zero_as_end")
+            spn_det.setEnabled(mode not in ("off", "zero_as_end"))
 
         # ---- Editing group ----
         has_shots = bool(store.shots)
@@ -220,12 +264,6 @@ class ShotsController(ptk.LoggingMixin):
             spn_gap.setValue(int(store.gap))
             spn_gap.blockSignals(False)
             spn_gap.setEnabled(has_shots)
-
-        chk_sol = getattr(self.ui, "chk_select_on_load", None)
-        if chk_sol is not None:
-            chk_sol.blockSignals(True)
-            chk_sol.setChecked(store.select_on_load)
-            chk_sol.blockSignals(False)
 
         self._populate_shot_combobox(store)
         self._sync_footer(store)
@@ -244,7 +282,7 @@ class ShotsController(ptk.LoggingMixin):
         cmb.blockSignals(True)
         cmb.clear()
         if store is not None:
-            for shot in store.shots:
+            for shot in store.sorted_shots():
                 cmb.addItem(
                     f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]",
                     shot.shot_id,
@@ -281,7 +319,7 @@ class ShotsController(ptk.LoggingMixin):
             if store is not None and store.active_shot_id is not None:
                 shot = store.shot_by_id(store.active_shot_id)
 
-            spn_move = getattr(self.ui, "spn_move_to", None)
+            btn_move = getattr(self.ui, "btn_move", None)
 
             has_shot = shot is not None
             has_any_shots = cmb is not None and cmb.count() > 0
@@ -292,8 +330,8 @@ class ShotsController(ptk.LoggingMixin):
                     w.setEnabled(has_shot)
             if btn_del is not None:
                 btn_del.setEnabled(has_shot)
-            if spn_move is not None:
-                spn_move.setEnabled(has_shot and has_any_shots)
+            if btn_move is not None:
+                btn_move.setEnabled(has_shot and has_any_shots)
 
             if shot is None:
                 if txt_name is not None:
@@ -334,23 +372,13 @@ class ShotsController(ptk.LoggingMixin):
                     )
                     cmb.blockSignals(False)
 
-            # Sync move-to spinbox range and current position
-            if spn_move is not None and store is not None:
-                sorted_ = store.sorted_shots()
-                n = len(sorted_)
-                spn_move.blockSignals(True)
-                spn_move.setMaximum(max(n, 1))
-                if shot is not None:
-                    pos = next(
-                        (
-                            i + 1
-                            for i, s in enumerate(sorted_)
-                            if s.shot_id == shot.shot_id
-                        ),
-                        1,
-                    )
-                    spn_move.setValue(pos)
-                spn_move.blockSignals(False)
+            # Keep the move-index spinbox range in sync with shot count
+            spn_idx = getattr(self, "_move_index_spn", None)
+            if spn_idx is not None and store is not None:
+                n = len(store.sorted_shots())
+                spn_idx.blockSignals(True)
+                spn_idx.setMaximum(max(n, 1))
+                spn_idx.blockSignals(False)
         finally:
             self._refreshing_editor = False
 
@@ -386,10 +414,10 @@ class ShotsController(ptk.LoggingMixin):
             store.detection_mode = mode
             store.save()
             store.notify_settings_changed()
-        # Disable Min Gap spinner in zero_as_end mode (unused there).
+        # Disable Min Gap spinner in off/zero_as_end modes (unused there).
         spn = getattr(self.ui, "spn_detection", None)
         if spn is not None:
-            spn.setEnabled(mode != "zero_as_end")
+            spn.setEnabled(mode not in ("off", "zero_as_end"))
 
     def on_gap_changed(self, value: int) -> None:
         store = self._active_store()
@@ -406,12 +434,6 @@ class ShotsController(ptk.LoggingMixin):
             with pm.UndoChunk():
                 seq.respace(gap=float(value))
             store.notify_settings_changed()
-
-    def on_select_on_load_changed(self, state: int) -> None:
-        store = self._active_store()
-        if store is not None:
-            store.select_on_load = bool(state)
-            store.save()
 
     # ---- shot editor actions ---------------------------------------------
 
@@ -460,17 +482,39 @@ class ShotsController(ptk.LoggingMixin):
         )
 
     def _setup_move_menu(self) -> None:
-        """Attach an option box action to the move-to spinbox."""
-        spn = getattr(self.ui, "spn_move_to", None)
-        if spn is None:
+        """Attach direction combobox and index spinbox to the Move button."""
+        btn = getattr(self.ui, "btn_move", None)
+        if btn is None:
             return
-        menu = spn.option_box.menu
-        menu.add(
-            "QPushButton",
-            setText="Move Shot",
-            setObjectName="btn_move_shot",
-            setToolTip="Move the selected shot to the specified position.",
+        menu = btn.option_box.menu
+        cmb = menu.add(
+            "QComboBox",
+            setObjectName="cmb_move_direction",
+            setToolTip="Move direction.",
         )
+        cmb.addItem("Forward", "forward")
+        cmb.addItem("Back", "back")
+        cmb.addItem("To Index", "to_index")
+
+        spn = menu.add(
+            "QSpinBox",
+            setObjectName="spn_move_index",
+            setMinimum=1,
+            setMaximum=1,
+            setValue=1,
+            setPrefix="Index: ",
+            setToolTip="Target position (1-based) within the shot order.",
+            setEnabled=False,
+        )
+        self._move_direction_cmb = cmb
+        self._move_index_spn = spn
+
+        cmb.currentIndexChanged.connect(self._on_move_direction_changed)
+
+    def _on_move_direction_changed(self, index: int) -> None:
+        """Enable/disable the index spinbox based on the selected direction."""
+        cmb = self._move_direction_cmb
+        self._move_index_spn.setEnabled(cmb.itemData(index) == "to_index")
 
     def on_delete_shot(self) -> None:
         """Delete the active shot after confirmation."""
@@ -517,16 +561,37 @@ class ShotsController(ptk.LoggingMixin):
         store.set_active_shot(None)
 
     def on_move_shot(self) -> None:
-        """Move the active shot to the position specified by spn_move_to."""
+        """Move the active shot forward, back, or to a specific index."""
         store = self._active_store()
         if store is None or store.active_shot_id is None:
             return
 
-        spn = getattr(self.ui, "spn_move_to", None)
-        if spn is None:
+        cmb = getattr(self, "_move_direction_cmb", None)
+        direction = cmb.currentData() if cmb is not None else "forward"
+
+        sorted_ = store.sorted_shots()
+        current_pos = next(
+            (
+                i + 1
+                for i, s in enumerate(sorted_)
+                if s.shot_id == store.active_shot_id
+            ),
+            None,
+        )
+        if current_pos is None:
             return
 
-        target_pos = int(spn.value())
+        if direction == "forward":
+            target_pos = current_pos - 1
+        elif direction == "back":
+            target_pos = current_pos + 1
+        else:  # to_index
+            spn = getattr(self, "_move_index_spn", None)
+            target_pos = int(spn.value()) if spn is not None else current_pos
+
+        n = len(sorted_)
+        if target_pos < 1 or target_pos > n or target_pos == current_pos:
+            return
 
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
@@ -593,7 +658,8 @@ class ShotsSlots(ptk.LoggingMixin):
                 "  \u2022 Name \u2014 Human-readable shot label.\n"
                 "  \u2022 Start / End \u2014 Frame range (syncs with Sequencer).\n"
                 "  \u2022 Description \u2014 Free-text notes.\n"
-                "  \u2022 Move To \u2014 Set position and click option box \u25b8 to reorder.\n"
+                "  \u2022 Move \u2014 Move forward, back, or to a specific index\n"
+                "    (option box \u25b8 for direction and index settings).\n"
                 "  \u2022 Delete \u2014 Remove shot (option box \u25b8 for Delete All).\n\n"
                 "Footer: Shot count, total duration, object count, and\n"
                 "overall frame range at a glance."
@@ -648,6 +714,6 @@ class ShotsSlots(ptk.LoggingMixin):
         """Delete all shots."""
         self.controller.on_delete_all_shots()
 
-    def btn_move_shot(self):
-        """Move shot to the position in spn_move_to."""
+    def btn_move(self):
+        """Move the selected shot forward, back, or to a specific index."""
         self.controller.on_move_shot()

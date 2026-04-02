@@ -14,11 +14,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
 from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
-    ERROR_COLOR,
     HEADERS,
-    BEHAVIOR_COLORS,
-    STEP_ICON_COLOR,
-    PASTEL_STATUS,
     COL_STEP,
     COL_SECTION,
     COL_DESC,
@@ -45,6 +41,10 @@ class ManifestTableMixin:
     - ``self._resolve_ranges()``  – range resolution entry point.
     - ``self._update_build_button()``  – button-state refresh.
     - ``self._set_footer(text, *, color)``  – footer label helper.
+    - ``self._status_palette``  – status color lookup dict.
+    - ``self._behavior_colors``  – behavior fg color dict.
+    - ``self._step_icon_color``  – hex color for step icons.
+    - ``self._error_color``  – hex color for error labels.
     """
 
     # -- behavior label widgets --------------------------------------------
@@ -63,7 +63,7 @@ class ManifestTableMixin:
             if not raw_name:
                 continue
             display = fmt_behavior(raw_name)
-            color = BEHAVIOR_COLORS.get(raw_name, (None, None))[0]
+            color = self._behavior_colors.get(raw_name, (None, None))[0]
             chk = label.menu.add(
                 "QCheckBox",
                 setText=display,
@@ -79,7 +79,7 @@ class ManifestTableMixin:
             chk.setProperty("behavior_raw", raw_name)
             checkboxes.append(chk)
 
-        label.setText(format_behavior_html(obj.behaviors))
+        label.setText(format_behavior_html(obj.behaviors, self._behavior_colors))
         tree.setItemWidget(child_item, COL_BEHAVIORS, label)
 
     def _on_behaviors_changed(self, obj, label, checkboxes) -> None:
@@ -87,7 +87,7 @@ class ManifestTableMixin:
         obj.behaviors = [
             chk.property("behavior_raw") for chk in checkboxes if chk.isChecked()
         ]
-        label.setText(format_behavior_html(obj.behaviors))
+        label.setText(format_behavior_html(obj.behaviors, self._behavior_colors))
         self._update_build_button()
 
     def _reapply_behavior(self, step_id: str, obj: BuilderObject) -> None:
@@ -101,7 +101,7 @@ class ManifestTableMixin:
             )
             if shot is None:
                 self._set_footer(
-                    f"Shot '{step_id}' not found in store.", color=ERROR_COLOR
+                    f"Shot '{step_id}' not found in store.", color=self._error_color
                 )
                 return
 
@@ -114,13 +114,25 @@ class ManifestTableMixin:
             )
         except Exception as exc:
             self.logger.error("Re-apply behavior failed: %s", exc)
-            self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
+            self._set_footer(f"Error: {exc}", color=self._error_color)
 
     # -- table population --------------------------------------------------
 
     def _populate_table(self) -> None:
         """Fill the TreeWidget with parsed steps and expandable object rows."""
         tree = self.ui.tbl_steps
+
+        # Preserve expansion state across rebuilds
+        from qtpy.QtCore import Qt as _Qt
+
+        expanded_ids: set = set()
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.isExpanded():
+                data = item.data(0, _Qt.UserRole)
+                if hasattr(data, "step_id"):
+                    expanded_ids.add(data.step_id)
+
         tree.clear()
         tree.setHeaderLabels(HEADERS)
         tree.setColumnCount(len(HEADERS))
@@ -168,6 +180,14 @@ class ManifestTableMixin:
         tree.set_stretch_column(2)  # Stretch "Description" column
         tree.restore_column_state()  # Persist user header changes
 
+        # Restore expansion state
+        if expanded_ids:
+            for i in range(tree.topLevelItemCount()):
+                item = tree.topLevelItem(i)
+                data = item.data(0, _Qt.UserRole)
+                if hasattr(data, "step_id") and data.step_id in expanded_ids:
+                    item.setExpanded(True)
+
     # -- formatting --------------------------------------------------------
 
     def _apply_formatting(self, tree) -> None:
@@ -188,7 +208,7 @@ class ManifestTableMixin:
         node_icons_cls = try_load_maya_icons()
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
-            tree.set_item_icon(parent, "step", color=STEP_ICON_COLOR)
+            tree.set_item_icon(parent, "step", color=self._step_icon_color)
             for j in range(parent.childCount()):
                 child = parent.child(j)
                 obj_name = child.text(content_col)
@@ -203,7 +223,7 @@ class ManifestTableMixin:
                     # Neutral grey before assessment; assessment will repaint
                     # with the actual status color if there's a problem.
                     tree.set_item_type_icon(
-                        child, "close", column=content_col, color=STEP_ICON_COLOR
+                        child, "close", column=content_col, color=self._step_icon_color
                     )
 
         # Column widths
@@ -247,7 +267,7 @@ class ManifestTableMixin:
         from qtpy.QtGui import QColor, QBrush, QFont
 
         tree = self.ui.tbl_steps
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
+        dim = QBrush(QColor(self._status_palette["locked"][0]))
         step_map = {r[0]: r for r in resolved}
 
         tree.blockSignals(True)
@@ -295,10 +315,10 @@ class ManifestTableMixin:
         from qtpy.QtGui import QColor, QBrush
 
         tree = self.ui.tbl_steps
-        c_fg, c_bg = PASTEL_STATUS["collision"]
+        c_fg, c_bg = self._status_palette["collision"]
         collision_fg = QBrush(QColor(c_fg))
         collision_bg = QBrush(QColor(c_bg))
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
+        dim = QBrush(QColor(self._status_palette["locked"][0]))
         collisions = 0
 
         # Build a map of step_id → tree item for quick lookup
@@ -368,7 +388,7 @@ class ManifestTableMixin:
         from qtpy.QtCore import Qt
         from qtpy.QtGui import QColor, QBrush
 
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
+        dim = QBrush(QColor(self._status_palette["locked"][0]))
         tree.blockSignals(True)
         try:
             for i in range(tree.topLevelItemCount()):
@@ -437,8 +457,8 @@ class ManifestTableMixin:
                 )
 
             # Recolor step icon and step text to reflect status
-            fg_hex, _ = PASTEL_STATUS.get(step_status.status, (None, None))
-            icon_color = fg_hex or STEP_ICON_COLOR
+            fg_hex, _ = self._status_palette.get(step_status.status, (None, None))
+            icon_color = fg_hex or self._step_icon_color
             tree.set_item_icon(parent, "step", color=icon_color)
             if fg_hex:
                 parent.setForeground(COL_STEP, QBrush(QColor(fg_hex)))
@@ -450,7 +470,7 @@ class ManifestTableMixin:
                 o for o in step_status.objects if o.status == "missing_behavior"
             ]
             if beh_issues:
-                b_fg, b_bg = PASTEL_STATUS["missing_behavior"]
+                b_fg, b_bg = self._status_palette["missing_behavior"]
                 if b_fg:
                     parent.setForeground(beh_col, QBrush(QColor(b_fg)))
                 if b_bg:
@@ -476,7 +496,7 @@ class ManifestTableMixin:
                 if obj_st is None or obj_st.status == "valid":
                     continue
 
-                c_fg, c_bg = PASTEL_STATUS.get(obj_st.status, (None, None))
+                c_fg, c_bg = self._status_palette.get(obj_st.status, (None, None))
                 if c_fg:
                     brush = QBrush(QColor(c_fg))
                     for c in range(col_count):
@@ -501,7 +521,7 @@ class ManifestTableMixin:
 
             # Additional objects (in shot but not in CSV)
             if step_status.additional_objects:
-                a_fg, a_bg = PASTEL_STATUS.get("additional", (None, None))
+                a_fg, a_bg = self._status_palette.get("additional", (None, None))
                 node_icons_cls = try_load_maya_icons()
                 for extra_name in step_status.additional_objects:
                     extra_item = tree.create_item(

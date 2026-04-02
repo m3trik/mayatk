@@ -11,6 +11,7 @@ backend that implements ``save(data)`` / ``load() -> dict | None``.
 :class:`MayaScenePersistence` is the default backend when PyMEL is
 available.
 """
+import logging
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -35,6 +36,12 @@ try:
 except ImportError:
     QSettings = None  # type: ignore[misc,assignment]
 
+try:
+    from qtpy.QtWidgets import QMessageBox, QApplication
+except ImportError:
+    QMessageBox = None  # type: ignore[misc,assignment]
+    QApplication = None  # type: ignore[misc,assignment]
+
 NODE_NAME = "shotStore"
 ATTR_NAME = "shotData"
 
@@ -49,6 +56,7 @@ __all__ = [
     "ActiveShotChanged",
     "SettingsChanged",
     "BatchComplete",
+    "SceneChanged",
     "ScenePersistence",
     "MayaScenePersistence",
 ]
@@ -130,6 +138,35 @@ try:
     )
 except ImportError:
     SHOT_PALETTE = {}  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Scene FPS helper
+# ---------------------------------------------------------------------------
+
+from mayatk.anim_utils._fps import get_scene_fps as _get_scene_fps
+
+
+def _ask_rescale_shot_ranges(old_fps: float, new_fps: float) -> bool:
+    """Show a dialog asking whether to rescale shot ranges for an fps change.
+
+    Returns ``True`` if the user chose Yes, ``False`` otherwise
+    (including when Qt is unavailable).
+    """
+    if QMessageBox is None:
+        return False
+    parent = QApplication.activeWindow() if QApplication.instance() else None
+    result = QMessageBox.question(
+        parent,
+        "Framerate Changed",
+        (
+            f"Scene framerate changed from {old_fps:.4g} fps to {new_fps:.4g} fps.\n\n"
+            f"Scale shot ranges to match the new framerate?"
+        ),
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.Yes,
+    )
+    return result == QMessageBox.Yes
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +294,27 @@ class BatchComplete(StoreEvent):
     name: ClassVar[str] = "batch_complete"
 
 
+@dataclass(frozen=True)
+class SceneChanged(StoreEvent):
+    """The Maya scene has changed — listeners should re-bind to the new store."""
+
+    name: ClassVar[str] = "scene_changed"
+
+
+@dataclass(frozen=True)
+class FpsChanged(StoreEvent):
+    """The scene framerate changed.
+
+    Fired in both the rescale and no-rescale branches.  Consumers
+    should not assume boundaries were rescaled — compare event fields
+    or re-query the store to determine what changed.
+    """
+
+    name: ClassVar[str] = "fps_changed"
+    old_fps: float = 24.0
+    new_fps: float = 24.0
+
+
 # ---------------------------------------------------------------------------
 # ShotStore
 # ---------------------------------------------------------------------------
@@ -272,8 +330,9 @@ class ShotStore:
 
     _active: Optional["ShotStore"] = None
     _persistence: Optional[ScenePersistence] = None
+    _scene_callbacks_registered: bool = False
     _QSETTINGS_PREFIX = "ShotStore"
-    DETECTION_MODES = ("auto", "all", "skip_zero", "zero_as_end")
+    DETECTION_MODES = ("off", "auto", "all", "skip_zero", "zero_as_end")
 
     def __init__(
         self,
@@ -286,14 +345,17 @@ class ShotStore:
         self.markers: List[Dict[str, Any]] = []
         self.gap: float = 0.0
         self.detection_threshold: float = 5.0
-        self.detection_mode: str = "auto"  # "auto", "all", "skip_zero", "zero_as_end"
-        self.select_on_load: bool = False
+        self.detection_mode: str = (
+            "auto"  # "off", "auto", "all", "skip_zero", "zero_as_end"
+        )
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.anim_layer: Optional[str] = anim_layer
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
         self._listeners: List[Callable[[StoreEvent], None]] = []
         self._batch_depth: int = 0
         self._batch_events: List[tuple] = []
+        self._save_timer: Optional[Any] = None
+        self.fps: float = _get_scene_fps()
 
     # ---- active shot (session state, not persisted) ----------------------
 
@@ -346,10 +408,17 @@ class ShotStore:
             pass
 
     def _notify(self, event: StoreEvent) -> None:
-        """Fire all registered listeners (deferred during :meth:`batch_update`)."""
+        """Fire all registered listeners (deferred during :meth:`batch_update`).
+
+        Data-mutating events (everything except ``ActiveShotChanged``)
+        also schedule a deferred persistence save so that callers do not
+        need to call :meth:`save` manually after each mutation.
+        """
         if self._batch_depth > 0:
             self._batch_events.append(event)
             return
+        if not isinstance(event, ActiveShotChanged):
+            self._schedule_save()
         for cb in self._listeners:
             try:
                 cb(event)
@@ -370,12 +439,58 @@ class ShotStore:
             self._batch_depth -= 1
             if self._batch_depth == 0 and self._batch_events:
                 self._batch_events.clear()
+                self._schedule_save()
                 _evt = BatchComplete()
                 for cb in self._listeners:
                     try:
                         cb(_evt)
                     except Exception:
                         pass
+
+    def _schedule_save(self) -> None:
+        """Schedule a deferred save so rapid mutations coalesce into one write.
+
+        Uses a zero-delay single-shot QTimer so the save runs after the
+        current event-processing cycle completes.  Falls back to an
+        immediate ``save()`` if Qt is unavailable.
+        """
+        try:
+            from qtpy.QtCore import QTimer
+        except ImportError:
+            self.save()
+            return
+
+        if self._save_timer is None:
+            self._save_timer = QTimer()
+            self._save_timer.setSingleShot(True)
+            self._save_timer.setInterval(0)
+            self._save_timer.timeout.connect(self.save)
+        # Restart the timer so rapid mutations coalesce.
+        self._save_timer.start()
+
+    # ---- fps rescaling ---------------------------------------------------
+
+    def rescale_for_fps(self, new_fps: float) -> None:
+        """Rescale all frame-based data from the stored fps to *new_fps*.
+
+        All shot boundaries, gap, and detection threshold are multiplied
+        by ``new_fps / stored_fps``.
+        """
+        old_fps = self.fps
+        if new_fps <= 0 or old_fps <= 0 or abs(new_fps - old_fps) < 0.01:
+            return
+        ratio = new_fps / old_fps
+        for shot in self.shots:
+            shot.start *= ratio
+            shot.end *= ratio
+        self.gap *= ratio
+        self.detection_threshold *= ratio
+        for marker in self.markers:
+            for key in ("time", "start", "end", "frame"):
+                if key in marker and isinstance(marker[key], (int, float)):
+                    marker[key] *= ratio
+        self.fps = new_fps
+        self._notify(FpsChanged(old_fps=old_fps, new_fps=new_fps))
 
     # ---- gap locking -----------------------------------------------------
 
@@ -419,22 +534,37 @@ class ShotStore:
         If a persistence backend is configured (or PyMEL is available),
         saved data is loaded automatically on first access.
         """
+        cls._register_scene_callbacks()
         if cls._active is None:
-            persistence = cls._persistence
-            if persistence is None and pm is not None:
-                persistence = MayaScenePersistence()
-                cls._persistence = persistence
-            if persistence is not None:
-                data = persistence.load()
-                if data:
-                    cls._active = cls.from_dict(data)
-                else:
-                    cls._active = cls()
-                    cls._active._restore_user_prefs()
-            else:
-                cls._active = cls()
-                cls._active._restore_user_prefs()
+            if cls._persistence is None and pm is not None:
+                cls._persistence = MayaScenePersistence()
+            cls._active = cls._load_or_create(cls._persistence)
         return cls._active
+
+    @classmethod
+    def _load_or_create(cls, persistence: Optional[ScenePersistence]) -> "ShotStore":
+        """Load from *persistence* or return a fresh store.
+
+        Shared by :meth:`active` and :meth:`_on_scene_changed` so the
+        initialization logic is defined once.  When the persisted fps
+        differs from the current scene fps, the user is prompted to
+        decide whether to rescale shot ranges.  If they decline (or Qt
+        is unavailable), only ``fps`` is updated.
+        """
+        if persistence is not None:
+            data = persistence.load()
+            if data:
+                store = cls.from_dict(data)
+                scene_fps = _get_scene_fps()
+                if store.shots and abs(store.fps - scene_fps) >= 0.01:
+                    if _ask_rescale_shot_ranges(store.fps, scene_fps):
+                        store.rescale_for_fps(scene_fps)
+                    else:
+                        store.fps = scene_fps
+                return store
+        store = cls()
+        store._restore_user_prefs()
+        return store
 
     @classmethod
     def set_active(cls, store: "ShotStore") -> None:
@@ -446,6 +576,80 @@ class ShotStore:
         """Reset the active store and persistence backend."""
         cls._active = None
         cls._persistence = None
+
+    @classmethod
+    def _register_scene_callbacks(cls) -> None:
+        """Register Maya scene-change callbacks to reset the singleton.
+
+        Called once from :meth:`active`.  When a new or different scene
+        is opened, ``_active`` is cleared so the next ``active()`` call
+        reloads from the new scene's persistence node.
+        """
+        if cls._scene_callbacks_registered:
+            return
+        if pm is None:
+            return
+        try:
+            for event in ("SceneOpened", "NewSceneOpened"):
+                pm.scriptJob(event=[event, cls._on_scene_changed], permanent=True)
+            pm.scriptJob(event=["timeUnitChanged", cls._on_fps_changed], permanent=True)
+            cls._scene_callbacks_registered = True
+        except Exception:
+            pass
+
+    @classmethod
+    def _on_scene_changed(cls) -> None:
+        """Eagerly restore from the new scene and notify controllers.
+
+        Proactively loads shot data from the new scene's persistence
+        node so the store is pre-populated when controllers re-bind
+        via :meth:`active`.  Fires :class:`SceneChanged` on the old
+        store so that controllers holding stale references can re-bind.
+        """
+        log = logging.getLogger(__name__)
+        old = cls._active
+
+        # Stop the old save timer BEFORE swapping persistence to prevent
+        # a queued save from writing stale data to the new scene's node.
+        if old is not None and old._save_timer is not None:
+            old._save_timer.stop()
+
+        # Eagerly create the new store from the new scene's persistence
+        # so that active() returns a ready store when controllers re-bind.
+        persistence = MayaScenePersistence()
+        cls._persistence = persistence
+        cls._active = cls._load_or_create(persistence)
+
+        if old is not None:
+            evt = SceneChanged()
+            for cb in list(old._listeners):
+                try:
+                    cb(evt)
+                except Exception:
+                    log.warning("SceneChanged listener %r failed", cb, exc_info=True)
+
+    @classmethod
+    def _on_fps_changed(cls) -> None:
+        """Handle a mid-session time-unit change.
+
+        Prompts the user with a dialog asking whether shot ranges
+        should be rescaled to match the new framerate.  If Yes,
+        boundaries are rescaled; otherwise only the stored fps is
+        updated.
+        """
+        if cls._active is None:
+            return
+        new_fps = _get_scene_fps()
+        old_fps = cls._active.fps
+        if abs(old_fps - new_fps) < 0.01:
+            return
+
+        if _ask_rescale_shot_ranges(old_fps, new_fps):
+            cls._active.rescale_for_fps(new_fps)
+        else:
+            cls._active.fps = new_fps
+            cls._active._notify(FpsChanged(old_fps=old_fps, new_fps=new_fps))
+            cls._active._schedule_save()
 
     # ---- cross-scene user preferences ------------------------------------
 
@@ -476,9 +680,6 @@ class ShotStore:
                         str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
                     )
                 # else leave at default "auto"
-            sol = s.value(f"{self._QSETTINGS_PREFIX}/select_on_load")
-            if sol is not None and sol in (True, "true", 1, "1"):
-                self.select_on_load = True
         except Exception:
             pass
 
@@ -491,10 +692,6 @@ class ShotStore:
             s.setValue(
                 f"{self._QSETTINGS_PREFIX}/detection_mode",
                 self.detection_mode,
-            )
-            s.setValue(
-                f"{self._QSETTINGS_PREFIX}/select_on_load",
-                self.select_on_load,
             )
         except Exception:
             pass
@@ -728,8 +925,8 @@ class ShotStore:
             "gap": self.gap,
             "detection_threshold": self.detection_threshold,
             "detection_mode": self.detection_mode,
-            "select_on_load": self.select_on_load,
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
+            "fps": self.fps,
         }
 
     @classmethod
@@ -771,8 +968,8 @@ class ShotStore:
             store.detection_mode = (
                 str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
             )
-        store.select_on_load = bool(data.get("select_on_load", False))
         store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
+        store.fps = float(data.get("fps", 24.0))
         return store
 
     # ---- persistence convenience -----------------------------------------

@@ -15,6 +15,8 @@ except ImportError as error:  # pragma: no cover - Maya environment only
 
 import pythontk as ptk
 
+from mayatk.anim_utils._fps import get_scene_fps as _get_scene_fps
+
 
 @dataclass
 class PlayblastExporter:
@@ -61,8 +63,7 @@ class PlayblastExporter:
     @staticmethod
     def _get_scene_fps() -> float:
         """Get the current scene frames per second."""
-        unit = pm.currentUnit(q=True, time=True)
-        return ptk.VidUtils.get_frame_rate(unit)
+        return _get_scene_fps()
 
     # ------------------------------------------------------------------
     # Public API

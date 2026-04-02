@@ -65,18 +65,29 @@ def scale_attribute_keys(
     Unlike :meth:`ShotSequencer.scale_object_keys` which scales every
     curve on the whole object, this targets a single attribute so that
     resizing an attribute sub-row clip leaves other attributes untouched.
+
+    Uses cutKey + setKeyframe instead of ``cmds.scaleKey`` because
+    scaleKey rounds stepped keys to integer frames.
     """
     curves = curves_for_attr(obj_name, attr_name)
     if not curves:
         return
-    if abs(old_end - old_start) < FLOAT_ZERO_EPS:
+    old_dur = old_end - old_start
+    if abs(old_dur) < FLOAT_ZERO_EPS:
         return
+    new_dur = new_end - new_start
+    from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+        _retime_curve_keys,
+    )
+
     for crv in curves:
-        cmds.scaleKey(
+        _retime_curve_keys(
+            cmds,
             str(crv),
-            time=(old_start, old_end),
-            newStartTime=new_start,
-            newEndTime=new_end,
+            (old_start, old_end),
+            lambda t, _os=old_start, _od=old_dur, _ns=new_start, _nd=new_dur: (
+                _ns + (t - _os) / _od * _nd
+            ),
         )
 
 
@@ -251,7 +262,8 @@ class ClipMotionMixin:
 
         shift_held = getattr(widget, "_shift_at_press", False)
 
-        if shift_held:
+        if shift_held or shot_id == -1:
+            # shift-held or scene-mode (no real shot): just move keys directly
             self.sequencer.move_object_keys(obj_name, orig_start, orig_end, new_start)
         else:
             self.sequencer.move_object_in_shot(

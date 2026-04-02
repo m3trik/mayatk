@@ -25,16 +25,29 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     regions_from_selected_keys,
 )
 from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
-    ERROR_COLOR,
     SETTINGS_NS,
     COL_STEP,
     COL_DESC,
     COL_START,
     COL_END,
+    STATUS_ADDITIONAL,
+    STATUS_MISSING_OBJECT,
+    STATUS_VALID,
+    _DEFAULT_MANIFEST_COLORS,
+    _MANIFEST_COLOR_SECTIONS,
+    _SETTINGS_NS_COLORS,
+    load_manifest_colors,
+    build_status_palette,
     fmt_behavior,
 )
 from mayatk.anim_utils.shots.shot_manifest._range_resolver import resolve_ranges
-from mayatk.anim_utils.shots._shots import StoreEvent, SettingsChanged
+from mayatk.anim_utils.shots._shots import (
+    StoreEvent,
+    SettingsChanged,
+    BatchComplete,
+    ShotRemoved,
+    SceneChanged,
+)
 from mayatk.anim_utils.shots.shot_manifest._table_presenter import ManifestTableMixin
 
 
@@ -54,6 +67,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         from uitk.widgets.mixins.settings_manager import SettingsManager
 
         self._settings = SettingsManager(namespace=SETTINGS_NS)
+
+        self._refresh_colors()
 
         self._user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
@@ -84,16 +99,183 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._setup_csv_layout_presets()
         self.ui.on_first_show.connect(self._on_first_show)
 
+    # ---- color map -------------------------------------------------------
+
+    def _refresh_colors(self):
+        """Load the persisted color map and derive runtime color lookups."""
+        cmap = load_manifest_colors()
+        self._status_palette = build_status_palette(cmap)
+        self._behavior_colors = {
+            k: (cmap[k], None) if isinstance(cmap[k], str) else cmap[k]
+            for k in ("fade_in", "fade_out")
+            if k in cmap
+        }
+        self._step_icon_color = cmap.get("step_icon", "#8E8E8E")
+        self._error_color = self._status_palette.get("error", (None, None))[0]
+
+    def _repaint_after_color_change(self):
+        """Re-apply formatting and assessment colours with updated color map."""
+        self._apply_formatting(self.ui.tbl_steps)
+        if self._last_results:
+            self._apply_assessment(self._last_results)
+        resolved = self._auto_fill_ranges()
+        if resolved:
+            self._validate_range_collisions(resolved)
+
     # ---- first-show auto-populate ----------------------------------------
 
     def _on_first_show(self) -> None:
-        """Auto-populate the table the first time the window is shown."""
+        """Auto-populate the table the first time the window is shown.
+
+        Priority:
+        1. If the store already has shots (scene was saved with built
+           shots), populate the table from the store in assess mode.
+        2. If CSV checkbox is on and a path exists, load the CSV.
+        3. Otherwise, run scene detection.
+        """
+        store = self._active_store()
+        if store is not None and store.shots:
+            self._load_from_store(store)
+            return
         if self.ui.chk_csv.isChecked():
             path = self.ui.txt_csv_path.text().strip()
             if path:
                 self._load_csv(path)
                 return
         self.detect()
+
+    def _load_from_store(self, store=None) -> None:
+        """Populate steps from existing shots in the store.
+
+        Called on first show when re-opening a scene that already has
+        built shots.  Reconstructs :class:`BuilderStep` entries from
+        :class:`ShotBlock` metadata so the table shows in built/assess
+        mode.  If the shots contain previous assessment metadata
+        (``object_status``), coloring is restored without a full
+        scene rescan.
+        """
+        if store is None:
+            store = self._active_store()
+        if store is None or not store.shots:
+            return
+
+        steps = []
+        ranges = {}
+        for shot in store.sorted_shots():
+            # Reconstruct BuilderObject list with behaviors from metadata
+            beh_map: dict = {}
+            for entry in shot.metadata.get("behaviors", []):
+                beh_map.setdefault(entry["name"], []).append(entry.get("behavior", ""))
+            csv_obj_names = shot.metadata.get("csv_objects", shot.objects)
+            objects = [
+                BuilderObject(
+                    name=n,
+                    behaviors=[b for b in beh_map.get(n, []) if b],
+                )
+                for n in csv_obj_names
+            ]
+            step = BuilderStep(
+                step_id=shot.name,
+                section=shot.metadata.get("section", ""),
+                section_title=shot.metadata.get("section_title", ""),
+                description=shot.description,
+                objects=objects,
+            )
+            steps.append(step)
+            ranges[shot.name] = (shot.start, shot.end)
+
+        self._steps = steps
+        self._csv_path = ""
+        self._user_ranges = ranges
+        self._last_results = []
+        self._built_this_round = True
+        self._cached_gaps = None
+        self._cached_gap_ends = None
+
+        self._sync_csv_widgets(False)
+        self._populate_table()
+        self._refresh_timing(store)
+
+        # Restore assessment coloring from stored metadata if available.
+        results = self._reconstruct_assessment(store)
+        if results:
+            self._apply_assessment(results)
+            self._last_results = results
+
+        self._update_build_button()
+
+        n = len(steps)
+        n_obj = sum(len(s.objects) for s in steps)
+        self._set_footer(
+            f"Loaded {n} shot{'s' if n != 1 else ''}, "
+            f"{n_obj} object{'s' if n_obj != 1 else ''} from scene."
+        )
+
+    def _reconstruct_assessment(self, store=None) -> list:
+        """Rebuild assessment results from shot metadata.
+
+        Returns a list of :class:`StepStatus` reconstructed from
+        ``object_status`` stored in shot metadata (written by a
+        previous :meth:`assess` call).  Returns an empty list when
+        no metadata is available.
+
+        .. note:: ``exists`` is derived from the *stored* status, not a
+           live scene check.  If the scene was externally modified
+           between sessions (objects added/deleted outside the manifest
+           workflow), the reconstructed coloring may be stale.  A full
+           :meth:`assess` call rescans the scene and corrects this.
+        """
+        from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+            StepStatus,
+            ObjectStatus,
+        )
+
+        if store is None:
+            store = self._active_store()
+        if store is None or not store.shots:
+            return []
+
+        built_map = {s.name: s for s in store.sorted_shots()}
+        results = []
+        any_status = False
+        for step in self._steps:
+            shot = built_map.get(step.step_id)
+            if shot is None:
+                results.append(StepStatus(step_id=step.step_id, built=False))
+                continue
+
+            obj_status_meta = shot.metadata.get("object_status", {})
+            if obj_status_meta:
+                any_status = True
+
+            csv_obj_names = {o.name for o in step.objects}
+            obj_statuses = []
+            for obj in step.objects:
+                status = obj_status_meta.get(obj.name, STATUS_VALID)
+                obj_statuses.append(
+                    ObjectStatus(
+                        name=obj.name,
+                        exists=status != STATUS_MISSING_OBJECT,
+                        status=status,
+                        behaviors=list(obj.behaviors),
+                    )
+                )
+            additional = [
+                o
+                for o in shot.objects
+                if o not in csv_obj_names
+                and obj_status_meta.get(o) == STATUS_ADDITIONAL
+            ]
+            results.append(
+                StepStatus(
+                    step_id=step.step_id,
+                    built=True,
+                    objects=obj_statuses,
+                    additional_objects=additional,
+                    locked=shot.locked,
+                )
+            )
+        return results if any_status else []
 
     # ---- built state -----------------------------------------------------
 
@@ -142,11 +324,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _detect_regions(self, gap_threshold: float) -> list:
         """Return detected shot regions, respecting the detection mode.
 
-        When a selected-keys mode is active and no keys are selected,
-        shows a message-box warning and returns an empty list.
+        When mode is ``"off"``, returns an empty list immediately (no
+        scene scan).  When a selected-keys mode is active and no keys
+        are selected, shows a message-box warning and returns an empty
+        list.
         """
         store = self._active_store()
         mode = store.detection_mode if store is not None else "auto"
+        if mode == "off":
+            return []
         if mode != "auto":
             regions = regions_from_selected_keys(
                 gap_threshold=gap_threshold, key_filter=mode
@@ -177,14 +363,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if gap is None:
             gap = store.detection_threshold if store is not None else 5.0
 
-        use_sel = (store.detection_mode != "auto") if store is not None else False
+        mode = store.detection_mode if store is not None else "auto"
+        use_sel = mode not in ("auto", "off")
         regions = self._detect_regions(gap)
         if not regions:
-            footer = (
-                "No selected keys found (select keys in the Graph Editor)."
-                if use_sel
-                else "No animation detected in scene."
-            )
+            if mode == "off":
+                footer = "Detection off \u2014 load a CSV to populate shots."
+            elif use_sel:
+                footer = "No selected keys found (select keys in the Graph Editor)."
+            else:
+                footer = "No animation detected in scene."
             self._load_data([], footer=footer)
             return
 
@@ -373,7 +561,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store = self._active_store()
         gap = store.gap if store else 0.0
         det_threshold = store.detection_threshold if store else 5.0
-        use_sel = (store.detection_mode != "auto") if store else False
+        use_sel = (store.detection_mode not in ("auto", "off")) if store else False
 
         # Detect animation regions for auto-fill (cached per assess cycle).
         if self._cached_gaps is not None:
@@ -437,8 +625,38 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """Remove ShotStore listener (call on teardown)."""
         self._unbind_store_listener()
 
+    def _reinitialize_from_store(self) -> None:
+        """Reset state and reload when the Maya scene changes.
+
+        Clears stale references, re-binds to the new
+        :class:`ShotStore`, and populates the table from the store
+        if it already has shots (scene was saved with built shots).
+        """
+        self._unbind_store_listener()
+        self._store = None
+        self._steps = []
+        self._csv_path = ""
+        self._user_ranges = {}
+        self._last_results = []
+        self._built_this_round = False
+        self._cached_gaps = None
+        self._cached_gap_ends = None
+        self._bind_store_listener()
+        store = self._active_store()
+        if store is not None and store.shots:
+            self._load_from_store(store)
+        else:
+            self._sync_csv_widgets(False)
+            self._populate_table()
+            self._update_build_button()
+            self._set_footer("")
+
     def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations — refresh tree timing if steps are loaded."""
+
+        if isinstance(event, SceneChanged):
+            self._reinitialize_from_store()
+            return
 
         if self._building:
             return
@@ -450,7 +668,29 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             if self._steps and not self._csv_path:
                 self.detect()
             return
+
+        # When all shots are cleared, reset to build mode so the user
+        # can rebuild.  This handles undo, Delete All, etc.
+        # NOTE: This block MUST precede the ``not self._steps`` auto-populate
+        # below.  Otherwise a ShotRemoved event that empties the store would
+        # fall through and try to auto-populate from a now-empty store.
+        if isinstance(event, (BatchComplete, ShotRemoved)):
+            store = getattr(self, "_bound_store", None)
+            if store is not None and not store.shots:
+                self._built_this_round = False
+                self._last_results = []
+                self._populate_table()
+                self._update_build_button()
+                self._set_footer("All shots cleared \u2014 ready to build.")
+                return
+
         if not self._steps:
+            # Shots were created externally (e.g. from the sequencer)
+            # while the manifest had no steps loaded.  Auto-populate
+            # from the store so the manifest picks up the new data.
+            store = getattr(self, "_bound_store", None)
+            if store is not None and store.shots:
+                self._load_from_store(store)
             return
         self._last_results = []  # invalidate stale assessment
         store = getattr(self, "_bound_store", None)
@@ -745,7 +985,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         menu.setTitle("Options")
         menu.add(
             "QPushButton",
-            setText="Shot Settings\u2026",
+            setText="Shots\u2026",
             setObjectName="btn_settings",
             setToolTip="Open shared shot detection, gap, and editing settings.",
         )
@@ -862,7 +1102,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         if not os.path.isfile(path):
             self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"File not found: {path}", color=ERROR_COLOR)
+            self._set_footer(f"File not found: {path}", color=self._error_color)
             return
 
         try:
@@ -870,7 +1110,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
             self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
+            self._set_footer(f"Error: {exc}", color=self._error_color)
             return
 
         self.ui.txt_csv_path.reset_action_color()
@@ -909,7 +1149,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self.detect()
         except Exception as exc:
             self.logger.error("Auto-detect failed: %s", exc)
-            self._set_footer(f"Detection error: {exc}", color=ERROR_COLOR)
+            self._set_footer(f"Detection error: {exc}", color=self._error_color)
 
         if not self._steps:
             self._set_footer("No animation detected in scene.")
@@ -978,7 +1218,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         try:
             import pymel.core as pm
         except ImportError:
-            self._set_footer("Maya is required to build shots.", color=ERROR_COLOR)
+            self._set_footer("Maya is required to build shots.", color=self._error_color)
             return
 
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -989,7 +1229,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             # When selected-keys mode is active, verify keys exist
             # before proceeding — even if user ranges are complete.
-            use_sel = (store.detection_mode != "auto") if store else False
+            use_sel = (store.detection_mode not in ("auto", "off")) if store else False
             if use_sel:
                 self._cached_gaps = None
                 regions = self._detect_regions(
@@ -998,7 +1238,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 if not regions:
                     self._set_footer(
                         "No selected keys found \u2014 select keyframes first.",
-                        color=ERROR_COLOR,
+                        color=self._error_color,
                     )
                     return
 
@@ -1023,7 +1263,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 if not build_steps:
                     self._set_footer(
                         "Selected keys don't map to any CSV steps.",
-                        color=ERROR_COLOR,
+                        color=self._error_color,
                     )
                     return
 
@@ -1071,9 +1311,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # Sync store.gap from actual shot positions so the spinbox
             # reflects the gap the manifest produced.
             actual_gap = store.compute_gap()
-            if abs(actual_gap - store.gap) > 0.5:
+            gap_changed = abs(actual_gap - store.gap) > 0.5
+            if gap_changed:
                 store.gap = actual_gap
-                store.save()
+
+            # Always persist after build so the network node is
+            # created/updated and shot data survives scene save/reopen.
+            store.save()
+
+            if gap_changed:
                 store.notify_settings_changed()
 
             # Refresh tree with post-build assessment
@@ -1081,7 +1327,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._update_build_button()
         except Exception as exc:
             self.logger.error("Build failed: %s", exc)
-            self._set_footer(f"Build error: {exc}", color=ERROR_COLOR)
+            self._set_footer(f"Build error: {exc}", color=self._error_color)
 
     def _apply_post_build(self, results: list, store) -> None:
         """Refresh tree with timing from the store and assessment results."""
@@ -1093,14 +1339,23 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     # ---- assess ----------------------------------------------------------
 
     def assess(self) -> None:
-        """Compare CSV steps against the live Maya shots and color the tree."""
+        """Compare CSV steps against the live Maya shots and color the tree.
+
+        If no steps are loaded but the store already contains shots
+        (e.g. scene reopened with previously built shots), the table is
+        populated from the store first so there is something to assess.
+        """
+        if not self._steps:
+            store = self._active_store()
+            if store is not None and store.shots:
+                self._load_from_store(store)
         if not self._ensure_steps():
             return
 
         try:
             import pymel.core as pm
         except ImportError:
-            self._set_footer("Maya is required to assess shots.", color=ERROR_COLOR)
+            self._set_footer("Maya is required to assess shots.", color=self._error_color)
             return
 
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -1190,6 +1445,12 @@ class ShotManifestSlots(ptk.LoggingMixin):
             setObjectName="btn_expand_extra",
             setToolTip="Expand every step row that has scene-discovered objects not in the CSV.",
         )
+        widget.menu.add(
+            "QPushButton",
+            setText="Colors",
+            setObjectName="btn_colors",
+            setToolTip="Customise status, behavior, and icon colors.",
+        )
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
             "QPushButton",
@@ -1247,6 +1508,37 @@ class ShotManifestSlots(ptk.LoggingMixin):
     def btn_expand_extra(self):
         """Expand all step rows that have scene-discovered extra objects."""
         self.controller.expand_extra()
+
+    def btn_colors(self):
+        """Open the manifest color configuration dialog."""
+        from uitk.widgets.editors.color_mapping_editor import ColorMappingDialog
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+
+        if hasattr(self, "_color_dlg") and self._color_dlg is not None:
+            try:
+                self._color_dlg.show()
+                self._color_dlg.raise_()
+                return
+            except RuntimeError:
+                pass
+
+        color_settings = SettingsManager(namespace=_SETTINGS_NS_COLORS)
+        dlg = ColorMappingDialog(
+            defaults=dict(_DEFAULT_MANIFEST_COLORS),
+            sections=_MANIFEST_COLOR_SECTIONS,
+            settings=color_settings,
+            title="Manifest Colors",
+            parent=self.ui,
+        )
+        self._color_dlg = dlg
+
+        def _apply(cmap):
+            self.controller._refresh_colors()
+            self.controller._repaint_after_color_change()
+
+        dlg.colors_changed.connect(_apply)
+        dlg.show()
+        dlg.raise_()
 
     def btn_settings(self):
         """Open the shared shots settings panel."""

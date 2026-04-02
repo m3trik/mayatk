@@ -74,6 +74,7 @@ class GapManagerMixin:
                         self.sequencer.move_shot(self.active_shot_id, start)
             finally:
                 self._syncing = False
+            self._segment_cache.clear()
             self._sync_to_widget()
             self._sync_combobox()
             return
@@ -90,6 +91,7 @@ class GapManagerMixin:
                     self.sequencer.resize_shot(self.active_shot_id, start, end)
         finally:
             self._syncing = False
+        self._segment_cache.clear()
         self._sync_to_widget()
         self._sync_combobox()
 
@@ -155,6 +157,7 @@ class GapManagerMixin:
                         )
         finally:
             self._syncing = False
+        self._segment_cache.clear()
         self._sync_to_widget()
         self._sync_combobox()
 
@@ -205,6 +208,7 @@ class GapManagerMixin:
                     self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
         finally:
             self._syncing = False
+        self._segment_cache.clear()
         self._sync_to_widget()
         self._sync_combobox()
 
@@ -258,6 +262,7 @@ class GapManagerMixin:
                     )
         finally:
             self._syncing = False
+        self._segment_cache.clear()
         self._sync_to_widget()
         self._sync_combobox()
 

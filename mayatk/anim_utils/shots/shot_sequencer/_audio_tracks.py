@@ -61,8 +61,20 @@ compute_waveform_envelope = AudioUtils.compute_waveform_envelope
 # ---------------------------------------------------------------------------
 
 
+try:
+    from mayatk.anim_utils._fps import get_scene_fps as _get_scene_fps
+except ImportError:
+    _get_scene_fps = None  # type: ignore[assignment]
+
+
 def _get_fps() -> float:
-    """Resolve the current scene FPS once."""
+    """Resolve the current scene FPS once.
+
+    Delegates to :func:`mayatk.anim_utils._fps.get_scene_fps` for the
+    canonical implementation.  Falls back to ``24.0`` if the import fails.
+    """
+    if _get_scene_fps is not None:
+        return _get_scene_fps()
     if pm is not None:
         return pm.mel.eval("float $fps = `currentTimeUnitToFPS`")
     return 24.0

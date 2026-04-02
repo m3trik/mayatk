@@ -89,11 +89,17 @@
          </property>
          <property name="toolTip">
           <string>How to detect shot boundaries.
+• Off – no detection; shots come from CSV only.
 • Auto-Detect – scan scene animation and cluster by gap.
 • All Keys – every selected key is a boundary (contiguous shots).
 • Skip Zero-Value – ignore keys with value 0.
 • Zero = Shot End – non-zero keys start shots, zero keys end them.</string>
          </property>
+         <item>
+          <property name="text">
+           <string>Off</string>
+          </property>
+         </item>
          <item>
           <property name="text">
            <string>Auto-Detect</string>
@@ -185,29 +191,6 @@ all shots on the timeline.</string>
          </property>
          <property name="prefix">
           <string>Gap:	</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QCheckBox" name="chk_select_on_load">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Select all objects belonging to the shot
-when navigating to it in the sequencer.</string>
-         </property>
-         <property name="text">
-          <string>Select Members on Load</string>
          </property>
         </widget>
        </item>
@@ -345,7 +328,7 @@ when navigating to it in the sequencer.</string>
         </widget>
        </item>
        <item>
-        <widget class="SpinBox" name="spn_move_to">
+        <widget class="PushButton" name="btn_move">
          <property name="enabled">
           <bool>false</bool>
          </property>
@@ -362,16 +345,10 @@ when navigating to it in the sequencer.</string>
           </size>
          </property>
          <property name="toolTip">
-          <string>Move the selected shot to this position in the timeline order (option box ▸ to apply).</string>
+          <string>Move the selected shot forward, back, or to a specific index (option box ▸ for settings).</string>
          </property>
-         <property name="prefix">
-          <string>Move To:	</string>
-         </property>
-         <property name="minimum">
-          <double>1.000000000000000</double>
-         </property>
-         <property name="maximum">
-          <double>1.000000000000000</double>
+         <property name="text">
+          <string>Move</string>
          </property>
         </widget>
        </item>

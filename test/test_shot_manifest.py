@@ -1530,6 +1530,382 @@ class TestCsvLayoutPresets(unittest.TestCase, _ControllerHarness):
 
 
 # ---------------------------------------------------------------------------
+# Tests: Detection mode "off"
+# ---------------------------------------------------------------------------
+
+
+class TestDetectionModeOff(unittest.TestCase, _ControllerHarness):
+    """Verify detection_mode='off' skips scene scanning entirely.
+
+    Feature: Added 2026-03-30. 'Off' mode ignores animation and selected
+    keys so shots come exclusively from CSV.
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        store = _fresh_store()
+        store.detection_mode = "off"
+        store.detection_threshold = 5.0
+        store.gap = 0.0
+
+    def test_off_in_detection_modes(self):
+        """'off' must be a valid detection mode in ShotStore."""
+        self.assertIn("off", ShotStore.DETECTION_MODES)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_detect_regions_returns_empty_for_off(self, mock_detect):
+        """_detect_regions must return [] immediately when mode is 'off'."""
+        result = self.ctrl._detect_regions(5.0)
+        self.assertEqual(result, [])
+        mock_detect.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_detect_shows_off_footer(self, mock_detect):
+        """detect() must show a 'detection off' footer, not 'no animation'."""
+        self.ctrl._steps = []
+        self.ctrl.detect()
+        footer_calls = self.ctrl.ui.footer.setText.call_args_list
+        footer_text = " ".join(str(c) for c in footer_calls)
+        self.assertIn("Detection off", footer_text)
+        mock_detect.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_resolve_ranges_treats_off_as_non_selected_keys(
+        self, mock_dur, mock_detect
+    ):
+        """_resolve_ranges must not treat 'off' as a selected-keys mode."""
+        mock_dur.return_value = 30.0
+        mock_detect.return_value = []
+        self.ctrl._cached_gaps = None
+        resolved = self.ctrl._resolve_ranges()
+        # 'off' mode should not abort like selected-keys modes do.
+        # It should produce sequential fallback ranges from compute_duration.
+        self.assertEqual(len(resolved), 3)
+
+
+class TestDetectionModeOffQSettings(unittest.TestCase):
+    """Verify 'off' mode survives QSettings round-trip."""
+
+    def setUp(self):
+        ShotStore._active = None
+        ShotStore._persistence = None
+
+    def tearDown(self):
+        ShotStore._active = None
+        ShotStore._persistence = None
+
+    @patch("mayatk.anim_utils.shots._shots.QSettings")
+    def test_off_mode_restored_from_qsettings(self, mock_qs_cls):
+        mock_qs = MagicMock()
+        mock_qs.value.side_effect = lambda key, *a: {
+            "ShotStore/detection_mode": "off",
+        }.get(key)
+        mock_qs_cls.return_value = mock_qs
+        store = ShotStore()
+        store._restore_user_prefs()
+        self.assertEqual(store.detection_mode, "off")
+
+
+# ---------------------------------------------------------------------------
+# Tests: Tree expansion persistence
+# ---------------------------------------------------------------------------
+
+
+class TestTreeExpansionPersistence(unittest.TestCase, _ControllerHarness):
+    """Verify expanded rows survive _populate_table rebuilds.
+
+    Feature: Added 2026-03-30. Previously, assess/build operations
+    called _populate_table which cleared and rebuilt the tree, losing
+    all user expansion state.
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        _fresh_store()
+
+    def test_expanded_rows_survive_repopulate(self):
+        """Expanded step rows must remain expanded after _populate_table."""
+        self.ctrl._populate_table()
+        tree = self.ctrl.ui.tbl_steps
+
+        # Expand first row
+        first = tree.topLevelItem(0)
+        self.assertIsNotNone(first)
+        first.setExpanded(True)
+
+        # Second row stays collapsed
+        second = tree.topLevelItem(1)
+        self.assertIsNotNone(second)
+        self.assertFalse(second.isExpanded())
+
+        # Repopulate — simulates assess/build
+        self.ctrl._populate_table()
+
+        first_after = tree.topLevelItem(0)
+        second_after = tree.topLevelItem(1)
+        self.assertTrue(first_after.isExpanded())
+        self.assertFalse(second_after.isExpanded())
+
+    def test_no_expansion_when_none_were_expanded(self):
+        """No rows should be expanded when none were previously expanded."""
+        self.ctrl._populate_table()
+        tree = self.ctrl.ui.tbl_steps
+
+        # Repopulate without expanding anything
+        self.ctrl._populate_table()
+
+        for i in range(tree.topLevelItemCount()):
+            self.assertFalse(tree.topLevelItem(i).isExpanded())
+
+
+# ---------------------------------------------------------------------------
+# Tests: Focus-on-shot-change preference
+# ---------------------------------------------------------------------------
+
+
+class TestFocusOnShotChangePref(unittest.TestCase):
+    """Verify focus_on_shot_change QSettings round-trip.
+
+    Feature: Added 2026-03-30. Makes viewport reframing on shot
+    navigation optional and persistent.
+    """
+
+    @patch("qtpy.QtCore.QSettings")
+    def test_load_default_false(self, mock_qs_cls):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        mock_qs = MagicMock()
+        mock_qs.value.return_value = None
+        mock_qs_cls.return_value = mock_qs
+        result = ShotSequencerController._load_focus_on_shot_change_pref()
+        self.assertFalse(result)
+
+    @patch("qtpy.QtCore.QSettings")
+    def test_load_true_when_set(self, mock_qs_cls):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        mock_qs = MagicMock()
+        mock_qs.value.side_effect = lambda key, *a: {
+            "ShotSequencer/focus_on_shot_change": True,
+        }.get(key)
+        mock_qs_cls.return_value = mock_qs
+        result = ShotSequencerController._load_focus_on_shot_change_pref()
+        self.assertTrue(result)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Move button direction logic
+# ---------------------------------------------------------------------------
+
+
+class TestMoveShotDirection(unittest.TestCase):
+    """Verify on_move_shot resolves forward/back/to_index directions correctly.
+
+    Feature: Added 2026-03-30. Replaced the move-to spinbox with a PushButton
+    whose option menu exposes Forward, Back, and To Index directions.
+    """
+
+    def setUp(self):
+        self.store = _fresh_store()
+        # Create 3 shots in timeline order: s1 @ 1-30, s2 @ 31-60, s3 @ 61-90
+        self.store.define_shot("s1", 1, 30)
+        self.store.define_shot("s2", 31, 60)
+        self.store.define_shot("s3", 61, 90)
+        sorted_ = self.store.sorted_shots()
+        self.store.set_active_shot(sorted_[1].shot_id)  # s2 at position 2
+
+    def _make_controller(self, direction="forward", index_value=1):
+        """Build a minimal ShotsController-like object for testing direction
+        resolution without a full UI."""
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        ctrl = object.__new__(ShotsController)
+        ctrl._move_direction_cmb = MagicMock()
+        ctrl._move_direction_cmb.currentData.return_value = direction
+        ctrl._move_index_spn = MagicMock()
+        ctrl._move_index_spn.value.return_value = index_value
+        ctrl.ui = MagicMock()
+        # Configure combobox mock so count() returns an int
+        ctrl.ui.cmb_shot_select.count.return_value = 3
+        ctrl.ui.cmb_shot_select.currentIndex.return_value = 0
+        ctrl.sb = MagicMock()
+        ctrl._refreshing_editor = False
+        return ctrl
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer"
+    )
+    def test_forward_decreases_position(self, mock_seq_cls):
+        """Forward (up) should move shot from position 2 to position 1."""
+        ctrl = self._make_controller(direction="forward")
+        ctrl.on_move_shot()
+        mock_seq_cls.return_value.move_shot_to_position.assert_called_once()
+        args = mock_seq_cls.return_value.move_shot_to_position.call_args[0]
+        self.assertEqual(args[1], 1)  # target_pos = 2 - 1 = 1
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer"
+    )
+    def test_back_increases_position(self, mock_seq_cls):
+        """Back (down) should move shot from position 2 to position 3."""
+        ctrl = self._make_controller(direction="back")
+        ctrl.on_move_shot()
+        mock_seq_cls.return_value.move_shot_to_position.assert_called_once()
+        args = mock_seq_cls.return_value.move_shot_to_position.call_args[0]
+        self.assertEqual(args[1], 3)  # target_pos = 2 + 1 = 3
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer"
+    )
+    def test_to_index_uses_spinbox(self, mock_seq_cls):
+        """To Index should use the value from the index spinbox."""
+        ctrl = self._make_controller(direction="to_index", index_value=3)
+        ctrl.on_move_shot()
+        mock_seq_cls.return_value.move_shot_to_position.assert_called_once()
+        args = mock_seq_cls.return_value.move_shot_to_position.call_args[0]
+        self.assertEqual(args[1], 3)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer"
+    )
+    def test_forward_at_first_position_is_noop(self, mock_seq_cls):
+        """Forward when already at position 1 should not call move."""
+        sorted_ = self.store.sorted_shots()
+        self.store.set_active_shot(sorted_[0].shot_id)  # s1, position 1
+        ctrl = self._make_controller(direction="forward")
+        ctrl.on_move_shot()
+        mock_seq_cls.return_value.move_shot_to_position.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer"
+    )
+    def test_back_at_last_position_is_noop(self, mock_seq_cls):
+        """Back when already at position 3 should not call move."""
+        sorted_ = self.store.sorted_shots()
+        self.store.set_active_shot(sorted_[2].shot_id)  # s3, position 3
+        ctrl = self._make_controller(direction="back")
+        ctrl.on_move_shot()
+        mock_seq_cls.return_value.move_shot_to_position.assert_not_called()
+
+
+class TestMoveShotDirectionToggle(unittest.TestCase):
+    """Verify _on_move_direction_changed enables/disables the index spinbox."""
+
+    def test_to_index_enables_spinbox(self):
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        ctrl = object.__new__(ShotsController)
+        ctrl._move_direction_cmb = MagicMock()
+        ctrl._move_direction_cmb.itemData.return_value = "to_index"
+        ctrl._move_index_spn = MagicMock()
+        ctrl._on_move_direction_changed(2)
+        ctrl._move_index_spn.setEnabled.assert_called_once_with(True)
+
+    def test_forward_disables_spinbox(self):
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        ctrl = object.__new__(ShotsController)
+        ctrl._move_direction_cmb = MagicMock()
+        ctrl._move_direction_cmb.itemData.return_value = "forward"
+        ctrl._move_index_spn = MagicMock()
+        ctrl._on_move_direction_changed(0)
+        ctrl._move_index_spn.setEnabled.assert_called_once_with(False)
+
+
+class TestShotComboboxSortedOrder(unittest.TestCase):
+    """Verify _populate_shot_combobox uses sorted_shots for timeline order."""
+
+    def test_combobox_reflects_sorted_order(self):
+        store = _fresh_store()
+        # Add shots out of order
+        store.define_shot("late", 100, 130)
+        store.define_shot("early", 1, 30)
+        store.define_shot("mid", 50, 80)
+
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        ctrl = object.__new__(ShotsController)
+        ctrl.ui = MagicMock()
+        ctrl._refreshing_editor = False
+        ctrl._move_index_spn = None
+        cmb = MagicMock()
+        cmb.count.return_value = 3
+        ctrl.ui.cmb_shot_select = cmb
+
+        ctrl._populate_shot_combobox(store)
+        # Verify addItem was called in sorted order (by start time)
+        calls = cmb.addItem.call_args_list
+        labels = [c[0][0] for c in calls]
+        self.assertIn("early", labels[0])
+        self.assertIn("mid", labels[1])
+        self.assertIn("late", labels[2])
+
+
+# ---------------------------------------------------------------------------
+# Tests: Interpolated clips are locked and read-only
+# ---------------------------------------------------------------------------
+
+
+class TestInterpolatedClipsLocked(unittest.TestCase):
+    """Verify _build_clips marks interpolated segments as locked/read_only."""
+
+    def test_interpolated_segment_produces_locked_clip(self):
+        from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
+
+        store = ShotStore()
+        shot = store.define_shot("A", 30, 60, objects=["arrow_loc"])
+
+        interp_seg = {
+            "obj": "arrow_loc",
+            "curves": [],
+            "keyframes": [],
+            "start": 30,
+            "end": 60,
+            "duration": 30,
+            "segment_range": (30, 60),
+            "interpolated": True,
+        }
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        seq = ShotSequencer(store=store)
+        seq.is_object_hidden = lambda _: False
+
+        widget = MagicMock()
+        track_ids = {"arrow_loc": 1}
+        segments_by_shot = {shot.shot_id: [interp_seg]}
+
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        ctrl = object.__new__(ShotSequencerController)
+        ctrl._sequencer = seq
+        ctrl.sequencer = seq
+
+        ctrl._build_clips(widget, shot, [shot], segments_by_shot, track_ids)
+
+        widget.add_clip.assert_called_once()
+        kw = widget.add_clip.call_args
+        self.assertTrue(kw.kwargs.get("locked") or kw[1].get("locked"))
+        self.assertTrue(kw.kwargs.get("read_only") or kw[1].get("read_only"))
+        self.assertTrue(kw.kwargs.get("interpolated") or kw[1].get("interpolated"))
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 

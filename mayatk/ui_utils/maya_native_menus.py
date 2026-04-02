@@ -420,11 +420,20 @@ class MayaNativeMenus(ptk.LoggingMixin):
         self.logger.debug(
             f"Switching menu mode to '{target_menu_set}' (original: {orig_menu_set})"
         )
+        import maya.cmds as cmds
+
         pm.setMenuMode(target_menu_set)
         try:
-            pm.mel.eval(init_command)
+            # Assign to MEL variable then catchQuiet(eval) to avoid
+            # backtick nesting when init_command contains backticks.
+            escaped = init_command.replace("\\", "\\\\").replace('"', '\\"')
+            pm.mel.eval(
+                f'string $__menuCmd = "{escaped}"; catchQuiet(`eval $__menuCmd`);'
+            )
         except Exception as e:
-            self.logger.warning(f"Menu init command for '{menu_key}' raised: {e}")
+            self.logger.debug(
+                f"Menu init command for '{menu_key}' raised: {e}"
+            )
         pm.refresh()
 
         # Create a placeholder menu UI
@@ -543,7 +552,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
                 # Resize the hosting window to accommodate new items
                 QtCore.QTimer.singleShot(50, placeholder_widget.fit_to_window)
             else:
-                self.logger.warning(
+                self.logger.debug(
                     f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
                 )
 

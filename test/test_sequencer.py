@@ -19,7 +19,7 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotBlock,
     ShotSequencer,
 )
-from mayatk.anim_utils.shots._shots import ShotStore
+from mayatk.anim_utils.shots._shots import ShotStore, FpsChanged
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     load_behavior,
@@ -3343,6 +3343,563 @@ class TestColumnMap(unittest.TestCase):
         cm = ColumnMap(exclude_steps=("SETUP", "INTRO"))
         restored = ColumnMap.from_dict(cm.to_dict())
         self.assertEqual(restored.exclude_steps, ("SETUP", "INTRO"))
+
+
+# ---------------------------------------------------------------------------
+# FPS rescaling
+# ---------------------------------------------------------------------------
+
+
+class TestFpsRescale(unittest.TestCase):
+    """ShotStore FPS tracking: rescale_for_fps, dialog, serialisation, _load_or_create."""
+
+    def _make_store(self, fps=24.0):
+        store = ShotStore(
+            [
+                ShotBlock(0, "A", 0, 100, ["cube1"]),
+                ShotBlock(1, "B", 110, 200, ["sphere1"]),
+            ]
+        )
+        store.fps = fps
+        store.gap = 10.0
+        store.detection_threshold = 5.0
+        store.markers = [{"time": 50.0, "note": "x"}]
+        return store
+
+    # -- _ask_rescale_shot_ranges ------------------------------------------
+
+    def test_ask_rescale_returns_false_when_no_qt(self):
+        """Returns False when QMessageBox is None (headless / no Qt)."""
+        from unittest.mock import patch
+        from mayatk.anim_utils.shots import _shots
+
+        with patch.object(_shots, "QMessageBox", None):
+            result = _shots._ask_rescale_shot_ranges(24.0, 30.0)
+
+        self.assertFalse(result)
+
+    def test_ask_rescale_returns_true_on_yes(self):
+        """Returns True when user clicks Yes."""
+        from unittest.mock import patch, MagicMock
+        from mayatk.anim_utils.shots import _shots
+
+        mock_mb = MagicMock()
+        mock_mb.Yes = 0x00004000
+        mock_mb.No = 0x00010000
+        mock_mb.question.return_value = mock_mb.Yes
+
+        with (
+            patch.object(_shots, "QMessageBox", mock_mb),
+            patch.object(_shots, "QApplication", MagicMock()),
+        ):
+            result = _shots._ask_rescale_shot_ranges(24.0, 30.0)
+
+        self.assertTrue(result)
+
+    def test_ask_rescale_returns_false_on_no(self):
+        """Returns False when user clicks No."""
+        from unittest.mock import patch, MagicMock
+        from mayatk.anim_utils.shots import _shots
+
+        mock_mb = MagicMock()
+        mock_mb.Yes = 0x00004000
+        mock_mb.No = 0x00010000
+        mock_mb.question.return_value = mock_mb.No
+
+        with (
+            patch.object(_shots, "QMessageBox", mock_mb),
+            patch.object(_shots, "QApplication", MagicMock()),
+        ):
+            result = _shots._ask_rescale_shot_ranges(24.0, 30.0)
+
+        self.assertFalse(result)
+
+    def test_ask_rescale_message_contains_fps_values(self):
+        """Dialog message contains the old and new fps values."""
+        from unittest.mock import patch, MagicMock, call
+        from mayatk.anim_utils.shots import _shots
+
+        mock_mb = MagicMock()
+        mock_mb.Yes = 0x00004000
+        mock_mb.No = 0x00010000
+        mock_mb.question.return_value = mock_mb.No
+
+        with (
+            patch.object(_shots, "QMessageBox", mock_mb),
+            patch.object(_shots, "QApplication", MagicMock()),
+        ):
+            _shots._ask_rescale_shot_ranges(24.0, 30.0)
+
+        args = mock_mb.question.call_args
+        message = args[0][2]  # third positional arg is the message text
+        self.assertIn("24", message)
+        self.assertIn("30", message)
+        self.assertIn("shot ranges", message.lower())
+
+    # -- rescale_for_fps ---------------------------------------------------
+
+    def test_rescale_for_fps_scales_boundaries(self):
+        """24→30 fps multiplies all frame-based data by 30/24."""
+        store = self._make_store(24.0)
+        store.rescale_for_fps(30.0)
+        self.assertAlmostEqual(store.shots[0].start, 0.0)
+        self.assertAlmostEqual(store.shots[0].end, 125.0)
+        self.assertAlmostEqual(store.shots[1].start, 137.5)
+        self.assertAlmostEqual(store.shots[1].end, 250.0)
+        self.assertAlmostEqual(store.gap, 12.5)
+        self.assertAlmostEqual(store.detection_threshold, 6.25)
+        self.assertAlmostEqual(store.markers[0]["time"], 62.5)
+        self.assertAlmostEqual(store.fps, 30.0)
+
+    def test_rescale_for_fps_downscale(self):
+        """30→24 fps multiplies all frame-based data by 24/30."""
+        store = self._make_store(30.0)
+        store.rescale_for_fps(24.0)
+        ratio = 24.0 / 30.0
+        self.assertAlmostEqual(store.shots[0].end, 100.0 * ratio)
+        self.assertAlmostEqual(store.shots[1].start, 110.0 * ratio)
+        self.assertAlmostEqual(store.gap, 10.0 * ratio)
+        self.assertAlmostEqual(store.fps, 24.0)
+
+    def test_rescale_for_fps_noop_same_fps(self):
+        """No change when new fps equals stored fps."""
+        store = self._make_store(24.0)
+        store.rescale_for_fps(24.0)
+        self.assertAlmostEqual(store.shots[0].end, 100.0)
+
+    def test_rescale_for_fps_noop_zero_new_fps(self):
+        """No change when new_fps is zero."""
+        store = self._make_store(24.0)
+        store.rescale_for_fps(0.0)
+        self.assertAlmostEqual(store.shots[0].end, 100.0)
+        self.assertAlmostEqual(store.fps, 24.0)
+
+    def test_rescale_for_fps_noop_negative_new_fps(self):
+        """No change when new_fps is negative."""
+        store = self._make_store(24.0)
+        store.rescale_for_fps(-1.0)
+        self.assertAlmostEqual(store.shots[0].end, 100.0)
+        self.assertAlmostEqual(store.fps, 24.0)
+
+    def test_rescale_for_fps_noop_zero_stored_fps(self):
+        """No change when stored fps is zero."""
+        store = self._make_store(24.0)
+        store.fps = 0.0
+        store.rescale_for_fps(30.0)
+        self.assertAlmostEqual(store.shots[0].end, 100.0)
+
+    def test_rescale_for_fps_fires_event(self):
+        """FpsChanged event is fired with correct old/new values."""
+        store = self._make_store(24.0)
+        events = []
+        store.add_listener(lambda e: events.append(e))
+        store.rescale_for_fps(30.0)
+        fps_events = [e for e in events if isinstance(e, FpsChanged)]
+        self.assertEqual(len(fps_events), 1)
+        self.assertAlmostEqual(fps_events[0].old_fps, 24.0)
+        self.assertAlmostEqual(fps_events[0].new_fps, 30.0)
+
+    def test_rescale_for_fps_no_event_on_noop(self):
+        """No FpsChanged event when fps is unchanged."""
+        store = self._make_store(24.0)
+        events = []
+        store.add_listener(lambda e: events.append(e))
+        store.rescale_for_fps(24.0)
+        self.assertEqual(len(events), 0)
+
+    def test_rescale_for_fps_multiple_marker_keys(self):
+        """Marker with start/end/frame keys all get scaled."""
+        store = self._make_store(24.0)
+        store.markers = [{"start": 10.0, "end": 20.0, "frame": 15.0, "label": "X"}]
+        store.rescale_for_fps(30.0)
+        ratio = 30.0 / 24.0
+        self.assertAlmostEqual(store.markers[0]["start"], 10.0 * ratio)
+        self.assertAlmostEqual(store.markers[0]["end"], 20.0 * ratio)
+        self.assertAlmostEqual(store.markers[0]["frame"], 15.0 * ratio)
+        self.assertEqual(store.markers[0]["label"], "X")  # non-numeric untouched
+
+    def test_rescale_for_fps_marker_string_value_ignored(self):
+        """Marker key that has a non-numeric value is left alone."""
+        store = self._make_store(24.0)
+        store.markers = [{"time": "not_a_number"}]
+        store.rescale_for_fps(30.0)
+        self.assertEqual(store.markers[0]["time"], "not_a_number")
+
+    # -- serialisation of fps ----------------------------------------------
+
+    def test_fps_round_trip(self):
+        """fps survives to_dict → from_dict."""
+        store = self._make_store(30.0)
+        restored = ShotStore.from_dict(store.to_dict())
+        self.assertAlmostEqual(restored.fps, 30.0)
+
+    def test_legacy_data_defaults_fps_24(self):
+        """Data without fps key defaults to 24."""
+        data = self._make_store().to_dict()
+        del data["fps"]
+        restored = ShotStore.from_dict(data)
+        self.assertAlmostEqual(restored.fps, 24.0)
+
+    def test_to_dict_has_no_ref_key_fields(self):
+        """to_dict no longer serialises ref_curve/ref_key_time/ref_key_value."""
+        d = self._make_store().to_dict()
+        self.assertNotIn("ref_curve", d)
+        self.assertNotIn("ref_key_time", d)
+        self.assertNotIn("ref_key_value", d)
+
+    def test_from_dict_ignores_legacy_ref_key_fields(self):
+        """from_dict tolerates legacy data that still contains ref key fields."""
+        data = self._make_store().to_dict()
+        data["ref_curve"] = "old_crv"
+        data["ref_key_time"] = 10.0
+        data["ref_key_value"] = 5.0
+        restored = ShotStore.from_dict(data)
+        # Should load without error; fields are just ignored
+        self.assertAlmostEqual(restored.fps, 24.0)
+        self.assertEqual(len(restored.shots), 2)
+
+    # -- _load_or_create fps reconciliation --------------------------------
+
+    def test_load_or_create_same_fps_no_rescale(self):
+        """When stored fps matches scene fps, boundaries are untouched."""
+        store = self._make_store(24.0)
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch
+
+        with patch(
+            "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=24.0
+        ):
+            loaded = ShotStore._load_or_create(FakePersistence())
+
+        self.assertAlmostEqual(loaded.shots[0].end, 100.0)
+        self.assertAlmostEqual(loaded.fps, 24.0)
+
+    def test_load_or_create_same_fps_no_dialog_shown(self):
+        """When stored fps matches scene fps, dialog is never shown."""
+        store = self._make_store(24.0)
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch, MagicMock
+
+        mock_ask = MagicMock()
+        with (
+            patch("mayatk.anim_utils.shots._shots._get_scene_fps", return_value=24.0),
+            patch(
+                "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges", mock_ask
+            ),
+        ):
+            ShotStore._load_or_create(FakePersistence())
+
+        mock_ask.assert_not_called()
+
+    def test_load_or_create_rescales_when_user_accepts(self):
+        """When user accepts the dialog, boundaries are rescaled."""
+        store = self._make_store(24.0)
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch
+
+        with (
+            patch("mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0),
+            patch(
+                "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                return_value=True,
+            ),
+        ):
+            loaded = ShotStore._load_or_create(FakePersistence())
+
+        ratio = 30.0 / 24.0
+        self.assertAlmostEqual(loaded.shots[0].end, 100.0 * ratio)
+        self.assertAlmostEqual(loaded.shots[1].start, 110.0 * ratio)
+        self.assertAlmostEqual(loaded.gap, 10.0 * ratio)
+        self.assertAlmostEqual(loaded.fps, 30.0)
+
+    def test_load_or_create_no_rescale_when_user_declines(self):
+        """When user declines the dialog, only fps is updated."""
+        store = self._make_store(24.0)
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch
+
+        with (
+            patch("mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0),
+            patch(
+                "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                return_value=False,
+            ),
+        ):
+            loaded = ShotStore._load_or_create(FakePersistence())
+
+        # Boundaries untouched
+        self.assertAlmostEqual(loaded.shots[0].end, 100.0)
+        self.assertAlmostEqual(loaded.shots[1].start, 110.0)
+        self.assertAlmostEqual(loaded.gap, 10.0)
+        # fps updated to scene fps
+        self.assertAlmostEqual(loaded.fps, 30.0)
+
+    def test_load_or_create_dialog_receives_correct_fps_args(self):
+        """Dialog is called with (stored_fps, scene_fps)."""
+        store = self._make_store(24.0)
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch, MagicMock
+
+        mock_ask = MagicMock(return_value=False)
+        with (
+            patch("mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0),
+            patch(
+                "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges", mock_ask
+            ),
+        ):
+            ShotStore._load_or_create(FakePersistence())
+
+        mock_ask.assert_called_once_with(24.0, 30.0)
+
+    def test_load_or_create_empty_shots_skips_dialog(self):
+        """No dialog shown when the store has no shots (even if fps differs)."""
+        store = ShotStore()
+        store.fps = 24.0
+        data = store.to_dict()
+
+        class FakePersistence:
+            def load(self):
+                return data
+
+            def save(self, d):
+                pass
+
+        from unittest.mock import patch, MagicMock
+
+        mock_ask = MagicMock()
+        with (
+            patch("mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0),
+            patch(
+                "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges", mock_ask
+            ),
+        ):
+            loaded = ShotStore._load_or_create(FakePersistence())
+
+        mock_ask.assert_not_called()
+        # fps stays at stored value since no rescale path was taken
+        self.assertAlmostEqual(loaded.fps, 24.0)
+
+    def test_load_or_create_persistence_returns_none(self):
+        """Persistence load() returning None → fresh store."""
+
+        class FakePersistence:
+            def load(self):
+                return None
+
+            def save(self, d):
+                pass
+
+        loaded = ShotStore._load_or_create(FakePersistence())
+        self.assertEqual(len(loaded.shots), 0)
+
+    def test_load_or_create_no_persistence_returns_fresh(self):
+        """None persistence → fresh store."""
+        loaded = ShotStore._load_or_create(None)
+        self.assertEqual(len(loaded.shots), 0)
+
+    # -- _on_fps_changed (via mocks) ---------------------------------------
+
+    def test_on_fps_changed_rescales_when_user_accepts(self):
+        """Mid-session fps change rescales when user accepts dialog."""
+        from unittest.mock import patch
+
+        store = self._make_store(24.0)
+        ShotStore._active = store
+
+        try:
+            with (
+                patch(
+                    "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0
+                ),
+                patch(
+                    "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                    return_value=True,
+                ),
+            ):
+                ShotStore._on_fps_changed()
+
+            self.assertAlmostEqual(store.fps, 30.0)
+            self.assertAlmostEqual(store.shots[0].end, 125.0)
+        finally:
+            ShotStore._active = None
+
+    def test_on_fps_changed_no_rescale_when_user_declines(self):
+        """Mid-session fps change updates fps only when user declines."""
+        from unittest.mock import patch
+
+        store = self._make_store(24.0)
+        ShotStore._active = store
+
+        try:
+            with (
+                patch(
+                    "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0
+                ),
+                patch(
+                    "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                    return_value=False,
+                ),
+                patch.object(ShotStore, "_schedule_save"),
+            ):
+                ShotStore._on_fps_changed()
+
+            self.assertAlmostEqual(store.fps, 30.0)
+            # Boundaries untouched
+            self.assertAlmostEqual(store.shots[0].end, 100.0)
+        finally:
+            ShotStore._active = None
+
+    def test_on_fps_changed_same_fps_no_dialog(self):
+        """When scene fps equals stored fps, no dialog is shown."""
+        from unittest.mock import patch, MagicMock
+
+        store = self._make_store(24.0)
+        ShotStore._active = store
+        mock_ask = MagicMock()
+
+        try:
+            with (
+                patch(
+                    "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=24.0
+                ),
+                patch(
+                    "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges", mock_ask
+                ),
+            ):
+                ShotStore._on_fps_changed()
+
+            mock_ask.assert_not_called()
+            self.assertAlmostEqual(store.fps, 24.0)
+        finally:
+            ShotStore._active = None
+
+    def test_on_fps_changed_dialog_receives_correct_args(self):
+        """Dialog is called with (old_fps, new_fps)."""
+        from unittest.mock import patch, MagicMock
+
+        store = self._make_store(24.0)
+        ShotStore._active = store
+        mock_ask = MagicMock(return_value=False)
+
+        try:
+            with (
+                patch(
+                    "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0
+                ),
+                patch(
+                    "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges", mock_ask
+                ),
+                patch.object(ShotStore, "_schedule_save"),
+            ):
+                ShotStore._on_fps_changed()
+
+            mock_ask.assert_called_once_with(24.0, 30.0)
+        finally:
+            ShotStore._active = None
+
+    def test_on_fps_changed_decline_calls_schedule_save(self):
+        """Declining the dialog still persists the fps update."""
+        from unittest.mock import patch, MagicMock
+
+        store = self._make_store(24.0)
+        ShotStore._active = store
+        mock_save = MagicMock()
+
+        try:
+            with (
+                patch(
+                    "mayatk.anim_utils.shots._shots._get_scene_fps", return_value=30.0
+                ),
+                patch(
+                    "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                    return_value=False,
+                ),
+                patch.object(ShotStore, "_schedule_save", mock_save),
+            ):
+                ShotStore._on_fps_changed()
+
+            mock_save.assert_called()
+        finally:
+            ShotStore._active = None
+
+    def test_on_fps_changed_fires_event_both_branches(self):
+        """FpsChanged event fires regardless of dialog answer."""
+        from unittest.mock import patch
+
+        for user_accepts in (True, False):
+            store = self._make_store(24.0)
+            events = []
+            store.add_listener(lambda e: events.append(e))
+            ShotStore._active = store
+
+            try:
+                with (
+                    patch(
+                        "mayatk.anim_utils.shots._shots._get_scene_fps",
+                        return_value=30.0,
+                    ),
+                    patch(
+                        "mayatk.anim_utils.shots._shots._ask_rescale_shot_ranges",
+                        return_value=user_accepts,
+                    ),
+                    patch.object(ShotStore, "_schedule_save"),
+                ):
+                    ShotStore._on_fps_changed()
+            finally:
+                ShotStore._active = None
+
+            fps_events = [e for e in events if isinstance(e, FpsChanged)]
+            self.assertEqual(
+                len(fps_events),
+                1,
+                f"Expected 1 FpsChanged for user_accepts={user_accepts}, "
+                f"got {len(fps_events)}",
+            )
+
+    def test_on_fps_changed_noop_when_no_active(self):
+        """No crash when _active is None."""
+        ShotStore._active = None
+        ShotStore._on_fps_changed()  # should not raise
 
 
 if __name__ == "__main__":
