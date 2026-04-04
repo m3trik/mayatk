@@ -47,14 +47,15 @@ class ShotsController(ptk.LoggingMixin):
         self._setup_delete_menu()
         self._setup_move_menu()
 
-        # Remove the collapse button from the header and enable
-        # hide-on-mouse-leave so the window behaves like a quick-access panel.
+        # Register persistent scene-change scriptJobs so the UI refreshes
+        # when the user opens or creates a scene while this panel is visible.
+        self._scene_opened_job: int | None = None
+        self._new_scene_job: int | None = None
+        self._install_scene_jobs()
+
+        # Enable hide-on-mouse-leave so the window behaves like a quick-access panel.
         # WindowStaysOnTopHint prevents the panel from falling behind the
         # sequencer when focus shifts back to it.
-        header = getattr(self.ui, "header", None)
-        if header is not None and hasattr(header, "config_buttons"):
-            header.config_buttons("menu", "minimize", "pin")
-
         self._setup_hide_on_leave()
 
     # ---- hide on mouse leave ---------------------------------------------
@@ -124,6 +125,75 @@ class ShotsController(ptk.LoggingMixin):
         if store is not None:
             store.add_listener(self._on_store_event)
             self._store_listener_bound = True
+
+    def _unbind_store_listener(self) -> None:
+        """Detach from the current store so we can rebind after scene change."""
+        if not self._store_listener_bound:
+            return
+        store = ShotStore._active
+        if store is not None:
+            store.remove_listener(self._on_store_event)
+        self._store_listener_bound = False
+
+    def remove_callbacks(self) -> None:
+        """Remove scene-change scriptJobs and store listener (call on teardown)."""
+        self._unbind_store_listener()
+        try:
+            import maya.cmds as cmds
+
+            if self._scene_opened_job is not None:
+                try:
+                    cmds.scriptJob(kill=self._scene_opened_job, force=True)
+                except Exception:
+                    pass
+                self._scene_opened_job = None
+            if self._new_scene_job is not None:
+                try:
+                    cmds.scriptJob(kill=self._new_scene_job, force=True)
+                except Exception:
+                    pass
+                self._new_scene_job = None
+        except ImportError:
+            pass
+
+    def _on_scene_opened(self) -> None:
+        """Re-sync the UI after a scene switch.
+
+        Explicitly invalidates ``ShotStore._active`` so that
+        ``_active_store()`` loads the new scene's data, regardless of
+        whether the persistence-layer scriptJob has already fired.
+        """
+        self._unbind_store_listener()
+        ShotStore._active = None
+        self._sync_from_store()
+        self._bind_store_listener()
+
+    def _install_scene_jobs(self) -> None:
+        """Register persistent scriptJobs for scene lifecycle events."""
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return
+
+        try:
+            if self._scene_opened_job is None or not cmds.scriptJob(
+                exists=self._scene_opened_job
+            ):
+                self._scene_opened_job = cmds.scriptJob(
+                    event=["SceneOpened", self._on_scene_opened],
+                )
+        except Exception:
+            pass
+
+        try:
+            if self._new_scene_job is None or not cmds.scriptJob(
+                exists=self._new_scene_job
+            ):
+                self._new_scene_job = cmds.scriptJob(
+                    event=["NewSceneOpened", self._on_scene_opened],
+                )
+        except Exception:
+            pass
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """Re-sync widgets when the store changes externally."""
@@ -251,12 +321,14 @@ class ShotsController(ptk.LoggingMixin):
                 )
             # Select the active shot, or auto-select the first one
             active_id = store.active_shot_id
+            matched = False
             if active_id is not None:
                 for i in range(cmb.count()):
                     if cmb.itemData(i) == active_id:
                         cmb.setCurrentIndex(i)
+                        matched = True
                         break
-            elif cmb.count() > 0:
+            if not matched and cmb.count() > 0:
                 cmb.setCurrentIndex(0)
                 first_id = cmb.itemData(0)
                 if first_id is not None:
@@ -376,7 +448,7 @@ class ShotsController(ptk.LoggingMixin):
         store = self._active_store()
         if store is not None:
             store.detection_threshold = float(value)
-            store.save()
+            store.mark_dirty()
             store.notify_settings_changed()
 
     def on_detection_mode_changed(self, index: int) -> None:
@@ -384,7 +456,7 @@ class ShotsController(ptk.LoggingMixin):
         mode = self._index_to_mode(index)
         if store is not None:
             store.detection_mode = mode
-            store.save()
+            store.mark_dirty()
             store.notify_settings_changed()
         # Disable Min Gap spinner in zero_as_end mode (unused there).
         spn = getattr(self.ui, "spn_detection", None)
@@ -395,7 +467,7 @@ class ShotsController(ptk.LoggingMixin):
         store = self._active_store()
         if store is not None:
             store.gap = float(value)
-            store.save()
+            store.mark_dirty()
 
             from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
                 ShotSequencer,
@@ -411,7 +483,7 @@ class ShotsController(ptk.LoggingMixin):
         store = self._active_store()
         if store is not None:
             store.select_on_load = bool(state)
-            store.save()
+            store.mark_dirty()
 
     # ---- shot editor actions ---------------------------------------------
 
@@ -537,7 +609,6 @@ class ShotsController(ptk.LoggingMixin):
         with pm.UndoChunk():
             seq.move_shot_to_position(store.active_shot_id, target_pos)
 
-        store.save()
         self._populate_shot_combobox(store)
         store.notify_settings_changed()
 

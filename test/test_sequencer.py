@@ -1507,9 +1507,13 @@ class TestShotStore(unittest.TestCase):
 
     def test_active_singleton(self):
         from mayatk.anim_utils.shots._shots import ShotStore
+        from unittest.mock import patch
 
-        a = ShotStore.active()
-        b = ShotStore.active()
+        # Prevent MayaScenePersistence.load() from hitting mocked PyNode
+        with patch("mayatk.anim_utils.shots._shots.pm") as mock_pm:
+            mock_pm.objExists.return_value = False
+            a = ShotStore.active()
+            b = ShotStore.active()
         self.assertIs(a, b)
 
     def test_set_active(self):

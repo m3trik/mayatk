@@ -38,6 +38,7 @@ class MayaUiHandler(UiHandler):
             discover_slots=True,
             recursive=True,
             log_level=log_level,
+            source_tags={"mayatk"},
             **kwargs,
         )
 
@@ -48,6 +49,19 @@ class MayaUiHandler(UiHandler):
             return self._load_maya_ui(menu_key=name, **kwargs)
 
         return super().get(name, reload=reload, **kwargs)
+
+    def apply_styles(self, ui, style=None):
+        """Override to give mayatk-sourced UIs a hide button instead of pin."""
+        import copy
+
+        style = copy.deepcopy(style or self.DEFAULT_STYLE)
+        try:
+            if ui.has_tags(["mayatk"]):
+                style["header_buttons"] = ("menu", "collapse", "hide")
+        except AttributeError:
+            pass
+        # Pass pre-built style so the base skips its own deepcopy.
+        super().apply_styles(ui, style=style)
 
     def _load_maya_ui(
         self,
@@ -93,17 +107,10 @@ class MayaUiHandler(UiHandler):
         # Force floating behavior.
         # When a QMainWindow has a parent, Qt treats it as an embedded child by default.
         # We must set the Window flag to keep it a floating tool window.
-        from qtpy import QtCore
-
-        ui.setWindowFlags(QtCore.Qt.Window)
+        ui.setWindowFlags(self.sb.QtCore.Qt.Window)
 
         if header:
-            self.logger.debug(
-                f"[{menu_key}] Adding header with config_buttons=('menu', 'collapse', 'minimize', 'pin')"
-            )
-            ui.header = self.sb.registered_widgets.Header(
-                config_buttons=("menu", "collapse", "minimize", "pin"),
-            )
+            ui.header = self.sb.registered_widgets.Header()
             ui.header.setTitle(ui.objectName().upper())
             ui.header.attach_to(ui.centralWidget())
             ui.style.set(ui.header, "dark", "Header")
@@ -114,5 +121,10 @@ class MayaUiHandler(UiHandler):
 
         ui.edit_tags(add="maya_menu")
         self.logger.debug(f"[{menu_key}] Maya UI created with tags={ui.tags}")
+
+        # Apply styles (including header buttons) through the normal pipeline.
+        # Maya native menus don't have the 'mayatk' tag, so they get the
+        # default pin button from DEFAULT_STYLE.
+        self.apply_styles(ui)
 
         return ui

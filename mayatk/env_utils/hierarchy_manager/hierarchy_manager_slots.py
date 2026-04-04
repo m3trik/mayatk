@@ -321,6 +321,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         quarantine_group: str = "_QUARANTINE",
         skip_animated: bool = False,
         fix_reparented: bool = True,
+        fix_fuzzy_renames: bool = True,
         dry_run: bool = True,
     ) -> bool:
         """Run repair operations on the current scene to match reference hierarchy.
@@ -334,6 +335,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             quarantine_group: Name of the quarantine group.
             skip_animated: Skip quarantining extras under animated ancestors.
             fix_reparented: Move reparented nodes to reference position.
+            fix_fuzzy_renames: Rename fuzzy-matched nodes to reference names.
             dry_run: Preview without changes.
 
         Returns:
@@ -351,6 +353,50 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         results = {}
         try:
+            # Fuzzy renames FIRST — renaming a parent (e.g. GRP → GRP1) makes
+            # its children resolvable, preventing stub creation from claiming
+            # the target name and causing Maya auto-suffix collisions (GRP2).
+            if fix_fuzzy_renames and effective.get("fuzzy_matches"):
+                self.logger.progress(
+                    f"Renaming {len(effective['fuzzy_matches'])} fuzzy-matched items..."
+                )
+                results["renamed"] = self.hierarchy_manager.fix_fuzzy_renames(
+                    effective["fuzzy_matches"]
+                )
+
+                # After renaming a parent (e.g. GRP → GRP1), children that
+                # were "extra" under the old name are now correctly parented
+                # under the new name.  Remove them from the extras list so
+                # quarantine doesn't move them away.
+                if results["renamed"]:
+                    fuzzy_cur_prefixes = [
+                        f["current_name"]
+                        for f in effective["fuzzy_matches"]
+                        if f.get("current_name")
+                    ]
+                    effective["extra"] = [
+                        p
+                        for p in effective["extra"]
+                        if not any(
+                            p.startswith(prefix + "|") for prefix in fuzzy_cur_prefixes
+                        )
+                    ]
+
+                    # Also remove children from the missing list — the fuzzy
+                    # rename resolved the parent so children exist now.
+                    fuzzy_ref_prefixes = [
+                        f["target_name"]
+                        for f in effective["fuzzy_matches"]
+                        if f.get("target_name")
+                    ]
+                    effective["missing"] = [
+                        p
+                        for p in effective["missing"]
+                        if not any(
+                            p.startswith(prefix + "|") for prefix in fuzzy_ref_prefixes
+                        )
+                    ]
+
             if create_stubs and effective["missing"]:
                 self.logger.progress(
                     f"Creating stubs for {len(effective['missing'])} missing items..."
@@ -1539,9 +1585,35 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def _on_scene_changed(self):
         """Reset UI state when a new scene is loaded."""
-        self.controller._clear_analysis_cache()
+        self.controller.hierarchy_manager = None
+        self.controller._current_diff_result = None
+        self.controller._reference_namespaces = []
+        self.controller.clear_ignored_paths()
+        self.controller._cleanup_cached_reference_import()
         self.controller.populate_current_scene_tree(self.ui.tree001)
-        self.ui.tree000.clear()
+
+        # Clear the reference tree — the cached import was cleaned up above
+        # so there is nothing to display until the user triggers a fresh
+        # import.  Re-importing automatically would pollute a new scene.
+        ref_path = self.ui.txt001.text().strip() if hasattr(self.ui, "txt001") else ""
+        if ref_path and os.path.exists(ref_path):
+            self.ui.tree000.clear()
+            self.ui.tree000.setHeaderLabels([Path(ref_path).stem or "Reference Scene"])
+            info_item = self.ui.tree000.create_item(
+                ["Click Diff or Pull to reload reference"]
+            )
+        else:
+            self.ui.tree000.clear()
+            self.ui.tree000.setHeaderLabels(["Reference Scene"])
+            info_item = self.ui.tree000.create_item(["Browse for Reference Scene"])
+            font = info_item.font(0)
+            font.setUnderline(True)
+            info_item.setFont(0, font)
+            info_item.setForeground(
+                0, self.sb.QtGui.QBrush(self.sb.QtGui.QColor("#6699CC"))
+            )
+            info_item.setData(0, self.sb.QtCore.Qt.UserRole, "browse_placeholder")
+
         self._show_startup_text()
 
     def _show_startup_text(self):
@@ -1619,6 +1691,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
             )
 
+            widget.configure_menu(hide_on_leave=True)
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Reference",
@@ -1777,6 +1850,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.sb.QtWidgets.QAbstractItemView.ExtendedSelection
             )
 
+            widget.configure_menu(hide_on_leave=True)
             widget.menu.add(
                 "QPushButton",
                 setText="Refresh Current Scene",
@@ -1928,6 +2002,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setChecked=False,
             setToolTip="Exclude mesh-bearing transforms from the comparison. When unchecked, all transforms (including geometry) are compared.",
         )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Ignore Quarantine Group",
+            setObjectName="chk_ignore_quarantine",
+            setChecked=True,
+            setToolTip="Automatically ignore the quarantine group (e.g. _QUARANTINE) in the current scene tree during diff analysis.",
+        )
 
     def tb002_init(self, widget):
         """Initialize the pull objects toggle button with options menu."""
@@ -1991,6 +2072,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setObjectName="chk_fix_reparented",
             setChecked=True,
             setToolTip="Move reparented nodes to match their reference hierarchy position.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Fix Fuzzy Renames",
+            setObjectName="chk_fix_fuzzy_renames",
+            setChecked=True,
+            setToolTip="Rename nodes identified as fuzzy matches to their reference names.",
         )
 
     def b000(self):
@@ -2088,7 +2176,22 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         if not success:
             return
 
-        # Log diff results
+        # Ensure trees are populated for diff visualization
+        # Only populate if not already populated or if structure has changed
+        self._ensure_trees_populated_for_diff(reference_path, fuzzy_matching, dry_run)
+
+        # Auto-ignore the quarantine group BEFORE logging/formatting so that
+        # counts and styling reflect the exclusion.
+        ignore_quarantine = True
+        if hasattr(self.ui, "tb001") and hasattr(self.ui.tb001, "menu"):
+            if hasattr(self.ui.tb001.menu, "chk_ignore_quarantine"):
+                ignore_quarantine = (
+                    self.ui.tb001.option_box.menu.chk_ignore_quarantine.isChecked()
+                )
+        if ignore_quarantine:
+            self._auto_ignore_quarantine_group()
+
+        # Log diff results (uses _filter_ignored_from_diff, so quarantine is excluded)
         self.controller.log_diff_results()
 
         # Apply analysis mode specific behavior
@@ -2098,10 +2201,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             self.logger.debug("Focusing on extra objects only")
         elif diff_mode == "Selected Objects Only":
             self.logger.debug("Analyzing selected objects only")
-
-        # Ensure trees are populated for diff visualization
-        # Only populate if not already populated or if structure has changed
-        self._ensure_trees_populated_for_diff(reference_path, fuzzy_matching, dry_run)
 
         # Apply diff formatting to trees
         if self.controller._current_diff_result:
@@ -2373,6 +2472,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         do_reparent = True
         skip_animated = False
         quarantine_name = "_QUARANTINE"
+        do_fuzzy_renames = True
 
         if hasattr(self.ui, "tb003") and hasattr(self.ui.tb003, "menu"):
             if hasattr(self.ui.tb003.menu, "chk_fix_stubs"):
@@ -2388,6 +2488,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             if hasattr(self.ui.tb003.menu, "chk_fix_reparented"):
                 do_reparent = (
                     self.ui.tb003.option_box.menu.chk_fix_reparented.isChecked()
+                )
+            if hasattr(self.ui.tb003.menu, "chk_fix_fuzzy_renames"):
+                do_fuzzy_renames = (
+                    self.ui.tb003.option_box.menu.chk_fix_fuzzy_renames.isChecked()
                 )
             if hasattr(self.ui.tb003.menu, "txt_quarantine_name"):
                 custom_name = (
@@ -2406,6 +2510,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             quarantine_group=quarantine_name,
             skip_animated=skip_animated,
             fix_reparented=do_reparent,
+            fix_fuzzy_renames=do_fuzzy_renames,
             dry_run=dry_run,
         )
 
@@ -2660,6 +2765,31 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.controller.apply_difference_formatting(
                     self.ui.tree001, self.ui.tree000
                 )
+
+    def _auto_ignore_quarantine_group(self):
+        """Add the quarantine group path to the current-scene ignored set.
+
+        Reads the quarantine group name from the repair options (tb003) or
+        falls back to ``_QUARANTINE``.  If a matching root-level item exists
+        in tree001, its path is added to ``_ignored_cur_paths`` so the
+        existing ignore styling (strikethrough + dim) is applied automatically.
+        """
+        quarantine_name = "_QUARANTINE"
+        if hasattr(self.ui, "tb003") and hasattr(self.ui.tb003, "menu"):
+            if hasattr(self.ui.tb003.menu, "txt_quarantine_name"):
+                custom = (
+                    self.ui.tb003.option_box.menu.txt_quarantine_name.text().strip()
+                )
+                if custom:
+                    quarantine_name = custom
+
+        tree = self.ui.tree001
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.text(0) == quarantine_name:
+                path = self.controller._build_item_path(item)
+                self.controller._ignored_cur_paths.add(path)
+                return
 
     def _ignore_selected(self, tree_widget):
         """Mark selected tree items (and their descendants) as ignored."""

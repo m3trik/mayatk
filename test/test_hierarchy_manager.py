@@ -283,6 +283,53 @@ class TestHierarchyManager(MayaTkTestCase):
                     f"'shared' should not be in '{key}': {diff_result[key]}",
                 )
 
+    def test_same_leaf_different_parent_not_fuzzy(self):
+        """Verify same-name leaves under different parents stay in missing/extra.
+
+        Bug: FuzzyMatcher scored identical leaf names at 1.0, causing them to
+        be classified as "renamed" when they were actually ambiguous reparents
+        (same leaf, different parent, N:M multiplicity).
+        Fixed: 2026-04-01
+        """
+        if not pm.namespace(exists="ref"):
+            pm.namespace(add="ref")
+
+        # Current scene: adapter_loc under grp1 AND grp1_copy
+        grp1 = pm.group(empty=True, name="grp1")
+        grp1_copy = pm.group(empty=True, name="grp1_copy")
+        pm.group(empty=True, name="adapter_loc", parent=grp1)
+        pm.group(empty=True, name="adapter_loc", parent=grp1_copy)
+
+        # Reference scene: adapter_loc under grp AND grp_copy
+        grp_ref = pm.group(empty=True, name="ref:grp")
+        grp_copy_ref = pm.group(empty=True, name="ref:grp_copy")
+        pm.group(empty=True, name="ref:adapter_loc", parent=grp_ref)
+        pm.group(empty=True, name="ref:adapter_loc", parent=grp_copy_ref)
+
+        ref_objects = [grp_ref, grp_copy_ref] + list(
+            grp_ref.getChildren() + grp_copy_ref.getChildren()
+        )
+
+        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+        diff_result = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=ref_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+
+        fuzzy = diff_result.get("fuzzy_matches", [])
+        fuzzy_leaves = {f["target_name"].rsplit("|", 1)[-1] for f in fuzzy} | {
+            f["current_name"].rsplit("|", 1)[-1] for f in fuzzy
+        }
+
+        self.assertNotIn(
+            "adapter_loc",
+            fuzzy_leaves,
+            f"Same-name leaf 'adapter_loc' should NOT be in fuzzy_matches: {fuzzy}",
+        )
+
     # -------------------------------------------------------------------------
     # Hierarchy Repair Tests
     # -------------------------------------------------------------------------

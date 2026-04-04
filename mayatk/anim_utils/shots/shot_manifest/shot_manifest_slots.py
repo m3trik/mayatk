@@ -745,7 +745,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         menu.setTitle("Options")
         menu.add(
             "QPushButton",
-            setText="Shot Settings\u2026",
+            setText="Shots\u2026",
             setObjectName="btn_settings",
             setToolTip="Open shared shot detection, gap, and editing settings.",
         )
@@ -919,52 +919,21 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     # ---- button state ----------------------------------------------------
 
     def _update_build_button(self) -> None:
-        """Enable Build when sync would produce created/patched actions.
+        """Enable Build only after assess has run and unbuilt steps remain.
 
-        Scenarios that re-enable the button:
-        - New CSV with step names absent from the store ("created").
-        - Updated CSV where objects or behaviors differ ("patched").
-        - Store mutation (undo, external removal) invalidates prior results.
+        Build always starts disabled.  The assess operation populates
+        ``_last_results`` which determines whether build is warranted.
+        If all steps are already built, or assess has not been run yet,
+        the button stays disabled.
         """
         btn = getattr(self.ui, "b003", None)
         if btn is None:
             return
         if self._last_results:
             needs_build = any(not r.built for r in self._last_results)
-        elif self._steps:
-            needs_build = self._needs_sync()
         else:
             needs_build = False
         btn.setEnabled(needs_build)
-
-    def _needs_sync(self) -> bool:
-        """Return True if any step would be created or patched by sync."""
-        try:
-            from mayatk.anim_utils.shots._shots import ShotStore
-
-            built_map = {s.name: s for s in ShotStore.active().shots}
-        except Exception:
-            return True
-        # Shots in store but not in CSV → would be "removed"
-        csv_ids = {step.step_id for step in self._steps}
-        if any(name not in csv_ids for name in built_map):
-            return True
-        for step in self._steps:
-            shot = built_map.get(step.step_id)
-            if shot is None:
-                return True  # new shot
-            # Check for object or behavior changes (same logic as update())
-            csv_obj_map = {o.name: sorted(o.behaviors) for o in step.objects}
-            if set(csv_obj_map) != set(shot.objects):
-                return True  # objects added or removed
-            old_beh: dict = {}
-            for e in shot.metadata.get("behaviors", []):
-                old_beh.setdefault(e["name"], []).append(e.get("behavior", ""))
-            for k in old_beh:
-                old_beh[k] = sorted(old_beh[k])
-            if any(csv_obj_map.get(n, []) != old_beh.get(n, []) for n in csv_obj_map):
-                return True  # behavior changed
-        return False
 
     # ---- assess ----------------------------------------------------------
 
@@ -1073,7 +1042,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             actual_gap = store.compute_gap()
             if abs(actual_gap - store.gap) > 0.5:
                 store.gap = actual_gap
-                store.save()
+                store.mark_dirty()
                 store.notify_settings_changed()
 
             # Refresh tree with post-build assessment

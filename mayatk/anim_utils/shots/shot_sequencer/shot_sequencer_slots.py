@@ -363,7 +363,6 @@ class ShotSequencerController(
             return False
         merged = sorted(existing | set(new_objects))
         self.sequencer.store.update_shot(shot_id, objects=merged)
-        self.sequencer.store.save()
         return True
 
     # ---- Maya time-change callback ----------------------------------------
@@ -492,6 +491,12 @@ class ShotSequencerController(
         shot = self._find_shot_at_time(time)
         if shot is not None:
             self._edit_shot_dialog(shot)
+
+    def _on_shot_switch_requested(self, time: float) -> None:
+        """Ctrl+Shift+Click on timeline — switch to the shot at *time*."""
+        shot = self._find_shot_at_time(time)
+        if shot is not None:
+            self.on_shot_block_clicked(shot.name)
 
     def _edit_shot_dialog(self, shot) -> None:
         """Open Shot Settings with the given shot pre-selected for editing."""
@@ -1703,6 +1708,12 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             sequencer.zone_context_menu_requested.connect(
                 self.controller.on_zone_context_menu
             )
+            sequencer.shot_block_clicked.connect(
+                self.controller.on_shot_block_clicked
+            )
+            sequencer.shot_switch_requested.connect(
+                self.controller._on_shot_switch_requested
+            )
             sequencer._zone_menu_connected = True
 
         # Register Delete key shortcut for selected clips.
@@ -2010,7 +2021,13 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         widget.menu.add(
             "QPushButton",
-            setText="Shot Settings\u2026",
+            setText="Shortcuts\u2026",
+            setObjectName="btn_shortcuts",
+            setToolTip="View and customise sequencer keyboard shortcuts.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Shots\u2026",
             setObjectName="btn_shot_settings",
             setToolTip="Open shared shot detection, gap, and editing settings.",
         )
@@ -2128,6 +2145,12 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         if widget is None:
             return
         widget.snap_interval = float(value)
+
+    def btn_shortcuts(self):
+        """Open the sequencer shortcut editor."""
+        widget = self.controller._get_sequencer_widget()
+        if widget is not None:
+            widget._shortcut_mgr.show_editor(parent=widget, title="Sequencer Shortcuts")
 
     def btn_shot_settings(self):
         """Open the shared shots settings panel."""

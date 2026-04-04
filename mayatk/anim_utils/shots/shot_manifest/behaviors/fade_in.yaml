@@ -1,4 +1,4 @@
-description: "Fade objects in at scene start via visibility."
+description: "Fade objects in at shot start via visibility."
 attributes:
   visibility:
     in:

@@ -37,6 +37,17 @@ except ImportError:
 
 NODE_NAME = "shotStore"
 ATTR_NAME = "shotData"
+_DEFAULT_FPS = 24.0
+
+
+def _get_scene_fps() -> float:
+    """Return the current Maya scene framerate, or *_DEFAULT_FPS* outside Maya."""
+    if pm is None:
+        return _DEFAULT_FPS
+    try:
+        return float(pm.mel.eval("float $fps = `currentTimeUnitToFPS`"))
+    except Exception:
+        return _DEFAULT_FPS
 
 __all__ = [
     "SHOT_PALETTE",
@@ -69,7 +80,13 @@ class ScenePersistence(Protocol):
 
 
 class MayaScenePersistence:
-    """Persist ShotStore data to a Maya network-node attribute."""
+    """Persist ShotStore data to a Maya network-node attribute.
+
+    Registers ``SceneOpened`` / ``NewSceneOpened`` scriptJobs so that
+    :attr:`ShotStore._active` is automatically invalidated when the
+    user opens or creates a scene.  The jobs are *persistent* (not
+    ``killWithScene``) so they survive across scene switches.
+    """
 
     def __init__(
         self,
@@ -78,6 +95,11 @@ class MayaScenePersistence:
     ):
         self._node_name = node_name
         self._attr_name = attr_name
+        self._scene_opened_job: Optional[int] = None
+        self._new_scene_job: Optional[int] = None
+        self._time_unit_job: Optional[int] = None
+        self._before_save_cb_id = None  # OpenMaya callback id
+        self._install_scene_jobs()
 
     def save(self, data: Dict[str, Any]) -> None:
         if pm is None:
@@ -107,6 +129,75 @@ class MayaScenePersistence:
         if not raw:
             return None
         return json.loads(raw)
+
+    # ---- scene lifecycle scriptJobs --------------------------------------
+
+    def _install_scene_jobs(self) -> None:
+        """Register persistent scriptJobs for scene lifecycle events."""
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return
+
+        try:
+            if self._scene_opened_job is None or not cmds.scriptJob(
+                exists=self._scene_opened_job
+            ):
+                self._scene_opened_job = cmds.scriptJob(
+                    event=["SceneOpened", self._on_scene_changed],
+                )
+        except Exception:
+            pass
+
+        try:
+            if self._new_scene_job is None or not cmds.scriptJob(
+                exists=self._new_scene_job
+            ):
+                self._new_scene_job = cmds.scriptJob(
+                    event=["NewSceneOpened", self._on_scene_changed],
+                )
+        except Exception:
+            pass
+
+        try:
+            if self._time_unit_job is None or not cmds.scriptJob(
+                exists=self._time_unit_job
+            ):
+                self._time_unit_job = cmds.scriptJob(
+                    event=["timeUnitChanged", self._on_time_unit_changed],
+                )
+        except Exception:
+            pass
+
+        try:
+            import maya.api.OpenMaya as om
+
+            if self._before_save_cb_id is None:
+                self._before_save_cb_id = om.MSceneMessage.addCallback(
+                    om.MSceneMessage.kBeforeSave, self._on_before_save
+                )
+        except Exception:
+            pass
+
+    def _on_scene_changed(self) -> None:
+        """Invalidate the cached store when a different scene is loaded."""
+        ShotStore._active = None
+
+    def _on_time_unit_changed(self) -> None:
+        """Rescale shot timings when the scene framerate changes."""
+        store = ShotStore._active
+        if store is None or not store.shots:
+            return
+        new_fps = _get_scene_fps()
+        old_fps = store.scene_fps
+        if old_fps and abs(new_fps - old_fps) > 0.01:
+            store.rescale_to_fps(new_fps)
+
+    def _on_before_save(self, *args) -> None:
+        """Flush dirty store data to the scene node before save."""
+        store = ShotStore._active
+        if store is not None and store._dirty:
+            store.save()
 
 
 # ---------------------------------------------------------------------------
@@ -290,10 +381,12 @@ class ShotStore:
         self.select_on_load: bool = False
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.anim_layer: Optional[str] = anim_layer
+        self.scene_fps: float = _get_scene_fps()
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
         self._listeners: List[Callable[[StoreEvent], None]] = []
         self._batch_depth: int = 0
         self._batch_events: List[tuple] = []
+        self._dirty: bool = False
 
     # ---- active shot (session state, not persisted) ----------------------
 
@@ -376,6 +469,8 @@ class ShotStore:
                         cb(_evt)
                     except Exception:
                         pass
+                # Synchronous flush — batch = single atomic write.
+                self._flush_dirty()
 
     # ---- gap locking -----------------------------------------------------
 
@@ -428,6 +523,11 @@ class ShotStore:
                 data = persistence.load()
                 if data:
                     cls._active = cls.from_dict(data)
+                    # Reconcile FPS: if the scene was saved at a different
+                    # framerate, rescale shot timings to match the current one.
+                    current_fps = _get_scene_fps()
+                    if cls._active.shots and abs(cls._active.scene_fps - current_fps) > 0.01:
+                        cls._active.rescale_to_fps(current_fps)
                 else:
                     cls._active = cls()
                     cls._active._restore_user_prefs()
@@ -579,6 +679,7 @@ class ShotStore:
         )
         self.shots.append(block)
         self._notify(ShotDefined(shot=block))
+        self.mark_dirty()
         return block
 
     def update_shot(
@@ -613,6 +714,7 @@ class ShotStore:
         if metadata is not None:
             shot.metadata = dict(metadata)
         self._notify(ShotUpdated(shot=shot))
+        self.mark_dirty()
         return shot
 
     def remove_shot(self, shot_id: int) -> bool:
@@ -621,6 +723,7 @@ class ShotStore:
             if s.shot_id == shot_id:
                 self.shots.pop(i)
                 self._notify(ShotRemoved(shot_id=shot_id))
+                self.mark_dirty()
                 return True
         return False
 
@@ -730,6 +833,7 @@ class ShotStore:
             "detection_mode": self.detection_mode,
             "select_on_load": self.select_on_load,
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
+            "scene_fps": self.scene_fps,
         }
 
     @classmethod
@@ -773,9 +877,58 @@ class ShotStore:
             )
         store.select_on_load = bool(data.get("select_on_load", False))
         store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
+        stored_fps = data.get("scene_fps")
+        if stored_fps is not None:
+            store.scene_fps = float(stored_fps)
         return store
 
     # ---- persistence convenience -----------------------------------------
+
+    def rescale_to_fps(self, new_fps: float) -> None:
+        """Scale all shot timings from the current ``scene_fps`` to *new_fps*.
+
+        Called automatically when Maya's time-unit changes.  Updates
+        ``scene_fps``, rescales shot boundaries, gap, and markers,
+        then fires a :class:`BatchComplete` so the UI repaints.
+        """
+        old_fps = self.scene_fps
+        if not old_fps or abs(new_fps - old_fps) < 0.01:
+            return
+        ratio = new_fps / old_fps
+        for shot in self.shots:
+            shot.start = round(shot.start * ratio)
+            shot.end = round(shot.end * ratio)
+        self.gap = round(self.gap * ratio, 2)
+        for marker in self.markers:
+            if "time" in marker:
+                marker["time"] = round(marker["time"] * ratio)
+        self.scene_fps = new_fps
+        self.mark_dirty()
+        self._notify(BatchComplete())
+
+    def mark_dirty(self) -> None:
+        """Flag the store as needing a save.
+
+        Inside a :meth:`batch_update` block the flush is deferred to
+        the block exit.  Otherwise an ``evalDeferred`` callback
+        coalesces rapid mutations into a single write.
+        """
+        self._dirty = True
+        if self._batch_depth > 0:
+            return
+        try:
+            import maya.cmds as cmds
+
+            cmds.evalDeferred(self._flush_dirty, lowestPriority=True)
+        except ImportError:
+            # Outside Maya (tests, standalone) — flush immediately.
+            self._flush_dirty()
+
+    def _flush_dirty(self) -> None:
+        """Write to the persistence backend if the dirty flag is set."""
+        if not self._dirty:
+            return
+        self.save()
 
     def save(self) -> None:
         """Persist via the configured backend (no-op if none set).
@@ -783,6 +936,7 @@ class ShotStore:
         Also writes detection preferences to QSettings so they survive
         across scenes even when the shots settings panel is not opened.
         """
+        self._dirty = False
         if self._persistence is not None:
             self._persistence.save(self.to_dict())
         self._save_user_prefs()
