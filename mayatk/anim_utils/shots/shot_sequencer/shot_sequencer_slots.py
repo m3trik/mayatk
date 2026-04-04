@@ -45,7 +45,7 @@ from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
 )
 from mayatk.anim_utils.shots.shot_sequencer._shot_nav import ShotNavMixin
 from mayatk.anim_utils.shots.shot_sequencer._marker_manager import MarkerManagerMixin
-from mayatk.anim_utils.shots._shots import StoreEvent, SceneChanged
+from mayatk.anim_utils.shots._shots import StoreEvent
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -75,7 +75,6 @@ class ShotSequencerController(
         self._shot_display_mode: str = "current"  # "current" | "adjacent" | "all"
         self._segment_cache: dict = {}  # shot_id → segments list
         self._sub_row_cache: dict = {}  # (shot_id, track_name) → sub-row data
-        self._track_full_names: dict = {}  # track_id → full DAG path
         self._shot_undo_stack: list = []  # shot-state snapshots for undo
         self._shifted_out_keys: dict = {}  # obj_name → {time, …} shift-moved out
         self._prev_action = None  # OptionBox action for prev shot
@@ -88,8 +87,6 @@ class ShotSequencerController(
         self._track_order_scope: str = "visible"  # "visible" | "global"
         self._cmb_mode: str = "shots"  # "shots" or "markers"
         self._cmb_label = None  # QLabel next to cmb_shot for mode text
-        self._select_on_load: bool = self._load_select_on_load_pref()
-        self._focus_on_shot_change: bool = self._load_focus_on_shot_change_pref()
         self._register_maya_undo_callbacks()
         self._register_time_change_callback()
         self._register_keyframe_callback()
@@ -144,68 +141,6 @@ class ShotSequencerController(
         ]
         self._set_footer(sep.join(parts))
 
-    # ---- select-on-load preference (sequencer-only, QSettings) -----------
-
-    _QSETTINGS_PREFIX = "ShotSequencer"
-
-    @staticmethod
-    def _load_select_on_load_pref() -> bool:
-        """Read the select-on-load preference from QSettings."""
-        try:
-            from qtpy.QtCore import QSettings
-
-            s = QSettings()
-            val = s.value("ShotSequencer/select_on_load")
-            if val is not None and val in (True, "true", 1, "1"):
-                return True
-            # Migrate from old ShotStore location
-            val = s.value("ShotStore/select_on_load")
-            if val is not None and val in (True, "true", 1, "1"):
-                return True
-        except Exception:
-            pass
-        return False
-
-    def _save_select_on_load_pref(self) -> None:
-        """Persist the select-on-load preference to QSettings."""
-        try:
-            from qtpy.QtCore import QSettings
-
-            s = QSettings()
-            s.setValue(
-                f"{self._QSETTINGS_PREFIX}/select_on_load",
-                self._select_on_load,
-            )
-        except Exception:
-            pass
-
-    # ---- focus-on-shot-change preference (sequencer-only, QSettings) -----
-
-    @staticmethod
-    def _load_focus_on_shot_change_pref() -> bool:
-        """Read the focus-on-shot-change preference from QSettings."""
-        try:
-            from qtpy.QtCore import QSettings
-
-            val = QSettings().value("ShotSequencer/focus_on_shot_change")
-            if val is not None and val in (True, "true", 1, "1"):
-                return True
-        except Exception:
-            pass
-        return False
-
-    def _save_focus_on_shot_change_pref(self) -> None:
-        """Persist the focus-on-shot-change preference to QSettings."""
-        try:
-            from qtpy.QtCore import QSettings
-
-            QSettings().setValue(
-                f"{self._QSETTINGS_PREFIX}/focus_on_shot_change",
-                self._focus_on_shot_change,
-            )
-        except Exception:
-            pass
-
     # ---- sequencer property (lazy init from ShotStore) -------------------
 
     @property
@@ -252,35 +187,8 @@ class ShotSequencerController(
             pass
         self._store_listener_bound = False
 
-    def _reinitialize_from_store(self) -> None:
-        """Reset cached state and re-bind when the Maya scene changes.
-
-        Called from :meth:`_on_store_event` in response to
-        :class:`SceneChanged`.  Clears the stale sequencer, re-binds to
-        the new :class:`ShotStore`, and re-populates the UI.
-        """
-        self._unbind_store_listener()
-        self._sequencer = None
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._shifted_out_keys.clear()
-        self._shot_undo_stack.clear()
-        self._bind_store_listener()
-        # Guard sync calls so that set_active_shot (fired from
-        # _sync_combobox auto-select) doesn't re-enter _on_store_event.
-        self._syncing = True
-        try:
-            self._sync_combobox()
-            self._sync_to_widget()
-            self._apply_view_playback_range()
-        finally:
-            self._syncing = False
-
     def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations from any source (e.g. manifest build)."""
-        if isinstance(event, SceneChanged):
-            self._reinitialize_from_store()
-            return
         if self._syncing or self.sequencer is None:
             return
         self._segment_cache.clear()
@@ -455,7 +363,6 @@ class ShotSequencerController(
             return False
         merged = sorted(existing | set(new_objects))
         self.sequencer.store.update_shot(shot_id, objects=merged)
-        self.sequencer.store.save()
         return True
 
     # ---- Maya time-change callback ----------------------------------------
@@ -584,6 +491,12 @@ class ShotSequencerController(
         shot = self._find_shot_at_time(time)
         if shot is not None:
             self._edit_shot_dialog(shot)
+
+    def _on_shot_switch_requested(self, time: float) -> None:
+        """Ctrl+Shift+Click on timeline — switch to the shot at *time*."""
+        shot = self._find_shot_at_time(time)
+        if shot is not None:
+            self.on_shot_block_clicked(shot.name)
 
     def _edit_shot_dialog(self, shot) -> None:
         """Open Shot Settings with the given shot pre-selected for editing."""
@@ -864,27 +777,9 @@ class ShotSequencerController(
         self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
 
     def refresh(self) -> None:
-        """Clear cached segments and rebuild the sequencer widget.
-
-        Also detects when the underlying :class:`ShotStore` has been
-        replaced (e.g. after a scene change that the event path missed)
-        and fully re-initialises in that case.
-        """
-        from mayatk.anim_utils.shots._shots import ShotStore
-
-        try:
-            current_store = ShotStore.active()
-            if (
-                self._sequencer is not None
-                and self._sequencer.store is not current_store
-            ):
-                self._reinitialize_from_store()
-                return
-        except Exception:
-            pass
+        """Clear cached segments and rebuild the sequencer widget."""
         self._segment_cache.clear()
         self._sub_row_cache.clear()
-        self._sync_combobox()
         self._sync_to_widget()
 
     # ---- _sync_to_widget helpers -----------------------------------------
@@ -1036,7 +931,13 @@ class ShotSequencerController(
 
         from uitk.widgets.mixins.settings_manager import SettingsManager
 
-        widget.attribute_colors = AttributeColorDialog.load_color_map()
+        color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
+        color_map = dict(_DEFAULT_ATTRIBUTE_COLORS)
+        for key in color_settings.keys():
+            val = color_settings.value(key)
+            if val:
+                color_map[key] = val
+        widget.attribute_colors = color_map
 
     def _build_tracks(
         self, widget, all_objects, active_objects, active_shot=None
@@ -1091,7 +992,6 @@ class ShotSequencerController(
                 **color_kw,
             )
             track_ids[obj_name] = tid
-        self._track_full_names = {tid: name for name, tid in track_ids.items()}
         return track_ids
 
     def _build_clips(self, widget, shot, visible_shots, segments_by_shot, track_ids):
@@ -1178,13 +1078,6 @@ class ShotSequencerController(
                         e = m["end"]
                         attrs = extract_attributes(m["segs"])
                         clip_extra = dict(extra)
-                        is_interp = any(sg.get("interpolated") for sg in m["segs"])
-                        if is_interp:
-                            clip_extra.update(
-                                locked=True,
-                                read_only=True,
-                                interpolated=True,
-                            )
                         if is_active and attrs:
                             clip_extra["label_center"] = Attributes.abbreviate_attrs(
                                 attrs
@@ -1554,9 +1447,7 @@ class ShotSequencerController(
         if shot is None:
             return []
 
-        obj_name = self._track_full_names.get(track_id) or self._resolve_full_name(
-            track_name
-        )
+        obj_name = self._resolve_full_name(track_name)
 
         # Return cached result if available
         cache_key = (shot_id, track_name)
@@ -1817,8 +1708,11 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             sequencer.zone_context_menu_requested.connect(
                 self.controller.on_zone_context_menu
             )
+            sequencer.shot_block_clicked.connect(
+                self.controller.on_shot_block_clicked
+            )
             sequencer.shot_switch_requested.connect(
-                self.controller.on_shot_switch_requested
+                self.controller._on_shot_switch_requested
             )
             sequencer._zone_menu_connected = True
 
@@ -1839,7 +1733,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "Delete keys for selected clips",
                 _QtCore.Qt.WidgetWithChildrenShortcut,
             )
-            sequencer._sync_shortcut_sequences()
+            sequencer._timeline._shortcut_sequences.append(
+                _QtGui.QKeySequence("Delete")
+            )
 
         # Setup shot navigation on the combobox
         self._setup_shot_nav()
@@ -1847,7 +1743,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         # Initial population so gaps and clips are visible immediately.
         self.controller._sync_combobox()
         self.controller._sync_to_widget()
-        self.controller._apply_view_playback_range()
 
     def _setup_shot_nav(self) -> None:
         """Configure prev/next option box actions on cmb_shot."""
@@ -1981,16 +1876,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         if scope and scope != self.controller._track_order_scope:
             self.controller._track_order_scope = scope
             self.controller._sync_to_widget()
-
-    def _on_select_on_load_changed(self, checked: bool) -> None:
-        """Handle select-on-load checkbox toggle."""
-        self.controller._select_on_load = checked
-        self.controller._save_select_on_load_pref()
-
-    def _on_focus_on_shot_change_changed(self, checked: bool) -> None:
-        """Handle focus-on-shot-change checkbox toggle."""
-        self.controller._focus_on_shot_change = checked
-        self.controller._save_focus_on_shot_change_pref()
 
     # ---- shot CRUD helpers -----------------------------------------------
 
@@ -2128,24 +2013,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         cmb_scope.currentIndexChanged.connect(self._on_track_order_changed)
 
-        chk_sol = widget.menu.add(
-            "QCheckBox",
-            setText="Select Members on Load",
-            setObjectName="chk_select_on_load",
-            setToolTip="Select all objects belonging to the shot\nwhen navigating to it in the sequencer.",
-            setChecked=self.controller._select_on_load,
-        )
-        chk_sol.toggled.connect(self._on_select_on_load_changed)
-
-        chk_focus = widget.menu.add(
-            "QCheckBox",
-            setText="Focus on Shot Change",
-            setObjectName="chk_focus_on_shot_change",
-            setToolTip="Reframe the sequencer viewport to the active shot\nwhen navigating between shots.",
-            setChecked=self.controller._focus_on_shot_change,
-        )
-        chk_focus.toggled.connect(self._on_focus_on_shot_change_changed)
-
         widget.menu.add(
             "QPushButton",
             setText="Attribute Colors",
@@ -2154,15 +2021,15 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         widget.menu.add(
             "QPushButton",
-            setText="Shots\u2026",
-            setObjectName="btn_shot_settings",
-            setToolTip="Open shared shot detection, gap, and editing settings.",
+            setText="Shortcuts\u2026",
+            setObjectName="btn_shortcuts",
+            setToolTip="View and customise sequencer keyboard shortcuts.",
         )
         widget.menu.add(
             "QPushButton",
-            setText="Shortcuts\u2026",
-            setObjectName="btn_shortcuts",
-            setToolTip="View and customize keyboard shortcuts for the shot sequencer.",
+            setText="Shots\u2026",
+            setObjectName="btn_shot_settings",
+            setToolTip="Open shared shot detection, gap, and editing settings.",
         )
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
@@ -2192,8 +2059,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "Ruler: Click/drag to move playhead, double-click to\n"
                 "  add a marker, mouse wheel to zoom, middle-drag to pan.\n\n"
                 "Shot Lane: Click a block to select that shot,\n"
-                "  double-click to open Shot Settings.\n"
-                "  Ctrl+Shift+Click anywhere to jump to that shot.\n\n"
+                "  double-click to open Shot Settings.\n\n"
                 "Clips:\n"
                 "  \u2022 Drag body \u2014 Move in time (ripple editing).\n"
                 "  \u2022 Drag edge \u2014 Resize (scales keyframes).\n"
@@ -2217,8 +2083,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "Keyboard:\n"
                 "  \u2190/\u2192 prev/next key \u2022 Shift+\u2190/\u2192 step \u00b11 frame\n"
                 "  Home/End start/end \u2022 F frame shot \u2022 M add marker\n"
-                "  Ctrl+Z undo \u2022 Ctrl+Shift+Z redo \u2022 Del delete keys\n"
-                "  Ctrl+Shift+Click \u2014 switch to shot at cursor"
+                "  Ctrl+Z undo \u2022 Ctrl+Shift+Z redo \u2022 Del delete keys"
             ),
         )
 
@@ -2237,15 +2102,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                     active_attrs.add(attr)
 
         color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
-
-        if hasattr(self, "_attr_color_dlg") and self._attr_color_dlg is not None:
-            try:
-                self._attr_color_dlg.show()
-                self._attr_color_dlg.raise_()
-                return
-            except RuntimeError:
-                pass
-
         dlg = AttributeColorDialog(
             defaults=dict(_DEFAULT_ATTRIBUTE_COLORS),
             common_attrs=list(_COMMON_ATTRIBUTES),
@@ -2253,15 +2109,13 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             settings=color_settings,
             parent=widget or self.ui,
         )
-        self._attr_color_dlg = dlg
 
         def _apply(cmap):
             if widget:
                 widget.attribute_colors = cmap
 
         dlg.colors_changed.connect(_apply)
-        dlg.show()
-        dlg.raise_()
+        dlg.exec_()
 
     def cmb_shot(self, index):
         """Handle direct combobox selection of a shot or marker."""
@@ -2282,7 +2136,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             return
         self.controller._shifted_out_keys.clear()
         self.controller.select_shot(shot_id)
-        self.controller._sync_to_widget(frame=self.controller._focus_on_shot_change)
+        self.controller._sync_to_widget(frame=True)
         self.controller._update_shot_nav_state()
 
     def spn_snap(self, value):
@@ -2292,15 +2146,12 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             return
         widget.snap_interval = float(value)
 
+    def btn_shortcuts(self):
+        """Open the sequencer shortcut editor."""
+        widget = self.controller._get_sequencer_widget()
+        if widget is not None:
+            widget._shortcut_mgr.show_editor(parent=widget, title="Sequencer Shortcuts")
+
     def btn_shot_settings(self):
         """Open the shared shots settings panel."""
         self.sb.handlers.marking_menu.show("shots")
-
-    def btn_shortcuts(self):
-        """Open the shortcut editor for the sequencer widget."""
-        widget = self.controller._get_sequencer_widget()
-        if widget is None:
-            return
-        widget._shortcut_mgr.show_editor(
-            parent=widget, title="Shot Sequencer Shortcuts"
-        )

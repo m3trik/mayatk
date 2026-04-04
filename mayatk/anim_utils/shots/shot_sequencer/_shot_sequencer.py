@@ -17,69 +17,6 @@ from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore, detect_shot_reg
 
 
 # ---------------------------------------------------------------------------
-# Tangent types whose weights and angles are meaningless (i.e. fully
-# determined by the tangent type alone).  All other tangent types carry
-# weight/angle data that must be explicitly restored after setKeyframe.
-# ---------------------------------------------------------------------------
-_SIMPLE_TANGENT_TYPES = frozenset({"step", "stepnext", "flat", "linear"})
-
-
-def _retime_curve_keys(cmds, crv, tr, time_fn):
-    """Snapshot keys on *crv* inside time-range *tr*, delete them, and
-    recreate each at ``time_fn(old_time)`` with full tangent preservation.
-
-    This replaces ``cmds.keyframe(edit, timeChange)`` and ``cmds.scaleKey``
-    which silently misplace stepped/fixed tangent keys and round stepped
-    keys to integer frames respectively.
-
-    Parameters:
-        cmds: ``maya.cmds`` module reference.
-        crv: Animation curve node name.
-        tr: ``(start, end)`` time-range tuple.
-        time_fn: Callable ``(float) -> float`` mapping old time to new.
-    """
-    times = cmds.keyframe(crv, q=True, time=tr, timeChange=True) or []
-    if not times:
-        return
-    vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True) or []
-    in_tans = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True) or []
-    out_tans = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True) or []
-    in_weights = cmds.keyTangent(crv, q=True, time=tr, inWeight=True) or []
-    out_weights = cmds.keyTangent(crv, q=True, time=tr, outWeight=True) or []
-    in_angles = cmds.keyTangent(crv, q=True, time=tr, inAngle=True) or []
-    out_angles = cmds.keyTangent(crv, q=True, time=tr, outAngle=True) or []
-
-    keys = list(
-        zip(times, vals, in_tans, out_tans, in_weights, out_weights, in_angles, out_angles)
-    )
-
-    # Resolve the driven plug BEFORE cutKey, because cutKey may
-    # auto-delete the curve node if it removes the last key.
-    conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
-    cmds.cutKey(crv, time=tr, clear=True)
-
-    target = crv if cmds.objExists(crv) else (conns[0] if conns else None)
-    if not target:
-        return
-
-    for t, v, itt, ott, iw, ow, ia, oa in keys:
-        new_t = time_fn(t)
-        cmds.setKeyframe(target, time=new_t, value=v)
-        tt = (new_t, new_t)
-        cmds.keyTangent(target, time=tt, inTangentType=itt, outTangentType=ott)
-        # Restore weights and angles for tangent types that carry them
-        kw = {}
-        if itt not in _SIMPLE_TANGENT_TYPES:
-            kw["inWeight"] = iw
-            kw["inAngle"] = ia
-        if ott not in _SIMPLE_TANGENT_TYPES:
-            kw["outWeight"] = ow
-            kw["outAngle"] = oa
-        if kw:
-            cmds.keyTangent(target, time=tt, **kw)
-
-
-# ---------------------------------------------------------------------------
 # ShotSequencer
 # ---------------------------------------------------------------------------
 
@@ -448,37 +385,16 @@ class ShotSequencer:
             # Skip curves that have no keys in this range
             if not cmds.keyframe(crv, q=True, time=tr):
                 continue
-            # Always use cutKey + setKeyframe to avoid Maya's
-            # cmds.keyframe(edit, timeChange) bug which silently
-            # misplaces keys with stepped, fixed, and other tangent
-            # types — especially at large offsets.
-            self._move_curve_keys(cmds, crv, tr, delta)
-
-    @staticmethod
-    def _move_curve_keys(cmds, crv, tr, delta):
-        """Move all keys on *crv* in *tr* by *delta*.
-
-        Delegates to :func:`_retime_curve_keys` with a simple offset
-        function.  Avoids Maya's ``cmds.keyframe(edit, timeChange)`` bug.
-        """
-        _retime_curve_keys(cmds, crv, tr, lambda t: t + delta)
-
-    @staticmethod
-    def _scale_curve_keys(cmds, crv, old_start, old_end, new_start, new_end):
-        """Scale keys on *crv* from [old_start, old_end] → [new_start, new_end].
-
-        Delegates to :func:`_retime_curve_keys` with a linear mapping
-        function.  Avoids ``cmds.scaleKey`` rounding stepped keys to
-        integers.
-        """
-        old_dur = old_end - old_start
-        new_dur = new_end - new_start
-        _retime_curve_keys(
-            cmds,
-            crv,
-            (old_start, old_end),
-            lambda t: new_start + (t - old_start) / old_dur * new_dur,
-        )
+            try:
+                cmds.keyframe(
+                    crv,
+                    edit=True,
+                    relative=True,
+                    timeChange=delta,
+                    time=tr,
+                )
+            except RuntimeError:
+                pass
 
     def move_stepped_keys(
         self,
@@ -493,8 +409,8 @@ class ShotSequencer:
         If *attr_name* is given, only that attribute's curves are moved.
         Otherwise all curves on *obj* with a stepped key at *old_time*.
 
-        Delegates to :func:`_retime_curve_keys` for tangent-safe key
-        movement.
+        Uses cutKey + setKeyframe instead of timeChange to avoid Maya
+        silently misplacing keys at large offsets.
         """
         import maya.cmds as cmds
 
@@ -512,7 +428,8 @@ class ShotSequencer:
             plug = f"{obj_path}.{attr_name}"
             if not cmds.objExists(plug):
                 return
-            curves = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+            raw = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+            curves = [(c, plug) for c in raw]
         else:
             all_curves = list(
                 set(
@@ -526,18 +443,40 @@ class ShotSequencer:
                     continue
                 ot = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
                 if ot and ot[0] in ("step", "stepnext"):
-                    curves.append(crv)
+                    conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+                    curves.append((crv, conns[0] if conns else None))
 
-        delta = new_time - old_time
-        for crv in curves:
-            _retime_curve_keys(cmds, crv, tr, lambda t: t + delta)
+        # Delete-and-recreate each key
+        for crv, plug in curves:
+            vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
+            in_tan = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True)
+            out_tan = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
+            if not vals:
+                continue
+            val = vals[0]
+            itt = in_tan[0] if in_tan else "stepnext"
+            ott = out_tan[0] if out_tan else "step"
+
+            cmds.cutKey(crv, time=tr, clear=True)
+            # cutKey may delete the curve node if it was the last key;
+            # fall back to the driven plug so setKeyframe recreates it.
+            target = crv if cmds.objExists(crv) else plug
+            if not target:
+                target = obj_path
+            cmds.setKeyframe(target, time=new_time, value=val)
+            cmds.keyTangent(
+                target,
+                time=(new_time, new_time),
+                inTangentType=itt,
+                outTangentType=ott,
+            )
 
     @staticmethod
     def _batch_move_keys(cmds, objects, old_start, old_end, new_start):
         """Move keyframes for all *objects* from [old_start, old_end] to new_start.
 
         Resolves curves in a single batch rather than per-object, then
-        retimes keys via cutKey + setKeyframe (see :func:`_retime_curve_keys`).
+        shifts keys using a direct single-pass move.
         """
         if not objects:
             return
@@ -562,7 +501,16 @@ class ShotSequencer:
         for crv in curves:
             if not cmds.keyframe(crv, q=True, time=tr):
                 continue
-            ShotSequencer._move_curve_keys(cmds, crv, tr, delta)
+            try:
+                cmds.keyframe(
+                    crv,
+                    edit=True,
+                    relative=True,
+                    timeChange=delta,
+                    time=tr,
+                )
+            except RuntimeError:
+                pass
 
     def move_object_in_shot(
         self,
@@ -685,19 +633,12 @@ class ShotSequencer:
             return
         if abs(old_end - old_start) < 1e-6:
             return
-
-        # Resolve to full DAG path and iterate per-curve so scaleKey
-        # works on non-transform nodes (locators, shapes, etc.).
-        # Use cutKey + setKeyframe instead of cmds.scaleKey because
-        # scaleKey rounds stepped keys to integer frames.
-        matches = cmds.ls(obj, long=True)
-        if not matches:
-            return
-        obj_path = matches[0]
-        curves = cmds.listConnections(obj_path, type="animCurve", s=True, d=False) or []
-        curves = list(set(curves))
-        for crv in curves:
-            self._scale_curve_keys(cmds, crv, old_start, old_end, new_start, new_end)
+        cmds.scaleKey(
+            obj,
+            time=(old_start, old_end),
+            newStartTime=new_start,
+            newEndTime=new_end,
+        )
 
     # ---- ripple editing --------------------------------------------------
 

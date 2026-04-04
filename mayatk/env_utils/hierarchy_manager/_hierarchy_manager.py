@@ -693,6 +693,10 @@ class HierarchyManager(ptk.LoggingMixin):
                     matched_fm_missing = set()
                     matched_fm_extra = set()
                     for query_leaf, (best_leaf, score) in raw_matches.items():
+                        # Skip same-name matches — identical leaf names are
+                        # reparented items (different parent), not renames.
+                        if query_leaf == best_leaf:
+                            continue
                         # Map leaves back to full cleaned paths
                         ref_path = next(
                             (
@@ -1160,6 +1164,61 @@ class HierarchyManager(ptk.LoggingMixin):
 
         self.logger.result(f"Quarantined {len(moved)} item(s) under '{group}'.")
         return moved
+
+    def fix_fuzzy_renames(
+        self, items: Optional[List[Dict[str, str]]] = None
+    ) -> List[str]:
+        """Rename nodes identified as fuzzy matches to their reference names.
+
+        Each item is a dict with ``current_name`` (cleaned current path) and
+        ``target_name`` (cleaned reference path) as produced by
+        ``analyze_hierarchies``.
+
+        Returns:
+            List of node names that were renamed.
+        """
+        targets = (
+            items if items is not None else self.differences.get("fuzzy_matches", [])
+        )
+        if not targets:
+            self.logger.notice("No fuzzy renames to fix.")
+            return []
+
+        renamed: List[str] = []
+        for entry in targets:
+            current_path = entry.get("current_name", "")
+            reference_path = entry.get("target_name", "")
+            if not current_path or not reference_path:
+                continue
+
+            cur_leaf = current_path.rsplit("|", 1)[-1]
+            ref_leaf = reference_path.rsplit("|", 1)[-1]
+            if cur_leaf == ref_leaf:
+                continue
+
+            if self.dry_run:
+                self.logger.info(
+                    f"[DRY-RUN] Would rename: '{cur_leaf}' \u2192 '{ref_leaf}'"
+                )
+                renamed.append(cur_leaf)
+                continue
+
+            node = self._resolve_node(current_path, source="current")
+            if not node:
+                self.logger.debug(f"Rename skipped (node not found): {current_path}")
+                continue
+
+            try:
+                old_name = node.nodeName()
+                node.rename(ref_leaf)
+                actual_name = node.nodeName()
+                renamed.append(actual_name)
+                self.logger.debug(f"Renamed: '{old_name}' \u2192 '{actual_name}'")
+            except Exception as e:
+                self.logger.warning(f"Failed to rename {cur_leaf}: {e}")
+
+        self.logger.result(f"Renamed {len(renamed)} fuzzy-matched item(s).")
+        return renamed
 
     def fix_reparented(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]:
         """Move reparented nodes to match their reference hierarchy position.

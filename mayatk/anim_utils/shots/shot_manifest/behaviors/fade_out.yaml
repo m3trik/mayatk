@@ -1,4 +1,4 @@
-description: "Fade objects out at scene end via visibility."
+description: "Fade objects out at shot end via visibility."
 attributes:
   visibility:
     out:

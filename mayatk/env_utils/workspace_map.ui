@@ -71,7 +71,7 @@
     </widget>
    </item>
    <item>
-    <widget class="TreeWidget" name="tree000">
+    <widget class="QTreeWidget" name="tree000">
      <property name="toolTip">
       <string>Available workspaces organized by directory</string>
      </property>
@@ -131,13 +131,6 @@
    </item>
   </layout>
  </widget>
- <customwidgets>
-  <customwidget>
-   <class>TreeWidget</class>
-   <extends>QTreeWidget</extends>
-   <header>uitk.widgets.treeWidget</header>
-  </customwidget>
- </customwidgets>
  <resources/>
  <connections/>
 </ui>

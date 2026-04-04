@@ -45,7 +45,7 @@ class ShotNavMixin:
         self.sequencer.store.set_active_shot(shot_id)
         self._apply_view_playback_range(shot)
 
-        if not self._select_on_load:
+        if not self.sequencer.store.select_on_load:
             return
 
         import maya.cmds as cmds
@@ -117,18 +117,12 @@ class ShotNavMixin:
             if shot.description:
                 label += f"  {shot.description}"
             cmb.addItem(label, shot.shot_id)
-        # Restore previous selection, or auto-select the first shot
-        # so the sequencer picks up existing shots on scene reopen.
+        # Restore previous selection
         if old_sid is not None:
             for i in range(cmb.count()):
                 if cmb.itemData(i) == old_sid:
                     cmb.setCurrentIndex(i)
                     break
-        elif cmb.count() > 0:
-            cmb.setCurrentIndex(0)
-            first_id = cmb.itemData(0)
-            if first_id is not None:
-                self.sequencer.store.set_active_shot(first_id)
         cmb.blockSignals(False)
         self._update_shot_nav_state()
 
@@ -154,9 +148,7 @@ class ShotNavMixin:
         shot_id = cmb.itemData(new_idx)
         self._shifted_out_keys.clear()
         self.select_shot(shot_id)
-        self._sync_to_widget(
-            frame=self._focus_on_shot_change and self._shot_display_mode == "current"
-        )
+        self._sync_to_widget(frame=self._shot_display_mode == "current")
         self._update_shot_nav_state()
 
     def on_shot_block_clicked(self, shot_name: str) -> None:
@@ -174,15 +166,6 @@ class ShotNavMixin:
                         break
                 self._shifted_out_keys.clear()
                 self.select_shot(shot.shot_id)
-                self._sync_to_widget(frame=self._focus_on_shot_change)
+                self._sync_to_widget(frame=True)
                 self._update_shot_nav_state()
-                return
-
-    def on_shot_switch_requested(self, time: float) -> None:
-        """Ctrl+Shift+Click: switch to the shot whose range contains *time*."""
-        if self.sequencer is None:
-            return
-        for shot in self.sequencer.sorted_shots():
-            if shot.start <= time <= shot.end:
-                self.on_shot_block_clicked(shot.name)
                 return

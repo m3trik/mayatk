@@ -382,7 +382,6 @@ class SegmentKeys(SegmentKeysInfo):
             keyframes = sorted(set(keyframes))
 
             # Apply time range filter if specified
-            interpolated = False
             if range_start is not None or range_end is not None:
                 eps = 1e-3
                 keyframes = [
@@ -392,15 +391,7 @@ class SegmentKeys(SegmentKeysInfo):
                     and (range_end is None or k <= range_end + eps)
                 ]
                 if not keyframes:
-                    # No physical keys in range — but active segments may
-                    # still span through the range (interpolated motion).
-                    if not split_static or not active_segments:
-                        continue
-                    _rs = range_start if range_start is not None else -1e18
-                    _re = range_end if range_end is not None else 1e18
-                    if not any(s <= _re and e >= _rs for s, e in active_segments):
-                        continue
-                    interpolated = True
+                    continue
 
             if split_static:
                 # Filter active segments to time range.
@@ -434,7 +425,7 @@ class SegmentKeys(SegmentKeysInfo):
             # Default behavior: absorb trailing holds into the segment so hold keys
             # move with the segment (prevents collisions during shifting/staggering).
             # Optional behavior (ignore_holds=True): keep segments active-only.
-            if split_static and active_segments and not ignore_holds and keyframes:
+            if split_static and active_segments and not ignore_holds:
                 eps = 1e-3
                 active_segments = sorted(active_segments, key=lambda x: (x[0], x[1]))
                 expanded_segments = []
@@ -485,18 +476,17 @@ class SegmentKeys(SegmentKeysInfo):
                 # Filter keyframes to those within this segment
                 segment_keys = [k for k in keyframes if seg_start <= k <= seg_end]
 
-                seg_dict = {
-                    "obj": obj,
-                    "curves": list(curves_to_use),
-                    "keyframes": segment_keys,
-                    "start": seg_start,
-                    "end": seg_end,
-                    "duration": seg_end - seg_start,
-                    "segment_range": (seg_start, seg_end),
-                }
-                if interpolated:
-                    seg_dict["interpolated"] = True
-                segments.append(seg_dict)
+                segments.append(
+                    {
+                        "obj": obj,
+                        "curves": list(curves_to_use),
+                        "keyframes": segment_keys,
+                        "start": seg_start,
+                        "end": seg_end,
+                        "duration": seg_end - seg_start,
+                        "segment_range": (seg_start, seg_end),
+                    }
+                )
 
             # Create individual segments for stepped key points
             for pt_time, _ in stepped_points:
