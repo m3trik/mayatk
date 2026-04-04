@@ -1287,6 +1287,26 @@ class ShotSequencerController(
             lambda names=list(track_names): self._open_spreadsheet(names),
         )
 
+    def on_header_menu(self, menu) -> None:
+        """Add settings actions to the header background context menu."""
+        if self.sequencer is None:
+            return
+        store = self.sequencer.store
+        act = menu.addAction("Select Members on Load")
+        act.setCheckable(True)
+        act.setChecked(store.select_on_load)
+        act.setToolTip(
+            "Select all objects belonging to the shot\n"
+            "when navigating to it in the sequencer."
+        )
+        act.toggled.connect(self._on_select_on_load_toggled)
+
+    def _on_select_on_load_toggled(self, checked: bool) -> None:
+        if self.sequencer is None:
+            return
+        self.sequencer.store.select_on_load = checked
+        self.sequencer.store.mark_dirty()
+
     def _open_spreadsheet(self, track_names) -> None:
         """Select the objects and open Maya's Attribute Spread Sheet."""
         resolved = []
@@ -1708,33 +1728,41 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             sequencer.zone_context_menu_requested.connect(
                 self.controller.on_zone_context_menu
             )
-            sequencer.shot_block_clicked.connect(
-                self.controller.on_shot_block_clicked
-            )
+            sequencer.shot_block_clicked.connect(self.controller.on_shot_block_clicked)
             sequencer.shot_switch_requested.connect(
                 self.controller._on_shot_switch_requested
             )
+            sequencer.header_menu_requested.connect(self.controller.on_header_menu)
             sequencer._zone_menu_connected = True
 
         # Register Delete key shortcut for selected clips.
         # Always update the action callback to the current controller
         # in case the slots were re-initialised with a new controller.
+        # Use WindowShortcut context when window_shortcuts is active so
+        # Qt claims the key at the window level and Maya never sees it.
         from qtpy import QtCore as _QtCore, QtGui as _QtGui
 
+        _del_ctx = (
+            _QtCore.Qt.WindowShortcut
+            if sequencer.window_shortcuts
+            else _QtCore.Qt.WidgetWithChildrenShortcut
+        )
         _del_key = _QtGui.QKeySequence("Delete").toString()
         if _del_key in sequencer._shortcut_mgr.shortcuts:
-            sequencer._shortcut_mgr.shortcuts[_del_key][
-                "action"
-            ] = self.controller._delete_selected_clip_keys
+            _entry = sequencer._shortcut_mgr.shortcuts[_del_key]
+            _entry["action"] = self.controller._delete_selected_clip_keys
+            if _entry["shortcut"] is not None:
+                _entry["shortcut"].setContext(_del_ctx)
+                _entry["shortcut"].activated.disconnect()
+                _entry["shortcut"].activated.connect(
+                    self.controller._delete_selected_clip_keys
+                )
         else:
             sequencer._shortcut_mgr.add_shortcut(
                 "Delete",
                 self.controller._delete_selected_clip_keys,
                 "Delete keys for selected clips",
-                _QtCore.Qt.WidgetWithChildrenShortcut,
-            )
-            sequencer._timeline._shortcut_sequences.append(
-                _QtGui.QKeySequence("Delete")
+                _del_ctx,
             )
 
         # Setup shot navigation on the combobox

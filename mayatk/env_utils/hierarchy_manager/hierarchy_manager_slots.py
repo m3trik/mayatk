@@ -1916,12 +1916,15 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def txt001_init(self, widget):
         """Initialize the reference scene path input."""
-        widget.option_box.menu.add(
-            "QPushButton",
-            setText="Browse Reference Scene",
-            setObjectName="b003",
-            setToolTip="Browse for a reference scene file.",
+        from uitk.widgets.optionBox.options.browse import BrowseOption
+
+        self._browse_option = BrowseOption(
+            wrapped_widget=widget,
+            file_types="Maya Files (*.ma *.mb);;FBX Files (*.fbx);;All Files (*.*)",
+            title="Select Reference Scene:",
+            start_dir=lambda: self.controller.workspace,
         )
+        widget.option_box.add_option(self._browse_option)
 
         # Recent reference scenes — option box button with history popup
         from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
@@ -2530,6 +2533,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def b003(self):
         """Browse for reference scene file."""
+        if hasattr(self, "_browse_option"):
+            self._browse_option.browse()
+            return
+
         reference_file = self.sb.file_dialog(
             file_types="Maya Files (*.ma *.mb);;FBX Files (*.fbx);;All Files (*.*)",
             title="Select Reference Scene:",
@@ -2538,7 +2545,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         if reference_file and len(reference_file) > 0:
             self.ui.txt001.setText(reference_file[0])
-            # Record to recent scenes
             if hasattr(self, "_recent_refs_option"):
                 self._recent_refs_option.record(reference_file[0])
 

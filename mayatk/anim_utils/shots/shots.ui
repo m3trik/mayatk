@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>265</width>
-    <height>328</height>
+    <height>297</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -124,6 +124,12 @@
            <height>20</height>
           </size>
          </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
          <property name="toolTip">
           <string>Minimum gap (frames) between detected shots.
 In Auto-Detect mode, clusters animation by this gap.
@@ -179,23 +185,6 @@ Unused in Zero = Shot End mode.</string>
            <height>20</height>
           </size>
          </property>
-         <property name="toolTip">
-          <string>Frame gap between shots. Changing this respaces
-all shots on the timeline.</string>
-         </property>
-         <property name="prefix">
-          <string>Gap:	</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QCheckBox" name="chk_select_on_load">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
@@ -203,11 +192,11 @@ all shots on the timeline.</string>
           </size>
          </property>
          <property name="toolTip">
-          <string>Select all objects belonging to the shot
-when navigating to it in the sequencer.</string>
+          <string>Frame gap between shots. Changing this respaces
+all shots on the timeline.</string>
          </property>
-         <property name="text">
-          <string>Select Members on Load</string>
+         <property name="prefix">
+          <string>Gap:	</string>
          </property>
         </widget>
        </item>
@@ -262,6 +251,12 @@ when navigating to it in the sequencer.</string>
            <height>20</height>
           </size>
          </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
          <property name="toolTip">
           <string>Shot name.</string>
          </property>
@@ -280,6 +275,12 @@ when navigating to it in the sequencer.</string>
            <property name="minimumSize">
             <size>
              <width>70</width>
+             <height>20</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
              <height>20</height>
             </size>
            </property>
@@ -308,6 +309,12 @@ when navigating to it in the sequencer.</string>
              <height>20</height>
             </size>
            </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>20</height>
+            </size>
+           </property>
            <property name="toolTip">
             <string>Shot end frame.</string>
            </property>
@@ -327,12 +334,17 @@ when navigating to it in the sequencer.</string>
          </item>
         </layout>
        </item>
-
        <item>
         <widget class="QLineEdit" name="txt_shot_desc">
          <property name="minimumSize">
           <size>
            <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
            <height>20</height>
           </size>
          </property>
@@ -383,6 +395,12 @@ when navigating to it in the sequencer.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
            <height>20</height>
           </size>
          </property>

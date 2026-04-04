@@ -297,6 +297,7 @@ from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
     COL_START,
     COL_END,
     parse_range,
+    short_name,
 )
 
 
@@ -1527,6 +1528,804 @@ class TestCsvLayoutPresets(unittest.TestCase, _ControllerHarness):
         self.assertEqual(restored.assets, ("Obj",))
         self.assertEqual(restored.audio, ("VO",))
         self.assertEqual(restored.exclude_steps, ("INTRO",))
+
+
+# ---------------------------------------------------------------------------
+# Tests: Incremental CSV sync (zero-duration fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestStepIsBuilt(unittest.TestCase, _ControllerHarness):
+    """Test per-step _step_is_built() vs global _is_built.
+
+    Bug: _is_built returned True for ALL steps when any step was built,
+    blocking range editing for newly-added CSV steps.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        store = _fresh_store()
+        # Only A01 is built
+        store.define_shot("A01", 1, 31, ["obj_A01"])
+
+    def test_is_built_true_when_any_step_built(self):
+        self.assertTrue(self.ctrl._is_built)
+
+    def test_step_is_built_true_for_built_step(self):
+        self.assertTrue(self.ctrl._step_is_built("A01"))
+
+    def test_step_is_built_false_for_unbuilt_step(self):
+        self.assertFalse(self.ctrl._step_is_built("A02"))
+        self.assertFalse(self.ctrl._step_is_built("A03"))
+
+
+class TestLoadCsvSeedsStoreRanges(unittest.TestCase, _ControllerHarness):
+    """Test that _load_csv seeds _user_ranges from existing store positions.
+
+    When a CSV is re-loaded after some shots are already built, the table
+    should immediately show correct Start/End for built steps.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.define_shot("A01", 10, 40, ["obj_A01"])
+        self.store.define_shot("A02", 50, 80, ["obj_A02"])
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.parse_csv")
+    def test_store_ranges_seeded_into_user_ranges(self, mock_parse):
+        mock_parse.return_value = _make_steps("A01", "A02", "A03")
+        import os
+
+        with patch.object(os.path, "isfile", return_value=True):
+            self.ctrl._load_csv("/fake/path.csv")
+
+        # Built steps should have their store ranges
+        self.assertEqual(self.ctrl._user_ranges["A01"], (10, 40))
+        self.assertEqual(self.ctrl._user_ranges["A02"], (50, 80))
+        # Unbuilt step should NOT have a range
+        self.assertNotIn("A03", self.ctrl._user_ranges)
+
+
+class TestZeroDurationFallback(unittest.TestCase):
+    """Test update() with zero_duration_fallback=True.
+
+    New shots without explicit ranges get zero duration (start == end)
+    instead of using compute_duration.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.store = _fresh_store()
+        self.store.gap = 5.0
+        self.assembler = ShotManifest(self.store)
+        # Pre-build two shots
+        self.store.define_shot("A01", 1, 31, ["obj_A01"])
+        self.store.define_shot("A02", 31, 61, ["obj_A02"])
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_new_shot_gets_zero_duration(self, mock_dur):
+        mock_dur.return_value = 30.0
+        steps = _make_steps("A01", "A02", "A03")
+        # Provide ranges for existing shots, omit A03
+        ranges = {"A01": (1.0, 31.0), "A02": (31.0, 61.0)}
+        actions = self.assembler.update(
+            steps, ranges=ranges, zero_duration_fallback=True
+        )
+        self.assertEqual(actions["A03"], "created")
+        shot = next(s for s in self.store.shots if s.name == "A03")
+        self.assertEqual(shot.start, shot.end, "New shot should have zero duration")
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_zero_duration_false_uses_compute_duration(self, mock_dur):
+        mock_dur.return_value = 30.0
+        steps = _make_steps("A01", "A02", "A03")
+        ranges = {"A01": (1.0, 31.0), "A02": (31.0, 61.0)}
+        actions = self.assembler.update(
+            steps, ranges=ranges, zero_duration_fallback=False
+        )
+        self.assertEqual(actions["A03"], "created")
+        shot = next(s for s in self.store.shots if s.name == "A03")
+        self.assertGreater(shot.end, shot.start, "Should use compute_duration")
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_consecutive_zero_duration_shots_dont_stack(self, mock_dur):
+        """Multiple new zero-duration shots should each get a unique position.
+
+        Cursor must advance by store.gap between zero-duration shots to
+        prevent them from stacking at the same frame.
+        """
+        mock_dur.return_value = 30.0
+        steps = _make_steps("A01", "A02", "A03", "A04", "A05")
+        # Only A01 and A02 have ranges; A03, A04, A05 are new
+        ranges = {"A01": (1.0, 31.0), "A02": (31.0, 61.0)}
+        self.assembler.update(steps, ranges=ranges, zero_duration_fallback=True)
+        new_shots = sorted(
+            [s for s in self.store.shots if s.name in ("A03", "A04", "A05")],
+            key=lambda s: s.start,
+        )
+        self.assertEqual(len(new_shots), 3)
+        # Each should be at a distinct position
+        starts = [s.start for s in new_shots]
+        self.assertEqual(len(set(starts)), 3, f"Starts should be unique: {starts}")
+        # Gap between consecutive zero-duration shots should be store.gap (5.0)
+        self.assertAlmostEqual(starts[1] - starts[0], 5.0)
+        self.assertAlmostEqual(starts[2] - starts[1], 5.0)
+
+
+class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
+    """Test the incremental build branch in build().
+
+    When _is_built is True and not in selected-keys mode, build() should
+    import store positions for existing shots and pass
+    zero_duration_fallback=True to sync().
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.define_shot("A01", 10, 40, ["obj_A01"])
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_incremental_passes_zero_duration_flag(self, mock_cls):
+        """sync() should receive zero_duration_fallback=True in incremental mode."""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+
+        import pymel.core as pm
+
+        pm.undoInfo = MagicMock()
+
+        self.ctrl.build()
+
+        mock_builder.sync.assert_called_once()
+        call_kwargs = mock_builder.sync.call_args
+        self.assertTrue(
+            call_kwargs.kwargs.get("zero_duration_fallback")
+            or (len(call_kwargs.args) > 4 and call_kwargs.args[4]),
+            "sync should be called with zero_duration_fallback=True",
+        )
+
+
+class TestCsvModeIgnoresDetectionMode(unittest.TestCase, _ControllerHarness):
+    """CSV mode must ignore store.detection_mode for use_sel gating.
+
+    Bug: When detection_mode was set to "all" (or any non-auto value) and
+    the controller was in CSV mode, build() and _resolve_ranges() treated
+    use_sel as True — forcing selected-keys detection that showed a "No
+    keys selected" error even though CSV steps define the shot list.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        store = _fresh_store()
+        store.detection_mode = "all"
+        store.detection_threshold = 5.0
+        store.gap = 0.0
+        # Simulate CSV mode — _csv_path is set, so _is_detection_mode is False
+        self.ctrl._csv_path = "/fake/shots.csv"
+
+    def test_resolve_ranges_ignores_detection_mode_in_csv_mode(self):
+        """_resolve_ranges should use auto-detect, not selected-keys, in CSV mode."""
+        with (
+            patch(
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions",
+                return_value=[],
+            ) as mock_auto,
+            patch(
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+            ) as mock_sel,
+        ):
+            self.ctrl._cached_gaps = None
+            self.ctrl._resolve_ranges()
+            mock_auto.assert_called_once()
+            mock_sel.assert_not_called()
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_build_skips_selected_keys_in_csv_mode(self, mock_cls):
+        """build() should not abort with 'no keys selected' in CSV mode."""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+
+        import pymel.core as pm
+
+        pm.undoInfo = MagicMock()
+
+        with patch(
+            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        ) as mock_sel:
+            self.ctrl.build()
+            mock_sel.assert_not_called()
+
+        mock_builder.sync.assert_called_once()
+
+
+class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
+    """_sync_detection_widgets disables detection controls after build.
+
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        # Create mock detection widgets on a fake parent shots UI
+        self.mock_shots_ui = MagicMock()
+        self.mock_shots_ui.cmb_detection_mode = MagicMock()
+        self.mock_shots_ui.spn_detection = MagicMock()
+        self.sb.loaded_ui.shots = self.mock_shots_ui
+
+    def test_widgets_disabled_when_built(self):
+        store = _fresh_store()
+        store.define_shot("A01", 1, 31, ["obj_A01"])
+        self.assertTrue(self.ctrl._is_built)
+
+        self.ctrl._sync_detection_widgets()
+
+        self.mock_shots_ui.cmb_detection_mode.setEnabled.assert_called_with(False)
+        self.mock_shots_ui.spn_detection.setEnabled.assert_called_with(False)
+
+    def test_widgets_enabled_when_not_built(self):
+        _fresh_store()
+        self.assertFalse(self.ctrl._is_built)
+
+        self.ctrl._sync_detection_widgets()
+
+        self.mock_shots_ui.cmb_detection_mode.setEnabled.assert_called_with(True)
+        self.mock_shots_ui.spn_detection.setEnabled.assert_called_with(True)
+
+    def test_tolerates_missing_shots_ui(self):
+        """Should not raise if shots UI is not loaded."""
+        del self.sb.loaded_ui.shots
+        _fresh_store()
+        # Should not raise
+        self.ctrl._sync_detection_widgets()
+
+
+class TestRangeEditValidation(unittest.TestCase, _ControllerHarness):
+    """Validate _on_item_changed() rejects invalid range edits and accepts valid ones.
+
+    These cover the validation rules in the range column edit handler:
+    non-numeric text, negative start, end <= start, overlap with previous
+    step's resolved end, and the happy path of a valid range flowing into
+    _user_ranges.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        _fresh_store()
+        self.ctrl._populate_table()
+        # Seed resolved ranges so _revert_range_cell and overlap checks work.
+        self.ctrl._last_resolved = [
+            ("A01", 1.0, 31.0, False),
+            ("A02", 31.0, 61.0, False),
+            ("A03", 61.0, 91.0, False),
+        ]
+
+    def _find_item(self, step_id):
+        from qtpy.QtCore import Qt
+
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            data = item.data(0, Qt.UserRole)
+            if isinstance(data, BuilderStep) and data.step_id == step_id:
+                return item
+        self.fail(f"Step {step_id} not found in tree")
+
+    def test_valid_range_stored(self):
+        """A valid start/end pair should be accepted into _user_ranges."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "40")
+        item.setText(COL_END, "70")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertEqual(self.ctrl._user_ranges["A02"], (40.0, 70.0))
+
+    def test_non_numeric_start_rejected(self):
+        """Non-numeric start value should revert the cell."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "abc")
+        item.setText(COL_END, "70")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_non_numeric_end_rejected(self):
+        """Non-numeric end value should revert the cell."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "40")
+        item.setText(COL_END, "xyz")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_negative_start_rejected(self):
+        """Negative start frame should be rejected."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "-10")
+        item.setText(COL_END, "70")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_end_less_than_start_rejected(self):
+        """End <= start should be rejected."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "50")
+        item.setText(COL_END, "30")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_end_equal_start_rejected(self):
+        """End == start should be rejected (zero-duration via manual edit)."""
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "50")
+        item.setText(COL_END, "50")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_start_before_previous_end_rejected(self):
+        """Start that precedes the previous step's resolved end is rejected."""
+        item = self._find_item("A02")
+        # A01 resolved end is 31.0, so start=25 overlaps
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "25")
+        item.setText(COL_END, "70")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+    def test_clear_both_removes_user_range(self):
+        """Clearing both start and end should remove the user range."""
+        self.ctrl._user_ranges["A02"] = (40.0, 70.0)
+        item = self._find_item("A02")
+        self.tree.blockSignals(True)
+        item.setText(COL_START, "")
+        item.setText(COL_END, "")
+        self.tree.blockSignals(False)
+        self.ctrl._on_item_changed(item, COL_START)
+        self.assertNotIn("A02", self.ctrl._user_ranges)
+
+
+class TestIncrementalBuildWithUserRange(unittest.TestCase):
+    """Verify that a user-entered range on a new shot overrides zero-duration
+    in incremental build mode.
+
+    Flow: CSV has new step A03, user enters range (100, 150) in table,
+    build runs incremental — A03 should get (100, 150), not zero-duration.
+    Fixed: 2026-04-03
+    """
+
+    def setUp(self):
+        self.store = _fresh_store()
+        self.store.gap = 5.0
+        self.assembler = ShotManifest(self.store)
+        self.store.define_shot("A01", 1, 31, ["obj_A01"])
+        self.store.define_shot("A02", 31, 61, ["obj_A02"])
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_explicit_range_overrides_zero_duration(self, mock_dur):
+        """New shot with explicit range should use that range, not zero-duration."""
+        mock_dur.return_value = 30.0
+        steps = _make_steps("A01", "A02", "A03")
+        # Existing shots keep positions, A03 gets user-entered range
+        ranges = {
+            "A01": (1.0, 31.0),
+            "A02": (31.0, 61.0),
+            "A03": (100.0, 150.0),
+        }
+        actions = self.assembler.update(
+            steps, ranges=ranges, zero_duration_fallback=True
+        )
+        self.assertEqual(actions["A03"], "created")
+        shot = next(s for s in self.store.shots if s.name == "A03")
+        self.assertEqual(shot.start, 100.0)
+        self.assertEqual(shot.end, 150.0)
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_mixed_explicit_and_zero_duration(self, mock_dur):
+        """Steps with ranges get those ranges; steps without get zero-duration."""
+        mock_dur.return_value = 30.0
+        steps = _make_steps("A01", "A02", "A03", "A04")
+        # A03 has a user range, A04 does not
+        ranges = {
+            "A01": (1.0, 31.0),
+            "A02": (31.0, 61.0),
+            "A03": (100.0, 150.0),
+        }
+        actions = self.assembler.update(
+            steps, ranges=ranges, zero_duration_fallback=True
+        )
+        a03 = next(s for s in self.store.shots if s.name == "A03")
+        a04 = next(s for s in self.store.shots if s.name == "A04")
+        self.assertEqual(a03.start, 100.0)
+        self.assertEqual(a03.end, 150.0)
+        self.assertEqual(a04.start, a04.end, "A04 should have zero duration")
+
+
+class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
+    """New steps in incremental build should be placed between their
+    CSV-order neighbors instead of at the end of the timeline.
+
+    Bug: New CSV step A09 (between A08 and A10) was placed at frame
+    21041 (end of timeline) instead of at A08's end (2520).
+    Fixed: 2026-04-04
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        # Three existing shots in the store
+        self.store.define_shot("A01", 1, 100, ["obj_A01"])
+        self.store.define_shot("A02", 100, 200, ["obj_A02"])
+        self.store.define_shot("A03", 200, 300, ["obj_A03"])
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_new_shot_placed_between_neighbors(self, mock_cls):
+        """A new step B01 inserted between A02 and A03 should get
+        (200, 200) — A02's end — not (300+, 300+)."""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+
+        import pymel.core as pm
+        pm.undoInfo = MagicMock()
+
+        # CSV order: A01, A02, B01(new), A03
+        self.ctrl._steps = _make_steps("A01", "A02", "B01", "A03")
+        self.ctrl._csv_path = "/fake.csv"
+        self.ctrl.build()
+
+        call_kwargs = mock_builder.sync.call_args
+        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
+        self.assertIn("B01", ranges)
+        self.assertEqual(ranges["B01"], (200, 200),
+                         "New step should be at predecessor A02's end")
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_consecutive_new_shots_stack(self, mock_cls):
+        """Two adjacent new steps should both stack at the same position."""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+
+        import pymel.core as pm
+        pm.undoInfo = MagicMock()
+
+        # CSV order: A01, B01(new), B02(new), A02, A03
+        self.ctrl._steps = _make_steps("A01", "B01", "B02", "A02", "A03")
+        self.ctrl._csv_path = "/fake.csv"
+        self.ctrl.build()
+
+        call_kwargs = mock_builder.sync.call_args
+        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
+        # Both should be at A01's end (100)
+        self.assertEqual(ranges["B01"], (100, 100))
+        self.assertEqual(ranges["B02"], (100, 100))
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_new_shot_at_start_of_csv(self, mock_cls):
+        """A new step at the very start of the CSV should use the
+        first existing neighbor's start position."""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+
+        import pymel.core as pm
+        pm.undoInfo = MagicMock()
+
+        # CSV order: B01(new), A01, A02, A03
+        self.ctrl._steps = _make_steps("B01", "A01", "A02", "A03")
+        self.ctrl._csv_path = "/fake.csv"
+        self.ctrl.build()
+
+        call_kwargs = mock_builder.sync.call_args
+        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
+        # B01 should be at A01's start (1)
+        self.assertEqual(ranges["B01"], (1, 1))
+
+
+# ---------------------------------------------------------------------------
+# Tests: short_name helper
+# ---------------------------------------------------------------------------
+
+
+class TestShortName(unittest.TestCase):
+    """Verify the short_name() DAG-path leaf extractor."""
+
+    def test_full_dag_path(self):
+        self.assertEqual(short_name("|group1|subgrp|mesh"), "mesh")
+
+    def test_already_short(self):
+        self.assertEqual(short_name("mesh"), "mesh")
+
+    def test_single_pipe(self):
+        self.assertEqual(short_name("|root"), "root")
+
+    def test_empty_string(self):
+        self.assertEqual(short_name(""), "")
+
+    def test_none_safe(self):
+        """short_name('') returns '' — callers should guard against None."""
+        self.assertEqual(short_name(""), "")
+
+
+# ---------------------------------------------------------------------------
+# Tests: tree state save/restore
+# ---------------------------------------------------------------------------
+
+
+class TestTreeStateSaveRestore(unittest.TestCase, _ControllerHarness):
+    """Verify expand/scroll state survives table rebuilds."""
+
+    def setUp(self):
+        self.setup_controller()
+
+    def test_expansion_preserved_across_populate(self):
+        """Expanded rows stay expanded after _populate_table."""
+        self.ctrl._populate_table()
+        tree = self.tree
+        # Expand first step, leave others collapsed
+        tree.topLevelItem(0).setExpanded(True)
+        self.assertTrue(tree.topLevelItem(0).isExpanded())
+        self.assertFalse(tree.topLevelItem(1).isExpanded())
+
+        state = self.ctrl._save_tree_state()
+        self.ctrl._populate_table()
+        self.ctrl._restore_tree_state(state)
+
+        self.assertTrue(tree.topLevelItem(0).isExpanded())
+        self.assertFalse(tree.topLevelItem(1).isExpanded())
+
+    def test_save_returns_step_ids(self):
+        """Saved state uses step-ID strings, not indices."""
+        self.ctrl._populate_table()
+        self.tree.topLevelItem(1).setExpanded(True)
+        expanded, _ = self.ctrl._save_tree_state()
+        self.assertIn("A02", expanded)
+        self.assertNotIn("A01", expanded)
+
+
+# ---------------------------------------------------------------------------
+# Tests: long names toggle
+# ---------------------------------------------------------------------------
+
+
+class TestLongNamesToggle(unittest.TestCase, _ControllerHarness):
+    """Verify the _use_short_names property and long-names setting."""
+
+    def setUp(self):
+        self.setup_controller()
+        # Clear any persisted value so tests start from a known state
+        self.ctrl._settings.clear("long_names")
+
+    def tearDown(self):
+        self.ctrl._settings.clear("long_names")
+
+    def test_default_uses_short_names(self):
+        """Short names enabled by default (long_names setting absent)."""
+        self.assertTrue(self.ctrl._use_short_names)
+
+    def test_long_names_setting_disables_short(self):
+        """Setting long_names=True disables short name display."""
+        self.ctrl._settings.setValue("long_names", True)
+        self.assertFalse(self.ctrl._use_short_names)
+
+    def test_long_names_false_keeps_short(self):
+        """Explicitly setting long_names=False keeps short names on."""
+        self.ctrl._settings.setValue("long_names", False)
+        self.assertTrue(self.ctrl._use_short_names)
+
+    def test_child_rows_show_short_names_by_default(self):
+        """Child row text uses leaf name when short names is on."""
+        # Add an object with a long DAG path
+        self.ctrl._steps[0].objects[0].name = "|group1|subgrp|obj_A01"
+        self.ctrl._populate_table()
+        parent = self.tree.topLevelItem(0)
+        child = parent.child(0)
+        self.assertEqual(child.text(COL_DESC), "obj_A01")
+        # Tooltip has full path
+        self.assertEqual(child.toolTip(COL_DESC), "|group1|subgrp|obj_A01")
+
+    def test_child_rows_show_long_names_when_toggled(self):
+        """Child row text uses full path when long names enabled."""
+        self.ctrl._settings.setValue("long_names", True)
+        self.ctrl._steps[0].objects[0].name = "|group1|subgrp|obj_A01"
+        self.ctrl._populate_table()
+        parent = self.tree.topLevelItem(0)
+        child = parent.child(0)
+        self.assertEqual(child.text(COL_DESC), "|group1|subgrp|obj_A01")
+
+
+# ---------------------------------------------------------------------------
+# Tests: color override restore
+# ---------------------------------------------------------------------------
+
+
+class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
+    """Verify _restore_color_overrides applies persisted colours."""
+
+    def setUp(self):
+        self.setup_controller()
+
+    def test_restore_mutates_palette(self):
+        """Persisted fg override is applied to PASTEL_STATUS."""
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import PASTEL_STATUS
+
+        settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
+        orig_fg = str(PASTEL_STATUS["missing_object"][0])
+        try:
+            settings.setValue("missing_object/fg", "#FF0000")
+            self.ctrl._restore_color_overrides()
+            self.assertEqual(str(PASTEL_STATUS["missing_object"][0]), "#FF0000")
+        finally:
+            # Restore original to avoid polluting other tests
+            settings.clear("missing_object/fg")
+            PASTEL_STATUS["missing_object"] = (
+                orig_fg,
+                str(PASTEL_STATUS["missing_object"][1]),
+            )
+
+    def test_restore_updates_behavior_status_colors(self):
+        """Persisted missing_behavior override propagates to BEHAVIOR_STATUS_COLORS."""
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            PASTEL_STATUS,
+            BEHAVIOR_STATUS_COLORS,
+        )
+
+        settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
+        orig_fg = str(PASTEL_STATUS["missing_behavior"][0])
+        try:
+            settings.setValue("missing_behavior/fg", "#AABBCC")
+            self.ctrl._restore_color_overrides()
+            self.assertEqual(str(BEHAVIOR_STATUS_COLORS["missing"]), "#AABBCC")
+        finally:
+            settings.clear("missing_behavior/fg")
+            PASTEL_STATUS["missing_behavior"] = (
+                orig_fg,
+                str(PASTEL_STATUS["missing_behavior"][1]),
+            )
+            BEHAVIOR_STATUS_COLORS["missing"] = orig_fg
+
+    def test_restore_updates_error_color(self):
+        """Persisted missing_object override propagates to BEHAVIOR_STATUS_COLORS['error']."""
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            PASTEL_STATUS,
+            BEHAVIOR_STATUS_COLORS,
+        )
+
+        settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
+        orig_fg = str(PASTEL_STATUS["missing_object"][0])
+        try:
+            settings.setValue("missing_object/fg", "#DD0011")
+            self.ctrl._restore_color_overrides()
+            self.assertEqual(str(BEHAVIOR_STATUS_COLORS["error"]), "#DD0011")
+        finally:
+            settings.clear("missing_object/fg")
+            PASTEL_STATUS["missing_object"] = (
+                orig_fg,
+                str(PASTEL_STATUS["missing_object"][1]),
+            )
+            BEHAVIOR_STATUS_COLORS["error"] = orig_fg
+
+
+class TestLastResultsPreservation(unittest.TestCase, _ControllerHarness):
+    """Verify _last_results isn't wiped by non-structural store events."""
+
+    def setUp(self):
+        self.setup_controller()
+
+    def test_shot_updated_preserves_results(self):
+        """ShotUpdated should not clear _last_results."""
+        from types import SimpleNamespace
+        from mayatk.anim_utils.shots._shots import ShotUpdated, ShotBlock
+
+        sentinel = [SimpleNamespace(built=True)]
+        self.ctrl._last_results = sentinel
+        self.ctrl._steps = [object()]  # non-empty to pass guard
+        self.ctrl._on_store_event(ShotUpdated(shot=ShotBlock(0, "A", 0, 10)))
+        self.assertIs(self.ctrl._last_results, sentinel)
+
+    def test_active_shot_changed_preserves_results(self):
+        """ActiveShotChanged should not clear _last_results."""
+        from types import SimpleNamespace
+        from mayatk.anim_utils.shots._shots import ActiveShotChanged
+
+        sentinel = [SimpleNamespace(built=True)]
+        self.ctrl._last_results = sentinel
+        self.ctrl._steps = [object()]
+        self.ctrl._on_store_event(ActiveShotChanged(shot_id=0))
+        self.assertIs(self.ctrl._last_results, sentinel)
+
+    def test_shot_removed_clears_results(self):
+        """ShotRemoved SHOULD clear _last_results."""
+        from mayatk.anim_utils.shots._shots import ShotRemoved
+
+        self.ctrl._last_results = [object()]
+        self.ctrl._steps = [object()]
+        self.ctrl._on_store_event(ShotRemoved(shot_id=0))
+        self.assertEqual(self.ctrl._last_results, [])
+
+    def test_batch_complete_clears_results(self):
+        """BatchComplete SHOULD clear _last_results."""
+        from mayatk.anim_utils.shots._shots import BatchComplete
+
+        self.ctrl._last_results = [object()]
+        self.ctrl._steps = [object()]
+        self.ctrl._on_store_event(BatchComplete())
+        self.assertEqual(self.ctrl._last_results, [])
+
+
+# ---------------------------------------------------------------------------
+# Tests: format_behavior_html
+# ---------------------------------------------------------------------------
+
+
+class TestFormatBehaviorHtml(unittest.TestCase):
+    """Verify behaviour label HTML respects broken / status_color flags."""
+
+    def setUp(self):
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            format_behavior_html,
+            BEHAVIOR_STATUS_COLORS,
+        )
+
+        self.format = format_behavior_html
+        self.colors = BEHAVIOR_STATUS_COLORS
+
+    def test_plain_when_no_broken(self):
+        """Behaviours with no issues produce plain text (no span tags)."""
+        html = self.format(["fade_in", "fade_out"])
+        self.assertNotIn("<span", html)
+        self.assertIn("Fade In", html)
+        self.assertIn("Fade Out", html)
+
+    def test_broken_gets_missing_color(self):
+        """Only the broken behaviour gets a colour span."""
+        html = self.format(["fade_in", "fade_out"], broken=["fade_out"])
+        self.assertNotIn("Fade In</span>", html)  # fade_in is plain
+        self.assertIn(self.colors["missing"], html)  # fade_out is coloured
+        self.assertIn("Fade Out</span>", html)
+
+    def test_status_color_overrides_all(self):
+        """status_color colours every behaviour, ignoring broken."""
+        html = self.format(
+            ["fade_in", "fade_out"],
+            broken=["fade_out"],
+            status_color="#FF0000",
+        )
+        self.assertEqual(html.count('color:#FF0000'), 2)
+        self.assertIn("Fade In</span>", html)
+        self.assertIn("Fade Out</span>", html)
+
+    def test_missing_object_error_color(self):
+        """error colour (from BEHAVIOR_STATUS_COLORS) renders all red."""
+        error_color = self.colors["error"]
+        html = self.format(["fade_in"], status_color=error_color)
+        self.assertIn(f"color:{error_color}", html)
+        self.assertIn("Fade In</span>", html)
+
+    def test_empty_behaviors(self):
+        """Empty list returns empty string."""
+        self.assertEqual(self.format([]), "")
+        self.assertEqual(self.format([], status_color="#FF0000"), "")
 
 
 # ---------------------------------------------------------------------------

@@ -19,16 +19,17 @@ COL_BEHAVIORS = 3
 COL_START = 4
 COL_END = 5
 
-# Foreground colors for behavior names on child rows (pastel)
-BEHAVIOR_COLORS = {
-    "fade_in": ("#8ECFBF", None),  # soft teal
-    "fade_out": ("#E0B880", None),  # soft amber
-}
-
 STEP_ICON_COLOR = "#8E8E8E"  # neutral dark grey for parent step rows
 
 # Assessment status colours — shared palette from _shots (single source of truth).
 PASTEL_STATUS = SHOT_PALETTE
+
+# Foreground colors for behavior issue states on child rows.
+# Valid behaviors are rendered without color.
+BEHAVIOR_STATUS_COLORS = {
+    "missing": PASTEL_STATUS["missing_behavior"][0],  # warn gold
+    "error": PASTEL_STATUS["missing_object"][0],  # error red
+}
 
 # Derived from the palette — used for footer error labels
 ERROR_COLOR = PASTEL_STATUS["error"][0]
@@ -44,18 +45,43 @@ def unfmt_behavior(display: str) -> str:
     return display.strip().lower().replace(" ", "_") if display else ""
 
 
-def format_behavior_html(behaviors) -> str:
-    """Return rich-text HTML for a list of behavior names."""
+def short_name(dag_path: str) -> str:
+    """Return the leaf node name from a Maya DAG path.
+
+    ``"|group1|subgrp|mesh"`` → ``"mesh"``.
+    Already-short names pass through unchanged.
+    """
+    return dag_path.rsplit("|", 1)[-1] if dag_path else ""
+
+
+def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
+    """Return rich-text HTML for a list of behavior names.
+
+    Parameters:
+        behaviors: Sequence of raw behavior names to display.
+        broken: Subset of *behaviors* that failed verification.
+            These are rendered with the ``missing_behavior`` palette
+            colour; the rest are left uncoloured.
+        status_color: Optional override colour applied to *all* behaviours.
+            When set, *broken* is ignored and every behaviour is rendered
+            in this colour (e.g. the error colour for missing objects).
+    """
     if not behaviors:
         return ""
     spans = []
-    for b in behaviors:
-        display = fmt_behavior(b)
-        color = BEHAVIOR_COLORS.get(b, (None, None))[0]
-        if color:
-            spans.append(f'<span style="color:{color}">{display}</span>')
-        else:
-            spans.append(display)
+    if status_color:
+        for b in behaviors:
+            display = fmt_behavior(b)
+            spans.append(f'<span style="color:{status_color}">{display}</span>')
+    else:
+        broken_set = set(broken)
+        for b in behaviors:
+            display = fmt_behavior(b)
+            if b in broken_set:
+                color = BEHAVIOR_STATUS_COLORS.get("missing")
+                spans.append(f'<span style="color:{color}">{display}</span>')
+            else:
+                spans.append(display)
     return "  ".join(spans)
 
 
@@ -90,9 +116,7 @@ def try_load_maya_icons():
     return NodeIcons
 
 
-def prune_to_top_boundaries(
-    region_starts: List[float], n_steps: int
-) -> List[float]:
+def prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]:
     """Keep only *n_steps* region starts by selecting the largest gaps.
 
     Picks the *n_steps - 1* largest consecutive differences in

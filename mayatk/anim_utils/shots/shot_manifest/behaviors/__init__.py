@@ -373,6 +373,8 @@ def apply_to_shots(
     for shot in shots:
         if shot.locked:
             continue
+        if abs(shot.end - shot.start) < 1e-6:
+            continue
         for entry in shot.metadata.get("behaviors", []):
             obj_name = entry.get("name", "")
             behavior = entry.get("behavior", "")

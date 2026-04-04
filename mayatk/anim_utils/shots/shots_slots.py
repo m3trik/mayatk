@@ -42,6 +42,23 @@ class ShotsController(ptk.LoggingMixin):
             if w is not None:
                 w.restore_state = False
 
+        # Debounce value-change signals so rapid spinner clicks / text
+        # edits coalesce into a single store update.
+        for name in ("spn_shot_start", "spn_shot_end", "txt_shot_name", "txt_shot_desc"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                w.debounce = 400
+
+        # Disable keyboard tracking on frame spinners so valueChanged only
+        # fires on commit (Enter / focus-loss / arrow-click), not on every
+        # keystroke.  Without this, clearing the text to retype a value
+        # emits valueChanged(0) mid-edit, which triggers ripple_shift with
+        # a bogus delta and corrupts all downstream shot ranges.
+        for name in ("spn_shot_start", "spn_shot_end"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                w.setKeyboardTracking(False)
+
         self._sync_from_store()
         self._bind_store_listener()
         self._setup_delete_menu()
@@ -291,12 +308,6 @@ class ShotsController(ptk.LoggingMixin):
             spn_gap.blockSignals(False)
             spn_gap.setEnabled(has_shots)
 
-        chk_sol = getattr(self.ui, "chk_select_on_load", None)
-        if chk_sol is not None:
-            chk_sol.blockSignals(True)
-            chk_sol.setChecked(store.select_on_load)
-            chk_sol.blockSignals(False)
-
         self._populate_shot_combobox(store)
         self._sync_footer(store)
 
@@ -314,7 +325,7 @@ class ShotsController(ptk.LoggingMixin):
         cmb.blockSignals(True)
         cmb.clear()
         if store is not None:
-            for shot in store.shots:
+            for shot in store.sorted_shots():
                 cmb.addItem(
                     f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]",
                     shot.shot_id,
@@ -369,13 +380,21 @@ class ShotsController(ptk.LoggingMixin):
 
             if shot is None:
                 if txt_name is not None:
+                    txt_name.blockSignals(True)
                     txt_name.setText("")
+                    txt_name.blockSignals(False)
                 if spn_start is not None:
+                    spn_start.blockSignals(True)
                     spn_start.setValue(0)
+                    spn_start.blockSignals(False)
                 if spn_end is not None:
+                    spn_end.blockSignals(True)
                     spn_end.setValue(0)
+                    spn_end.blockSignals(False)
                 if txt_desc is not None:
+                    txt_desc.blockSignals(True)
                     txt_desc.setText("")
+                    txt_desc.blockSignals(False)
                 return
 
             if txt_name is not None and txt_name.text() != shot.name:
@@ -479,12 +498,6 @@ class ShotsController(ptk.LoggingMixin):
                 seq.respace(gap=float(value))
             store.notify_settings_changed()
 
-    def on_select_on_load_changed(self, state: int) -> None:
-        store = self._active_store()
-        if store is not None:
-            store.select_on_load = bool(state)
-            store.mark_dirty()
-
     # ---- shot editor actions ---------------------------------------------
 
     def on_shot_selected(self, index: int) -> None:
@@ -513,7 +526,19 @@ class ShotsController(ptk.LoggingMixin):
         self._push_shot_field(start=value)
 
     def on_shot_end_changed(self, value: float) -> None:
-        self._push_shot_field(end=value)
+        if self._refreshing_editor:
+            return
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+        shot = store.shot_by_id(store.active_shot_id)
+        if shot is None:
+            return
+        old_end = shot.end
+        delta = value - old_end
+        with store.batch_update():
+            store.update_shot(store.active_shot_id, end=value)
+            store.ripple_shift(old_end, delta, exclude_id=shot.shot_id)
 
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)

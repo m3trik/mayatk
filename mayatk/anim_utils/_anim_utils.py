@@ -871,7 +871,9 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # Use cmds.ls to handle various forms of input (single object, string, list)
         # Ensure input is a list of strings for cmds
-        if isinstance(objects, (str, pm.PyNode)):
+        _pynode = getattr(pm, "PyNode", None)
+        _check_types = (str, _pynode) if isinstance(_pynode, type) else (str,)
+        if isinstance(objects, _check_types):
             objects = [str(objects)]
         elif isinstance(objects, list):
             objects = [str(o) for o in objects]

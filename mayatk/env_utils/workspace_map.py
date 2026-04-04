@@ -400,12 +400,16 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
 
         if not widget.is_initialized:
-            widget.menu.add(
-                "QPushButton",
-                setText="Browse",
-                setObjectName="b000",
-                setToolTip="Open a file browser to select a root directory.",
+            from uitk.widgets.optionBox.options.browse import BrowseOption
+
+            self._browse_option = BrowseOption(
+                wrapped_widget=widget,
+                mode="directory",
+                title="Select a root directory",
+                start_dir=lambda: self.controller.current_workspace,
             )
+            widget.option_box.add_option(self._browse_option)
+
             widget.menu.add(
                 "QPushButton",
                 setText="Set To Workspace",
@@ -501,6 +505,10 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def browse_directory(self):
         """Browse for a root directory."""
+        if hasattr(self, "_browse_option"):
+            self._browse_option.browse()
+            return
+
         start_dir = self.ui.txt000.text()
         if not os.path.isdir(start_dir):
             start_dir = self.controller.current_workspace
