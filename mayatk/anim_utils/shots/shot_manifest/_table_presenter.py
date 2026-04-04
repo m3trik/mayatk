@@ -14,9 +14,9 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
 from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+    BEHAVIOR_STATUS_COLORS,
     ERROR_COLOR,
     HEADERS,
-    BEHAVIOR_COLORS,
     STEP_ICON_COLOR,
     PASTEL_STATUS,
     COL_STEP,
@@ -27,6 +27,7 @@ from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
     COL_END,
     fmt_behavior,
     format_behavior_html,
+    short_name,
     try_load_maya_icons,
 )
 
@@ -45,7 +46,41 @@ class ManifestTableMixin:
     - ``self._resolve_ranges()``  – range resolution entry point.
     - ``self._update_build_button()``  – button-state refresh.
     - ``self._set_footer(text, *, color)``  – footer label helper.
+    - ``self._settings``  – :class:`SettingsManager` instance.
     """
+
+    # -- display settings --------------------------------------------------
+
+    @property
+    def _use_short_names(self) -> bool:
+        """Whether to display leaf-only names instead of full DAG paths."""
+        settings = getattr(self, "_settings", None)
+        if settings is None:
+            return True
+        return not settings.value("long_names", False)
+
+    # -- tree state save / restore -----------------------------------------
+
+    def _save_tree_state(self):
+        """Return expansion state and scroll position for later restore."""
+        tree = self.ui.tbl_steps
+        expanded = set()
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.isExpanded():
+                expanded.add(item.text(0))  # step_id column
+        scroll_val = tree.verticalScrollBar().value()
+        return expanded, scroll_val
+
+    def _restore_tree_state(self, state):
+        """Re-expand items and restore scroll position from *state*."""
+        expanded, scroll_val = state
+        tree = self.ui.tbl_steps
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.text(0) in expanded:
+                item.setExpanded(True)
+        tree.verticalScrollBar().setValue(scroll_val)
 
     # -- behavior label widgets --------------------------------------------
 
@@ -63,14 +98,11 @@ class ManifestTableMixin:
             if not raw_name:
                 continue
             display = fmt_behavior(raw_name)
-            color = BEHAVIOR_COLORS.get(raw_name, (None, None))[0]
             chk = label.menu.add(
                 "QCheckBox",
                 setText=display,
                 setChecked=(raw_name in obj.behaviors),
             )
-            if color:
-                chk.setStyleSheet(f"QCheckBox {{ color: {color}; }}")
             chk.toggled.connect(
                 lambda checked, o=obj, lbl=label, cbs=checkboxes: (
                     self._on_behaviors_changed(o, lbl, cbs)
@@ -107,13 +139,12 @@ class ManifestTableMixin:
 
             for b in obj.behaviors:
                 apply_behavior(obj.name, b, shot.start, shot.end)
-            names = ", ".join(fmt_behavior(b) for b in obj.behaviors)
-            self._set_footer(
-                f"Applied [{names}] to {obj.name} "
-                f"({shot.start:.0f}\u2013{shot.end:.0f})."
-            )
+
+            # Re-assess so the UI reflects the fixed state.
+            # assess() sets its own footer summary.
+            self.assess()
         except Exception as exc:
-            self.logger.error("Re-apply behavior failed: %s", exc)
+            self.logger.error("Apply behavior failed: %s", exc)
             self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
 
     # -- table population --------------------------------------------------
@@ -140,11 +171,14 @@ class ManifestTableMixin:
             )
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
+                display = short_name(obj.name) if self._use_short_names else obj.name
                 child = tree.create_item(
-                    ["", "", obj.name, "", "", ""],
+                    ["", "", display, "", "", ""],
                     data=obj,
                     parent=parent,
                 )
+                if display != obj.name:
+                    child.setToolTip(COL_DESC, obj.name)
                 self._make_behavior_label(obj, tree, child, behavior_choices)
 
         # Restrict editability: only Range column on parent rows, pre-build
@@ -460,7 +494,7 @@ class ManifestTableMixin:
                     f"{len(beh_issues)} missing",
                 )
                 lines = [
-                    f"{o.name}  \u2192  {', '.join(fmt_behavior(b) for b in o.behaviors)}"
+                    f"{o.name}  \u2192  {', '.join(fmt_behavior(b) for b in (o.broken_behaviors or o.behaviors))}"
                     for o in beh_issues
                 ]
                 parent.setToolTip(beh_col, "\n".join(lines))
@@ -473,7 +507,29 @@ class ManifestTableMixin:
                 if not isinstance(child_data, BuilderObject):
                     continue
                 obj_st = obj_status_map.get(child_data.name)
-                if obj_st is None or obj_st.status == "valid":
+                if obj_st is None:
+                    continue
+
+                # Refresh behavior label to highlight broken behaviors
+                if obj_st.behaviors:
+                    beh_widget = tree.itemWidget(child, beh_col)
+                    if beh_widget is not None:
+                        if obj_st.status == "missing_object":
+                            beh_widget.setText(
+                                format_behavior_html(
+                                    obj_st.behaviors,
+                                    status_color=BEHAVIOR_STATUS_COLORS.get("error"),
+                                )
+                            )
+                        else:
+                            beh_widget.setText(
+                                format_behavior_html(
+                                    obj_st.behaviors,
+                                    broken=obj_st.broken_behaviors,
+                                )
+                            )
+
+                if obj_st.status == "valid":
                     continue
 
                 c_fg, c_bg = PASTEL_STATUS.get(obj_st.status, (None, None))
@@ -489,10 +545,10 @@ class ManifestTableMixin:
                 if obj_st.status == "missing_object":
                     child.setToolTip(content_col, "Object not found in Maya")
                 elif obj_st.status == "missing_behavior":
-                    expected = ", ".join(fmt_behavior(b) for b in obj_st.behaviors)
-                    child.setToolTip(
-                        content_col, f"Expected [{expected}] keys not found"
-                    )
+                    broken = ", ".join(
+                        fmt_behavior(b) for b in obj_st.broken_behaviors
+                    ) or ", ".join(fmt_behavior(b) for b in obj_st.behaviors)
+                    child.setToolTip(content_col, f"Missing keys: [{broken}]")
                 elif obj_st.status == "user_animated" and obj_st.key_range:
                     child.setToolTip(
                         content_col,
@@ -504,14 +560,17 @@ class ManifestTableMixin:
                 a_fg, a_bg = PASTEL_STATUS.get("additional", (None, None))
                 node_icons_cls = try_load_maya_icons()
                 for extra_name in step_status.additional_objects:
+                    display = (
+                        short_name(extra_name) if self._use_short_names else extra_name
+                    )
                     extra_item = tree.create_item(
-                        ["", "", extra_name, "scene", ""],
+                        ["", "", display, "scene", ""],
                         parent=parent,
                     )
-                    extra_item.setToolTip(
-                        content_col,
-                        "Unexpected: object is in the shot but not listed in the manifest CSV.",
-                    )
+                    tip = "Unexpected: object is in the shot but not listed in the manifest CSV."
+                    if display != extra_name:
+                        tip = f"{extra_name}\n{tip}"
+                    extra_item.setToolTip(content_col, tip)
                     # Italic font to visually distinguish from CSV objects
                     font = extra_item.font(content_col)
                     font.setItalic(True)

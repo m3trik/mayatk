@@ -49,6 +49,7 @@ def _get_scene_fps() -> float:
     except Exception:
         return _DEFAULT_FPS
 
+
 __all__ = [
     "SHOT_PALETTE",
     "ShotBlock",
@@ -526,7 +527,10 @@ class ShotStore:
                     # Reconcile FPS: if the scene was saved at a different
                     # framerate, rescale shot timings to match the current one.
                     current_fps = _get_scene_fps()
-                    if cls._active.shots and abs(cls._active.scene_fps - current_fps) > 0.01:
+                    if (
+                        cls._active.shots
+                        and abs(cls._active.scene_fps - current_fps) > 0.01
+                    ):
                         cls._active.rescale_to_fps(current_fps)
                 else:
                     cls._active = cls()
@@ -716,6 +720,29 @@ class ShotStore:
         self._notify(ShotUpdated(shot=shot))
         self.mark_dirty()
         return shot
+
+    def ripple_shift(
+        self,
+        after_frame: float,
+        delta: float,
+        exclude_id: Optional[int] = None,
+    ) -> None:
+        """Shift all shots starting at or after *after_frame* by *delta*.
+
+        Parameters:
+            after_frame: Only shots whose start is >= this value are moved.
+            delta: Frames to add (positive) or subtract (negative).
+            exclude_id: Optional shot id to skip (the shot being resized).
+        """
+        if abs(delta) < 1e-6:
+            return
+        for s in self.sorted_shots():
+            if s.shot_id == exclude_id:
+                continue
+            if s.start >= after_frame - 1e-6:
+                s.start += delta
+                s.end += delta
+        self.mark_dirty()
 
     def remove_shot(self, shot_id: int) -> bool:
         """Remove a shot by ID.  Returns ``True`` if found."""

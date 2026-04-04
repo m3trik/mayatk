@@ -104,25 +104,6 @@
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="PushButton" name="b001">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>20</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>70</width>
-          <height>20</height>
-         </size>
-        </property>
-        <property name="text">
-         <string>Browse</string>
-        </property>
-       </widget>
-      </item>
      </layout>
     </item>
     <item>
@@ -240,14 +221,14 @@ automatically. Assesses the scene after completion.</string>
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
-   <class>LineEdit</class>
-   <extends>QLineEdit</extends>
-   <header>uitk.widgets.lineEdit</header>
-  </customwidget>
-  <customwidget>
    <class>PushButton</class>
    <extends>QPushButton</extends>
    <header>uitk.widgets.pushButton</header>
+  </customwidget>
+  <customwidget>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>uitk.widgets.lineEdit</header>
   </customwidget>
   <customwidget>
    <class>TreeWidget</class>

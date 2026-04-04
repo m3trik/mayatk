@@ -109,6 +109,9 @@ class ObjectStatus:
     behaviors: List[str] = field(
         default_factory=list
     )  # expected behaviors (empty = user-animated)
+    broken_behaviors: List[str] = field(
+        default_factory=list
+    )  # subset of *behaviors* that failed verification
     key_range: Optional[Tuple[float, float]] = None  # actual keyframe extent
 
 
@@ -435,6 +438,7 @@ class ShotManifest:
         apply_behaviors: bool = True,
         ranges: Optional[Dict[str, Tuple[float, float]]] = None,
         remove_missing: bool = True,
+        zero_duration_fallback: bool = False,
     ) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]:
         """Full build pipeline: update → apply behaviors → assess.
 
@@ -449,11 +453,20 @@ class ShotManifest:
                 are absent from *steps* are removed.  Set to False for
                 scene-detection mode where existing shots should be
                 preserved.
+            zero_duration_fallback: If True, new shots without an
+                explicit range are created with zero duration instead
+                of using ``compute_duration``.  Used during incremental
+                builds to avoid disrupting existing shot positions.
 
         Returns:
             ``(actions, behavior_result, assessment)`` tuple.
         """
-        actions = self.update(steps, ranges=ranges, remove_missing=remove_missing)
+        actions = self.update(
+            steps,
+            ranges=ranges,
+            remove_missing=remove_missing,
+            zero_duration_fallback=zero_duration_fallback,
+        )
 
         behavior_result: Dict[str, list] = {"applied": [], "skipped": []}
         if apply_behaviors:
@@ -477,6 +490,7 @@ class ShotManifest:
         steps: List[BuilderStep],
         ranges: Optional[Dict[str, Tuple[float, float]]] = None,
         remove_missing: bool = True,
+        zero_duration_fallback: bool = False,
     ) -> Dict[str, str]:
         """Sync parsed steps to the ShotStore (data only, no behaviors).
 
@@ -503,6 +517,9 @@ class ShotManifest:
                 that are absent from *steps* are removed.  Set to
                 False for scene-detection mode where existing shots
                 should be preserved.
+            zero_duration_fallback: If True, new shots without an
+                explicit range are created with zero duration (start
+                == end) instead of using ``compute_duration``.
 
         Returns:
             Dict mapping ``step_id`` → action taken
@@ -534,6 +551,9 @@ class ShotManifest:
                 rng = ranges.get(step.step_id) if ranges else None
                 if rng is not None:
                     start, end = rng
+                elif zero_duration_fallback:
+                    start = cursor
+                    end = start
                 else:
                     dur = compute_duration(step.objects)
                     start = cursor
@@ -550,7 +570,12 @@ class ShotManifest:
                 )
                 for n in obj_names:
                     self.store.set_object_pinned(n)
-                cursor = end
+                # Advance cursor past the new shot; for zero-duration
+                # shots use the store gap to prevent stacking.
+                if end == start:
+                    cursor = end + (self.store.gap if self.store.gap > 0 else 1)
+                else:
+                    cursor = end
                 actions[step.step_id] = "created"
             else:
                 # Locked shots are protected — skip all content changes
@@ -717,15 +742,17 @@ class ShotManifest:
             for obj in step.objects:
                 exists = exists_fn(obj.name)
                 key_range = None
+                broken = []
                 if not exists:
                     status = "missing_object"
                 elif built and obj.behaviors:
-                    # Check all declared behaviors have keys
-                    all_ok = all(
-                        verify_fn(obj.name, b, shot.start, shot.end)
+                    # Check each declared behavior individually
+                    broken = [
+                        b
                         for b in obj.behaviors
-                    )
-                    status = "valid" if all_ok else "missing_behavior"
+                        if not verify_fn(obj.name, b, shot.start, shot.end)
+                    ]
+                    status = "missing_behavior" if broken else "valid"
                 elif built and not obj.behaviors:
                     # User-animated: query actual keyframe extent
                     key_range = keyframe_range_fn(obj.name)
@@ -740,6 +767,7 @@ class ShotManifest:
                         exists=exists,
                         status=status,
                         behaviors=list(obj.behaviors),
+                        broken_behaviors=broken,
                         key_range=key_range,
                     )
                 )
@@ -747,8 +775,14 @@ class ShotManifest:
             # Detect additional objects (in shot but not in CSV)
             additional = []
             if shot is not None:
-                csv_names = {o.name for o in step.objects}
-                stored_extra = [n for n in shot.objects if n not in csv_names]
+                from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+                    short_name as _short,
+                )
+
+                csv_short = {_short(o.name) for o in step.objects}
+                stored_extra = [
+                    n for n in shot.objects if _short(n) not in csv_short
+                ]
                 # Filter stored extras to only those with actual motion
                 # (removes flat-key objects from previous builds).
                 if stored_extra:
@@ -758,8 +792,9 @@ class ShotManifest:
                 additional = stored_extra
                 # Also discover scene objects with keys in this shot's
                 # range that aren't tracked in the CSV or the store.
+                known = csv_short | {_short(n) for n in shot.objects}
                 scene_extra = self._discover_scene_objects(
-                    shot.start, shot.end, csv_names | set(shot.objects)
+                    shot.start, shot.end, known
                 )
                 additional.extend(scene_extra)
                 # Merge discovered objects into the shot so the sequencer
@@ -817,8 +852,12 @@ class ShotManifest:
             self._animated_transforms = animated
 
         found: list = []
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            short_name as _short,
+        )
+
         for obj in sorted(animated):
-            if obj in exclude_names:
+            if _short(obj) in exclude_names:
                 continue
             for crv in animated[obj]:
                 vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)

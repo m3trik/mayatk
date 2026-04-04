@@ -444,8 +444,11 @@ class ImageTracerSlots:
         )
 
     def txt000_init(self, widget):
-        # Configure option box for file dialog
-        self.ui.txt000.option_box.set_action(self.browse_image, icon="folder")
+        # Configure option box for file browsing
+        widget.option_box.browse(
+            file_types="Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+            title="Select Image",
+        )
 
     def browse_image(self):
         file_path = self.sb.file_dialog(

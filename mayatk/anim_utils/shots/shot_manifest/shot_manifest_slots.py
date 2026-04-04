@@ -34,12 +34,19 @@ from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
     fmt_behavior,
 )
 from mayatk.anim_utils.shots.shot_manifest._range_resolver import resolve_ranges
-from mayatk.anim_utils.shots._shots import StoreEvent, SettingsChanged
+from mayatk.anim_utils.shots._shots import (
+    BatchComplete,
+    SettingsChanged,
+    ShotRemoved,
+    StoreEvent,
+)
 from mayatk.anim_utils.shots.shot_manifest._table_presenter import ManifestTableMixin
 
 
 class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     """Business logic for the Shot Manifest UI."""
+
+    _COLOR_SETTINGS_NS = "ShotManifest/colors"
 
     def __init__(self, slots_instance, log_level="WARNING"):
         super().__init__()
@@ -82,6 +89,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._setup_csv_toggle()
         self._setup_header_menu()
         self._setup_csv_layout_presets()
+        self._restore_color_overrides()
         self.ui.on_first_show.connect(self._on_first_show)
 
     # ---- first-show auto-populate ----------------------------------------
@@ -107,6 +115,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         except Exception:
             return False
         return any(step.step_id in built_map for step in self._steps)
+
+    def _step_is_built(self, step_id: str) -> bool:
+        """True if a specific step already exists as a shot in the store."""
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            return any(s.name == step_id for s in ShotStore.active().shots)
+        except Exception:
+            return False
 
     # ---- range column editing --------------------------------------------
 
@@ -144,9 +161,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         When a selected-keys mode is active and no keys are selected,
         shows a message-box warning and returns an empty list.
+        CSV mode always uses auto-detect regardless of the store's
+        detection_mode setting.
         """
         store = self._active_store()
         mode = store.detection_mode if store is not None else "auto"
+        if not self._is_detection_mode:
+            mode = "auto"
         if mode != "auto":
             regions = regions_from_selected_keys(
                 gap_threshold=gap_threshold, key_filter=mode
@@ -198,16 +219,26 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         )
 
     def _on_range_double_clicked(self, item, column) -> None:
-        """Allow editing Step, Description, Start, and End on parent rows pre-build.
+        """Allow editing Step, Description, Start, and End on parent rows.
 
-        For non-editable columns or post-build state, toggle expand/collapse instead.
+        Built steps are locked; unbuilt steps remain editable even after
+        other shots have been built.  For non-editable columns, toggle
+        expand/collapse instead.
         """
+        from qtpy.QtCore import Qt
+
         editable_cols = [COL_STEP, COL_DESC, COL_START, COL_END]
         is_parent = item.parent() is None
-        if is_parent and not self._is_built and column in editable_cols:
-            tree = self.ui.tbl_steps
-            tree.editItem(item, column)
-            return
+        if is_parent and column in editable_cols:
+            step_data = item.data(0, Qt.UserRole)
+            if isinstance(step_data, BuilderStep) and self._step_is_built(
+                step_data.step_id
+            ):
+                pass  # fall through to expand/collapse
+            else:
+                tree = self.ui.tbl_steps
+                tree.editItem(item, column)
+                return
         # Fallback: toggle expand/collapse for parent rows
         if is_parent:
             item.setExpanded(not item.isExpanded())
@@ -373,7 +404,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store = self._active_store()
         gap = store.gap if store else 0.0
         det_threshold = store.detection_threshold if store else 5.0
-        use_sel = (store.detection_mode != "auto") if store else False
+        use_sel = (
+            self._is_detection_mode
+            and store is not None
+            and store.detection_mode != "auto"
+        )
 
         # Detect animation regions for auto-fill (cached per assess cycle).
         if self._cached_gaps is not None:
@@ -452,7 +487,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
         if not self._steps:
             return
-        self._last_results = []  # invalidate stale assessment
+        # Only invalidate cached assessment on structural changes
+        # (shot added/removed).  Cosmetic events like ActiveShotChanged
+        # or field edits (ShotUpdated) don't change object status.
+        if isinstance(event, (ShotRemoved, BatchComplete)):
+            self._last_results = []
         store = getattr(self, "_bound_store", None)
         # Only overwrite tree timing from the store when shots have
         # been built for the current round.  Before build, detection
@@ -538,15 +577,27 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             ):
                 selected_step_ids.append(sel_data.step_id)
 
+        # Pre-compute built-step names once for all guards in this menu.
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            built_names = {s.name for s in ShotStore.active().shots}
+        except Exception:
+            built_names = set()
+        any_built = bool(built_names & {s.step_id for s in self._steps})
+
         menu = QMenu(tree)
         act_open = menu.addAction(f"Open '{step_data.step_id}' in Shot Sequencer")
-        if not self._is_built:
+        act_open_shots = menu.addAction(f"Open '{step_data.step_id}' in Shots")
+        if not any_built:
             act_open.setEnabled(False)
             act_open.setToolTip("Build shots first")
+            act_open_shots.setEnabled(False)
+            act_open_shots.setToolTip("Build shots first")
 
         # Exclude step action (parent rows, pre-build only)
         act_exclude = None
-        if not self._is_built and selected_step_ids:
+        if not any_built and selected_step_ids:
             menu.addSeparator()
             if len(selected_step_ids) == 1:
                 act_exclude = menu.addAction(f"Exclude '{selected_step_ids[0]}'")
@@ -565,7 +616,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         act_auto_fill = None
         act_clear_range = None
         column = tree.columnAt(pos.x())
-        if not is_child and not self._is_built and column in (COL_START, COL_END):
+        step_is_built = step_data.step_id in built_names
+        if not is_child and not step_is_built and column in (COL_START, COL_END):
             menu.addSeparator()
             act_set_frame = menu.addAction("Set Start to Current Frame")
             act_auto_fill = menu.addAction("Auto-fill from Gaps")
@@ -587,11 +639,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 act_outliner = menu.addAction(f"Show '{obj_name}' in Outliner")
                 if self._is_built and obj_data.behaviors:
                     names = ", ".join(fmt_behavior(b) for b in obj_data.behaviors)
-                    act_reapply = menu.addAction(f"Re-apply [{names}]")
+                    act_reapply = menu.addAction(f"Apply [{names}]")
 
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen is act_open:
             self._open_in_shot_sequencer(step_data.step_id)
+        elif chosen is act_open_shots:
+            self._open_in_shots(step_data.step_id)
         elif chosen is act_exclude and act_exclude is not None:
             self._exclude_steps(selected_step_ids)
         elif chosen is not None and chosen is act_outliner:
@@ -715,11 +769,32 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     controller._update_shot_nav_state()
                     break
 
+    def _open_in_shots(self, step_id: str) -> None:
+        """Open the Shots editor UI and navigate to the shot matching *step_id*."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore.active()
+        if not store.shots:
+            self._set_footer("Build shots first before opening the shots editor.")
+            return
+
+        shot = store.shot_by_name(step_id)
+        if shot is None:
+            self._set_footer(f"Shot '{step_id}' not found in the store.")
+            return
+
+        self.sb.handlers.marking_menu.show("shots")
+
+        # set_active_shot fires ActiveShotChanged which the ShotsController
+        # listener handles — it syncs the combobox and editor fields.
+        store.set_active_shot(shot.shot_id)
+
     # ---- CSV loading -----------------------------------------------------
 
     def _setup_recent_csv(self) -> None:
-        """Attach a RecentValuesOption to the CSV path widget."""
+        """Attach a RecentValuesOption and BrowseOption to the CSV path widget."""
         from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
+        from uitk.widgets.optionBox.options.browse import BrowseOption
 
         txt = self.ui.txt_csv_path
         self._recent_csv_option = RecentValuesOption(
@@ -728,6 +803,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             max_recent=10,
         )
         txt.option_box.add_option(self._recent_csv_option)
+
+        self._browse_csv_option = BrowseOption(
+            wrapped_widget=txt,
+            file_types="CSV Files (*.csv);;All Files (*)",
+            title="Open Sequence CSV",
+            callback=lambda path: self._on_csv_browsed(path),
+        )
+        txt.option_box.add_option(self._browse_csv_option)
 
     def _setup_csv_toggle(self) -> None:
         """Connect the CSV checkbox to enable/disable the path and browse widgets."""
@@ -742,13 +825,175 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         the shared ``shots.ui`` panel, opened via the Settings button.
         """
         menu = self.ui.header.menu
-        menu.setTitle("Options")
+        menu.setTitle("Shot Manifest:")
+
+        menu.add(
+            "QPushButton",
+            setText="Expand All Missing",
+            setObjectName="btn_expand_missing",
+            setToolTip="Expand every step row that has missing objects or behaviors.",
+        )
+        menu.add(
+            "QPushButton",
+            setText="Expand All Extra",
+            setObjectName="btn_expand_extra",
+            setToolTip="Expand every step row that has scene-discovered objects not in the CSV.",
+        )
+
+        menu.add("Separator", setTitle="Settings")
         menu.add(
             "QPushButton",
             setText="Shots\u2026",
             setObjectName="btn_settings",
             setToolTip="Open shared shot detection, gap, and editing settings.",
         )
+
+        chk_long = menu.add(
+            "QCheckBox",
+            setText="Long Names",
+            setChecked=bool(self._settings.value("long_names", False)),
+            setToolTip="Show full DAG paths instead of leaf node names.",
+        )
+        chk_long.toggled.connect(self._on_long_names_toggled)
+
+        menu.add(
+            "QPushButton",
+            setText="Colors\u2026",
+            setObjectName="btn_manifest_colors",
+            setToolTip="Edit manifest status colors.",
+        ).released.connect(self._open_color_editor)
+
+        menu.add("Separator", setTitle="About")
+        menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Shot Manifest \u2014 Build and validate shots from a CSV\n"
+                "file or by auto-detecting animation in the scene.\n\n"
+                "Quick Start (CSV):\n"
+                "  1. Check the CSV checkbox and browse to a CSV file.\n"
+                "  2. Review parsed steps in the table; edit ranges\n"
+                "     or exclude steps as needed.\n"
+                "  3. Click Build to create shots with behaviors applied.\n"
+                "  4. Click Assess to verify completeness.\n\n"
+                "Quick Start (Scene Detection):\n"
+                "  1. Uncheck CSV \u2014 animation is auto-detected using\n"
+                "     the settings in Shot Settings.\n"
+                "  2. Refine ranges in the table if needed.\n"
+                "  3. Click Build, then Assess.\n\n"
+                "Table Columns:\n"
+                "  Step \u2014 Step ID (e.g. A01).\n"
+                "  Section \u2014 Read-only grouping label from CSV.\n"
+                "  Description \u2014 Audio narration or step notes.\n"
+                "  Behaviors \u2014 Per-object actions (fade in/out, etc.).\n"
+                "    Click the label on a child row to toggle behaviors.\n"
+                "  Start / End \u2014 Frame range per step.\n"
+                "    Solid text = user-entered; dim italic = auto-filled.\n\n"
+                "Editing Ranges:\n"
+                "  \u2022 Double-click Start or End to type a frame or range\n"
+                "    (e.g. '120-250'). Downstream steps re-flow.\n"
+                "  \u2022 Right-click a range cell:\n"
+                "    \u2013 Set Start to Current Frame\n"
+                "    \u2013 Auto-fill from Gaps (re-detect and reflow)\n"
+                "    \u2013 Clear Range (revert to auto-fill)\n\n"
+                "Buttons:\n"
+                "  \u2022 Assess \u2014 Read-only comparison against live shots.\n"
+                "    Rows are color-tinted: red = missing, normal = valid.\n"
+                "  \u2022 Build \u2014 Create or update shots from loaded steps.\n"
+                "    Behaviors are applied automatically. Locked shots\n"
+                "    are never modified.\n\n"
+                "Right-Click Actions:\n"
+                "  \u2022 Step row: Exclude step, Open in Shot Sequencer\n"
+                "    (post-build), Show Excluded.\n"
+                "  \u2022 Child row: Show in Outliner, Re-apply Behaviors\n"
+                "    (post-build).\n\n"
+                "Tip: Red tint = missing objects or behaviors,\n"
+                "grey = locked shots, normal = valid steps."
+            ),
+        )
+
+    def _on_long_names_toggled(self, checked: bool) -> None:
+        """Persist and apply the long-names display preference."""
+        self._settings.setValue("long_names", checked)
+        state = self._save_tree_state()
+        self._populate_table()
+        if self._last_results:
+            self._apply_assessment(self._last_results)
+        self._restore_tree_state(state)
+
+    def _open_color_editor(self) -> None:
+        """Launch the status-color editor dialog."""
+        from uitk.widgets.editors.color_mapping_editor import ColorMappingDialog
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            PASTEL_STATUS,
+            BEHAVIOR_STATUS_COLORS,
+        )
+
+        # Keys with actual (fg, bg) colours — skip 'valid'/'csv_object' (None, None)
+        editable_keys = [
+            k for k, v in PASTEL_STATUS.items() if v[0] is not None or v[1] is not None
+        ]
+
+        # Build defaults dict: {key: (fg_hex, bg_hex)}
+        defaults = {}
+        for k in editable_keys:
+            fg, bg = PASTEL_STATUS[k]
+            defaults[k] = (str(fg) if fg else "#808080", str(bg) if bg else "#2A2A2A")
+
+        sections = [("Status Colors", editable_keys)]
+
+        color_settings = SettingsManager(namespace=self._COLOR_SETTINGS_NS)
+        dlg = ColorMappingDialog(
+            defaults=defaults,
+            sections=sections,
+            settings=color_settings,
+            title="Manifest Colors",
+            parent=self.ui,
+        )
+
+        def _apply(cmap):
+            # Write changed colours back into the live PASTEL_STATUS palette
+            for key, val in cmap.items():
+                if key in PASTEL_STATUS:
+                    PASTEL_STATUS[key] = val
+            # Update derived constants
+            BEHAVIOR_STATUS_COLORS["missing"] = PASTEL_STATUS["missing_behavior"][0]
+            BEHAVIOR_STATUS_COLORS["error"] = PASTEL_STATUS["missing_object"][0]
+            # Refresh the table with new colours
+            state = self._save_tree_state()
+            self._populate_table()
+            if self._last_results:
+                self._apply_assessment(self._last_results)
+            self._restore_tree_state(state)
+
+        dlg.colors_changed.connect(_apply)
+        dlg.exec_()
+
+    def _restore_color_overrides(self) -> None:
+        """Apply any persisted color overrides to the live palette."""
+        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+            PASTEL_STATUS,
+            BEHAVIOR_STATUS_COLORS,
+        )
+
+        settings = SettingsManager(namespace=self._COLOR_SETTINGS_NS)
+        changed = False
+        for key in list(PASTEL_STATUS):
+            fg_val = settings.value(f"{key}/fg")
+            bg_val = settings.value(f"{key}/bg")
+            if fg_val or bg_val:
+                orig_fg, orig_bg = PASTEL_STATUS[key]
+                PASTEL_STATUS[key] = (
+                    fg_val or (str(orig_fg) if orig_fg else None),
+                    bg_val or (str(orig_bg) if orig_bg else None),
+                )
+                changed = True
+        if changed:
+            BEHAVIOR_STATUS_COLORS["missing"] = PASTEL_STATUS["missing_behavior"][0]
+            BEHAVIOR_STATUS_COLORS["error"] = PASTEL_STATUS["missing_object"][0]
 
     def _setup_csv_layout_presets(self) -> None:
         """Wire a PresetManager for CSV layout presets."""
@@ -795,7 +1040,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         txt.setEnabled(csv_mode)
         txt.style().unpolish(txt)
         txt.style().polish(txt)
-        self.ui.b001.setEnabled(csv_mode)
 
     def _load_data(
         self,
@@ -845,6 +1089,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     def browse_csv(self) -> None:
         """Open a file dialog and load the selected CSV."""
+        if hasattr(self, "_browse_csv_option"):
+            self._browse_csv_option.browse()
+            return
+
         from qtpy.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getOpenFileName(
@@ -852,6 +1100,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         )
         if not path:
             return
+        self._on_csv_browsed(path)
+
+    def _on_csv_browsed(self, path: str) -> None:
+        """Handle a CSV path selected via browse or BrowseOption."""
         self._sync_csv_widgets(True)
         self.ui.txt_csv_path.setText(path)
         self._load_csv(path)
@@ -876,11 +1128,34 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.ui.txt_csv_path.reset_action_color()
         self._recent_csv_option.record(path)
         n_obj = sum(len(s.objects) for s in steps)
+
+        # Seed _user_ranges with existing store positions so the table
+        # immediately shows correct Start/End for built steps.
+        store_ranges = {}
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            store = ShotStore.active()
+            step_ids = {s.step_id for s in steps}
+            store_ranges = {
+                s.name: (s.start, s.end)
+                for s in store.sorted_shots()
+                if s.name in step_ids
+            }
+        except Exception:
+            pass
+
         self._load_data(
             steps,
+            ranges=store_ranges or None,
             csv_path=path,
             footer=f"{len(steps)} steps, {n_obj} objects loaded.",
         )
+
+        # Populate _last_resolved so edit validation has correct bounds
+        # for new steps added between existing ones.
+        if store_ranges:
+            self._refresh_ranges()
 
     # ---- helpers ---------------------------------------------------------
 
@@ -958,7 +1233,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             # When selected-keys mode is active, verify keys exist
             # before proceeding — even if user ranges are complete.
-            use_sel = (store.detection_mode != "auto") if store else False
+            # CSV mode never uses selected-keys detection; the CSV
+            # defines the step list and ranges are resolved or seeded
+            # from the store directly.
+            use_sel = (
+                self._is_detection_mode
+                and store is not None
+                and store.detection_mode != "auto"
+            )
             if use_sel:
                 self._cached_gaps = None
                 regions = self._detect_regions(
@@ -973,7 +1255,48 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             # Resolve ranges — short-circuit when all ranges are
             # already complete (detection mode provides full ranges).
-            if self._all_ranges_complete():
+            # Incremental mode: when shots already exist and we're not
+            # in selected-keys mode, use the resolver's last-cascaded
+            # positions so that user edits ripple downstream.  Fall
+            # back to store positions when there is no resolved data.
+            incremental = self._is_built and not use_sel
+            if incremental:
+                # Start from store positions, then layer resolved
+                # cascade on top (so edits ripple), then user ranges.
+                range_map = {
+                    s.name: (s.start, s.end) for s in store.sorted_shots()
+                }
+                if self._last_resolved:
+                    range_map.update(
+                        {
+                            sid: (s, e)
+                            for sid, s, e, _ in self._last_resolved
+                            if e is not None
+                        }
+                    )
+                range_map.update(self._user_ranges)
+                # Place new steps at their CSV-order predecessor's end
+                # so they appear between neighbors instead of at the
+                # end of the timeline.  The loop is in CSV order so
+                # all predecessors are guaranteed in range_map by the
+                # time each step is reached.
+                for i, step in enumerate(self._steps):
+                    if step.step_id not in range_map:
+                        if i > 0:
+                            prev_end = range_map[self._steps[i - 1].step_id][1]
+                        else:
+                            # New step at the very start of the CSV —
+                            # find the first existing neighbor's start.
+                            prev_end = next(
+                                (
+                                    range_map[s.step_id][0]
+                                    for s in self._steps[1:]
+                                    if s.step_id in range_map
+                                ),
+                                1,
+                            )
+                        range_map[step.step_id] = (prev_end, prev_end)
+            elif self._all_ranges_complete():
                 range_map = dict(self._user_ranges)
             else:
                 resolved = self._resolve_ranges()
@@ -1007,6 +1330,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         build_steps,
                         ranges=range_map,
                         remove_missing=remove,
+                        zero_duration_fallback=incremental,
                     )
             finally:
                 self._building = False
@@ -1054,10 +1378,25 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     def _apply_post_build(self, results: list, store) -> None:
         """Refresh tree with timing from the store and assessment results."""
+        state = self._save_tree_state()
         self._populate_table()
         self._refresh_timing(store)
         self._apply_assessment(results)
+        self._restore_tree_state(state)
         self._last_results = results
+        self._sync_detection_widgets()
+
+    def _sync_detection_widgets(self) -> None:
+        """Disable detection widgets in the parent shots UI after build."""
+        try:
+            shots_ui = self.sb.loaded_ui.shots
+        except Exception:
+            return
+        enabled = not self._is_built
+        for attr in ("cmb_detection_mode", "spn_detection"):
+            widget = getattr(shots_ui, attr, None)
+            if widget is not None:
+                widget.setEnabled(enabled)
 
     # ---- assess ----------------------------------------------------------
 
@@ -1096,11 +1435,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             shot.metadata["object_status"] = obj_status
 
         # Rebuild tree and enrich with timing from store + status
+        state = self._save_tree_state()
         self._populate_table()
         if not self._is_built:
             self._refresh_ranges()
         self._refresh_timing(store)
         self._apply_assessment(results)
+        self._restore_tree_state(state)
         self._last_results = results
 
         # Summary counts
@@ -1144,70 +1485,8 @@ class ShotManifestSlots(ptk.LoggingMixin):
     # ---- header ----------------------------------------------------------
 
     def header_init(self, widget):
-        """Configure header menu."""
-        widget.menu.setTitle("Shot Manifest:")
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Expand All Missing",
-            setObjectName="btn_expand_missing",
-            setToolTip="Expand every step row that has missing objects or behaviors.",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="Expand All Extra",
-            setObjectName="btn_expand_extra",
-            setToolTip="Expand every step row that has scene-discovered objects not in the CSV.",
-        )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Shot Manifest \u2014 Build and validate shots from a CSV\n"
-                "file or by auto-detecting animation in the scene.\n\n"
-                "Quick Start (CSV):\n"
-                "  1. Check the CSV checkbox and browse to a CSV file.\n"
-                "  2. Review parsed steps in the table; edit ranges\n"
-                "     or exclude steps as needed.\n"
-                "  3. Click Build to create shots with behaviors applied.\n"
-                "  4. Click Assess to verify completeness.\n\n"
-                "Quick Start (Scene Detection):\n"
-                "  1. Uncheck CSV \u2014 animation is auto-detected using\n"
-                "     the settings in Shot Settings.\n"
-                "  2. Refine ranges in the table if needed.\n"
-                "  3. Click Build, then Assess.\n\n"
-                "Table Columns:\n"
-                "  Step \u2014 Step ID (e.g. A01).\n"
-                "  Section \u2014 Read-only grouping label from CSV.\n"
-                "  Description \u2014 Audio narration or step notes.\n"
-                "  Behaviors \u2014 Per-object actions (fade in/out, etc.).\n"
-                "    Click the label on a child row to toggle behaviors.\n"
-                "  Start / End \u2014 Frame range per step.\n"
-                "    Solid text = user-entered; dim italic = auto-filled.\n\n"
-                "Editing Ranges:\n"
-                "  \u2022 Double-click Start or End to type a frame or range\n"
-                "    (e.g. '120-250'). Downstream steps re-flow.\n"
-                "  \u2022 Right-click a range cell:\n"
-                "    \u2013 Set Start to Current Frame\n"
-                "    \u2013 Auto-fill from Gaps (re-detect and reflow)\n"
-                "    \u2013 Clear Range (revert to auto-fill)\n\n"
-                "Buttons:\n"
-                "  \u2022 Assess \u2014 Read-only comparison against live shots.\n"
-                "    Rows are color-tinted: red = missing, normal = valid.\n"
-                "  \u2022 Build \u2014 Create or update shots from loaded steps.\n"
-                "    Behaviors are applied automatically. Locked shots\n"
-                "    are never modified.\n\n"
-                "Right-Click Actions:\n"
-                "  \u2022 Step row: Exclude step, Open in Shot Sequencer\n"
-                "    (post-build), Show Excluded.\n"
-                "  \u2022 Child row: Show in Outliner, Re-apply Behaviors\n"
-                "    (post-build).\n\n"
-                "Tip: Red tint = missing objects or behaviors,\n"
-                "grey = locked shots, normal = valid steps."
-            ),
-        )
+        """Header menu is configured once in controller.__init__."""
+        pass
 
     def btn_expand_missing(self):
         """Expand all step rows that have missing objects or behaviors."""
@@ -1222,10 +1501,6 @@ class ShotManifestSlots(ptk.LoggingMixin):
         self.sb.handlers.marking_menu.show("shots")
 
     # ---- buttons ---------------------------------------------------------
-
-    def b001(self):
-        """Browse for CSV file."""
-        self.controller.browse_csv()
 
     def b002(self):
         """Assess shots against live Maya scene."""
