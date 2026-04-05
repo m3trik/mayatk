@@ -99,12 +99,15 @@ class ShotNavMixin:
 
         if self._cmb_mode == "markers":
             widget = self._get_sequencer_widget()
-            if widget:
-                for md in sorted(widget.markers(), key=lambda m: m.time):
+            markers = sorted(widget.markers(), key=lambda m: m.time) if widget else []
+            if markers:
+                for md in markers:
                     label = f"@ {md.time:.0f}"
                     if md.note:
                         label += f"  {md.note}"
                     cmb.addItem(label, md.time)
+            else:
+                cmb.addItem("No markers", None)
             cmb.blockSignals(False)
             self._update_shot_nav_state()
             return
@@ -148,7 +151,9 @@ class ShotNavMixin:
         shot_id = cmb.itemData(new_idx)
         self._shifted_out_keys.clear()
         self.select_shot(shot_id)
-        self._sync_to_widget(frame=self._shot_display_mode == "current")
+        store = self.sequencer.store if self.sequencer else None
+        do_frame = store.frame_on_shot_change if store else False
+        self._sync_to_widget(frame=do_frame)
         self._update_shot_nav_state()
 
     def on_shot_block_clicked(self, shot_name: str) -> None:
@@ -166,6 +171,8 @@ class ShotNavMixin:
                         break
                 self._shifted_out_keys.clear()
                 self.select_shot(shot.shot_id)
-                self._sync_to_widget(frame=True)
+                store = self.sequencer.store if self.sequencer else None
+                do_frame = store.frame_on_shot_change if store else False
+                self._sync_to_widget(frame=do_frame)
                 self._update_shot_nav_state()
                 return

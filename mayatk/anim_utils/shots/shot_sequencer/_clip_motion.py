@@ -176,21 +176,6 @@ class ClipMotionMixin:
             self._audio_mgr.invalidate()
             return True
 
-        # Stepped key clip
-        if clip.data.get("is_stepped"):
-            obj_name = clip.data.get("obj")
-            old_time = clip.data.get("stepped_key_time")
-            attr_name = clip.data.get("attr_name")
-            if obj_name and old_time is not None:
-                self.sequencer.move_stepped_keys(
-                    obj_name, old_time, new_start, attr_name
-                )
-                clip.data["stepped_key_time"] = new_start
-                clip.data["orig_start"] = new_start
-                self._expand_shot_for_clip(clip, new_start, new_start)
-                self._track_shifted_out_key(clip, obj_name, new_start)
-            return True
-
         # Sub-row attribute clip move
         attr_name = clip.data.get("attr_name")
         if attr_name:
@@ -204,14 +189,24 @@ class ClipMotionMixin:
             delta = new_start - orig_start
             if abs(delta) < FLOAT_ZERO_EPS:
                 return False
-            curves = curves_for_attr(obj_name, attr_name)
-            if curves:
-                SegmentKeys.shift_curves(
-                    curves,
-                    delta,
-                    time_range=(orig_start, orig_end),
-                    remove_flat_at_dest=False,
-                )
+            if clip.data.get("is_stepped"):
+                # Stepped sub-row clip: delete-and-recreate.
+                # Note: shift-out tracking is omitted here because sub-rows
+                # are built from live Maya data (_provide_sub_rows), not from
+                # the cached segments that _shifted_out_keys filters.
+                if self.sequencer is not None:
+                    self.sequencer.move_stepped_keys(
+                        obj_name, orig_start, new_start, attr_name=attr_name
+                    )
+            else:
+                curves = curves_for_attr(obj_name, attr_name)
+                if curves:
+                    SegmentKeys.shift_curves(
+                        curves,
+                        delta,
+                        time_range=(orig_start, orig_end),
+                        remove_flat_at_dest=False,
+                    )
             new_end = new_start + (orig_end - orig_start)
             self._expand_shot_for_clip(clip, new_start, new_end)
             return True
@@ -232,6 +227,25 @@ class ClipMotionMixin:
         delta = new_start - orig_start
         if abs(delta) < FLOAT_ZERO_EPS:
             return False
+
+        # Stepped (zero-duration) clips use delete-and-recreate
+        if clip.data.get("is_stepped"):
+            self.logger.debug(
+                "[ANIM MOVE] stepped obj=%s from=%s to=%s shot=%s shift=%s",
+                obj_name, orig_start, new_start, shot_id,
+                getattr(widget, "_shift_at_press", False),
+            )
+            self.sequencer.move_stepped_keys(obj_name, orig_start, new_start)
+            shift_held = getattr(widget, "_shift_at_press", False)
+            if shift_held:
+                shot = self.sequencer.shot_by_id(shot_id)
+                if shot and (new_start < shot.start or new_start > shot.end):
+                    self._shifted_out_keys.setdefault(obj_name, set()).add(new_start)
+            else:
+                # Normal move clears any shift-out exclusions for this object
+                self._shifted_out_keys.pop(obj_name, None)
+            self._expand_shot_for_clip(clip, new_start, new_start)
+            return True
 
         shot = self.sequencer.shot_by_id(shot_id)
         self.logger.debug(
@@ -256,6 +270,8 @@ class ClipMotionMixin:
             self.sequencer.move_object_in_shot(
                 shot_id, obj_name, orig_start, orig_end, new_start
             )
+            # Normal move clears any shift-out exclusions for this object
+            self._shifted_out_keys.pop(obj_name, None)
 
         shot_after = self.sequencer.shot_by_id(shot_id)
         if shot_after:
@@ -265,35 +281,6 @@ class ClipMotionMixin:
                 shot_after.end,
             )
         return True
-
-    def _track_shifted_out_key(self, clip, obj_name: str, new_time: float) -> None:
-        """Record or clear a shift-moved-out key for segment filtering.
-
-        When shift is held and the key lands outside the shot range,
-        the (obj, time) pair is recorded so ``_sync_to_widget`` can
-        exclude it even if the shot later expands to cover that time.
-        When shift is NOT held (normal move), any prior exclusion for
-        this object is cleared because the user explicitly placed the
-        key inside the shot.
-        """
-        widget = self._get_sequencer_widget()
-        shift_held = getattr(widget, "_shift_at_press", False) if widget else False
-        shot_id = clip.data.get("shot_id")
-        shot = (
-            self.sequencer.shot_by_id(shot_id)
-            if self.sequencer and shot_id is not None
-            else None
-        )
-        if not shift_held:
-            self._shifted_out_keys.pop(obj_name, None)
-            return
-        if shot is None:
-            return
-        if new_time < shot.start or new_time > shot.end:
-            self._shifted_out_keys.setdefault(obj_name, set()).add(new_time)
-            self.logger.debug(
-                "[SHIFT-OUT] recorded exclusion obj=%s time=%s", obj_name, new_time
-            )
 
     def _expand_shot_for_clip(self, clip, new_start: float, new_end: float) -> None:
         """Grow the shot if the clip's new range exceeds shot boundaries.
@@ -383,3 +370,130 @@ class ClipMotionMixin:
                 self._set_footer(
                     f"Moved {len(moves)} clip{'s' if len(moves) != 1 else ''}"
                 )
+
+    # -- per-key handlers ---------------------------------------------------
+
+    def on_keys_moved(self, clip_id: int, changes: list) -> None:
+        """Move individual keyframes on the Maya curves, then refresh.
+
+        Parameters
+        ----------
+        clip_id : int
+            The sequencer clip whose keys were dragged.
+        changes : list[tuple[float, float]]
+            ``[(old_time, new_time), ...]`` for every key that moved.
+        """
+        widget = self._get_sequencer_widget()
+        clip = widget.get_clip(clip_id) if widget else None
+        if clip is None:
+            return
+
+        obj_name = clip.data.get("obj")
+        attr_name = clip.data.get("attr_name")
+        if not obj_name or not attr_name:
+            return
+
+        curves = curves_for_attr(obj_name, attr_name)
+        if not curves:
+            return
+
+        eps = 1e-3
+        # Two-pass to avoid batch collisions (new_t of one change
+        # landing on old_t of another would corrupt the later query).
+        # Pass 1 — snapshot values and tangents, then delete old keys.
+        snapshots: list = []  # (crv, new_t, val, itt, ott)
+        with pm.UndoChunk():
+            for old_t, new_t in changes:
+                if abs(new_t - old_t) < 1e-6:
+                    continue
+                for crv in curves:
+                    tr = (old_t - eps, old_t + eps)
+                    vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
+                    if not vals:
+                        continue
+                    in_tan = cmds.keyTangent(
+                        crv, q=True, time=tr, inTangentType=True
+                    )
+                    out_tan = cmds.keyTangent(
+                        crv, q=True, time=tr, outTangentType=True
+                    )
+                    snapshots.append((
+                        crv,
+                        new_t,
+                        vals[0],
+                        in_tan[0] if in_tan else "auto",
+                        out_tan[0] if out_tan else "auto",
+                    ))
+                    cmds.cutKey(crv, time=tr, clear=True)
+
+            # Pass 2 — recreate at new positions.
+            for crv, new_t, val, itt, ott in snapshots:
+                target = crv if cmds.objExists(crv) else f"{obj_name}.{attr_name}"
+                cmds.setKeyframe(target, time=new_t, value=val)
+                cmds.keyTangent(
+                    target,
+                    time=(new_t, new_t),
+                    inTangentType=itt,
+                    outTangentType=ott,
+                )
+
+        if not snapshots:
+            return
+
+        self._save_shot_state()
+        shot_id = clip.data.get("shot_id")
+        self._sync_to_widget(shot_id=shot_id)
+        n = len(changes)
+        self._set_footer(
+            f"Moved {n} key{'s' if n != 1 else ''} on {obj_name}.{attr_name}"
+        )
+
+    def on_keys_deleted(self, clip_id: int, times: list) -> None:
+        """Delete individual keyframes from the Maya curves, then refresh.
+
+        .. note::
+
+            The primary Delete-key path now bypasses this method and
+            performs batched deletion directly in
+            ``_delete_selected_clip_keys``.  This handler remains
+            connected to the ``keys_deleted`` signal for any external
+            callers that emit it directly.
+
+        Parameters
+        ----------
+        clip_id : int
+            The sequencer clip whose keys should be removed.
+        times : list[float]
+            Absolute times of the keys to delete.
+        """
+        widget = self._get_sequencer_widget()
+        clip = widget.get_clip(clip_id) if widget else None
+        if clip is None:
+            return
+
+        obj_name = clip.data.get("obj")
+        attr_name = clip.data.get("attr_name")
+        if not obj_name or not attr_name:
+            return
+
+        curves = curves_for_attr(obj_name, attr_name)
+        if not curves:
+            return
+
+        deleted = False
+        with pm.UndoChunk():
+            for t in times:
+                for crv in curves:
+                    cmds.cutKey(str(crv), time=(t, t), clear=True)
+                    deleted = True
+
+        if not deleted:
+            return
+
+        self._save_shot_state()
+        shot_id = clip.data.get("shot_id")
+        self._sync_to_widget(shot_id=shot_id)
+        n = len(times)
+        self._set_footer(
+            f"Deleted {n} key{'s' if n != 1 else ''} on {obj_name}.{attr_name}"
+        )

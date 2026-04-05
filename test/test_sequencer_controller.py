@@ -3991,5 +3991,208 @@ class TestUndoRedoRuntimeErrorRecovery(ControllerTestCase):
         _mock_pm.undo.side_effect = None
 
 
+# ===========================================================================
+# Test: Key Deletion Undo
+# ===========================================================================
+
+
+class TestKeyDeletionUndo(ControllerTestCase):
+    """Verify that key deletion supports Ctrl+Z via _save_shot_state +
+    pm.UndoChunk.
+
+    Bugs fixed:
+        - on_undo: _restore_shot_state and pm.undo shared a try block —
+          a persistence flush error in _restore_shot_state silently
+          prevented pm.undo from running.
+        - _delete_selected_clip_keys: emitted keys_deleted per-clip,
+          each creating a separate UndoChunk. Only the first clip's
+          deletion was undone.
+        - _delete_clip_keys: had no _save_shot_state or UndoChunk,
+          making whole-clip deletion completely non-undoable.
+        - _save_shot_state was pushed before confirming any keys were
+          actually deleted, leaving orphaned undo entries.
+    Fixed: 2026-04
+    """
+
+    shot_defs = [("Shot_A", 100, 200, ["ObjA"])]
+
+    def test_on_undo_calls_pm_undo_despite_restore_error(self):
+        """pm.undo must run even when _restore_shot_state raises.
+
+        Prior bug: both were in the same try/except RuntimeError block.
+        """
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        # Push state so _restore_shot_state has something to pop
+        self.ctrl._save_shot_state()
+
+        # Force _restore_shot_state to fail
+        with patch.object(
+            self.ctrl, "_restore_shot_state", side_effect=RuntimeError("flush error")
+        ):
+            with patch.object(self.ctrl, "_sync_to_widget"):
+                self.ctrl.on_undo()
+
+        # pm.undo MUST still have been called
+        _mock_pm.undo.assert_called_once()
+
+    def test_delete_selected_clip_keys_single_undo_chunk(self):
+        """Per-key deletion must use a single UndoChunk for all clips."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        clips = self._anim_clips()
+        self.assertTrue(len(clips) > 0, "Need at least one anim clip")
+
+        clip = clips[0]
+
+        # Add obj/attr data to clip so the controller finds them
+        clip.data["obj"] = "ObjA"
+        clip.data["attr_name"] = "translateX"
+
+        # Mock KeyframeItem selection
+        from unittest.mock import MagicMock as MM
+        from uitk.widgets.sequencer._keyframe import KeyframeItem
+
+        fake_key = MM(spec=KeyframeItem)
+        fake_key._parent_clip = MM()
+        fake_key._parent_clip._data = clip
+        fake_key._time = 120.0
+
+        with patch.object(
+            self.widget._timeline._scene,
+            "selectedItems",
+            return_value=[fake_key],
+        ):
+            with patch(
+                "mayatk.anim_utils.shots.shot_sequencer._clip_motion.curves_for_attr",
+                return_value=["ObjA_translateX"],
+            ):
+                save_calls = []
+                orig_save = self.ctrl._save_shot_state
+
+                def tracking_save():
+                    save_calls.append(True)
+                    orig_save()
+
+                self.ctrl._save_shot_state = tracking_save
+
+                with patch.object(self.ctrl, "_sync_to_widget"):
+                    self.ctrl._delete_selected_clip_keys()
+
+                self.assertEqual(
+                    len(save_calls), 1, "_save_shot_state should be called once"
+                )
+
+    def test_delete_selected_no_curves_skips_undo(self):
+        """When no curves exist, _save_shot_state must NOT be called."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        clips = self._anim_clips()
+        clip = clips[0]
+        clip.data["obj"] = "ObjA"
+        clip.data["attr_name"] = "translateX"
+
+        from unittest.mock import MagicMock as MM
+        from uitk.widgets.sequencer._keyframe import KeyframeItem
+
+        fake_key = MM(spec=KeyframeItem)
+        fake_key._parent_clip = MM()
+        fake_key._parent_clip._data = clip
+        fake_key._time = 120.0
+
+        with patch.object(
+            self.widget._timeline._scene,
+            "selectedItems",
+            return_value=[fake_key],
+        ):
+            # curves_for_attr returns empty — nothing to delete
+            with patch(
+                "mayatk.anim_utils.shots.shot_sequencer._clip_motion.curves_for_attr",
+                return_value=[],
+            ):
+                initial_stack = len(self.ctrl._shot_undo_stack)
+
+                with patch.object(self.ctrl, "_sync_to_widget"):
+                    self.ctrl._delete_selected_clip_keys()
+
+                self.assertEqual(
+                    len(self.ctrl._shot_undo_stack),
+                    initial_stack,
+                    "No undo entry should be pushed when nothing was deleted",
+                )
+
+    def test_delete_clip_keys_saves_shot_state(self):
+        """_delete_clip_keys must call _save_shot_state after deletion."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        clips = self._anim_clips()
+        self.assertTrue(len(clips) > 0)
+
+        clip = clips[0]
+        clip.data["obj"] = "ObjA"
+        clip.data["attributes"] = ["translateX"]
+        clip.data["orig_start"] = 110
+        clip.data["orig_end"] = 180
+
+        initial_stack_len = len(self.ctrl._shot_undo_stack)
+
+        with patch.object(self.ctrl, "_sync_to_widget"):
+            self.ctrl._delete_clip_keys([clip.clip_id])
+
+        self.assertEqual(
+            len(self.ctrl._shot_undo_stack),
+            initial_stack_len + 1,
+            "_save_shot_state should push to undo stack",
+        )
+
+    def test_delete_clip_keys_wraps_undo_chunk(self):
+        """_delete_clip_keys must wrap cutKey ops in a single UndoChunk."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        clips = self._anim_clips()
+        self.assertTrue(len(clips) > 0)
+
+        clip = clips[0]
+        clip.data["obj"] = "ObjA"
+        clip.data["attributes"] = ["translateX"]
+        clip.data["orig_start"] = 110
+        clip.data["orig_end"] = 180
+
+        _mock_pm.UndoChunk.reset_mock()
+
+        with patch.object(self.ctrl, "_sync_to_widget"):
+            self.ctrl._delete_clip_keys([clip.clip_id])
+
+        _mock_pm.UndoChunk.assert_called_once()
+
+    def test_delete_clip_keys_no_attrs_skips_undo(self):
+        """When clip has no attributes, no undo entry should be created."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        clips = self._anim_clips()
+        clip = clips[0]
+        clip.data["obj"] = "ObjA"
+        clip.data["orig_start"] = 110
+        clip.data["orig_end"] = 180
+        # No "attributes" or "attr_name" set
+
+        initial_stack = len(self.ctrl._shot_undo_stack)
+
+        with patch.object(self.ctrl, "_sync_to_widget"):
+            self.ctrl._delete_clip_keys([clip.clip_id])
+
+        self.assertEqual(
+            len(self.ctrl._shot_undo_stack),
+            initial_stack,
+            "No undo entry should be pushed when nothing was deleted",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

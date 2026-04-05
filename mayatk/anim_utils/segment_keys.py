@@ -359,15 +359,15 @@ class SegmentKeys(SegmentKeysInfo):
                         keyframes = None
 
             # Determine segment ranges
-            stepped_points = []
             if split_static:
-                active_segments, stepped_points, all_kf = (
+                active_segments, _, all_kf = (
                     cls._get_active_animation_segments(
                         curves_to_use,
                         tolerance=static_tolerance,
                         ignore_visibility_holds=ignore_visibility_holds,
                         motion_only=motion_only,
                         motion_rate=motion_rate,
+                        time_range=time_range,
                     )
                 )
                 # Use keyframes collected inside _get_active_animation_segments
@@ -406,19 +406,13 @@ class SegmentKeys(SegmentKeysInfo):
                             seg_start = max(seg_start, range_start)
                         if range_end is not None:
                             seg_end = min(seg_end, range_end)
-                        if seg_start <= seg_end + _BOUNDARY_EPS:
-                            # Clamp so output always has start <= end
-                            filtered_segments.append(
-                                (seg_start, max(seg_start, seg_end))
-                            )
+                        if seg_start > seg_end + _BOUNDARY_EPS:
+                            continue
+                        # Clamp so output always has start <= end
+                        filtered_segments.append(
+                            (seg_start, max(seg_start, seg_end))
+                        )
                     active_segments = filtered_segments
-                    if stepped_points:
-                        stepped_points = [
-                            (t, t)
-                            for t, _ in stepped_points
-                            if (range_start is None or t >= range_start - _BOUNDARY_EPS)
-                            and (range_end is None or t <= range_end + _BOUNDARY_EPS)
-                        ]
             else:
                 active_segments = [(keyframes[0], keyframes[-1])]
 
@@ -500,21 +494,6 @@ class SegmentKeys(SegmentKeysInfo):
                         "end": seg_end,
                         "duration": seg_end - seg_start,
                         "segment_range": (seg_start, seg_end),
-                    }
-                )
-
-            # Create individual segments for stepped key points
-            for pt_time, _ in stepped_points:
-                segments.append(
-                    {
-                        "obj": obj,
-                        "curves": list(curves_to_use),
-                        "keyframes": [pt_time],
-                        "start": pt_time,
-                        "end": pt_time,
-                        "duration": 0.0,
-                        "segment_range": (pt_time, pt_time),
-                        "is_stepped": True,
                     }
                 )
 
@@ -995,20 +974,24 @@ class SegmentKeys(SegmentKeysInfo):
         ignore_visibility_holds: bool = False,
         motion_only: bool = False,
         motion_rate: float = 1e-3,
+        time_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
     ) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]], List[float]]:
         """Identify segments of active animation, excluding static gaps.
 
         A segment is considered active if at least one curve has changing values.
         Static gaps (where all curves hold the same value) are excluded.
 
-        Stepped tangent pairs are emitted as individual zero-duration points
-        so that the caller can distinguish them from smooth spans.  These
-        points are returned in a second list to avoid being swallowed by
-        the merge step.
+        When *motion_only* is ``True``, stepped tangent intervals are
+        treated specially: same-value holds are skipped entirely, and
+        value-change intervals emit the full ``[t1, t2]`` range so
+        downstream clips span both keys.  When *time_range* is also
+        provided, stepped intervals whose boundary keys both fall
+        outside the range are dropped before the merge step so they
+        cannot swallow nearby intervals from other curves.
 
-        Note: Visibility curves (and other stepped curves) are treated as active
-        between all keys to preserve holds during scaling, unless ignore_visibility_holds
-        is True.
+        Note: Visibility curves are treated as active between all keys
+        to preserve holds during scaling, unless *ignore_visibility_holds*
+        is ``True``.
 
         Parameters:
             curves: List of animation curves to analyze (PyNodes or strings).
@@ -1020,15 +1003,16 @@ class SegmentKeys(SegmentKeysInfo):
                 ``abs(v2 - v1) / max(t2 - t1, 1) > motion_rate``.  This
                 normalises by interval duration so sparse/baked keys that
                 drift slowly are correctly classified as static.
+            time_range: Optional ``(start, end)`` used to pre-filter stepped
+                intervals.  Intervals whose boundary keys are both outside
+                this range are dropped before the merge step.
 
         Returns:
-            A tuple ``(merged_spans, stepped_points, all_keyframe_times)``
+            A tuple ``(merged_spans, empty_list, all_keyframe_times)``
             where *merged_spans* is a list of ``(start, end)`` tuples for
-            smooth animation, *stepped_points* is a list of
-            ``(time, time)`` zero-duration tuples for stepped keys, and
-            *all_keyframe_times* is a sorted list of every keyframe time
-            across all curves (useful to avoid a redundant query in the
-            caller).
+            active animation, *empty_list* is always ``[]`` (kept for API
+            compatibility), and *all_keyframe_times* is a sorted list of
+            every keyframe time across all curves.
         """
         import maya.cmds as cmds
 
@@ -1038,7 +1022,6 @@ class SegmentKeys(SegmentKeysInfo):
             return ([], [], [])
 
         all_intervals = []
-        stepped_points: List[Tuple[float, float]] = []
         all_keyframe_times: set = set()
 
         for curve in curves:
@@ -1076,7 +1059,7 @@ class SegmentKeys(SegmentKeysInfo):
                     except Exception:
                         pass
 
-            # Query out-tangent types for stepped detection
+            # Query out-tangent types for debug logging
             out_tangents = cmds.keyTangent(crv, query=True, outTangentType=True) or []
 
             _log.debug(
@@ -1092,41 +1075,70 @@ class SegmentKeys(SegmentKeysInfo):
                 t1, t2 = times[i], times[i + 1]
                 v1, v2 = values[i], values[i + 1]
 
+                # Stepped tangents: no gradual motion during the
+                # interval — value holds at v1, then jumps at the
+                # boundary.  When motion_only is active, skip the
+                # interval entirely (it's a hold) and emit only the
+                # point where the value actually changes.
+                ot = out_tangents[i] if i < len(out_tangents) else ""
+                is_stepped = ot in ("step", "stepnext")
+
                 # For visibility, treat all intervals as active to preserve holds
                 # unless ignore_visibility_holds is True.
                 # Static intervals (same value) are also kept as zero-duration
                 # points so the object still appears in the sequencer.
                 if motion_only:
-                    dt = max(t2 - t1, 1.0)
-                    is_value_change = abs(v2 - v1) / dt > motion_rate
+                    if is_stepped:
+                        # Stepped: value is constant for the interval
+                        # (no gradual motion).  Same-value holds are
+                        # skipped.  When a time range is given, trim
+                        # intervals whose boundary keys fall outside:
+                        #   - Both outside → drop (pass-through hold)
+                        #   - One outside  → emit only the in-range
+                        #     boundary as a point (the out-of-range
+                        #     portion is a pre-existing hold)
+                        #   - Both inside  → emit full [t1, t2]
+                        if abs(v2 - v1) <= 1e-6:
+                            continue
+                        if time_range is not None:
+                            r_lo = time_range[0] if time_range[0] is not None else -1e18
+                            r_hi = time_range[1] if time_range[1] is not None else 1e18
+                            t1_in = t1 >= r_lo
+                            t2_in = t2 <= r_hi
+                            if not t1_in and not t2_in:
+                                _log.debug(
+                                    "[SEGMENTS]   interval %s-%s: STEPPED pass-through [SKIPPED]",
+                                    t1, t2,
+                                )
+                                continue
+                            if not t1_in or not t2_in:
+                                # Partial: keep only the in-range key
+                                # as a zero-duration point.
+                                pt = t2 if t1_in is False else t1
+                                all_intervals.append((pt, pt))
+                                _log.debug(
+                                    "[SEGMENTS]   interval %s-%s: STEPPED partial -> point at %s",
+                                    t1, t2, pt,
+                                )
+                                continue
+                        # Both keys in range (or no time_range) — emit
+                        # full interval so clips span both keys.
+                        is_value_change = True
+                    else:
+                        dt = max(t2 - t1, 1.0)
+                        is_value_change = abs(v2 - v1) / dt > motion_rate
                 else:
                     is_value_change = abs(v1 - v2) > tolerance
 
                 if is_visibility or is_value_change:
-                    # Check if this interval is stepped
-                    is_step = i < len(out_tangents) and out_tangents[i] in (
-                        "step",
-                        "stepnext",
+                    all_intervals.append((t1, t2))
+                    _log.debug(
+                        "[SEGMENTS]   interval %s-%s: ACTIVE (vals %s->%s)",
+                        t1,
+                        t2,
+                        v1,
+                        v2,
                     )
-                    if is_step and not is_visibility:
-                        stepped_points.append((t1, t1))
-                        stepped_points.append((t2, t2))
-                        _log.debug(
-                            "[SEGMENTS]   interval %s-%s: STEPPED (vals %s->%s)",
-                            t1,
-                            t2,
-                            v1,
-                            v2,
-                        )
-                    else:
-                        all_intervals.append((t1, t2))
-                        _log.debug(
-                            "[SEGMENTS]   interval %s-%s: SMOOTH (vals %s->%s)",
-                            t1,
-                            t2,
-                            v1,
-                            v2,
-                        )
                 else:
                     _log.debug(
                         "[SEGMENTS]   interval %s-%s: STATIC [SKIPPED] (val=%s)",
@@ -1135,29 +1147,23 @@ class SegmentKeys(SegmentKeysInfo):
                         v1,
                     )
 
-        if not all_intervals and not stepped_points:
+        if not all_intervals:
             return ([], [], sorted(all_keyframe_times))
 
         # Merge overlapping span intervals
-        if all_intervals:
-            all_intervals.sort(key=lambda x: x[0])
-            merged = []
-            current_start, current_end = all_intervals[0]
-            for i in range(1, len(all_intervals)):
-                next_start, next_end = all_intervals[i]
-                if next_start <= current_end:
-                    current_end = max(current_end, next_end)
-                else:
-                    merged.append((current_start, current_end))
-                    current_start, current_end = next_start, next_end
-            merged.append((current_start, current_end))
-        else:
-            merged = []
+        all_intervals.sort(key=lambda x: x[0])
+        merged = []
+        current_start, current_end = all_intervals[0]
+        for i in range(1, len(all_intervals)):
+            next_start, next_end = all_intervals[i]
+            if next_start <= current_end:
+                current_end = max(current_end, next_end)
+            else:
+                merged.append((current_start, current_end))
+                current_start, current_end = next_start, next_end
+        merged.append((current_start, current_end))
 
-        # De-duplicate stepped points
-        stepped_points = sorted(set(stepped_points))
-
-        return (merged, stepped_points, sorted(all_keyframe_times))
+        return (merged, [], sorted(all_keyframe_times))
 
     @staticmethod
     def shift_curves(

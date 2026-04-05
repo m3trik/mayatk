@@ -389,7 +389,9 @@ class ShotStore:
         self.detection_threshold: float = 5.0
         self.detection_mode: str = "auto"  # "auto", "all", "skip_zero", "zero_as_end"
         self.select_on_load: bool = False
+        self.frame_on_shot_change: bool = True
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
+        self.locked_objects: set = set()  # object names locked in the sequencer
         self.anim_layer: Optional[str] = anim_layer
         self.scene_fps: float = _get_scene_fps()
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
@@ -868,6 +870,7 @@ class ShotStore:
             "detection_threshold": self.detection_threshold,
             "detection_mode": self.detection_mode,
             "select_on_load": self.select_on_load,
+            "frame_on_shot_change": self.frame_on_shot_change,
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
             "scene_fps": self.scene_fps,
         }
@@ -912,6 +915,7 @@ class ShotStore:
                 str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
             )
         store.select_on_load = bool(data.get("select_on_load", False))
+        store.frame_on_shot_change = bool(data.get("frame_on_shot_change", True))
         store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
         stored_fps = data.get("scene_fps")
         if stored_fps is not None:

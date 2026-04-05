@@ -827,6 +827,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         menu = self.ui.header.menu
         menu.setTitle("Shot Manifest:")
 
+        chk_long = menu.add(
+            "QCheckBox",
+            setText="Long Names",
+            setChecked=bool(self._settings.value("long_names", False)),
+            setToolTip="Show full DAG paths instead of leaf node names.",
+        )
+        chk_long.toggled.connect(self._on_long_names_toggled)
+
+        menu.add("Separator", setTitle="Actions")
         menu.add(
             "QPushButton",
             setText="Expand All Missing",
@@ -839,29 +848,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             setObjectName="btn_expand_extra",
             setToolTip="Expand every step row that has scene-discovered objects not in the CSV.",
         )
-
-        menu.add("Separator", setTitle="Settings")
-        menu.add(
-            "QPushButton",
-            setText="Shots\u2026",
-            setObjectName="btn_settings",
-            setToolTip="Open shared shot detection, gap, and editing settings.",
-        )
-
-        chk_long = menu.add(
-            "QCheckBox",
-            setText="Long Names",
-            setChecked=bool(self._settings.value("long_names", False)),
-            setToolTip="Show full DAG paths instead of leaf node names.",
-        )
-        chk_long.toggled.connect(self._on_long_names_toggled)
-
         menu.add(
             "QPushButton",
             setText="Colors\u2026",
             setObjectName="btn_manifest_colors",
             setToolTip="Edit manifest status colors.",
         ).released.connect(self._open_color_editor)
+        menu.add(
+            "QPushButton",
+            setText="Shots\u2026",
+            setObjectName="btn_settings",
+            setToolTip="Open shared shot detection, gap, and editing settings.",
+        )
 
         menu.add("Separator", setTitle="About")
         menu.add(
@@ -1263,9 +1261,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             if incremental:
                 # Start from store positions, then layer resolved
                 # cascade on top (so edits ripple), then user ranges.
-                range_map = {
-                    s.name: (s.start, s.end) for s in store.sorted_shots()
-                }
+                range_map = {s.name: (s.start, s.end) for s in store.sorted_shots()}
                 if self._last_resolved:
                     range_map.update(
                         {
