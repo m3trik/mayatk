@@ -96,15 +96,17 @@ class GapManagerMixin:
     # ---- gap resize / move -----------------------------------------------
 
     def on_gap_resized(self, original_next_start: float, new_next_start: float) -> None:
-        """Handle a gap overlay being dragged to resize.
+        """Handle right-edge gap drag — adjust downstream shots.
 
-        Shifts the shot starting at *original_next_start* and all
-        downstream shots by the same delta so that every shot keeps
-        its original duration.  Only the gap size changes.
+        The right edge of the gap is the start of the next shot.
 
-        By default the keyframes inside each shifted shot are moved
-        so they stay aligned.  Holding **Shift** moves boundaries only,
-        leaving keyframes in place.
+        **Normal drag** shifts the adjacent shot and all downstream
+        shots by the same delta so every shot keeps its original
+        duration and keyframes stay aligned.
+
+        **Shift+drag** only adjusts the adjacent shot's start
+        boundary without rippling downstream — the adjacent shot's
+        duration changes and keyframes stay in place.
         """
         if self.sequencer is None:
             return
@@ -133,13 +135,11 @@ class GapManagerMixin:
         try:
             with pm.UndoChunk():
                 if shift_held:
-                    for shot in sorted_shots[target_idx:]:
-                        duration = shot.end - shot.start
-                        self.sequencer.store.update_shot(
-                            shot.shot_id,
-                            start=shot.start + delta,
-                            end=shot.start + delta + duration,
-                        )
+                    # Boundary only — no ripple, no key movement.
+                    target = sorted_shots[target_idx]
+                    self.sequencer.store.update_shot(
+                        target.shot_id, start=target.start + delta
+                    )
                 else:
                     for shot in sorted_shots[target_idx:]:
                         new_start = shot.start + delta
@@ -166,9 +166,12 @@ class GapManagerMixin:
         The gap's left edge is the previous shot's end frame.
         Dragging it adjusts that shot's duration.
 
-        By default, keyframes inside the shot are scaled to fit the
-        new range.  Holding **Shift** changes the boundary only,
-        leaving keyframes in place.
+        **Normal drag** scales keyframes in the preceding shot to fit
+        the new range and ripples all downstream shots by the same
+        delta so their durations and key alignment are preserved.
+
+        **Shift+drag** only changes the boundary without scaling
+        keys or rippling downstream shots.
         """
         if self.sequencer is None:
             return
@@ -180,9 +183,11 @@ class GapManagerMixin:
         sorted_shots = self.sequencer.sorted_shots()
 
         target = None
-        for shot in sorted_shots:
+        target_idx = None
+        for i, shot in enumerate(sorted_shots):
             if abs(shot.end - original_prev_end) < 1.0:
                 target = shot
+                target_idx = i
                 break
 
         if target is None:
@@ -196,6 +201,7 @@ class GapManagerMixin:
         try:
             with pm.UndoChunk():
                 if shift_held:
+                    # Boundary only — no key scaling, no ripple.
                     self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
                 else:
                     for obj in target.objects:
@@ -203,6 +209,20 @@ class GapManagerMixin:
                             obj, target.start, target.end, target.start, new_prev_end
                         )
                     self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
+                    # Ripple downstream shots so they accommodate the
+                    # boundary change — preserves durations and keys.
+                    for shot in sorted_shots[target_idx + 1 :]:
+                        new_start = shot.start + delta
+                        for obj in shot.objects:
+                            self.sequencer.move_object_keys(
+                                obj, shot.start, shot.end, new_start
+                            )
+                        duration = shot.end - shot.start
+                        self.sequencer.store.update_shot(
+                            shot.shot_id,
+                            start=new_start,
+                            end=new_start + duration,
+                        )
         finally:
             self._syncing = False
         self._sync_to_widget()

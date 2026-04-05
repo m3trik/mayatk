@@ -24,11 +24,10 @@ except ImportError:
     cmds = None
 
 from mayatk.anim_utils.segment_keys import SegmentKeys
+from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import AudioTrackManager
 
 if TYPE_CHECKING:
-    from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import (
-        AudioTrackManager,
-    )
+    pass
 
 # Near-zero guard for floating-point comparisons.
 FLOAT_ZERO_EPS = 1e-6

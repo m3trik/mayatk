@@ -425,6 +425,21 @@ class SegmentKeys(SegmentKeysInfo):
             # Default behavior: absorb trailing holds into the segment so hold keys
             # move with the segment (prevents collisions during shifting/staggering).
             # Optional behavior (ignore_holds=True): keep segments active-only.
+            #
+            # When there are NO active segments but there ARE keyframes (hold-only
+            # object) and ignore_holds is False, synthesise a single hold segment
+            # spanning all keyframes so the object remains visible.
+            # Only applies in motion_only mode — in non-motion_only mode, flat
+            # curves are legitimately static and should produce 0 segments.
+            if (
+                split_static
+                and not active_segments
+                and not ignore_holds
+                and keyframes
+                and motion_only
+            ):
+                active_segments = [(keyframes[0], keyframes[-1])]
+
             if split_static and active_segments and not ignore_holds:
                 eps = 1e-3
                 active_segments = sorted(active_segments, key=lambda x: (x[0], x[1]))
@@ -1093,7 +1108,7 @@ class SegmentKeys(SegmentKeysInfo):
                         "step",
                         "stepnext",
                     )
-                    if is_step:
+                    if is_step and not is_visibility:
                         stepped_points.append((t1, t1))
                         stepped_points.append((t2, t2))
                         _log.debug(
@@ -1112,18 +1127,6 @@ class SegmentKeys(SegmentKeysInfo):
                             v1,
                             v2,
                         )
-                elif not motion_only:
-                    # Static hold — emit as a span so consecutive flat
-                    # intervals merge into one segment instead of N points.
-                    # Skipped entirely in motion_only mode (the is_value_change
-                    # branch above already excluded this interval).
-                    all_intervals.append((t1, t2))
-                    _log.debug(
-                        "[SEGMENTS]   interval %s-%s: STATIC (val=%s)",
-                        t1,
-                        t2,
-                        v1,
-                    )
                 else:
                     _log.debug(
                         "[SEGMENTS]   interval %s-%s: STATIC [SKIPPED] (val=%s)",

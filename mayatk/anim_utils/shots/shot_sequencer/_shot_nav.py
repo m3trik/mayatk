@@ -28,7 +28,7 @@ class ShotNavMixin:
     * ``active_shot_id`` — property
     * ``_playback_range_mode`` / ``_shot_display_mode``
     * ``_shifted_out_keys`` — dict
-    * ``_cmb_mode`` / ``_cmb_label``
+    * ``_cmb_mode`` / ``_cmb_mode_widget``
     * ``_prev_action`` / ``_next_action``
     * ``_sync_to_widget()`` / ``_update_shot_nav_state()``
     * ``_visible_shots()``
