@@ -58,7 +58,13 @@
        <number>1</number>
       </property>
       <item>
-       <widget class="QLabel" name="lbl_cmb_mode">
+       <widget class="ComboBox" name="cmb_mode">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -70,12 +76,6 @@
           <width>16777215</width>
           <height>20</height>
          </size>
-        </property>
-        <property name="text">
-         <string>Shots:</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
         </property>
        </widget>
       </item>

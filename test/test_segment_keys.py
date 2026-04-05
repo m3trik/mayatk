@@ -487,6 +487,84 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(segs_ignore[0]["end"], 10)
         self.assertEqual(segs_ignore[0]["keyframes"], [0.0, 10.0])
 
+    def test_hold_only_object_visible_when_ignore_holds_false(self):
+        """Hold-only objects produce a segment when ignore_holds=False.
+
+        Bug: An object with flat keys (no motion) produced 0 segments even
+        with ignore_holds=False because _get_active_animation_segments
+        returned no active segments and the hold-absorption code required
+        at least one active segment to exist.
+        Fixed: 2026-04-04
+        """
+        cube = pm.polyCube(name="holdOnlyCube")[0]
+        pm.setKeyframe(cube, t=1, v=5, at="tx")
+        pm.setKeyframe(cube, t=10, v=5, at="tx")
+        pm.setKeyframe(cube, t=20, v=5, at="tx")
+
+        # With ignore_holds=True and motion_only=True: no segments (correct)
+        segs_ignore = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_ignore), 0)
+
+        # With ignore_holds=False and motion_only=True: hold-only object
+        # should produce a single segment spanning all keys
+        segs_show = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=False,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_show), 1, "Hold-only object must be visible")
+        self.assertEqual(segs_show[0]["start"], 1)
+        self.assertEqual(segs_show[0]["end"], 20)
+        self.assertEqual(segs_show[0]["keyframes"], [1.0, 10.0, 20.0])
+
+    def test_motion_then_hold_extends_with_motion_only(self):
+        """Trailing hold extends segment when ignore_holds=False + motion_only=True.
+
+        Bug: Show Internal Holds toggle had no effect when collect_object_segments
+        hardcoded ignore_holds=True. Even after threading the parameter, holds on
+        motion_only segments weren't absorbed because active_segments was empty
+        for the hold portion.
+        Fixed: 2026-04-04
+        """
+        cube = pm.polyCube(name="motionHold")[0]
+        pm.setKeyframe(cube, t=1, v=0, at="tx")
+        pm.setKeyframe(cube, t=5, v=5, at="tx")
+        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        pm.setKeyframe(cube, t=15, v=10, at="tx")
+        pm.setKeyframe(cube, t=20, v=10, at="tx")
+
+        segs_no = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_no), 1)
+        self.assertEqual(segs_no[0]["end"], 10)
+
+        segs_yes = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=False,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_yes), 1)
+        self.assertEqual(
+            segs_yes[0]["end"],
+            20,
+            "Segment must absorb trailing hold when ignore_holds=False",
+        )
+
     def test_collect_segments_visibility_holds_can_bridge_static_gaps(self):
         """Visibility curves can merge segments unless ignore_visibility_holds=True.
 
@@ -743,7 +821,7 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(segments), 1)
         curves = segments[0]["curves"]
         self.assertEqual(len(curves), 1)
-        self.assertTrue(curves[0].name().endswith("_translateX"))
+        self.assertTrue(str(curves[0]).endswith("_translateX"))
 
     def test_collect_segments_exclude_next_start(self):
         """collect_segments respects exclude_next_start parameter."""

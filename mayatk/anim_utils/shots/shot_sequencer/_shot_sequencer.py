@@ -197,11 +197,71 @@ class ShotSequencer:
             return []
         return cmds.ls(shot.objects, long=True) or []
 
+    @staticmethod
+    def _reconcile_stale_paths(shot: ShotBlock) -> bool:
+        """Re-resolve stale long DAG paths by short name.
+
+        When a parent node is renamed the long paths of all children
+        change, making the stored entries stale.  This helper extracts
+        the short (leaf) name from each stale entry, looks it up in
+        the current scene, and substitutes the updated long path.
+
+        Returns ``True`` if any paths were updated.
+        """
+        import maya.cmds as cmds
+
+        updated = False
+        new_objects: list = []
+        for obj in shot.objects:
+            if cmds.objExists(obj):
+                new_objects.append(obj)
+                continue
+            short = obj.rsplit("|", 1)[-1]
+            matches = cmds.ls(short, long=True, type="transform") or []
+            if len(matches) == 1:
+                new_objects.append(matches[0])
+                updated = True
+            elif matches:
+                # Multiple matches — prefer one with anim curves,
+                # fall back to the first match.
+                resolved = matches[0]
+                for m in matches:
+                    if cmds.listConnections(m, type="animCurve", s=True, d=False):
+                        resolved = m
+                        break
+                new_objects.append(resolved)
+                updated = True
+            # else: no scene node with this short name → truly deleted.
+        result = sorted(set(new_objects))
+        if result != sorted(shot.objects):
+            shot.objects = result
+            updated = True
+        return updated
+
+    def reconcile_all_shots(self) -> bool:
+        """Re-resolve stale DAG paths across every shot and persist changes.
+
+        Should be called once per refresh cycle *before* segment collection
+        so that all stored paths are current.
+
+        Returns ``True`` if any shot was modified.
+        """
+        changed = False
+        with self.store.batch_update():
+            for shot in self.store.shots:
+                nodes = self._shot_nodes(shot)
+                if shot.objects and len(nodes) < len(set(shot.objects)):
+                    if self._reconcile_stale_paths(shot):
+                        self.store.update_shot(shot.shot_id, objects=shot.objects)
+                        changed = True
+        return changed
+
     def collect_object_segments(
         self,
         shot_id: int,
         ignore: Optional[str] = None,
         motion_rate: float = 1e-3,
+        ignore_holds: bool = True,
     ) -> List[Dict[str, Any]]:
         """Collect per-object animation segments within a shot's range.
 
@@ -209,13 +269,15 @@ class ShotSequencer:
         and ``"duration"`` keys — suitable for populating per-object
         tracks in the sequencer widget.
 
-        Flat/constant-value intervals are always excluded so only
-        actual motion is shown.
-
         Parameters:
             shot_id: The shot whose objects and range to query.
             ignore: Attribute pattern(s) to exclude.
             motion_rate: Per-frame rate-of-change threshold.
+            ignore_holds: If True (default), flat-key hold spans are
+                excluded so only actual motion is shown.  When False,
+                trailing holds are absorbed into adjacent motion
+                segments (wider clips) and hold-only objects (flat keys,
+                no motion) produce a single segment spanning all keys.
 
         Returns:
             A list of segment dicts grouped by object.
@@ -230,6 +292,7 @@ class ShotSequencer:
             discovered = self._find_keyed_transforms(shot.start, shot.end)
             if discovered:
                 shot.objects = sorted(set(discovered))
+                self.store.update_shot(shot.shot_id, objects=shot.objects)
                 nodes = self._shot_nodes(shot)
             if not nodes:
                 return []
@@ -241,7 +304,7 @@ class ShotSequencer:
             split_static=True,
             ignore=ignore,
             time_range=(shot.start, shot.end),
-            ignore_holds=True,
+            ignore_holds=ignore_holds,
             ignore_visibility_holds=True,
             motion_only=True,
             motion_rate=motion_rate,

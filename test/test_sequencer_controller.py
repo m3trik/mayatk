@@ -210,7 +210,11 @@ def wire_cmds(mock_cmds, key_db: FakeKeyDB, obj_curves: dict):
     mock_cmds.cutKey = MagicMock(side_effect=_cutKey)
     mock_cmds.setKeyframe = MagicMock(side_effect=_setKeyframe)
     mock_cmds.listConnections = MagicMock(side_effect=_listConnections)
-    mock_cmds.ls = MagicMock(side_effect=lambda *a, **kw: list(a) if a else [])
+    mock_cmds.ls = MagicMock(
+        side_effect=lambda *a, **kw: (
+            list(a[0]) if a and isinstance(a[0], list) else list(a) if a else []
+        )
+    )
 
 
 def make_segments(obj_name, spans, stepped_times=None):
@@ -300,9 +304,14 @@ class ControllerTestCase(unittest.TestCase):
         # Slots / controller
         self.slots = FakeSlotsInstance(self.widget)
         with patch.object(ShotSequencerController, "_register_maya_undo_callbacks"):
-            with patch.object(ShotSequencerController, "_register_time_change_job"):
-                with patch.object(ShotSequencerController, "_bind_store_listener"):
-                    self.ctrl = ShotSequencerController(self.slots)
+            with patch.object(
+                ShotSequencerController, "_register_time_change_callback"
+            ):
+                with patch.object(
+                    ShotSequencerController, "_register_keyframe_callback"
+                ):
+                    with patch.object(ShotSequencerController, "_bind_store_listener"):
+                        self.ctrl = ShotSequencerController(self.slots)
         self.ctrl.sequencer = self.sequencer
 
         # Populate shot selector and select initial shot
@@ -609,13 +618,9 @@ class TestSteppedKeyMove(ControllerTestCase):
         self.ctrl.on_clip_moved(clip_id, 163.0)
 
         # Verify the key moved
-        keys_at_163 = self.key_db.get_keys_in_range(
-            "ARROW_L_visibility", 162.9, 163.1
-        )
+        keys_at_163 = self.key_db.get_keys_in_range("ARROW_L_visibility", 162.9, 163.1)
         self.assertTrue(len(keys_at_163) > 0, "Key should exist at 163")
-        keys_at_166 = self.key_db.get_keys_in_range(
-            "ARROW_L_visibility", 165.9, 166.1
-        )
+        keys_at_166 = self.key_db.get_keys_in_range("ARROW_L_visibility", 165.9, 166.1)
         self.assertEqual(len(keys_at_166), 0, "Key at 166 should be deleted")
 
 
@@ -786,11 +791,14 @@ class TestShotExpansion(ControllerTestCase):
     def setUp(self):
         super().setUp()
         shot_a = self.sequencer.sorted_shots()[0]
+        # Stepped key at 250 is outside span (100,200) so it won't be
+        # absorbed into the merged clip and will produce a separate
+        # stepped clip that the tests can locate.
         self._set_segments(
             shot_a.shot_id,
             [
                 *make_segments("Obj", [(100, 200)]),
-                *make_segments("Obj", [], stepped_times=[100.0]),
+                *make_segments("Obj", [], stepped_times=[250.0]),
             ],
         )
         self._do_initial_sync()
@@ -798,7 +806,6 @@ class TestShotExpansion(ControllerTestCase):
     def test_expand_shot_when_clip_exceeds_end(self):
         """A clip moved beyond shot.end should expand the shot."""
         shot = self.sequencer.shot_by_id(self._active_shot_id())
-        old_end = shot.end
 
         stepped_clip = None
         for cd in self._anim_clips():
@@ -808,15 +815,15 @@ class TestShotExpansion(ControllerTestCase):
         self.assertIsNotNone(stepped_clip)
 
         # Add the key
-        self.key_db.add_key("Obj_visibility", 100.0, 1.0, "spline", "step")
+        self.key_db.add_key("Obj_visibility", 250.0, 1.0, "spline", "step")
         self.obj_curves["Obj"] = ["Obj_visibility"]
         wire_cmds(_mock_cmds, self.key_db, self.obj_curves)
 
         # Move the stepped clip beyond the shot end
-        self.ctrl._apply_clip_move(stepped_clip.clip_id, 210.0)
+        self.ctrl._apply_clip_move(stepped_clip.clip_id, 310.0)
 
         self.assertGreaterEqual(
-            shot.end, 210.0, "Shot should have expanded to include moved key"
+            shot.end, 310.0, "Shot should have expanded to include moved key"
         )
 
     def test_expand_shot_does_not_shrink(self):
@@ -829,8 +836,9 @@ class TestShotExpansion(ControllerTestCase):
             if cd.data.get("is_stepped"):
                 stepped_clip = cd
                 break
+        self.assertIsNotNone(stepped_clip)
 
-        self.key_db.add_key("Obj_visibility", 100.0, 1.0, "spline", "step")
+        self.key_db.add_key("Obj_visibility", 250.0, 1.0, "spline", "step")
         self.obj_curves["Obj"] = ["Obj_visibility"]
         wire_cmds(_mock_cmds, self.key_db, self.obj_curves)
 
@@ -1054,12 +1062,13 @@ class TestAttributeClipMove(ControllerTestCase):
         self.assertIsNotNone(clip)
 
         with patch(
-            "mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots.ShotSequencerController._curves_for_attr",
+            "mayatk.anim_utils.shots.shot_sequencer._clip_motion.curves_for_attr",
             return_value=[],
         ):
             result = self.ctrl._apply_clip_move(cid, 115.0)
-        # Even with no curves found, the method should return False
-        # because no curves => delta check fails gracefully
+        # With no curves found the move still returns True (sub-row
+        # attribute path completes) and expand_shot_for_clip fires.
+        self.assertTrue(result)
 
 
 # ===========================================================================
@@ -1147,7 +1156,17 @@ class TestWidgetPopulationAfterSync(ControllerTestCase):
         self.assertTrue(len(span_clips) >= 2, "Should have span clips for both objects")
 
     def test_sync_creates_stepped_clips(self):
-        """Stepped key times become zero-duration clips."""
+        """Stepped key times outside span ranges become zero-duration clips."""
+        # Re-set segments with stepped keys outside the span so they
+        # are not absorbed into the merged span clip.
+        shot = self.sequencer.sorted_shots()[0]
+        self._set_segments(
+            shot.shot_id,
+            [
+                *make_segments("ObjA", [(10, 80)]),
+                *make_segments("ObjB", [(20, 90)], stepped_times=[5.0, 95.0]),
+            ],
+        )
         self._do_initial_sync()
         stepped_clips = [c for c in self._anim_clips() if c.data.get("is_stepped")]
         self.assertEqual(len(stepped_clips), 2, "ObjB has 2 stepped keys")
@@ -1164,14 +1183,10 @@ class TestWidgetPopulationAfterSync(ControllerTestCase):
     def test_repeated_sync_idempotent(self):
         """Calling _sync_to_widget twice should produce identical state."""
         self._do_initial_sync()
-        clips_1 = [
-            (c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()
-        ]
+        clips_1 = [(c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()]
 
         self.ctrl._sync_to_widget()
-        clips_2 = [
-            (c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()
-        ]
+        clips_2 = [(c.start, c.duration, c.data.get("obj")) for c in self._anim_clips()]
 
         self.assertEqual(sorted(clips_1), sorted(clips_2))
 
@@ -1572,7 +1587,8 @@ class TestGapOverlays(ControllerTestCase):
         for gap in self.widget._gap_overlays:
             rect = gap._rect()
             self.assertGreater(
-                rect.height(), 0,
+                rect.height(),
+                0,
                 "Gap overlay must have non-zero height even without tracks",
             )
 
@@ -1830,6 +1846,28 @@ class TestGapResize(ControllerTestCase):
         self.assertAlmostEqual(shot_b.end, orig_b[1], msg="Shot_B end not restored")
         self.assertAlmostEqual(shot_c.start, orig_c[0], msg="Shot_C start not restored")
         self.assertAlmostEqual(shot_c.end, orig_c[1], msg="Shot_C end not restored")
+
+    def test_shift_gap_resize_no_ripple(self):
+        """Shift+drag right edge adjusts only the adjacent shot's start.
+
+        Downstream shots should NOT ripple when Shift is held.
+        Fixed: 2026-04-04
+        """
+        shot_b = self.sequencer.sorted_shots()[1]
+        shot_c = self.sequencer.sorted_shots()[2]
+        orig_b_end = shot_b.end  # 310
+        orig_c_start = shot_c.start  # 320
+        orig_c_end = shot_c.end  # 420
+
+        self.widget._shift_at_press = True
+        self.ctrl.on_gap_resized(210.0, 220.0)
+
+        # Shot_B start shifted, but end stays → duration changes
+        self.assertAlmostEqual(shot_b.start, 220.0)
+        self.assertAlmostEqual(shot_b.end, orig_b_end)
+        # Shot_C untouched
+        self.assertAlmostEqual(shot_c.start, orig_c_start)
+        self.assertAlmostEqual(shot_c.end, orig_c_end)
 
 
 # ===========================================================================
@@ -2749,35 +2787,65 @@ class TestFlatObjectExclusion(ControllerTestCase):
         self._set_segments(0, make_segments("ObjA", [(110, 180)]))
 
     def test_collect_segments_excludes_flat_objects(self):
-        """_collect_segments should not include objects without segments."""
+        """collect_segments should not include objects without segments."""
+        from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+            collect_segments,
+        )
+
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        segs_by_shot, all_objects = self.ctrl._collect_segments(shot, visible)
+        segs_by_shot, all_objects = collect_segments(
+            self.sequencer,
+            shot,
+            visible,
+            self.ctrl._segment_cache,
+            self.ctrl._shifted_out_keys,
+            self.ctrl.logger,
+        )
         self.assertIn("ObjA", all_objects)
         self.assertNotIn("FlatObj", all_objects)
         self.assertNotIn("ObjB", all_objects)
 
     def test_active_object_set_excludes_flat_objects(self):
-        """_active_object_set should only include objects with segments."""
+        """active_object_set should only include objects with segments."""
+        from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+            active_object_set,
+        )
+
         shot = self.sequencer.sorted_shots()[0]
         segs_by_shot = {shot.shot_id: make_segments("ObjA", [(110, 180)])}
-        active = self.ctrl._active_object_set(shot, segs_by_shot)
+        active = active_object_set(shot, segs_by_shot)
         self.assertIn("ObjA", active)
         self.assertNotIn("FlatObj", active)
         self.assertNotIn("ObjB", active)
 
     def test_pinned_objects_still_shown(self):
         """Pinned objects should appear even without segments."""
+        from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+            collect_segments,
+        )
+
         self.sequencer.store.set_object_pinned("FlatObj")
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        _, all_objects = self.ctrl._collect_segments(shot, visible)
+        _, all_objects = collect_segments(
+            self.sequencer,
+            shot,
+            visible,
+            self.ctrl._segment_cache,
+            self.ctrl._shifted_out_keys,
+            self.ctrl.logger,
+        )
         self.assertIn("ObjA", all_objects)
         self.assertIn("FlatObj", all_objects)
         self.assertNotIn("ObjB", all_objects)
 
     def test_multi_shot_flat_object_excluded(self):
         """Flat objects should be excluded even across multiple visible shots."""
+        from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+            collect_segments,
+        )
+
         # Add a second shot with ObjA + FlatObj2
         self.sequencer.store.define_shot(
             name="Shot_B", start=200, end=300, objects=["ObjA", "FlatObj2"]
@@ -2785,7 +2853,14 @@ class TestFlatObjectExclusion(ControllerTestCase):
         self._set_segments(1, make_segments("ObjA", [(210, 280)]))
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        _, all_objects = self.ctrl._collect_segments(shot, visible)
+        _, all_objects = collect_segments(
+            self.sequencer,
+            shot,
+            visible,
+            self.ctrl._segment_cache,
+            self.ctrl._shifted_out_keys,
+            self.ctrl.logger,
+        )
         self.assertIn("ObjA", all_objects)
         self.assertNotIn("FlatObj", all_objects)
         self.assertNotIn("FlatObj2", all_objects)
@@ -2797,6 +2872,7 @@ class TestGapLeftResize(ControllerTestCase):
     shot_defs = [
         ("Shot_A", 100, 200, ["ObjA"]),
         ("Shot_B", 250, 350, ["ObjA"]),
+        ("Shot_C", 360, 460, ["ObjA"]),
     ]
     initial_shot_index = 0
 
@@ -2807,6 +2883,50 @@ class TestGapLeftResize(ControllerTestCase):
         self.ctrl.on_gap_left_resized(200.0, 190.0)
         shot_a = self.sequencer.shot_by_id(0)
         self.assertAlmostEqual(shot_a.end, 190.0)
+
+    def test_left_resize_ripples_downstream(self):
+        """Normal left-edge drag must ripple all downstream shots.
+
+        Bug: on_gap_left_resized only adjusted the preceding shot's end
+        without shifting downstream shots to accommodate.
+        Fixed: 2026-04-04
+        """
+        shot_b = self.sequencer.sorted_shots()[1]
+        shot_c = self.sequencer.sorted_shots()[2]
+        orig_b = (shot_b.start, shot_b.end)  # (250, 350)
+        orig_c = (shot_c.start, shot_c.end)  # (360, 460)
+        dur_b = orig_b[1] - orig_b[0]  # 100
+        dur_c = orig_c[1] - orig_c[0]  # 100
+
+        # Drag from 200 → 190 (delta = -10)
+        self.ctrl.on_gap_left_resized(200.0, 190.0)
+
+        # Downstream shots shift by -10 but keep durations
+        self.assertAlmostEqual(shot_b.start, orig_b[0] - 10)
+        self.assertAlmostEqual(shot_b.end - shot_b.start, dur_b)
+        self.assertAlmostEqual(shot_c.start, orig_c[0] - 10)
+        self.assertAlmostEqual(shot_c.end - shot_c.start, dur_c)
+
+    def test_shift_left_resize_no_ripple(self):
+        """Shift+drag left edge adjusts only the boundary, no ripple.
+
+        Fixed: 2026-04-04
+        """
+        shot_b = self.sequencer.sorted_shots()[1]
+        shot_c = self.sequencer.sorted_shots()[2]
+        orig_b = (shot_b.start, shot_b.end)
+        orig_c = (shot_c.start, shot_c.end)
+
+        self.widget._shift_at_press = True
+        self.ctrl.on_gap_left_resized(200.0, 190.0)
+
+        shot_a = self.sequencer.shot_by_id(0)
+        self.assertAlmostEqual(shot_a.end, 190.0)
+        # Downstream untouched
+        self.assertAlmostEqual(shot_b.start, orig_b[0])
+        self.assertAlmostEqual(shot_b.end, orig_b[1])
+        self.assertAlmostEqual(shot_c.start, orig_c[0])
+        self.assertAlmostEqual(shot_c.end, orig_c[1])
 
     def test_left_resize_noop_for_tiny_delta(self):
         """A sub-threshold delta should not change anything."""
@@ -2995,9 +3115,7 @@ class TestDeleteTrack(ControllerTestCase):
         self.ctrl.delete_track(["ObjB"])
 
         for shot in self.sequencer.sorted_shots():
-            self.assertNotIn(
-                "ObjB", shot.objects, f"ObjB still in {shot.name}.objects"
-            )
+            self.assertNotIn("ObjB", shot.objects, f"ObjB still in {shot.name}.objects")
 
     def test_delete_also_clears_pinned_and_hidden(self):
         """Deleting a track should clean up pinned and hidden state."""
@@ -3012,8 +3130,7 @@ class TestDeleteTrack(ControllerTestCase):
         """After deletion the widget should no longer have that track."""
         self._set_segments(
             0,
-            make_segments("ObjA", [(100, 200)])
-            + make_segments("ObjB", [(120, 180)]),
+            make_segments("ObjA", [(100, 200)]) + make_segments("ObjB", [(120, 180)]),
         )
         self._set_segments(1, make_segments("ObjA", [(250, 350)]))
         self._do_initial_sync()
@@ -3124,6 +3241,7 @@ class TestLockableGaps(ControllerTestCase):
         store.lock_gap(shots[0].shot_id, shots[1].shot_id)
         # Respace with gap=5 — locked gap should stay 10, unlocked should be 5
         import mayatk.anim_utils.shots.shot_sequencer._shot_sequencer as _mod
+
         with patch.object(_mod, "pm", None):
             self.sequencer.respace(gap=5, start_frame=1)
         shots = self.sequencer.sorted_shots()
@@ -3135,6 +3253,7 @@ class TestLockableGaps(ControllerTestCase):
     def test_respace_unlocked_gaps_use_uniform_value(self):
         """All unlocked gaps should use the global gap value after respace."""
         import mayatk.anim_utils.shots.shot_sequencer._shot_sequencer as _mod
+
         with patch.object(_mod, "pm", None):
             self.sequencer.respace(gap=15, start_frame=1)
         shots = self.sequencer.sorted_shots()
@@ -3165,12 +3284,8 @@ class TestLockableGaps(ControllerTestCase):
         store.lock_gap(shots[0].shot_id, shots[1].shot_id)
         data = store.to_dict()
         restored = ShotStore.from_dict(data)
-        self.assertTrue(
-            restored.is_gap_locked(shots[0].shot_id, shots[1].shot_id)
-        )
-        self.assertFalse(
-            restored.is_gap_locked(shots[1].shot_id, shots[2].shot_id)
-        )
+        self.assertTrue(restored.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
+        self.assertFalse(restored.is_gap_locked(shots[1].shot_id, shots[2].shot_id))
 
     def test_gap_overlay_receives_locked_state(self):
         """Gap overlays created during rebuild carry the locked flag."""
@@ -3188,13 +3303,9 @@ class TestLockableGaps(ControllerTestCase):
         store = self.sequencer.store
         shots = self.sequencer.sorted_shots()
         # Simulate widget signal → controller handler
-        self.ctrl.on_gap_lock_changed(
-            shots[0].end, shots[1].start, True
-        )
+        self.ctrl.on_gap_lock_changed(shots[0].end, shots[1].start, True)
         self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
-        self.ctrl.on_gap_lock_changed(
-            shots[0].end, shots[1].start, False
-        )
+        self.ctrl.on_gap_lock_changed(shots[0].end, shots[1].start, False)
         self.assertFalse(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
 
     def test_lock_all_via_controller(self):
@@ -3253,7 +3364,8 @@ class TestShotLanePopulation(ControllerTestCase):
         self._do_initial_sync()
         blocks = self.widget._timeline._scene.ruler._shot_blocks
         self.assertEqual(
-            len(blocks), 3,
+            len(blocks),
+            3,
             "All three shots should appear as ruler blocks",
         )
 
@@ -3278,7 +3390,8 @@ class TestShotLanePopulation(ControllerTestCase):
         self._do_initial_sync()
         self.widget.clear()
         self.assertEqual(
-            len(self.widget._timeline._scene.ruler._shot_blocks), 0,
+            len(self.widget._timeline._scene.ruler._shot_blocks),
+            0,
             "Ruler blocks should be empty after clear()",
         )
 
@@ -3309,7 +3422,8 @@ class TestGapOverlayDisplay(ControllerTestCase):
         self._do_initial_sync()
         # There are 2 gaps: A→B (101-111) and B→C (211-221)
         self.assertEqual(
-            len(self.widget._gap_overlays), 2,
+            len(self.widget._gap_overlays),
+            2,
             "Both gaps must have overlays regardless of display mode",
         )
 
@@ -3347,7 +3461,8 @@ class TestContiguousShotsOverlays(ControllerTestCase):
     def test_overlays_for_contiguous_shots(self):
         self._do_initial_sync()
         self.assertEqual(
-            len(self.widget._gap_overlays), 2,
+            len(self.widget._gap_overlays),
+            2,
             "Contiguous shots should have handle overlays at each boundary",
         )
 
@@ -3369,6 +3484,7 @@ class TestShotlessDisplay(ControllerTestCase):
 
     def setUp(self):
         super().setUp()
+
         # Configure playback range
         def _pb_options(**kw):
             if kw.get("q"):
@@ -3403,10 +3519,24 @@ class TestShotlessDisplay(ControllerTestCase):
         self._mock_scene_objects(
             ["ObjA", "ObjB"],
             [
-                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
-                 "is_stepped": False, "curves": [], "attr": None},
-                {"obj": "ObjB", "start": 20.0, "end": 100.0, "duration": 80.0,
-                 "is_stepped": False, "curves": [], "attr": None},
+                {
+                    "obj": "ObjA",
+                    "start": 10.0,
+                    "end": 80.0,
+                    "duration": 70.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
+                {
+                    "obj": "ObjB",
+                    "start": 20.0,
+                    "end": 100.0,
+                    "duration": 80.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
             ],
         )
         self._do_initial_sync()
@@ -3419,8 +3549,15 @@ class TestShotlessDisplay(ControllerTestCase):
         self._mock_scene_objects(
             ["ObjA"],
             [
-                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
-                 "is_stepped": False, "curves": [], "attr": None},
+                {
+                    "obj": "ObjA",
+                    "start": 10.0,
+                    "end": 80.0,
+                    "duration": 70.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
             ],
         )
         self._do_initial_sync()
@@ -3432,8 +3569,15 @@ class TestShotlessDisplay(ControllerTestCase):
         self._mock_scene_objects(
             ["ObjA"],
             [
-                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
-                 "is_stepped": False, "curves": [], "attr": None},
+                {
+                    "obj": "ObjA",
+                    "start": 10.0,
+                    "end": 80.0,
+                    "duration": 70.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
             ],
         )
         self._do_initial_sync()
@@ -3446,8 +3590,15 @@ class TestShotlessDisplay(ControllerTestCase):
         self._mock_scene_objects(
             ["ObjA"],
             [
-                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
-                 "is_stepped": False, "curves": [], "attr": None},
+                {
+                    "obj": "ObjA",
+                    "start": 10.0,
+                    "end": 80.0,
+                    "duration": 70.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
             ],
         )
         self._do_initial_sync()
@@ -3465,8 +3616,15 @@ class TestShotlessDisplay(ControllerTestCase):
         self._mock_scene_objects(
             ["ObjA", "ObjB"],
             [
-                {"obj": "ObjA", "start": 10.0, "end": 80.0, "duration": 70.0,
-                 "is_stepped": False, "curves": [], "attr": None},
+                {
+                    "obj": "ObjA",
+                    "start": 10.0,
+                    "end": 80.0,
+                    "duration": 70.0,
+                    "is_stepped": False,
+                    "curves": [],
+                    "attr": None,
+                },
             ],
         )
         self._do_initial_sync()
@@ -3494,7 +3652,7 @@ class TestPlaybackFollowsView(ControllerTestCase):
 
     def test_current_mode_sets_active_shot_range(self):
         """In 'current' mode, playback range = active shot only."""
-        self.ctrl._playback_follows_view = True
+        self.ctrl._playback_range_mode = "follows_view"
         self.ctrl._shot_display_mode = "current"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
 
@@ -3503,7 +3661,7 @@ class TestPlaybackFollowsView(ControllerTestCase):
 
     def test_adjacent_mode_spans_three_shots(self):
         """In 'adjacent' mode on middle shot, range = prev+current+next."""
-        self.ctrl._playback_follows_view = True
+        self.ctrl._playback_range_mode = "follows_view"
         self.ctrl._shot_display_mode = "adjacent"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
 
@@ -3512,7 +3670,7 @@ class TestPlaybackFollowsView(ControllerTestCase):
 
     def test_adjacent_mode_first_shot(self):
         """In 'adjacent' mode on first shot, range = current+next only."""
-        self.ctrl._playback_follows_view = True
+        self.ctrl._playback_range_mode = "follows_view"
         self.ctrl._shot_display_mode = "adjacent"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[0].shot_id)
 
@@ -3521,7 +3679,7 @@ class TestPlaybackFollowsView(ControllerTestCase):
 
     def test_all_mode_spans_entire_timeline(self):
         """In 'all' mode, range covers first to last shot."""
-        self.ctrl._playback_follows_view = True
+        self.ctrl._playback_range_mode = "follows_view"
         self.ctrl._shot_display_mode = "all"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
 
@@ -3529,8 +3687,8 @@ class TestPlaybackFollowsView(ControllerTestCase):
         self.assertEqual(args, call(min=100, max=500))
 
     def test_disabled_always_uses_active_shot(self):
-        """When _playback_follows_view is False, always use active shot range."""
-        self.ctrl._playback_follows_view = False
+        """When playback range is locked, always use active shot range."""
+        self.ctrl._playback_range_mode = "locked"
         self.ctrl._shot_display_mode = "all"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
 
@@ -3539,7 +3697,7 @@ class TestPlaybackFollowsView(ControllerTestCase):
 
     def test_view_mode_change_updates_range(self):
         """Changing view mode re-applies the playback range."""
-        self.ctrl._playback_follows_view = True
+        self.ctrl._playback_range_mode = "follows_view"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
         _mock_pm.playbackOptions.reset_mock()
 
@@ -3549,17 +3707,288 @@ class TestPlaybackFollowsView(ControllerTestCase):
         self.assertEqual(args, call(min=100, max=500))
 
     def test_toggle_reapplies_range(self):
-        """Toggling playback-follows-view on/off reapplies correctly."""
+        """Toggling playback-range-mode reapplies correctly."""
         self.ctrl._shot_display_mode = "all"
         self.ctrl.select_shot(self.sequencer.sorted_shots()[1].shot_id)
 
-        self.ctrl._toggle_playback_follows_view(False)
+        self.ctrl._set_playback_range_mode("locked")
         args = _mock_pm.playbackOptions.call_args
         self.assertEqual(args, call(min=200, max=350))
 
-        self.ctrl._toggle_playback_follows_view(True)
+        self.ctrl._set_playback_range_mode("follows_view")
         args = _mock_pm.playbackOptions.call_args
         self.assertEqual(args, call(min=100, max=500))
+
+
+# ===========================================================================
+# Test: Save does not pollute undo queue
+# ===========================================================================
+
+
+class TestSavePersistenceUndoSafe(unittest.TestCase):
+    """MayaScenePersistence.save() must not pollute the Maya undo queue.
+
+    Bug: save() called node.attr(...).set(json_data) which was an undoable
+    Maya operation. After a clip move, evalDeferred fired save() after the
+    UndoChunk closed, making the save the top undo entry instead of the
+    keyframe edit.
+    Fixed: 2026-04
+    """
+
+    def test_save_disables_undo_during_write(self):
+        """save() should bracket its Maya writes with undoInfo(off/on)."""
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        persistence = MayaScenePersistence()
+        _mock_cmds.undoInfo = MagicMock()
+        _mock_pm.objExists.return_value = True
+        mock_node = MagicMock()
+        _mock_pm.PyNode.return_value = mock_node
+
+        persistence.save({"test": "data"})
+
+        # undoInfo should have been called to disable then re-enable
+        calls = _mock_cmds.undoInfo.call_args_list
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(calls[0], call(stateWithoutFlush=False))
+        self.assertEqual(calls[-1], call(stateWithoutFlush=True))
+
+    def test_save_reenables_undo_on_exception(self):
+        """undoInfo(stateWithoutFlush=True) must fire even if save raises."""
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        persistence = MayaScenePersistence()
+        _mock_cmds.undoInfo = MagicMock()
+        _mock_pm.objExists.return_value = True
+        mock_node = MagicMock()
+        mock_node.attr.return_value.set.side_effect = RuntimeError("boom")
+        _mock_pm.PyNode.return_value = mock_node
+
+        with self.assertRaises(RuntimeError):
+            persistence.save({"test": "data"})
+
+        # Even after an error, undo must be re-enabled
+        last_call = _mock_cmds.undoInfo.call_args_list[-1]
+        self.assertEqual(last_call, call(stateWithoutFlush=True))
+
+
+# ===========================================================================
+# Test: Footer shows attr_name for sub-row clips
+# ===========================================================================
+
+
+class TestFooterAttrNameFallback(ControllerTestCase):
+    """on_selection_changed should show attr_name in the footer when
+    attributes list is empty (sub-row attribute clips).
+
+    Bug: Sub-row clips carry attr_name instead of attributes list, so
+    the footer only showed the object name with no attribute indication.
+    Fixed: 2026-04
+    """
+
+    shot_defs = [("Shot_A", 100, 200, ["ObjA"])]
+
+    def test_footer_shows_attr_name_for_sub_row(self):
+        """Selecting a sub-row clip should include the attribute in footer."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        # Create a clip with attr_name but no attributes
+        tracks = self.widget.tracks()
+        self.assertTrue(tracks, "Expected at least one track")
+        tid = tracks[0].track_id
+        cid = self.widget.add_clip(
+            track_id=tid,
+            start=110,
+            duration=70,
+            label="translateX",
+            sub_row="translateX",
+            obj="ObjA",
+            attr_name="translateX",
+            shot_id=0,
+            orig_start=110,
+            orig_end=180,
+        )
+
+        footer_calls = []
+        with patch.object(
+            self.ctrl, "_set_footer", side_effect=lambda t, **kw: footer_calls.append(t)
+        ):
+            self.ctrl.on_selection_changed([cid])
+
+        self.assertTrue(footer_calls, "Footer was not set")
+        self.assertIn("translateX", footer_calls[-1])
+
+    def test_footer_shows_attributes_list_for_object_clip(self):
+        """Selecting an object clip should show the attributes list."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        tracks = self.widget.tracks()
+        tid = tracks[0].track_id
+        cid = self.widget.add_clip(
+            track_id=tid,
+            start=110,
+            duration=70,
+            label="ObjA",
+            obj="ObjA",
+            attributes=["translateX", "rotateY"],
+            shot_id=0,
+            orig_start=110,
+            orig_end=180,
+        )
+
+        footer_calls = []
+        with patch.object(
+            self.ctrl, "_set_footer", side_effect=lambda t, **kw: footer_calls.append(t)
+        ):
+            self.ctrl.on_selection_changed([cid])
+
+        self.assertTrue(footer_calls, "Footer was not set")
+        self.assertIn("translateX", footer_calls[-1])
+        self.assertIn("rotateY", footer_calls[-1])
+
+
+# ===========================================================================
+# Test: Object tracks always ignore holds
+# ===========================================================================
+
+
+class TestObjectTracksIgnoreHolds(ControllerTestCase):
+    """collect_segments always passes ignore_holds=True for object tracks.
+
+    Internal holds are an attribute-level detail shown only in expanded
+    sub-rows. Object tracks show the gross motion shape.
+    Fixed: 2026-04
+    """
+
+    shot_defs = [("Shot_A", 100, 200, ["ObjA"])]
+
+    def test_collect_always_ignores_holds(self):
+        """collect_segments calls collect_object_segments with ignore_holds=True
+        regardless of _show_internal_holds setting."""
+        from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+            collect_segments,
+        )
+
+        calls_log = []
+        orig_collect = self.sequencer.collect_object_segments
+
+        def tracking_collect(sid, **kw):
+            calls_log.append(kw)
+            return orig_collect(sid, **kw)
+
+        self.sequencer.collect_object_segments = tracking_collect
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+
+        shot = self.sequencer.sorted_shots()[0]
+        visible = [shot]
+
+        # With holds enabled
+        self.ctrl._show_internal_holds = True
+        self.ctrl._segment_cache.clear()
+        collect_segments(
+            self.sequencer,
+            shot,
+            visible,
+            self.ctrl._segment_cache,
+            self.ctrl._shifted_out_keys,
+            self.ctrl.logger,
+        )
+        self.assertTrue(calls_log[-1].get("ignore_holds", False))
+
+        # With holds disabled
+        self.ctrl._show_internal_holds = False
+        self.ctrl._segment_cache.clear()
+        calls_log.clear()
+        collect_segments(
+            self.sequencer,
+            shot,
+            visible,
+            self.ctrl._segment_cache,
+            self.ctrl._shifted_out_keys,
+            self.ctrl.logger,
+        )
+        self.assertTrue(calls_log[-1].get("ignore_holds", False))
+
+    def test_toggle_holds_only_clears_sub_row_cache(self):
+        """_set_show_internal_holds should clear _sub_row_cache but NOT
+        _segment_cache since object segments are hold-independent."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        self.ctrl._segment_cache["sentinel"] = "keep_me"
+        self.ctrl._sub_row_cache["sentinel"] = "remove_me"
+
+        with patch.object(self.ctrl, "_sync_to_widget"):
+            self.ctrl._set_show_internal_holds(True)
+
+        self.assertIn("sentinel", self.ctrl._segment_cache)
+        self.assertNotIn("sentinel", self.ctrl._sub_row_cache)
+
+
+# ===========================================================================
+# Test: on_undo/on_redo always sync even on RuntimeError
+# ===========================================================================
+
+
+class TestUndoRedoRuntimeErrorRecovery(ControllerTestCase):
+    """on_undo and on_redo must clear caches and sync the widget
+    even when pm.undo()/pm.redo() raises RuntimeError.
+
+    Bug: except RuntimeError: return skipped cache clear and widget sync,
+    leaving the widget stale after _restore_shot_state had already run.
+    Fixed: 2026-04
+    """
+
+    shot_defs = [("Shot_A", 100, 200, ["ObjA"])]
+
+    def test_undo_syncs_on_runtime_error(self):
+        """on_undo with empty Maya undo queue should still sync widget."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        # Push a shot state so _restore_shot_state has something to pop
+        self.ctrl._save_shot_state()
+
+        _mock_pm.undo.side_effect = RuntimeError("Nothing to undo")
+        sync_calls = []
+        with patch.object(
+            self.ctrl, "_sync_to_widget", side_effect=lambda **kw: sync_calls.append(1)
+        ):
+            self.ctrl.on_undo()
+
+        self.assertEqual(len(sync_calls), 1, "_sync_to_widget must be called")
+        _mock_pm.undo.side_effect = None
+
+    def test_redo_syncs_on_runtime_error(self):
+        """on_redo with empty Maya redo queue should still sync widget."""
+        self._set_segments(0, make_segments("ObjA", [(110, 180)]))
+        self._do_initial_sync()
+
+        _mock_pm.redo.side_effect = RuntimeError("Nothing to redo")
+        sync_calls = []
+        with patch.object(
+            self.ctrl, "_sync_to_widget", side_effect=lambda **kw: sync_calls.append(1)
+        ):
+            self.ctrl.on_redo()
+
+        self.assertEqual(len(sync_calls), 1, "_sync_to_widget must be called")
+        _mock_pm.redo.side_effect = None
+
+    def test_undo_clears_caches_on_error(self):
+        """Segment and sub-row caches must be invalidated even on error."""
+        self.ctrl._save_shot_state()
+        self.ctrl._segment_cache["stale"] = "data"
+        self.ctrl._sub_row_cache["stale"] = "data"
+
+        _mock_pm.undo.side_effect = RuntimeError("Nothing")
+        with patch.object(self.ctrl, "_sync_to_widget"):
+            self.ctrl.on_undo()
+
+        self.assertNotIn("stale", self.ctrl._segment_cache)
+        self.assertNotIn("stale", self.ctrl._sub_row_cache)
+        _mock_pm.undo.side_effect = None
 
 
 if __name__ == "__main__":

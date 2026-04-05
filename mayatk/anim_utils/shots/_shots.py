@@ -106,15 +106,24 @@ class MayaScenePersistence:
         if pm is None:
             return
         import json
+        import maya.cmds as cmds
 
-        node = None
-        if pm.objExists(self._node_name):
-            node = pm.PyNode(self._node_name)
-        else:
-            node = pm.createNode("network", name=self._node_name)
-            pm.addAttr(node, longName=self._attr_name, dataType="string")
+        # Persistence writes must not pollute the undo queue.  They
+        # fire via evalDeferred AFTER an UndoChunk closes and would
+        # otherwise become the top undo entry, preventing the real
+        # operation (e.g. keyframe move) from being undone.
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            node = None
+            if pm.objExists(self._node_name):
+                node = pm.PyNode(self._node_name)
+            else:
+                node = pm.createNode("network", name=self._node_name)
+                pm.addAttr(node, longName=self._attr_name, dataType="string")
 
-        node.attr(self._attr_name).set(json.dumps(data))
+            node.attr(self._attr_name).set(json.dumps(data))
+        finally:
+            cmds.undoInfo(stateWithoutFlush=True)
 
     def load(self) -> Optional[Dict[str, Any]]:
         if pm is None:

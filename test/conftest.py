@@ -55,6 +55,7 @@ sys.modules["pymel.core"] = mock_pm
 sys.modules.setdefault("maya", types.ModuleType("maya"))
 sys.modules.setdefault("maya.api", types.ModuleType("maya.api"))
 sys.modules["maya.api.OpenMaya"] = mock_om2
+sys.modules.setdefault("maya.api.OpenMayaAnim", MagicMock())
 sys.modules["maya.cmds"] = mock_cmds
 sys.modules.setdefault("maya.mel", MagicMock())
 sys.modules.setdefault("maya.OpenMaya", MagicMock())

@@ -26,11 +26,19 @@ __all__ = [
 
 
 def collect_segments(
-    sequencer, shot, visible_shots, segment_cache, shifted_out_keys, logger
+    sequencer,
+    shot,
+    visible_shots,
+    segment_cache,
+    shifted_out_keys,
+    logger,
 ):
     """Collect animation segments for visible shots.
 
     Returns ``(segments_by_shot, all_objects)``.
+
+    Object-level tracks always ignore holds — hold visibility is an
+    attribute-level detail handled by ``_provide_sub_rows``.
 
     Parameters
     ----------
@@ -51,7 +59,7 @@ def collect_segments(
     for vs in visible_shots:
         is_active_shot = vs.shot_id == shot.shot_id
         if is_active_shot or vs.shot_id not in segment_cache:
-            segs = sequencer.collect_object_segments(vs.shot_id)
+            segs = sequencer.collect_object_segments(vs.shot_id, ignore_holds=True)
             segment_cache[vs.shot_id] = segs
         else:
             segs = segment_cache[vs.shot_id]

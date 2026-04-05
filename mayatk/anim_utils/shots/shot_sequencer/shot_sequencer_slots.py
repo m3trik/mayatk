@@ -80,13 +80,17 @@ class ShotSequencerController(
         self._prev_action = None  # OptionBox action for prev shot
         self._next_action = None  # OptionBox action for next shot
         self._view_mode_action = None  # OptionBox action for view mode cycle
-        self._markers_mode_action = None  # OptionBox action shots↔markers
+        self._cmb_mode_widget = None  # mode selector combobox (Shots/Markers)
+        self._holds_action = None  # OptionBox action for internal holds toggle
         self._playback_range_mode: str = (
             "follows_view"  # "off" | "follows_view" | "locked"
         )
         self._track_order_scope: str = "visible"  # "visible" | "global"
+        self._show_internal_holds: bool = (
+            False  # show flat-key spans in attribute sub-rows
+        )
         self._cmb_mode: str = "shots"  # "shots" or "markers"
-        self._cmb_label = None  # QLabel next to cmb_shot for mode text
+
         self._register_maya_undo_callbacks()
         self._register_time_change_callback()
         self._register_keyframe_callback()
@@ -521,14 +525,20 @@ class ShotSequencerController(
             self._apply_view_playback_range()
 
     def _set_cmb_mode(self, mode: str) -> None:
-        """Toggle the combobox between shots and scene markers."""
+        """Switch the combobox between shots and scene markers."""
         if mode == "markers":
             widget = self._get_sequencer_widget()
             if widget and not widget.markers():
                 return  # No markers available — stay in shots mode
         self._cmb_mode = mode
-        if self._cmb_label is not None:
-            self._cmb_label.setText("Markers:" if mode == "markers" else "Shots:")
+        # Keep the mode selector in sync (guard against re-entry)
+        cmb_mode = self._cmb_mode_widget
+        if cmb_mode is not None:
+            idx = 1 if mode == "markers" else 0
+            if cmb_mode.currentIndex() != idx:
+                cmb_mode.blockSignals(True)
+                cmb_mode.setCurrentIndex(idx)
+                cmb_mode.blockSignals(False)
         self._sync_combobox()
 
     # ---- widget ↔ engine sync -------------------------------------------
@@ -575,7 +585,7 @@ class ShotSequencerController(
             self._restore_shot_state()
             pm.undo()
         except RuntimeError:
-            return
+            pass
         finally:
             self._syncing = False
         self._segment_cache.clear()
@@ -590,7 +600,7 @@ class ShotSequencerController(
         try:
             pm.redo()
         except RuntimeError:
-            return
+            pass
         finally:
             self._syncing = False
         self._segment_cache.clear()
@@ -729,7 +739,7 @@ class ShotSequencerController(
 
         from mayatk.anim_utils.segment_keys import SegmentKeys
 
-        valid = cmds.ls(scene_shot.objects) or []
+        valid = cmds.ls(scene_shot.objects, long=True) or []
         segments = SegmentKeys.collect_segments(
             valid,
             split_static=True,
@@ -813,31 +823,45 @@ class ShotSequencerController(
 
     def _rebuild_content(self, widget, shot, visible_shots) -> None:
         """Clear widget and rebuild tracks + clips from segments (expensive)."""
-        widget.clear()
-        self._sub_row_cache.clear()
-        self._sync_header_settings(widget)
+        # Suppress store-event → _sync_to_widget re-entrancy for the
+        # entire rebuild.  Both reconciliation and auto-discovery may
+        # call store.update_shot(); without this guard each call would
+        # trigger a nested _sync_to_widget mid-build → duplicate tracks.
+        self._syncing = True
+        try:
+            widget.clear()
+            self._sub_row_cache.clear()
+            self._sync_header_settings(widget)
 
-        segments_by_shot, all_objects = collect_segments(
-            self.sequencer,
-            shot,
-            visible_shots,
-            self._segment_cache,
-            self._shifted_out_keys,
-            self.logger,
-        )
+            # Re-resolve any stale DAG paths (e.g. parent renamed) across
+            # ALL shots before collecting segments so that global track sets
+            # and segment caches never mix old and new paths.
+            if self.sequencer.reconcile_all_shots():
+                self._segment_cache.clear()
 
-        # When "global" scope is active, expand the object set to include
-        # every object across all shots so track positions never shift.
-        if self._track_order_scope == "global":
-            for s in self.sequencer.sorted_shots():
-                all_objects.update(s.objects)
+            segments_by_shot, all_objects = collect_segments(
+                self.sequencer,
+                shot,
+                visible_shots,
+                self._segment_cache,
+                self._shifted_out_keys,
+                self.logger,
+            )
 
-        active_objects = active_object_set(shot, segments_by_shot)
-        track_ids = self._build_tracks(
-            widget, all_objects, active_objects, active_shot=shot
-        )
-        self._build_clips(widget, shot, visible_shots, segments_by_shot, track_ids)
-        self._build_audio_tracks(widget, shot)
+            # When "global" scope is active, expand the object set to include
+            # every object across all shots so track positions never shift.
+            if self._track_order_scope == "global":
+                for s in self.sequencer.sorted_shots():
+                    all_objects.update(s.objects)
+
+            active_objects = active_object_set(shot, segments_by_shot)
+            track_ids = self._build_tracks(
+                widget, all_objects, active_objects, active_shot=shot
+            )
+            self._build_clips(widget, shot, visible_shots, segments_by_shot, track_ids)
+            self._build_audio_tracks(widget, shot)
+        finally:
+            self._syncing = False
 
     def _rebuild_decoration(self, widget, shot, visible_shots) -> None:
         """Recreate overlays, markers, gap indicators, and active-shot tint."""
@@ -1216,6 +1240,10 @@ class ShotSequencerController(
                 if pm.objExists(full):
                     resolved.append(full)
                 attrs = clip.data.get("attributes", [])
+                if not attrs:
+                    attr_name = clip.data.get("attr_name")
+                    if attr_name:
+                        attrs = [attr_name]
                 start = clip.data.get("orig_start")
                 end = clip.data.get("orig_end")
                 parts = [obj]
@@ -1306,6 +1334,12 @@ class ShotSequencerController(
             return
         self.sequencer.store.select_on_load = checked
         self.sequencer.store.mark_dirty()
+
+    def _set_show_internal_holds(self, enabled: bool) -> None:
+        """Toggle flat-key span visibility in attribute sub-rows."""
+        self._show_internal_holds = enabled
+        self._sub_row_cache.clear()
+        self._sync_to_widget()
 
     def _open_spreadsheet(self, track_names) -> None:
         """Select the objects and open Maya's Attribute Spread Sheet."""
@@ -1451,6 +1485,10 @@ class ShotSequencerController(
         Called by the widget's ``sub_row_provider`` protocol when a user
         double-clicks a header label to expand a track.
 
+        Uses the same ``SegmentKeys.collect_segments`` pipeline as the
+        object row so that hold absorption, hold-only synthesis, and
+        motion detection are consistent between both views.
+
         Returns
         -------
         list
@@ -1492,11 +1530,12 @@ class ShotSequencerController(
 
         widget = self._get_sequencer_widget()
         color_map = widget.attribute_colors if widget else {}
-        store = self.sequencer.store if self.sequencer else None
-        gap = store.detection_threshold if store else 10.0
+        show_holds = self._show_internal_holds
 
-        # Group curves by attribute
-        attr_curves: dict = defaultdict(list)
+        # Discover which attributes this object has animated curves for.
+        # We need the attribute names to iterate; the actual per-attribute
+        # curve filtering is handled by collect_segments via channel_box_attrs.
+        attr_names: set = set()
         for curve in all_curves:
             try:
                 conns = (
@@ -1507,51 +1546,63 @@ class ShotSequencerController(
                 )
                 for conn in conns:
                     if "." in conn:
-                        attr_curves[conn.rsplit(".", 1)[-1]].append(curve)
+                        attr_names.add(conn.rsplit(".", 1)[-1])
             except Exception:
                 continue
 
         result = []
-        for attr_name, curves in sorted(attr_curves.items()):
-            # Use active-segment analysis to trim flat holds
-            spans, stepped, kf_times = SegmentKeys._get_active_animation_segments(
-                curves,
+        for attr_name in sorted(attr_names):
+            # Reuse the same collect_segments pipeline as the object row.
+            # channel_box_attrs filters to just this attribute's curves.
+            segs = SegmentKeys.collect_segments(
+                [obj_name],
+                split_static=True,
+                channel_box_attrs=[attr_name],
+                ignore_holds=not show_holds,
                 ignore_visibility_holds=True,
                 motion_only=True,
                 motion_rate=1e-3,
+                time_range=(shot.start, shot.end),
             )
 
-            # Filter to shot range and merge with gap threshold
-            all_ranges = []
-            for s, e in spans:
-                cs = max(s, shot.start)
-                ce = min(e, shot.end)
-                if cs < ce:
-                    all_ranges.append((cs, ce))
-            for s, _ in stepped:
-                if shot.start - 0.001 <= s <= shot.end + 0.001:
-                    all_ranges.append((s, s))
-
-            if not all_ranges:
+            if not segs:
                 continue
 
-            all_ranges.sort()
-
-            # Merge ranges respecting gap_threshold
-            merged = [list(all_ranges[0])]
-            for s, e in all_ranges[1:]:
-                if s <= merged[-1][1] + gap:
-                    merged[-1][1] = max(merged[-1][1], e)
-                else:
-                    merged.append([s, e])
+            # Determine which segments are pure holds by comparing
+            # against active-only results.  A segment is a pure hold
+            # only when it has zero overlap with any active span.
+            # Motion-extended segments (motion + trailing hold) keep
+            # normal styling since they contain real motion.
+            hold_ranges: set = set()
+            if show_holds:
+                active_segs = SegmentKeys.collect_segments(
+                    [obj_name],
+                    split_static=True,
+                    channel_box_attrs=[attr_name],
+                    ignore_holds=True,
+                    ignore_visibility_holds=True,
+                    motion_only=True,
+                    motion_rate=1e-3,
+                    time_range=(shot.start, shot.end),
+                )
+                active_spans = [(s["start"], s["end"]) for s in active_segs]
+                for seg in segs:
+                    ss, se = seg["start"], seg["end"]
+                    # Pure hold: no overlap with any active span
+                    if not any(a_s < se and a_e > ss for a_s, a_e in active_spans):
+                        hold_ranges.add((ss, se))
 
             color = color_map.get(attr_name)
             segments = []
-            for s, e in merged:
+            for seg in segs:
+                s, e = seg["start"], seg["end"]
                 dur = e - s
-                # Build curve preview for the segment's time range
+                is_hold = (s, e) in hold_ranges
+                is_stepped = seg.get("is_stepped", False)
+
+                # Build curve preview from the segment's own curves
                 preview = None
-                for crv in curves:
+                for crv in seg.get("curves", []):
                     preview = build_curve_preview(crv, s, e)
                     if preview:
                         break
@@ -1564,10 +1615,11 @@ class ShotSequencerController(
                 }
                 if preview:
                     extra["curve_preview"] = preview
-                # Zero-duration: lock it
-                if dur < 1e-6:
+                if is_stepped or dur < 1e-6:
                     extra["is_stepped"] = True
                     extra["stepped_key_time"] = s
+                elif is_hold:
+                    extra["is_hold"] = True
                 segments.append((s, dur, attr_name, color, extra))
             result.append((attr_name, segments))
 
@@ -1822,30 +1874,10 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             order=4,
         )
 
-        # Shots ↔ Markers toggle
-        _MARKER_STATES = [
-            {
-                "icon": "camera",
-                "tooltip": "Shots",
-                "callback": lambda: self.controller._set_cmb_mode("markers"),
-            },
-            {
-                "icon": "chevron_down",
-                "tooltip": "Markers",
-                "callback": lambda: self.controller._set_cmb_mode("shots"),
-            },
-        ]
-        markers_opt = ActionOption(
-            wrapped_widget=cmb,
-            states=_MARKER_STATES,
-            order=3,
-        )
-
         cmb.option_box.set_order(["action"])
         cmb.option_box.add_option(prev_opt)
         cmb.option_box.add_option(next_opt)
         cmb.option_box.add_option(view_opt)
-        cmb.option_box.add_option(markers_opt)
 
         # "+" button — one-click shot creation
         add_opt = ActionOption(
@@ -1867,10 +1899,33 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         cmb.option_box.add_option(refresh_opt)
 
+        # Show Internal Holds toggle (two-state: off / on)
+        _HOLD_STATES = [
+            {
+                "icon": "eye_off",
+                "tooltip": "Show Internal Holds (off)\nClick to reveal flat-key spans in sub-rows",
+                "callback": lambda: self.controller._set_show_internal_holds(True),
+            },
+            {
+                "icon": "eye",
+                "tooltip": "Show Internal Holds (on)\nClick to hide flat-key spans in sub-rows",
+                "callback": lambda: self.controller._set_show_internal_holds(False),
+            },
+        ]
+        holds_opt = ActionOption(
+            wrapped_widget=cmb,
+            states=_HOLD_STATES,
+            order=5,
+            settings_key="shot_sequencer_show_holds",
+        )
+        cmb.option_box.add_option(holds_opt)
+        # Sync controller state from persisted option state
+        self.controller._show_internal_holds = holds_opt.current_state == 1
+        self.controller._holds_action = holds_opt
+
         self.controller._prev_action = prev_opt
         self.controller._next_action = next_opt
         self.controller._view_mode_action = view_opt
-        self.controller._markers_mode_action = markers_opt
 
         # Install right-click context menu on the combobox
         from qtpy import QtCore
@@ -1878,13 +1933,17 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         cmb.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         cmb.customContextMenuRequested.connect(self._cmb_context_menu)
 
-        # Reference the label from the .ui file
-        lbl = getattr(self.ui, "lbl_cmb_mode", None)
-        if lbl is not None:
-            from qtpy import QtCore
-
-            lbl.setFixedWidth(lbl.fontMetrics().horizontalAdvance("Markers:") + 4)
-            self.controller._cmb_label = lbl
+        # Wire the mode selector combobox (Shots / Markers)
+        cmb_mode = getattr(self.ui, "cmb_mode", None)
+        if cmb_mode is not None:
+            cmb_mode.blockSignals(True)
+            cmb_mode.clear()
+            cmb_mode.addItem("Shots:", "shots")
+            cmb_mode.addItem("Markers:", "markers")
+            cmb_mode.setCurrentIndex(0)
+            cmb_mode.blockSignals(False)
+            cmb_mode.currentIndexChanged.connect(self._on_cmb_mode_changed)
+            self.controller._cmb_mode_widget = cmb_mode
 
     def _on_playback_range_changed(self, index: int) -> None:
         """Handle playback-range combobox selection."""
@@ -1894,6 +1953,15 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         mode = cmb_pb.itemData(index)
         if mode:
             self.controller._set_playback_range_mode(mode)
+
+    def _on_cmb_mode_changed(self, index: int) -> None:
+        """Handle the Shots/Markers mode selector combobox."""
+        cmb_mode = getattr(self.ui, "cmb_mode", None)
+        if cmb_mode is None:
+            return
+        mode = cmb_mode.itemData(index)
+        if mode:
+            self.controller._set_cmb_mode(mode)
 
     def _on_track_order_changed(self, index: int) -> None:
         """Handle track-order scope combobox selection."""
@@ -2079,7 +2147,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "  \u2022 \u25c4 / \u25ba \u2014 Previous / next shot.\n"
                 "  \u2022 + \u2014 Append a new shot to the end.\n"
                 "  \u2022 View Mode (cycles): Current \u2192 Adjacent \u2192 All.\n"
-                "  \u2022 Shots / Markers toggle \u2014 Switch dropdown content.\n"
+                "  \u2022 Shots / Markers selector \u2014 Switch dropdown content.\n"
                 "  \u2022 Refresh \u2014 Rebuild from Maya.\n"
                 "  \u2022 Right-click dropdown: New Shot, Detect Next Shot\n"
                 "    (finds the next unregistered animation cluster),\n"
