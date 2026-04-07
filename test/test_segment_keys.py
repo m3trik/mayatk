@@ -763,6 +763,131 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(result[0], (0, 10))
         self.assertEqual(result[1], (20, 30))
 
+    @unittest.skipIf(pm is None, "Requires Maya")
+    def test_stepped_tangent_emits_full_interval(self):
+        """Stepped tangent with value change emits full [t1, t2] interval.
+
+        The rate-based check is skipped for stepped tangents (no gradual
+        motion). Instead, a simple value-change check determines whether the
+        interval is active. Pass-through pruning in collect_segments handles
+        the case where both boundary keys are outside the shot range.
+        Fixed: 2025-07-17
+        """
+        import maya.cmds as cmds
+
+        cube = pm.polyCube(name="steppedCube")[0]
+
+        # Wide stepped interval: value holds at 37.35 until t=18388, then
+        # jumps to -40.  Rate-based check would have used
+        # abs(-40 - 37.35) / 17988 ≈ 0.0043 > 0.001, but stepped tangent
+        # handling skips that and uses a simple value-change check instead.
+        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
+        pm.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
+
+        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves, motion_only=True, motion_rate=1e-3,
+        )
+
+        # Should be a full [400, 18388] interval.
+        self.assertEqual(len(result), 1, f"Expected 1 segment, got {result}")
+        start, end = result[0]
+        self.assertAlmostEqual(start, 400, places=0)
+        self.assertAlmostEqual(end, 18388, places=0)
+
+    @unittest.skipIf(pm is None, "Requires Maya")
+    def test_stepped_pass_through_pruned_by_collect(self):
+        """Stepped interval fully outside shot range is pruned by collect_segments.
+
+        Bug: A distant stepped interval (e.g. rotateY [400, 18388]) was
+        clamped to the shot range, producing a full-shot clip with no real
+        keyframes. collect_segments now drops pass-through intervals whose
+        original boundary keys are both outside the time range AND have no
+        in-range keyframes.
+        Fixed: 2025-07-17
+        """
+        import maya.cmds as cmds
+
+        cube = pm.polyCube(name="steppedPassCube")[0]
+
+        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
+        pm.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
+
+        # Collect with a shot range that excludes both keys.
+        segments = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            time_range=(1560, 1800),
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+
+        # No segments — the stepped interval passes through the range
+        # but neither key is inside it.
+        self.assertEqual(len(segments), 0, f"Expected 0 segments, got {segments}")
+
+    @unittest.skipIf(pm is None, "Requires Maya")
+    def test_stepped_partial_pass_through_emits_point(self):
+        """Stepped interval with one key outside range emits only the in-range key.
+
+        Bug: A stepped visibility interval like [1434, 1785] where t1 is
+        before the shot produced a wide clip [shot_start, 1785] after
+        clamping. The pre-shot hold (constant value) should not create a
+        clip; only the in-range jump at t2 matters.
+        Fixed: 2025-07-17
+        """
+        import maya.cmds as cmds
+
+        cube = pm.polyCube(name="steppedPartialCube")[0]
+
+        # Stepped interval: t1=1434 outside [1560,1800], t2=1785 inside.
+        pm.setKeyframe(cube, t=1434, v=0, at="ry")
+        pm.setKeyframe(cube, t=1785, v=1, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(1434, 1434), ott="step")
+
+        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
+            time_range=(1560, 1800),
+        )
+
+        # Should be a single zero-duration point at t2=1785 (the in-range key).
+        self.assertEqual(len(result), 1, f"Expected 1 segment, got {result}")
+        start, end = result[0]
+        self.assertAlmostEqual(start, 1785, places=0)
+        self.assertAlmostEqual(end, 1785, places=0)
+
+    @unittest.skipIf(pm is None, "Requires Maya")
+    def test_stepped_same_value_is_pure_hold(self):
+        """Stepped interval with same start/end value is a pure hold — no segment.
+
+        Bug: Same as stepped tangent bug — a stepped interval where v1 == v2
+        should produce no active segment at all.
+        Fixed: 2025-07-17
+        """
+        import maya.cmds as cmds
+
+        cube = pm.polyCube(name="stepHoldCube")[0]
+
+        # Stepped hold: value stays 37.35 for entire interval.
+        pm.setKeyframe(cube, t=0, v=37.35, at="ry")
+        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
+        pm.setKeyframe(cube, t=18388, v=37.35, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(0, 400), ott="step")
+
+        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves, motion_only=True, motion_rate=1e-3,
+        )
+
+        # No value changes anywhere → zero active segments.
+        self.assertEqual(len(result), 0, f"Expected 0 segments, got {result}")
+
 
 class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
     """Edge case tests for SegmentKeys."""

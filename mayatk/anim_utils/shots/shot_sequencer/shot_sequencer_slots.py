@@ -58,7 +58,7 @@ class ShotSequencerController(
 ):
     """Business logic controller bridging SequencerWidget ↔ ShotSequencer."""
 
-    def __init__(self, slots_instance, log_level="DEBUG"):
+    def __init__(self, slots_instance, log_level="WARNING"):
         super().__init__()
         self.set_log_level(log_level)
         self.sb = slots_instance.sb
@@ -526,10 +526,6 @@ class ShotSequencerController(
 
     def _set_cmb_mode(self, mode: str) -> None:
         """Switch the combobox between shots and scene markers."""
-        if mode == "markers":
-            widget = self._get_sequencer_widget()
-            if widget and not widget.markers():
-                return  # No markers available — stay in shots mode
         self._cmb_mode = mode
         # Keep the mode selector in sync (guard against re-entry)
         cmb_mode = self._cmb_mode_widget
@@ -582,7 +578,10 @@ class ShotSequencerController(
             return
         self._syncing = True
         try:
-            self._restore_shot_state()
+            try:
+                self._restore_shot_state()
+            except Exception:
+                self.logger.debug("on_undo: _restore_shot_state failed", exc_info=True)
             pm.undo()
         except RuntimeError:
             pass
@@ -624,9 +623,56 @@ class ShotSequencerController(
         if clip is None:
             return
 
+        obj_name = clip.data.get("obj")
+
         menu.addSeparator()
         act_delete = menu.addAction("Delete Key")
         act_delete.triggered.connect(lambda: self._delete_clip_keys([clip_id]))
+
+        # Per-object lock helpers
+        if obj_name and self.sequencer:
+            menu.addSeparator()
+            act_lock_others = menu.addAction("Lock Others")
+            act_unlock_all = menu.addAction("Unlock All")
+            act_lock_others.triggered.connect(
+                lambda: self._lock_others(widget, obj_name)
+            )
+            act_unlock_all.triggered.connect(lambda: self._unlock_all(widget))
+
+    # -- lock helpers -------------------------------------------------------
+
+    def _lock_others(self, widget, keep_obj: str) -> None:
+        """Lock every main-row object clip except *keep_obj*."""
+        store = self.sequencer.store if self.sequencer else None
+        if store is None:
+            return
+        # Collect all unique main-row object names in the active shot
+        obj_names: set = set()
+        for cd in widget._clips.values():
+            o = cd.data.get("obj")
+            if o and not cd.sub_row and not cd.data.get("read_only"):
+                obj_names.add(o)
+        for o in obj_names:
+            if o == keep_obj:
+                store.locked_objects.discard(o)
+            else:
+                store.locked_objects.add(o)
+        # Apply to all clips
+        for cid, cd in list(widget._clips.items()):
+            o = cd.data.get("obj")
+            if o and not cd.data.get("read_only"):
+                widget.set_clip_locked(cid, o != keep_obj)
+        self._sub_row_cache.clear()
+
+    def _unlock_all(self, widget) -> None:
+        """Unlock every clip in the current view."""
+        store = self.sequencer.store if self.sequencer else None
+        if store is not None:
+            store.locked_objects.clear()
+        for cid, cd in list(widget._clips.items()):
+            if cd.locked and not cd.data.get("read_only"):
+                widget.set_clip_locked(cid, False)
+        self._sub_row_cache.clear()
 
     def on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None:
         """Add domain-specific actions to a gap overlay's context menu.
@@ -759,6 +805,7 @@ class ShotSequencerController(
             widget, all_objects, all_objects, active_shot=scene_shot
         )
         self._build_clips(widget, scene_shot, [scene_shot], segments_by_shot, track_ids)
+        self._ensure_scene_attr_colors(widget)
         self._build_audio_tracks(widget, scene_shot)
 
         current_time = cmds.currentTime(q=True)
@@ -859,6 +906,7 @@ class ShotSequencerController(
                 widget, all_objects, active_objects, active_shot=shot
             )
             self._build_clips(widget, shot, visible_shots, segments_by_shot, track_ids)
+            self._ensure_scene_attr_colors(widget)
             self._build_audio_tracks(widget, shot)
         finally:
             self._syncing = False
@@ -963,6 +1011,48 @@ class ShotSequencerController(
                 color_map[key] = val
         widget.attribute_colors = color_map
 
+    # Palette for auto-assigning colors to scene-specific attributes
+    # not present in the user's color map (e.g. custom/plugin attrs).
+    _AUTO_PALETTE = [
+        "#5B8BD4",
+        "#6EBF6E",
+        "#D4A65B",
+        "#C45C5C",
+        "#8E6FBF",
+        "#5BBFB4",
+        "#BF6E8E",
+        "#8EB05B",
+    ]
+
+    def _ensure_scene_attr_colors(self, widget) -> None:
+        """Auto-assign colors to scene attributes missing from the color map.
+
+        Scans all clips for attribute names not yet in
+        ``widget.attribute_colors`` and assigns each a deterministic
+        color from ``_AUTO_PALETTE`` (hash-based so the same attribute
+        always gets the same color).  The widget's live color map is
+        updated in-place so that both ``ClipItem._resolve_color`` and
+        ``_provide_sub_rows`` see the assignments.
+        """
+        if widget is None:
+            return
+        color_map = widget.attribute_colors
+        changed = False
+        from hashlib import md5
+
+        for clip in widget._clips.values():
+            for attr in clip.data.get("attributes", []):
+                if attr not in color_map:
+                    # Deterministic hash — same attribute always maps to
+                    # the same palette slot (built-in hash() is randomized).
+                    idx = int(md5(attr.encode()).hexdigest(), 16) % len(
+                        self._AUTO_PALETTE
+                    )
+                    color_map[attr] = self._AUTO_PALETTE[idx]
+                    changed = True
+        if changed:
+            widget.attribute_colors = color_map
+
     def _build_tracks(
         self, widget, all_objects, active_objects, active_shot=None
     ) -> dict:
@@ -1031,6 +1121,8 @@ class ShotSequencerController(
             for seg in segs:
                 by_obj[seg["obj"]].append(seg)
 
+            store = self.sequencer.store if self.sequencer else None
+
             for obj_name in sorted(set(vs.objects) | set(by_obj)):
                 if self.sequencer.is_object_hidden(obj_name):
                     continue
@@ -1041,12 +1133,11 @@ class ShotSequencerController(
                 if not obj_segs:
                     continue
 
-                span_segs = [seg for seg in obj_segs if not seg.get("is_stepped")]
-                stepped_segs = [seg for seg in obj_segs if seg.get("is_stepped")]
-
                 extra: dict = {}
                 if not is_active:
                     extra = {"locked": True, "read_only": True, "dimmed": True}
+                elif store and obj_name in store.locked_objects:
+                    extra = {"locked": True}
                 status = obj_classes.get(obj_name, "valid")
                 if status != "valid":
                     pair = SHOT_PALETTE.get(status)
@@ -1055,19 +1146,24 @@ class ShotSequencerController(
                         if fg:
                             extra["status_color"] = fg
 
+                # Merge adjacent segments separated only by flat-key
+                # gaps so the main track shows fewer, larger clips.
+                # Stepped (zero-duration) segments are kept separate — they
+                # are point events and must not be absorbed into spans.
+                gap = store.detection_threshold if store else 10.0
+                span_segs = [sg for sg in obj_segs if not sg.get("is_stepped")]
+                stepped_segs = [sg for sg in obj_segs if sg.get("is_stepped")]
+
+                span_segs.sort(key=lambda sg: sg["start"])
+                merged: list = []
                 if span_segs:
-                    # Merge adjacent segments separated only by flat-key
-                    # gaps so the main track shows fewer, larger clips.
-                    store = self.sequencer.store if self.sequencer else None
-                    gap = store.detection_threshold if store else 10.0
-                    span_segs.sort(key=lambda sg: sg["start"])
-                    merged: list = [
+                    merged.append(
                         {
                             "start": span_segs[0]["start"],
                             "end": span_segs[0]["end"],
                             "segs": [span_segs[0]],
                         }
-                    ]
+                    )
                     for seg in span_segs[1:]:
                         if seg["start"] <= merged[-1]["end"] + gap:
                             merged[-1]["end"] = max(merged[-1]["end"], seg["end"])
@@ -1081,61 +1177,50 @@ class ShotSequencerController(
                                 }
                             )
 
-                    # Absorb stepped segments that fall within a merged
-                    # span so the main track shows one consolidated clip
-                    # rather than layered stepped + span clips.
-                    uncovered_stepped = []
-                    for seg in stepped_segs:
-                        t = seg["start"]
-                        absorbed = False
-                        for m in merged:
-                            if m["start"] <= t <= m["end"]:
-                                m["segs"].append(seg)
-                                absorbed = True
-                                break
-                        if not absorbed:
-                            uncovered_stepped.append(seg)
-                    stepped_segs = uncovered_stepped
-
-                    for m in merged:
-                        s = m["start"]
-                        e = m["end"]
-                        attrs = extract_attributes(m["segs"])
-                        clip_extra = dict(extra)
-                        if is_active and attrs:
-                            clip_extra["label_center"] = Attributes.abbreviate_attrs(
-                                attrs
-                            )
-                        widget.add_clip(
-                            track_id=tid,
-                            start=s,
-                            duration=e - s,
-                            label="",
-                            shot_id=vs.shot_id,
-                            obj=obj_name,
-                            orig_start=s,
-                            orig_end=e,
-                            attributes=attrs,
-                            **clip_extra,
-                        )
-
-                for seg in stepped_segs:
-                    attrs = extract_attributes([seg])
+                for m in merged:
+                    s = m["start"]
+                    e = m["end"]
+                    attrs = extract_attributes(m["segs"])
+                    clip_extra = dict(extra)
+                    if is_active and attrs:
+                        clip_extra["label_center"] = Attributes.abbreviate_attrs(attrs)
                     widget.add_clip(
                         track_id=tid,
-                        start=seg["start"],
+                        start=s,
+                        duration=e - s,
+                        label="",
+                        shot_id=vs.shot_id,
+                        obj=obj_name,
+                        orig_start=s,
+                        orig_end=e,
+                        attributes=attrs,
+                        **clip_extra,
+                    )
+
+                # Add stepped (zero-duration) clips individually
+                for seg in stepped_segs:
+                    t = seg["start"]
+                    # Skip stepped keys that fall inside a merged span —
+                    # the span clip already covers that time.
+                    if any(m["start"] <= t <= m["end"] for m in merged):
+                        self.logger.debug(
+                            "[SYNC]   stepped key at %s inside span — skipped",
+                            t,
+                        )
+                        continue
+                    clip_extra = dict(extra)
+                    widget.add_clip(
+                        track_id=tid,
+                        start=t,
                         duration=0.0,
                         label="",
                         shot_id=vs.shot_id,
                         obj=obj_name,
-                        orig_start=seg["start"],
-                        orig_end=seg["start"],
+                        orig_start=t,
+                        orig_end=t,
                         is_stepped=True,
-                        resizable_left=False,
-                        resizable_right=False,
-                        stepped_key_time=seg["start"],
-                        attributes=attrs,
-                        **extra,
+                        stepped_key_time=t,
+                        **clip_extra,
                     )
 
     def _build_audio_tracks(self, widget, shot) -> None:
@@ -1275,21 +1360,31 @@ class ShotSequencerController(
         self._select_and_show(resolved)
 
     def on_clip_locked(self, clip_id: int, locked: bool) -> None:
-        """Persist clip lock toggle to the ShotBlock and propagate to siblings."""
+        """Persist per-object clip lock and propagate to sibling clips."""
         widget = self._get_sequencer_widget()
         if widget is None or self.sequencer is None:
             return
         clip = widget._clips.get(clip_id)
         if clip is None:
             return
-        shot_id = clip.data.get("shot_id")
-        if shot_id is None:
+        obj_name = clip.data.get("obj")
+        if not obj_name:
             return
-        self.sequencer.store.update_shot(shot_id, locked=locked)
-        # Propagate to all sibling clips belonging to the same shot
+
+        # Persist on the store
+        store = self.sequencer.store
+        if locked:
+            store.locked_objects.add(obj_name)
+        else:
+            store.locked_objects.discard(obj_name)
+
+        # Propagate to every clip (main + sub-row) for the same object.
+        # The originating clip is included — contextMenuEvent routes
+        # through set_clip_locked, and a redundant call is harmless.
         for cid, cd in widget._clips.items():
-            if cd.data.get("shot_id") == shot_id and cid != clip_id:
+            if cd.data.get("obj") == obj_name:
                 widget.set_clip_locked(cid, locked)
+        self._sub_row_cache.clear()
 
     def on_track_menu(self, menu, track_names) -> None:
         """Add Maya-specific actions to the track header context menu."""
@@ -1317,17 +1412,12 @@ class ShotSequencerController(
 
     def on_header_menu(self, menu) -> None:
         """Add settings actions to the header background context menu."""
+
+    def _on_frame_on_shot_change_toggled(self, checked: bool) -> None:
         if self.sequencer is None:
             return
-        store = self.sequencer.store
-        act = menu.addAction("Select Members on Load")
-        act.setCheckable(True)
-        act.setChecked(store.select_on_load)
-        act.setToolTip(
-            "Select all objects belonging to the shot\n"
-            "when navigating to it in the sequencer."
-        )
-        act.toggled.connect(self._on_select_on_load_toggled)
+        self.sequencer.store.frame_on_shot_change = checked
+        self.sequencer.store.mark_dirty()
 
     def _on_select_on_load_toggled(self, checked: bool) -> None:
         if self.sequencer is None:
@@ -1369,6 +1459,49 @@ class ShotSequencerController(
         except Exception:
             pass
 
+    def on_key_selection_changed(self, key_groups: list) -> None:
+        """Sync the Maya Graph Editor selection to match the sequencer.
+
+        Parameters
+        ----------
+        key_groups : list[dict]
+            ``[{clip_id, times}, ...]`` — one entry per clip with
+            selected :class:`KeyframeItem` children.
+        """
+        if pm is None:
+            return
+
+        import maya.cmds as cmds
+
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._clip_motion import (
+            curves_for_attr,
+        )
+
+        # Deselect all keys first.
+        cmds.selectKey(clear=True)
+
+        for group in key_groups:
+            clip = widget.get_clip(group["clip_id"])
+            if clip is None:
+                continue
+            obj_name = clip.data.get("obj")
+            attr_name = clip.data.get("attr_name")
+            if not obj_name or not attr_name:
+                continue
+
+            curves = curves_for_attr(obj_name, attr_name)
+            for crv in curves:
+                for t in group["times"]:
+                    cmds.selectKey(
+                        str(crv),
+                        add=True,
+                        time=(t, t),
+                    )
+
     def _reveal_in_outliner(self, objects) -> None:
         """Select and reveal object(s) in Maya's Outliner."""
         from mayatk.ui_utils._ui_utils import UiUtils
@@ -1385,7 +1518,10 @@ class ShotSequencerController(
             self.logger.debug("_delete_clip_keys: no widget, skipping.")
             return
 
-        deleted = False
+        import maya.cmds as cmds
+
+        # Collect all operations first so we can wrap in a single UndoChunk.
+        ops: list = []
         for cid in clip_ids:
             clip = widget.get_clip(cid)
             if clip is None:
@@ -1422,9 +1558,16 @@ class ShotSequencerController(
                 continue
 
             for attr in attrs:
-                plug = f"{full}.{attr}"
+                ops.append((f"{full}.{attr}", start, end))
+
+        if not ops:
+            return
+
+        deleted = False
+        with pm.UndoChunk():
+            for plug, start, end in ops:
                 try:
-                    pm.cutKey(plug, time=(start, end), clear=True)
+                    cmds.cutKey(plug, time=(start, end), clear=True)
                     deleted = True
                 except Exception:
                     self.logger.debug(
@@ -1434,16 +1577,78 @@ class ShotSequencerController(
                     )
 
         if deleted:
+            self._save_shot_state()
             self._segment_cache.clear()
             self._sub_row_cache.clear()
             self._sync_to_widget()
+            n = len(clip_ids)
+            self._set_footer(
+                f"Deleted {n} clip{'s' if n != 1 else ''}"
+            )
 
     def _delete_selected_clip_keys(self) -> None:
-        """Delete keys for all marquee-selected clips."""
+        """Delete selected keyframes or, if none, all keys on selected clips.
+
+        Individual keyframes are batched into a single Maya UndoChunk so
+        that Ctrl+Z restores all deleted keys in one step.
+        """
         widget = self._get_sequencer_widget()
         if widget is None:
             self.logger.debug("_delete_selected_clip_keys: no widget.")
             return
+
+        from uitk.widgets.sequencer._keyframe import KeyframeItem
+
+        try:
+            items = widget._timeline._scene.selectedItems()
+        except RuntimeError:
+            items = []
+
+        # Group selected keyframe items by clip_id.
+        by_clip: dict = {}
+        for item in items:
+            if isinstance(item, KeyframeItem):
+                cid = item._parent_clip._data.clip_id
+                by_clip.setdefault(cid, []).append(item._time)
+
+        if by_clip:
+            # Batch-delete all selected keyframes in a single undo chunk.
+            import maya.cmds as cmds
+
+            from mayatk.anim_utils.shots.shot_sequencer._clip_motion import (
+                curves_for_attr,
+            )
+
+            deleted = 0
+            with pm.UndoChunk():
+                for clip_id, times in by_clip.items():
+                    clip = widget.get_clip(clip_id)
+                    if clip is None:
+                        continue
+                    obj_name = clip.data.get("obj")
+                    attr_name = clip.data.get("attr_name")
+                    if not obj_name or not attr_name:
+                        continue
+                    curves = curves_for_attr(obj_name, attr_name)
+                    if not curves:
+                        continue
+                    for t in times:
+                        for crv in curves:
+                            cmds.cutKey(str(crv), time=(t, t), clear=True)
+                    deleted += len(times)
+
+            if deleted:
+                self._save_shot_state()
+                shot_id = self.active_shot_id
+                self._segment_cache.clear()
+                self._sub_row_cache.clear()
+                self._sync_to_widget(shot_id=shot_id)
+                self._set_footer(
+                    f"Deleted {deleted} key{'s' if deleted != 1 else ''}"
+                )
+            return
+
+        # Fallback: delete entire clips when no individual keys are selected.
         clip_ids = widget.selected_clips()
         self.logger.debug("_delete_selected_clip_keys: selected_clips=%s", clip_ids)
         if clip_ids:
@@ -1550,6 +1755,9 @@ class ShotSequencerController(
             except Exception:
                 continue
 
+        store = self.sequencer.store if self.sequencer else None
+        is_obj_locked = bool(store and obj_name in store.locked_objects)
+
         result = []
         for attr_name in sorted(attr_names):
             # Reuse the same collect_segments pipeline as the object row.
@@ -1598,7 +1806,6 @@ class ShotSequencerController(
                 s, e = seg["start"], seg["end"]
                 dur = e - s
                 is_hold = (s, e) in hold_ranges
-                is_stepped = seg.get("is_stepped", False)
 
                 # Build curve preview from the segment's own curves
                 preview = None
@@ -1615,11 +1822,10 @@ class ShotSequencerController(
                 }
                 if preview:
                     extra["curve_preview"] = preview
-                if is_stepped or dur < 1e-6:
-                    extra["is_stepped"] = True
-                    extra["stepped_key_time"] = s
-                elif is_hold:
+                if is_hold:
                     extra["is_hold"] = True
+                if is_obj_locked:
+                    extra["locked"] = True
                 segments.append((s, dur, attr_name, color, extra))
             result.append((attr_name, segments))
 
@@ -1785,39 +1991,42 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 self.controller._on_shot_switch_requested
             )
             sequencer.header_menu_requested.connect(self.controller.on_header_menu)
+            sequencer.keys_moved.connect(self.controller.on_keys_moved)
+            sequencer.keys_deleted.connect(self.controller.on_keys_deleted)
+            sequencer.key_selection_changed.connect(
+                self.controller.on_key_selection_changed
+            )
             sequencer._zone_menu_connected = True
 
-        # Register Delete key shortcut for selected clips.
-        # Always update the action callback to the current controller
-        # in case the slots were re-initialised with a new controller.
-        # Use WindowShortcut context when window_shortcuts is active so
-        # Qt claims the key at the window level and Maya never sees it.
-        from qtpy import QtCore as _QtCore, QtGui as _QtGui
+            # Register Delete key shortcut for selected clips.
+            # Always update the action callback to the current controller
+            # in case the slots were re-initialised with a new controller.
+            # Use WindowShortcut context when window_shortcuts is active so
+            # Qt claims the key at the window level and Maya never sees it.
+            from qtpy import QtCore as _QtCore, QtGui as _QtGui
 
-        _del_ctx = (
-            _QtCore.Qt.WindowShortcut
-            if sequencer.window_shortcuts
-            else _QtCore.Qt.WidgetWithChildrenShortcut
-        )
-        _del_key = _QtGui.QKeySequence("Delete").toString()
-        if _del_key in sequencer._shortcut_mgr.shortcuts:
-            _entry = sequencer._shortcut_mgr.shortcuts[_del_key]
-            _entry["action"] = self.controller._delete_selected_clip_keys
-            if _entry["shortcut"] is not None:
-                _entry["shortcut"].setContext(_del_ctx)
-                _entry["shortcut"].activated.disconnect()
-                _entry["shortcut"].activated.connect(
-                    self.controller._delete_selected_clip_keys
-                )
-        else:
-            sequencer._shortcut_mgr.add_shortcut(
-                "Delete",
-                self.controller._delete_selected_clip_keys,
-                "Delete keys for selected clips",
-                _del_ctx,
+            _del_ctx = (
+                _QtCore.Qt.WindowShortcut
+                if sequencer.window_shortcuts
+                else _QtCore.Qt.WidgetWithChildrenShortcut
             )
-
-        # Setup shot navigation on the combobox
+            _del_key = _QtGui.QKeySequence("Delete").toString()
+            if _del_key in sequencer._shortcut_mgr.shortcuts:
+                _entry = sequencer._shortcut_mgr.shortcuts[_del_key]
+                _entry["action"] = self.controller._delete_selected_clip_keys
+                if _entry["shortcut"] is not None:
+                    _entry["shortcut"].setContext(_del_ctx)
+                    _entry["shortcut"].activated.disconnect()
+                    _entry["shortcut"].activated.connect(
+                        self.controller._delete_selected_clip_keys
+                    )
+            else:
+                sequencer._shortcut_mgr.add_shortcut(
+                    "Delete",
+                    self.controller._delete_selected_clip_keys,
+                    "Delete keys for selected clips",
+                    _del_ctx,
+                )
         self._setup_shot_nav()
 
         # Initial population so gaps and clips are visible immediately.
@@ -1926,6 +2135,11 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.controller._prev_action = prev_opt
         self.controller._next_action = next_opt
         self.controller._view_mode_action = view_opt
+        # Sync controller view mode from persisted button state
+        _VIEW_MODE_MAP = {0: "current", 1: "adjacent", 2: "all"}
+        self.controller._shot_display_mode = _VIEW_MODE_MAP.get(
+            view_opt.current_state, "current"
+        )
 
         # Install right-click context menu on the combobox
         from qtpy import QtCore
@@ -2109,6 +2323,36 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         cmb_scope.currentIndexChanged.connect(self._on_track_order_changed)
 
+        chk_select = widget.menu.add(
+            "QCheckBox",
+            setText="Select Members on Load",
+            setObjectName="chk_select_on_load",
+            setToolTip=(
+                "Select all objects belonging to the shot\n"
+                "when navigating to it in the sequencer."
+            ),
+        )
+        chk_select.restore_state = False  # ShotStore owns this setting
+        seq = getattr(self.controller, "sequencer", None)
+        if seq is not None and hasattr(seq, "store"):
+            chk_select.setChecked(seq.store.select_on_load)
+        chk_select.toggled.connect(self.controller._on_select_on_load_toggled)
+
+        chk_frame = widget.menu.add(
+            "QCheckBox",
+            setText="Frame on Shot Change",
+            setObjectName="chk_frame_on_shot_change",
+            setToolTip=(
+                "Automatically frame the camera on the shot's objects\n"
+                "when navigating to a different shot."
+            ),
+        )
+        chk_frame.restore_state = False  # ShotStore owns this setting
+        if seq is not None and hasattr(seq, "store"):
+            chk_frame.setChecked(seq.store.frame_on_shot_change)
+        chk_frame.toggled.connect(self.controller._on_frame_on_shot_change_toggled)
+
+        widget.menu.add("Separator", setTitle="Actions")
         widget.menu.add(
             "QPushButton",
             setText="Attribute Colors",
@@ -2232,7 +2476,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             return
         self.controller._shifted_out_keys.clear()
         self.controller.select_shot(shot_id)
-        self.controller._sync_to_widget(frame=True)
+        store = self.controller.sequencer.store if self.controller.sequencer else None
+        do_frame = store.frame_on_shot_change if store else False
+        self.controller._sync_to_widget(frame=do_frame)
         self.controller._update_shot_nav_state()
 
     def spn_snap(self, value):

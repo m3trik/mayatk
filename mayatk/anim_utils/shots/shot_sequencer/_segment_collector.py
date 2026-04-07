@@ -100,12 +100,11 @@ def collect_segments(
     )
     for seg in active_segs:
         logger.debug(
-            "[SYNC]   obj=%s start=%s end=%s dur=%s stepped=%s attr=%s",
+            "[SYNC]   obj=%s start=%s end=%s dur=%s attr=%s",
             seg.get("obj"),
             seg.get("start"),
             seg.get("end"),
             seg.get("duration"),
-            seg.get("is_stepped"),
             seg.get("attr"),
         )
     return segments_by_shot, all_objects

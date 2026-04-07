@@ -12,6 +12,7 @@ from mayatk.anim_utils.shots._shots import (
     ShotStore,
     StoreEvent,
     BatchComplete,
+    ShotDefined,
     ActiveShotChanged,
     ShotUpdated,
     ShotRemoved,
@@ -214,13 +215,10 @@ class ShotsController(ptk.LoggingMixin):
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """Re-sync widgets when the store changes externally."""
-        if isinstance(event, BatchComplete):
+        if isinstance(event, (BatchComplete, ShotDefined, ShotRemoved)):
             self._sync_from_store()
         elif isinstance(event, (ActiveShotChanged, ShotUpdated)):
             self._sync_shot_editor()
-            self._sync_footer()
-        elif isinstance(event, ShotRemoved):
-            self._populate_shot_combobox()
             self._sync_footer()
 
     # ---- index ↔ mode mapping ---------------------------------------------
@@ -293,10 +291,14 @@ class ShotsController(ptk.LoggingMixin):
             cmb_mode.setCurrentIndex(self._mode_to_index(store.detection_mode))
             cmb_mode.blockSignals(False)
 
-        # Disable Min Gap spinner in zero_as_end mode (unused there).
+        # Disable detection widgets when shots exist (irrelevant) or
+        # Min Gap spinner in zero_as_end mode (unused there).
         mode = store.detection_mode
+        det_relevant = store.is_detection_relevant
         if spn_det is not None:
-            spn_det.setEnabled(mode != "zero_as_end")
+            spn_det.setEnabled(det_relevant and mode != "zero_as_end")
+        if cmb_mode is not None:
+            cmb_mode.setEnabled(det_relevant)
 
         # ---- Editing group ----
         has_shots = bool(store.shots)
@@ -477,10 +479,14 @@ class ShotsController(ptk.LoggingMixin):
             store.detection_mode = mode
             store.mark_dirty()
             store.notify_settings_changed()
-        # Disable Min Gap spinner in zero_as_end mode (unused there).
+        # Disable Min Gap spinner when irrelevant or zero_as_end.
+        det_relevant = store.is_detection_relevant if store is not None else True
         spn = getattr(self.ui, "spn_detection", None)
         if spn is not None:
-            spn.setEnabled(mode != "zero_as_end")
+            spn.setEnabled(det_relevant and mode != "zero_as_end")
+        cmb = getattr(self.ui, "cmb_detection_mode", None)
+        if cmb is not None:
+            cmb.setEnabled(det_relevant)
 
     def on_gap_changed(self, value: int) -> None:
         store = self._active_store()
