@@ -2329,6 +2329,576 @@ class TestFormatBehaviorHtml(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Tests: _detect_regions honours detection_mode with empty steps
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Tests: ShotStore detection convenience API
+# ---------------------------------------------------------------------------
+
+
+class TestIsDetectionRelevant(unittest.TestCase):
+    """ShotStore.is_detection_relevant reflects whether shots exist."""
+
+    def test_true_when_empty(self):
+        store = _fresh_store()
+        self.assertTrue(store.is_detection_relevant)
+
+    def test_false_when_shots_exist(self):
+        store = _fresh_store()
+        store.define_shot("A01", 1, 31, ["obj"])
+        self.assertFalse(store.is_detection_relevant)
+
+    def test_becomes_true_after_removing_all_shots(self):
+        store = _fresh_store()
+        shot = store.define_shot("A01", 1, 31, ["obj"])
+        self.assertFalse(store.is_detection_relevant)
+        store.remove_shot(shot.shot_id)
+        self.assertTrue(store.is_detection_relevant)
+
+
+class TestStoreDetectRegions(unittest.TestCase):
+    """ShotStore.detect_regions() dispatches by detection_mode."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+
+    @patch(
+        "mayatk.anim_utils.shots._shots.detect_shot_regions",
+        return_value=[{"name": "R1", "start": 1, "end": 30, "objects": []}],
+    )
+    def test_auto_mode_calls_detect_shot_regions(self, mock_auto):
+        self.store.detection_mode = "auto"
+        self.store.detection_threshold = 7.0
+        result = self.store.detect_regions()
+        mock_auto.assert_called_once_with(gap_threshold=7.0)
+        self.assertEqual(len(result), 1)
+
+    @patch(
+        "mayatk.anim_utils.shots._shots.regions_from_selected_keys",
+        return_value=[{"name": "K1", "start": 10, "end": 40, "objects": []}],
+    )
+    def test_skip_zero_mode_calls_selected_keys(self, mock_sel):
+        self.store.detection_mode = "skip_zero"
+        self.store.detection_threshold = 3.0
+        result = self.store.detect_regions()
+        mock_sel.assert_called_once_with(gap_threshold=3.0, key_filter="skip_zero")
+        self.assertEqual(len(result), 1)
+
+    @patch(
+        "mayatk.anim_utils.shots._shots.regions_from_selected_keys",
+        return_value=[],
+    )
+    def test_zero_as_end_mode_calls_selected_keys(self, mock_sel):
+        self.store.detection_mode = "zero_as_end"
+        self.store.detection_threshold = 5.0
+        self.store.detect_regions()
+        mock_sel.assert_called_once_with(gap_threshold=5.0, key_filter="zero_as_end")
+
+
+class TestOverlapsExisting(unittest.TestCase):
+    """ShotStore._overlaps_existing detects range overlaps."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+        self.store.define_shot("A01", 10, 30, [])
+
+    def test_overlap_before(self):
+        self.assertTrue(self.store._overlaps_existing({"start": 5, "end": 15}))
+
+    def test_overlap_after(self):
+        self.assertTrue(self.store._overlaps_existing({"start": 25, "end": 40}))
+
+    def test_contained(self):
+        self.assertTrue(self.store._overlaps_existing({"start": 15, "end": 25}))
+
+    def test_no_overlap_before(self):
+        self.assertFalse(self.store._overlaps_existing({"start": 1, "end": 10}))
+
+    def test_no_overlap_after(self):
+        self.assertFalse(self.store._overlaps_existing({"start": 30, "end": 50}))
+
+    def test_exact_match(self):
+        """Exact same range counts as overlap."""
+        self.assertTrue(self.store._overlaps_existing({"start": 10, "end": 30}))
+
+
+class TestDetectAndDefine(unittest.TestCase):
+    """ShotStore.detect_and_define() detects and creates shots."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+        self.regions = [
+            {"name": "R1", "start": 1, "end": 30, "objects": ["obj_a"]},
+            {"name": "R2", "start": 40, "end": 70, "objects": ["obj_b"]},
+        ]
+
+    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    def test_creates_all_shots(self, mock_detect):
+        mock_detect.return_value = self.regions
+        created = self.store.detect_and_define()
+        self.assertEqual(len(created), 2)
+        self.assertEqual(len(self.store.shots), 2)
+        self.assertEqual(created[0].name, "R1")
+        self.assertEqual(created[1].name, "R2")
+
+    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    def test_skips_overlapping_by_default(self, mock_detect):
+        self.store.define_shot("existing", 20, 50, [])
+        mock_detect.return_value = self.regions
+        created = self.store.detect_and_define()
+        # R1 overlaps [20,50], R2 overlaps [20,50] — both skipped
+        self.assertEqual(len(created), 0)
+        self.assertEqual(len(self.store.shots), 1)  # only "existing"
+
+    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    def test_overwrite_creates_overlapping(self, mock_detect):
+        self.store.define_shot("existing", 20, 50, [])
+        mock_detect.return_value = self.regions
+        created = self.store.detect_and_define(overwrite=True)
+        self.assertEqual(len(created), 2)
+        self.assertEqual(len(self.store.shots), 3)
+
+    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    def test_fires_single_batch_complete(self, mock_detect):
+        mock_detect.return_value = self.regions
+        events = []
+        self.store.add_listener(lambda e: events.append(type(e).__name__))
+        self.store.detect_and_define()
+        batch_events = [e for e in events if e == "BatchComplete"]
+        self.assertEqual(len(batch_events), 1)
+
+
+class TestStoreAssess(unittest.TestCase):
+    """ShotStore.assess() checks object existence."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+
+    def test_no_objects_is_valid(self):
+        self.store.define_shot("A01", 1, 30, [])
+        result = self.store.assess()
+        shot = self.store.shots[0]
+        self.assertEqual(result[shot.shot_id], "valid")
+
+    def test_all_objects_exist(self):
+        self.store.define_shot("A01", 1, 30, ["|obj_a", "|obj_b"])
+        _mock_cmds.ls.return_value = ["|obj_a", "|obj_b"]
+        result = self.store.assess()
+        shot = self.store.shots[0]
+        self.assertEqual(result[shot.shot_id], "valid")
+
+    def test_missing_object(self):
+        self.store.define_shot("A01", 1, 30, ["|obj_a", "|obj_b"])
+        _mock_cmds.ls.return_value = ["|obj_a"]  # only 1 of 2
+        result = self.store.assess()
+        shot = self.store.shots[0]
+        self.assertEqual(result[shot.shot_id], "missing_object")
+
+    def tearDown(self):
+        _mock_cmds.ls.return_value = []
+
+
+# ---------------------------------------------------------------------------
+# Tests: shots_slots store event handling
+# ---------------------------------------------------------------------------
+
+
+class TestShotsControllerStoreEvents(unittest.TestCase):
+    """ShotsController._on_store_event handles ShotDefined and ShotRemoved.
+
+    Bug: ShotRemoved only called _populate_shot_combobox + _sync_footer,
+    never re-syncing detection widgets. Deleting the last shot left them
+    disabled. ShotDefined was unhandled entirely.
+    Fixed: 2026-04-07
+    """
+
+    def setUp(self):
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        _fresh_store()
+        # Build a bare instance without __init__ (avoids UI wiring)
+        self.ctrl = object.__new__(ShotsController)
+        self.ctrl._sync_from_store = MagicMock()
+        self.ctrl._sync_shot_editor = MagicMock()
+        self.ctrl._sync_footer = MagicMock()
+
+    def test_shot_defined_triggers_full_sync(self):
+        from mayatk.anim_utils.shots._shots import ShotDefined
+
+        shot = ShotBlock(shot_id=1, name="A01", start=1, end=30)
+        self.ctrl._on_store_event(ShotDefined(shot=shot))
+        self.ctrl._sync_from_store.assert_called_once()
+
+    def test_shot_removed_triggers_full_sync(self):
+        from mayatk.anim_utils.shots._shots import ShotRemoved
+
+        self.ctrl._on_store_event(ShotRemoved(shot_id=1))
+        self.ctrl._sync_from_store.assert_called_once()
+
+    def test_batch_complete_triggers_full_sync(self):
+        from mayatk.anim_utils.shots._shots import BatchComplete
+
+        self.ctrl._on_store_event(BatchComplete())
+        self.ctrl._sync_from_store.assert_called_once()
+
+    def test_shot_updated_does_not_trigger_full_sync(self):
+        from mayatk.anim_utils.shots._shots import ShotUpdated
+
+        shot = ShotBlock(shot_id=1, name="A01", start=1, end=30)
+        self.ctrl._on_store_event(ShotUpdated(shot=shot))
+        self.ctrl._sync_from_store.assert_not_called()
+        self.ctrl._sync_shot_editor.assert_called_once()
+
+
+class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
+    """_detect_regions must use the store's detection_mode even when
+    _steps is empty (first detection).
+
+    Bug: _detect_regions guarded the selected-keys path with
+    ``_is_detection_mode`` which requires non-empty _steps.  On the
+    very first detection (empty steps) the mode was forced to "auto",
+    silently ignoring skip_zero / all / zero_as_end.
+    Fixed: 2026-04-07
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.ctrl._steps = []  # simulate first detection (no steps yet)
+        self.ctrl._csv_path = ""
+        self.store = _fresh_store()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_skip_zero_calls_selected_keys_with_empty_steps(
+        self, mock_auto, mock_sel
+    ):
+        """With skip_zero mode and empty steps, _detect_regions must call
+        regions_from_selected_keys, NOT detect_shot_regions."""
+        self.store.detection_mode = "skip_zero"
+        mock_sel.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+        mock_auto.return_value = []
+
+        regions = self.ctrl._detect_regions(5.0)
+
+        mock_sel.assert_called_once_with(gap_threshold=5.0, key_filter="skip_zero")
+        mock_auto.assert_not_called()
+        self.assertEqual(len(regions), 1)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_auto_mode_still_calls_detect_shot_regions(self, mock_auto, mock_sel):
+        """With auto mode, _detect_regions must call detect_shot_regions."""
+        self.store.detection_mode = "auto"
+        mock_auto.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+
+        regions = self.ctrl._detect_regions(5.0)
+
+        mock_auto.assert_called_once()
+        mock_sel.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_csv_mode_forces_auto_regardless_of_store_mode(
+        self, mock_auto, mock_sel
+    ):
+        """When a CSV is loaded, _detect_regions must always use auto-detect,
+        regardless of the store's detection_mode."""
+        self.store.detection_mode = "skip_zero"
+        self.ctrl._csv_path = "/some/file.csv"
+        mock_auto.return_value = []
+
+        self.ctrl._detect_regions(5.0)
+
+        mock_auto.assert_called_once()
+        mock_sel.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_settings_changed_triggers_detect_after_first_show(
+        self, mock_auto, mock_sel
+    ):
+        """SettingsChanged event must trigger detect() after first-show,
+        even when _steps is empty, so that changing to skip_zero mode
+        after a failed initial detect works."""
+        from mayatk.anim_utils.shots._shots import SettingsChanged
+
+        self.store.detection_mode = "skip_zero"
+        mock_sel.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+
+        # Mark as shown (simulates _on_first_show having run)
+        self.ctrl._first_shown = True
+
+        # Simulate SettingsChanged event
+        self.ctrl._on_store_event(SettingsChanged())
+
+        # Should have triggered detect → regions_from_selected_keys
+        mock_sel.assert_called_once()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_settings_changed_skipped_before_first_show(
+        self, mock_auto, mock_sel
+    ):
+        """SettingsChanged before _on_first_show must NOT trigger detect(),
+        avoiding spurious message boxes when the widget isn't visible yet.
+
+        Bug: Removing the _steps guard from the SettingsChanged handler
+        without a visibility check let detection fire during construction.
+        Fixed: 2026-04-07
+        """
+        from mayatk.anim_utils.shots._shots import SettingsChanged
+
+        self.store.detection_mode = "skip_zero"
+        # _first_shown defaults to False on fresh controller
+        self.assertFalse(self.ctrl._first_shown)
+
+        self.ctrl._on_store_event(SettingsChanged())
+
+        mock_sel.assert_not_called()
+        mock_auto.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: assess() selected-keys guard + scene discovery skip
+# ---------------------------------------------------------------------------
+
+
+class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
+    """assess() must re-verify selected-keys exist and skip full-scene
+    discovery when using a selected-keys detection mode.
+
+    Bug: assess() had no selected-keys guard — it always ran full scene
+    assessment including _discover_scene_objects(), adding all animated
+    scene objects even in skip_zero mode.  No warning was shown when
+    no keys were selected.
+    Fixed: 2026-04-07
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.detection_mode = "skip_zero"
+        self.store.detection_threshold = 5.0
+        self.store.gap = 0.0
+        self.ui.spn_gap = MagicMock(value=MagicMock(return_value=5.0))
+        self.ui.txt_csv_path = MagicMock()
+        # Steps from detection (no CSV)
+        self.ctrl._csv_path = ""
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        return_value=[],
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_aborts_no_keys_selected(
+        self, mock_active, mock_manifest_cls, _mock_sel
+    ):
+        """assess() must abort when skip_zero mode is active and no keys
+        are selected, instead of running full scene assessment."""
+        mock_active.return_value = self.store
+        mock_builder = MagicMock()
+        mock_manifest_cls.return_value = mock_builder
+
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+
+        mock_builder.assess.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_proceeds_when_keys_selected(
+        self, mock_active, mock_manifest_cls, mock_sel
+    ):
+        """assess() proceeds normally when selected keys are found."""
+        mock_sel.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+        self.store.define_shot("A01", 10, 50, ["ctrl"])
+        mock_active.return_value = self.store
+        mock_builder = MagicMock()
+        mock_builder.assess.return_value = []
+        mock_manifest_cls.return_value = mock_builder
+
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+
+        mock_builder.assess.assert_called_once()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_auto_mode_no_guard(
+        self, mock_active, mock_manifest_cls, mock_auto
+    ):
+        """assess() in auto mode runs without selected-keys guard."""
+        self.store.detection_mode = "auto"
+        self.store.define_shot("A01", 10, 50, ["ctrl"])
+        mock_active.return_value = self.store
+        mock_builder = MagicMock()
+        mock_builder.assess.return_value = []
+        mock_manifest_cls.return_value = mock_builder
+
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+
+        mock_builder.assess.assert_called_once()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_passes_skip_discovery_in_selected_keys_mode(
+        self, mock_active, mock_manifest_cls, mock_sel
+    ):
+        """assess() must pass skip_scene_discovery=True when in selected-keys mode."""
+        mock_sel.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+        self.store.define_shot("A01", 10, 50, ["ctrl"])
+        mock_active.return_value = self.store
+        mock_builder = MagicMock()
+        mock_builder.assess.return_value = []
+        mock_manifest_cls.return_value = mock_builder
+
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+
+        # Verify skip_scene_discovery was passed as True
+        call_kwargs = mock_builder.assess.call_args
+        self.assertTrue(
+            call_kwargs[1].get("skip_scene_discovery", False)
+            if call_kwargs[1]
+            else False,
+            "assess() must pass skip_scene_discovery=True in selected-keys mode",
+        )
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_no_skip_discovery_in_auto_mode(
+        self, mock_active, mock_manifest_cls, mock_auto
+    ):
+        """assess() in auto mode should NOT skip scene discovery."""
+        self.store.detection_mode = "auto"
+        self.store.define_shot("A01", 10, 50, ["ctrl"])
+        mock_active.return_value = self.store
+        mock_builder = MagicMock()
+        mock_builder.assess.return_value = []
+        mock_manifest_cls.return_value = mock_builder
+
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+
+        call_kwargs = mock_builder.assess.call_args
+        skip = (
+            call_kwargs[1].get("skip_scene_discovery", False)
+            if call_kwargs[1]
+            else False
+        )
+        self.assertFalse(skip)
+
+
+# ---------------------------------------------------------------------------
+# Tests: message_box only shown from detect(), not assess()/build()
+# ---------------------------------------------------------------------------
+
+
+class TestMessageBoxOnlyInDetect(unittest.TestCase, _ControllerHarness):
+    """The 'No keys selected' message box must only appear during user-
+    initiated detect(), not during assess() or build() which show footer
+    messages instead.
+
+    Bug: _detect_regions itself showed the message box, so every caller
+    (detect, assess, build, _resolve_ranges) would pop up a dialog.
+    Fixed: 2026-04-07 — moved the message box into detect(), callers
+    handle their own feedback.
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.detection_mode = "skip_zero"
+        self.store.detection_threshold = 5.0
+        self.ctrl._csv_path = ""
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        return_value=[],
+    )
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_detect_shows_message_box_when_no_keys(self, mock_active, mock_sel):
+        """detect() in selected-keys mode with no keys must show a message box."""
+        mock_active.return_value = self.store
+        self.ctrl._first_shown = True
+        self.ctrl.detect()
+        self.ctrl.sb.message_box.assert_called_once()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        return_value=[],
+    )
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_assess_does_not_show_message_box(
+        self, mock_active, mock_manifest_cls, mock_sel
+    ):
+        """assess() in selected-keys mode with no keys must NOT show a message box."""
+        mock_active.return_value = self.store
+        self.ctrl._first_shown = True
+        self.ctrl.assess()
+        self.ctrl.sb.message_box.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        return_value=[],
+    )
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_build_does_not_show_message_box(self, mock_active, mock_sel):
+        """build() in selected-keys mode with no keys must NOT show a message box."""
+        mock_active.return_value = self.store
+        self.ctrl._first_shown = True
+        self.ctrl.build()
+        self.ctrl.sb.message_box.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 

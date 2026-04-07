@@ -665,6 +665,7 @@ class ShotManifest:
         keyframe_range_fn: Optional[
             Callable[[str], Optional[Tuple[float, float]]]
         ] = None,
+        skip_scene_discovery: bool = False,
     ) -> List[StepStatus]:
         """Compare parsed steps against the current store state.
 
@@ -792,15 +793,18 @@ class ShotManifest:
                 additional = stored_extra
                 # Also discover scene objects with keys in this shot's
                 # range that aren't tracked in the CSV or the store.
-                known = csv_short | {_short(n) for n in shot.objects}
-                scene_extra = self._discover_scene_objects(
-                    shot.start, shot.end, known
-                )
-                additional.extend(scene_extra)
-                # Merge discovered objects into the shot so the sequencer
-                # can display them (it reads shot.objects).
-                if scene_extra:
-                    shot.objects = sorted(set(shot.objects) | set(scene_extra))
+                # Skip in selected-keys mode: only the explicitly
+                # selected keys' objects are relevant.
+                if not skip_scene_discovery:
+                    known = csv_short | {_short(n) for n in shot.objects}
+                    scene_extra = self._discover_scene_objects(
+                        shot.start, shot.end, known
+                    )
+                    additional.extend(scene_extra)
+                    # Merge discovered objects into the shot so the sequencer
+                    # can display them (it reads shot.objects).
+                    if scene_extra:
+                        shot.objects = sorted(set(shot.objects) | set(scene_extra))
 
             # Compute shrinkable frames (unused tail)
             shrinkable = 0.0

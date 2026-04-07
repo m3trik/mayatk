@@ -79,6 +79,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         self._building = False
         self._built_this_round = False
+        self._first_shown = False
         self._store_listener_bound = False
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
@@ -96,6 +97,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     def _on_first_show(self) -> None:
         """Auto-populate the table the first time the window is shown."""
+        self._first_shown = True
         if self.ui.chk_csv.isChecked():
             path = self.ui.txt_csv_path.text().strip()
             if path:
@@ -132,6 +134,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """True when steps were populated via scene detection (no CSV)."""
         return bool(self._steps) and not self._csv_path
 
+    @property
+    def _use_selected_keys(self) -> bool:
+        """True when a selected-keys detection mode is active (not CSV)."""
+        if self._csv_path:
+            return False
+        store = self._active_store()
+        return store is not None and store.detection_mode != "auto"
+
     def _all_ranges_complete(self) -> bool:
         """True when every step has a user-supplied (start, end) pair."""
         return bool(self._steps) and all(
@@ -159,26 +169,20 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _detect_regions(self, gap_threshold: float) -> list:
         """Return detected shot regions, respecting the detection mode.
 
-        When a selected-keys mode is active and no keys are selected,
-        shows a message-box warning and returns an empty list.
+        Returns an empty list when a selected-keys mode is active and
+        no keys are selected.  Callers are responsible for showing
+        appropriate user feedback (message box, footer, etc.).
         CSV mode always uses auto-detect regardless of the store's
         detection_mode setting.
         """
         store = self._active_store()
         mode = store.detection_mode if store is not None else "auto"
-        if not self._is_detection_mode:
+        if self._csv_path:
             mode = "auto"
         if mode != "auto":
-            regions = regions_from_selected_keys(
+            return regions_from_selected_keys(
                 gap_threshold=gap_threshold, key_filter=mode
             )
-            if not regions:
-                self.sb.message_box(
-                    "<b>No keys selected.</b><br>"
-                    "Select keyframes in the Graph Editor first.",
-                    background_color="rgb(68, 44, 44)",
-                )
-            return regions
         return detect_shot_regions(gap_threshold=gap_threshold)
 
     def detect(self, gap: Optional[float] = None) -> None:
@@ -198,9 +202,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if gap is None:
             gap = store.detection_threshold if store is not None else 5.0
 
-        use_sel = (store.detection_mode != "auto") if store is not None else False
+        use_sel = self._use_selected_keys
         regions = self._detect_regions(gap)
         if not regions:
+            if use_sel:
+                self.sb.message_box(
+                    "<b>No keys selected.</b><br>"
+                    "Select keyframes in the Graph Editor first.",
+                    background_color="rgb(68, 44, 44)",
+                )
             footer = (
                 "No selected keys found (select keys in the Graph Editor)."
                 if use_sel
@@ -404,11 +414,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store = self._active_store()
         gap = store.gap if store else 0.0
         det_threshold = store.detection_threshold if store else 5.0
-        use_sel = (
-            self._is_detection_mode
-            and store is not None
-            and store.detection_mode != "auto"
-        )
+        use_sel = self._use_selected_keys
 
         # Detect animation regions for auto-fill (cached per assess cycle).
         if self._cached_gaps is not None:
@@ -479,10 +485,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
         if isinstance(event, SettingsChanged):
             # Detection settings changed — invalidate cache and re-detect
-            # when the manifest is in detection mode (no CSV).
+            # when not in CSV mode.  Must trigger even when _steps is
+            # empty so that switching to a selected-keys mode after a
+            # failed initial auto-detect works.  Guard on _first_shown
+            # to avoid triggering detection (and message boxes) before
+            # the widget is visible.
             self._cached_gaps = None
             self._cached_gap_ends = None
-            if self._steps and not self._csv_path:
+            if not self._csv_path and self._first_shown:
                 self.detect()
             return
         if not self._steps:
@@ -1234,11 +1244,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # CSV mode never uses selected-keys detection; the CSV
             # defines the step list and ranges are resolved or seeded
             # from the store directly.
-            use_sel = (
-                self._is_detection_mode
-                and store is not None
-                and store.detection_mode != "auto"
-            )
+            use_sel = self._use_selected_keys
             if use_sel:
                 self._cached_gaps = None
                 regions = self._detect_regions(
@@ -1383,12 +1389,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._sync_detection_widgets()
 
     def _sync_detection_widgets(self) -> None:
-        """Disable detection widgets in the parent shots UI after build."""
+        """Disable detection widgets in the parent shots UI when irrelevant."""
         try:
             shots_ui = self.sb.loaded_ui.shots
         except Exception:
             return
-        enabled = not self._is_built
+        store = self._active_store()
+        enabled = store.is_detection_relevant if store is not None else True
         for attr in ("cmb_detection_mode", "spn_detection"):
             widget = getattr(shots_ui, attr, None)
             if widget is not None:
@@ -1411,12 +1418,28 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         store = ShotStore.active()
         builder = ShotManifest(store)
+        use_sel = self._use_selected_keys
+
+        # In selected-keys mode, verify keys exist before proceeding.
+        if use_sel:
+            self._cached_gaps = None
+            regions = self._detect_regions(
+                store.detection_threshold if store else 5.0
+            )
+            if not regions:
+                self._set_footer(
+                    "No selected keys found \u2014 select keyframes first.",
+                    color=ERROR_COLOR,
+                )
+                return
 
         # Invalidate cached gaps so _resolve_ranges rescans the scene
         self._cached_gaps = None
         self._cached_gap_ends = None
 
-        results = builder.assess(self._steps)
+        results = builder.assess(
+            self._steps, skip_scene_discovery=use_sel
+        )
 
         # Write per-object statuses back to shot metadata so that
         # both the manifest and sequencer share the same classification.

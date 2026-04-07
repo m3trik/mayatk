@@ -981,6 +981,95 @@ class ShotStore:
             self._persistence.save(self.to_dict())
         self._save_user_prefs()
 
+    # ---- detection convenience -------------------------------------------
+
+    @property
+    def is_detection_relevant(self) -> bool:
+        """True when detection settings are actionable.
+
+        Returns False when shots already exist in the store (detection
+        settings would have no effect — shots are already defined).
+        """
+        return not bool(self.shots)
+
+    def detect_regions(self) -> List[Dict[str, Any]]:
+        """Detect shot candidates using the store's detection settings.
+
+        Dispatches to :func:`detect_shot_regions` (auto mode) or
+        :func:`regions_from_selected_keys` (selected-keys modes)
+        based on :attr:`detection_mode` and :attr:`detection_threshold`.
+
+        Returns:
+            List of candidate dicts with ``"name"``, ``"start"``,
+            ``"end"``, and ``"objects"`` keys.
+        """
+        if self.detection_mode != "auto":
+            return regions_from_selected_keys(
+                gap_threshold=self.detection_threshold,
+                key_filter=self.detection_mode,
+            )
+        return detect_shot_regions(gap_threshold=self.detection_threshold)
+
+    def _overlaps_existing(self, candidate: Dict[str, Any]) -> bool:
+        """True if *candidate* overlaps any existing shot's range."""
+        c_start = candidate["start"]
+        c_end = candidate["end"]
+        for shot in self.shots:
+            if c_start < shot.end and c_end > shot.start:
+                return True
+        return False
+
+    def detect_and_define(self, overwrite: bool = False) -> List[ShotBlock]:
+        """Detect shot regions and define them in the store.
+
+        Convenience method that calls :meth:`detect_regions` and
+        :meth:`define_shot` for each candidate.  Wraps all mutations
+        in :meth:`batch_update` for a single ``BatchComplete`` event.
+
+        Parameters:
+            overwrite: If False (default), candidates that overlap
+                existing shots are skipped.
+
+        Returns:
+            List of newly created :class:`ShotBlock` instances.
+        """
+        candidates = self.detect_regions()
+        created: List[ShotBlock] = []
+        with self.batch_update():
+            for cand in candidates:
+                if not overwrite and self._overlaps_existing(cand):
+                    continue
+                shot = self.define_shot(
+                    name=cand["name"],
+                    start=cand["start"],
+                    end=cand["end"],
+                    objects=cand.get("objects", []),
+                )
+                created.append(shot)
+        return created
+
+    def assess(self) -> Dict[int, str]:
+        """Lightweight assessment: check if shot objects exist in the scene.
+
+        Returns:
+            Dict mapping ``shot_id`` → ``"valid"`` or
+            ``"missing_object"``.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return {s.shot_id: "valid" for s in self.shots}
+        result: Dict[int, str] = {}
+        for shot in self.shots:
+            if not shot.objects:
+                result[shot.shot_id] = "valid"
+                continue
+            existing = cmds.ls(shot.objects, long=True) or []
+            result[shot.shot_id] = (
+                "valid" if len(existing) == len(shot.objects) else "missing_object"
+            )
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Standard attribute filtering  (shared by sequencer + manifest)
