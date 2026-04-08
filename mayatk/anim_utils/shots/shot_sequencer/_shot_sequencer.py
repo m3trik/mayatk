@@ -575,6 +575,104 @@ class ShotSequencer:
             except RuntimeError:
                 pass
 
+    @staticmethod
+    def _shift_audio(
+        cmds,
+        old_start: float,
+        old_end: float,
+        delta: float,
+        shifted: Optional[set] = None,
+    ) -> None:
+        """Shift audio nodes whose timeline position falls within a range.
+
+        Handles both DG ``audio`` nodes (offset attribute) and keyed
+        ``audio_trigger`` enum locators used by AudioEvents.
+
+        Parameters:
+            cmds: The ``maya.cmds`` module.
+            old_start: Start of the time range to shift.
+            old_end: End of the time range to shift.
+            delta: Frames to add to each audio position.
+            shifted: Optional set of node names already shifted in this
+                batch.  Nodes present in the set are skipped, and newly
+                shifted nodes are added.  Prevents double-shifting when
+                multiple shots are processed sequentially (e.g. respace).
+        """
+        if abs(delta) < 1e-6:
+            return
+        if shifted is None:
+            shifted = set()
+
+        eps = 1e-3
+
+        # --- DG audio nodes ---
+        for node in cmds.ls(type="audio") or []:
+            if node in shifted:
+                continue
+            offset = cmds.getAttr(f"{node}.offset") or 0.0
+            if old_start - eps <= offset <= old_end + eps:
+                cmds.setAttr(f"{node}.offset", offset + delta)
+                shifted.add(node)
+
+        # --- Event audio locators (keyed audio_trigger attrs) ---
+        trigger_attr = "audio_trigger"
+        for xform in cmds.ls(type="transform") or []:
+            if xform in shifted:
+                continue
+            if not cmds.attributeQuery(trigger_attr, node=xform, exists=True):
+                continue
+            attr = f"{xform}.{trigger_attr}"
+            keys = cmds.keyframe(attr, q=True, time=(old_start - eps, old_end + eps))
+            if not keys:
+                continue
+            try:
+                cmds.keyframe(
+                    attr,
+                    edit=True,
+                    relative=True,
+                    timeChange=delta,
+                    time=(old_start - eps, old_end + eps),
+                )
+                shifted.add(xform)
+            except RuntimeError:
+                pass
+
+    def _move_shot_content(
+        self,
+        shot: "ShotBlock",
+        new_start: float,
+        shifted_audio: Optional[set] = None,
+    ) -> None:
+        """Shift all content (object keys and audio) for *shot* to *new_start*.
+
+        Uses :meth:`_batch_move_keys` for animation curves and
+        :meth:`_shift_audio` for DG audio nodes / event triggers,
+        then updates the shot boundaries.  When Maya is not available
+        only the boundaries are updated.
+
+        Parameters:
+            shot: The shot to move.
+            new_start: Desired first frame after the move.
+            shifted_audio: Optional set forwarded to :meth:`_shift_audio`
+                to prevent double-shifting nodes across sequential calls.
+        """
+        old_start = shot.start
+        old_end = shot.end
+        delta = new_start - old_start
+        if abs(delta) < 1e-6:
+            return
+
+        duration = old_end - old_start
+
+        if pm is not None:
+            import maya.cmds as cmds
+
+            self._batch_move_keys(cmds, shot.objects, old_start, old_end, new_start)
+            self._shift_audio(cmds, old_start, old_end, delta, shifted_audio)
+
+        shot.start = new_start
+        shot.end = new_start + duration
+
     def move_object_in_shot(
         self,
         shot_id: int,
@@ -611,22 +709,33 @@ class ShotSequencer:
             self._push_overlapping_objects(shot, obj, new_start, new_end)
 
         # Check if the clip now exceeds the shot boundaries
+        prior_start = shot.start
         prior_end = shot.end
-        expanded = False
+        start_expanded = False
+        end_expanded = False
 
         if new_start < shot.start:
             shot.start = new_start
-            expanded = True
+            start_expanded = True
 
         if new_end > shot.end:
             shot.end = new_end
-            expanded = True
+            end_expanded = True
 
-        # Ripple downstream shots by however much the shot tail grew
-        if expanded:
-            delta = shot.end - prior_end
-            if abs(delta) > 1e-6:
-                self._ripple_downstream(shot_id, prior_end, delta)
+        # Ripple upstream by however much the shot head grew
+        if start_expanded:
+            start_delta = shot.start - prior_start  # negative
+            if abs(start_delta) > 1e-6:
+                shifted_audio: set = set()
+                self._ripple_upstream(shot_id, prior_start, start_delta, shifted_audio)
+
+        # Ripple downstream by however much the shot tail grew
+        if end_expanded:
+            end_delta = shot.end - prior_end  # positive
+            if abs(end_delta) > 1e-6:
+                if not start_expanded:
+                    shifted_audio = set()
+                self._ripple_downstream(shot_id, prior_end, end_delta, shifted_audio)
         # Do NOT call _enforce_gap_holds() here — it iterates ALL objects
         # in every pre-gap shot and sets out-tangents to "step", corrupting
         # tangent types on objects the user didn't touch.  Gap holds are
@@ -727,37 +836,89 @@ class ShotSequencer:
         if abs(delta) < 1e-6:
             return
 
-        duration = old_end - old_start
-
-        # Shift all keys in this shot
-        for obj in shot.objects:
-            self.move_object_keys(obj, old_start, old_end, new_start)
-
-        shot.start = new_start
-        shot.end = new_start + duration
+        shifted_audio: set = set()
+        self._move_shot_content(shot, new_start, shifted_audio)
 
         # Ripple every downstream shot by the same delta
         for s in self.sorted_shots():
             if s.shot_id == shot_id:
                 continue
             if s.start >= old_end - 1e-6:
-                for obj in s.objects:
-                    self.move_object_keys(obj, s.start, s.end, s.start + delta)
-                s.start += delta
-                s.end += delta
+                self._move_shot_content(s, s.start + delta, shifted_audio)
 
         self._enforce_gap_holds()
 
-    def _ripple_downstream(self, shot_id: int, after_frame: float, delta: float):
+    def slide_shot(
+        self,
+        shot_id: int,
+        new_start: float,
+        direction: str = "downstream",
+        _enforce: bool = True,
+    ) -> None:
+        """Slide a shot intact to *new_start*, rippling only in *direction*.
+
+        Unlike :meth:`move_shot` which always ripples downstream, this
+        method lets the caller choose which side of the timeline absorbs
+        the displacement.  The shot's duration and internal keyframes
+        are preserved (translated, not scaled).
+
+        Parameters:
+            shot_id: The shot to slide.
+            new_start: Desired new start frame.
+            direction: ``"downstream"`` ripples shots after this one;
+                ``"upstream"`` ripples shots before this one.
+            _enforce: If True (default), call :meth:`_enforce_gap_holds`
+                after the operation.  Pass False when batching multiple
+                edits and calling it once at the end.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+
+        old_start = shot.start
+        old_end = shot.end
+        delta = new_start - old_start
+        if abs(delta) < 1e-6:
+            return
+
+        shifted_audio: set = set()
+        self._move_shot_content(shot, new_start, shifted_audio)
+
+        if direction == "downstream":
+            self._ripple_downstream(shot_id, old_end, delta, shifted_audio)
+        elif direction == "upstream":
+            self._ripple_upstream(shot_id, old_start, delta, shifted_audio)
+
+        if _enforce:
+            self._enforce_gap_holds()
+
+    def _ripple_downstream(
+        self,
+        shot_id: int,
+        after_frame: float,
+        delta: float,
+        shifted_audio: Optional[set] = None,
+    ):
         """Shift all shots starting at or after *after_frame* by *delta*."""
         for s in self.sorted_shots():
             if s.shot_id == shot_id:
                 continue
             if s.start >= after_frame:
-                for obj in s.objects:
-                    self.move_object_keys(obj, s.start, s.end, s.start + delta)
-                s.start += delta
-                s.end += delta
+                self._move_shot_content(s, s.start + delta, shifted_audio)
+
+    def _ripple_upstream(
+        self,
+        shot_id: int,
+        before_frame: float,
+        delta: float,
+        shifted_audio: Optional[set] = None,
+    ):
+        """Shift all shots ending at or before *before_frame* by *delta*."""
+        for s in reversed(self.sorted_shots()):
+            if s.shot_id == shot_id:
+                continue
+            if s.end <= before_frame + 1e-6:
+                self._move_shot_content(s, s.start + delta, shifted_audio)
 
     def _enforce_gap_holds(self):
         """Set stepped out-tangents on the last key before every inter-shot gap.
@@ -921,17 +1082,27 @@ class ShotSequencer:
         self._ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
 
-    def resize_shot(self, shot_id: int, new_start: float, new_end: float) -> None:
+    def resize_shot(
+        self,
+        shot_id: int,
+        new_start: float,
+        new_end: float,
+        _enforce: bool = True,
+    ) -> None:
         """Resize a shot to [new_start, new_end], scaling all keys and rippling.
 
         Both edges may move.  Keyframes are scaled from the old range
-        into the new one, and downstream shots are shifted by the
-        change in the shot's end frame.
+        into the new one.  Downstream shots are shifted by any change
+        in the tail, and upstream shots are shifted by any change in
+        the head.
 
         Parameters:
             shot_id: ID of the shot to resize.
             new_start: Desired start frame.
             new_end: Desired end frame.
+            _enforce: If True (default), call :meth:`_enforce_gap_holds`
+                after the operation.  Pass False when batching multiple
+                edits and calling it once at the end.
         """
         shot = self.shot_by_id(shot_id)
         if shot is None:
@@ -941,6 +1112,8 @@ class ShotSequencer:
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
 
+        shifted_audio: set = set()
+
         # Scale keyframes within this shot
         for obj in shot.objects:
             self.scale_object_keys(obj, old_start, old_end, new_start, new_end)
@@ -948,10 +1121,17 @@ class ShotSequencer:
         shot.end = new_end
 
         # Shift downstream shots by however much the tail moved
-        delta = new_end - old_end
-        if abs(delta) > 1e-6:
-            self._ripple_downstream(shot_id, old_end, delta)
-        self._enforce_gap_holds()
+        tail_delta = new_end - old_end
+        if abs(tail_delta) > 1e-6:
+            self._ripple_downstream(shot_id, old_end, tail_delta, shifted_audio)
+
+        # Shift upstream shots by however much the head moved
+        head_delta = new_start - old_start
+        if abs(head_delta) > 1e-6:
+            self._ripple_upstream(shot_id, old_start, head_delta, shifted_audio)
+
+        if _enforce:
+            self._enforce_gap_holds()
 
     def set_shot_start(
         self, shot_id: int, new_start: float, ripple: bool = True
@@ -1174,18 +1354,11 @@ class ShotSequencer:
                 locked_widths[i] = max(0, right.start - left.end)
 
         cursor = start_frame
+        shifted_audio: set = set()
         for i, shot in enumerate(shots):
-            duration = shot.end - shot.start
             new_start = cursor
             if abs(new_start - shot.start) > 1e-6:
-                if pm is not None:
-                    import maya.cmds as cmds
-
-                    self._batch_move_keys(
-                        cmds, shot.objects, shot.start, shot.end, new_start
-                    )
-                shot.start = new_start
-                shot.end = new_start + duration
+                self._move_shot_content(shot, new_start, shifted_audio)
             effective_gap = locked_widths.get(i, gap)
             cursor = shot.end + effective_gap
 

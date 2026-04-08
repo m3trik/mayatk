@@ -159,8 +159,12 @@ class ClipMotionMixin:
         if clip is None:
             return False
 
-        # Audio clip move
+        # Audio clip move — persist the new offset in Maya, then expand
+        # the shot boundary if the audio clip now extends beyond it.
         if clip.data.get("is_audio"):
+            orig_start = clip.data.get("orig_start")
+            if orig_start is not None and abs(new_start - orig_start) < FLOAT_ZERO_EPS:
+                return False
             source = clip.data.get("audio_source", "dg")
             if source == "event":
                 locator = clip.data.get("audio_node")
@@ -172,8 +176,17 @@ class ClipMotionMixin:
                 audio_node = clip.data.get("audio_node")
                 if audio_node:
                     AudioTrackManager.set_audio_offset(audio_node, new_start)
+            # Compute the true audio end from the full duration.
+            orig_end = clip.data.get("orig_end")
+            if orig_end is not None and orig_start is not None:
+                full_dur = orig_end - orig_start
+            else:
+                full_dur = clip.rect().width() if hasattr(clip, "rect") else 0
+            new_end = new_start + full_dur
             clip.data["orig_start"] = new_start
+            clip.data["orig_end"] = new_end
             self._audio_mgr.invalidate()
+            self._expand_shot_for_clip(clip, new_start, new_end)
             return True
 
         # Sub-row attribute clip move
@@ -232,11 +245,14 @@ class ClipMotionMixin:
         if clip.data.get("is_stepped"):
             self.logger.debug(
                 "[ANIM MOVE] stepped obj=%s from=%s to=%s shot=%s shift=%s",
-                obj_name, orig_start, new_start, shot_id,
-                getattr(widget, "_shift_at_press", False),
+                obj_name,
+                orig_start,
+                new_start,
+                shot_id,
+                getattr(widget, "shift_held_at_press", False),
             )
             self.sequencer.move_stepped_keys(obj_name, orig_start, new_start)
-            shift_held = getattr(widget, "_shift_at_press", False)
+            shift_held = getattr(widget, "shift_held_at_press", False)
             if shift_held:
                 shot = self.sequencer.shot_by_id(shot_id)
                 if shot and (new_start < shot.start or new_start > shot.end):
@@ -259,10 +275,10 @@ class ClipMotionMixin:
             shot_id,
             shot.start if shot else "?",
             shot.end if shot else "?",
-            getattr(widget, "_shift_at_press", False),
+            getattr(widget, "shift_held_at_press", False),
         )
 
-        shift_held = getattr(widget, "_shift_at_press", False)
+        shift_held = getattr(widget, "shift_held_at_press", False)
 
         if shift_held:
             self.sequencer.move_object_keys(obj_name, orig_start, orig_end, new_start)
@@ -289,7 +305,7 @@ class ClipMotionMixin:
         boundaries without changing them".
         """
         widget = self._get_sequencer_widget()
-        if getattr(widget, "_shift_at_press", False):
+        if getattr(widget, "shift_held_at_press", False):
             self.logger.debug("[EXPAND] skipped — shift held")
             return
         if self.sequencer is None:
@@ -313,6 +329,17 @@ class ClipMotionMixin:
             self.sequencer.store.update_shot(
                 shot_id, start=expanded_start, end=expanded_end
             )
+            # Ripple upstream/downstream so adjacent shots stay in order
+            shifted_audio: set = set()
+            start_delta = expanded_start - prior_start
+            if abs(start_delta) > 1e-6:
+                self.sequencer._ripple_upstream(shot_id, prior_start, start_delta, shifted_audio)
+            end_delta = expanded_end - prior_end
+            if abs(end_delta) > 1e-6:
+                self.sequencer._ripple_downstream(shot_id, prior_end, end_delta, shifted_audio)
+            # Downstream/upstream shots may have moved — flush stale cache
+            # so _sync_to_widget re-collects their segments.
+            self._segment_cache.clear()
         self.logger.debug(
             "[EXPAND] shot=%s prior=(%s,%s) new_clip=(%s,%s) result=(%s,%s)",
             shot_id,
@@ -336,6 +363,7 @@ class ClipMotionMixin:
         )
         shot_id = clip.data.get("shot_id") if clip else None
         obj_name = clip.data.get("obj", "") if clip else ""
+
         self._save_shot_state()
         with pm.UndoChunk():
             if self._apply_clip_move(clip_id, new_start):
@@ -411,19 +439,17 @@ class ClipMotionMixin:
                     vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
                     if not vals:
                         continue
-                    in_tan = cmds.keyTangent(
-                        crv, q=True, time=tr, inTangentType=True
+                    in_tan = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True)
+                    out_tan = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
+                    snapshots.append(
+                        (
+                            crv,
+                            new_t,
+                            vals[0],
+                            in_tan[0] if in_tan else "auto",
+                            out_tan[0] if out_tan else "auto",
+                        )
                     )
-                    out_tan = cmds.keyTangent(
-                        crv, q=True, time=tr, outTangentType=True
-                    )
-                    snapshots.append((
-                        crv,
-                        new_t,
-                        vals[0],
-                        in_tan[0] if in_tan else "auto",
-                        out_tan[0] if out_tan else "auto",
-                    ))
                     cmds.cutKey(crv, time=tr, clear=True)
 
             # Pass 2 — recreate at new positions.
@@ -442,6 +468,18 @@ class ClipMotionMixin:
 
         self._save_shot_state()
         shot_id = clip.data.get("shot_id")
+
+        # If any key landed outside the originating shot's range,
+        # invalidate the segment cache for adjacent shots so the
+        # upcoming _sync_to_widget rebuild picks up fresh data.
+        shot = self.sequencer.shot_by_id(shot_id) if self.sequencer else None
+        if shot is not None:
+            new_times = [new_t for _, new_t in changes]
+            if any(t < shot.start or t > shot.end for t in new_times):
+                for sid in list(self._segment_cache):
+                    if sid != shot_id:
+                        self._segment_cache.pop(sid, None)
+
         self._sync_to_widget(shot_id=shot_id)
         n = len(changes)
         self._set_footer(

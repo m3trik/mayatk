@@ -11,9 +11,11 @@ import pythontk as ptk
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
     StoreEvent,
+    StoreInvalidated,
     BatchComplete,
     ShotDefined,
     ActiveShotChanged,
+    SettingsChanged,
     ShotUpdated,
     ShotRemoved,
 )
@@ -38,6 +40,7 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_end",
             "txt_shot_desc",
             "spn_move_to",
+            "spn_gap",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -45,7 +48,12 @@ class ShotsController(ptk.LoggingMixin):
 
         # Debounce value-change signals so rapid spinner clicks / text
         # edits coalesce into a single store update.
-        for name in ("spn_shot_start", "spn_shot_end", "txt_shot_name", "txt_shot_desc"):
+        for name in (
+            "spn_shot_start",
+            "spn_shot_end",
+            "txt_shot_name",
+            "txt_shot_desc",
+        ):
             w = getattr(self.ui, name, None)
             if w is not None:
                 w.debounce = 400
@@ -65,11 +73,10 @@ class ShotsController(ptk.LoggingMixin):
         self._setup_delete_menu()
         self._setup_move_menu()
 
-        # Register persistent scene-change scriptJobs so the UI refreshes
-        # when the user opens or creates a scene while this panel is visible.
-        self._scene_opened_job: int | None = None
-        self._new_scene_job: int | None = None
-        self._install_scene_jobs()
+        # Subscribe to class-level invalidation so the UI refreshes when
+        # the persistence layer detects a scene change — no duplicate
+        # scriptJobs needed.
+        ShotStore.add_invalidation_listener(self._on_store_invalidated)
 
         # Enable hide-on-mouse-leave so the window behaves like a quick-access panel.
         # WindowStaysOnTopHint prevents the panel from falling behind the
@@ -142,80 +149,35 @@ class ShotsController(ptk.LoggingMixin):
         store = self._active_store()
         if store is not None:
             store.add_listener(self._on_store_event)
+            self._bound_store = store
             self._store_listener_bound = True
 
     def _unbind_store_listener(self) -> None:
         """Detach from the current store so we can rebind after scene change."""
         if not self._store_listener_bound:
             return
-        store = ShotStore._active
+        store = getattr(self, "_bound_store", None) or ShotStore._active
         if store is not None:
             store.remove_listener(self._on_store_event)
+        self._bound_store = None
         self._store_listener_bound = False
 
     def remove_callbacks(self) -> None:
-        """Remove scene-change scriptJobs and store listener (call on teardown)."""
+        """Remove store listeners and invalidation subscription (call on teardown)."""
         self._unbind_store_listener()
-        try:
-            import maya.cmds as cmds
+        ShotStore.remove_invalidation_listener(self._on_store_invalidated)
 
-            if self._scene_opened_job is not None:
-                try:
-                    cmds.scriptJob(kill=self._scene_opened_job, force=True)
-                except Exception:
-                    pass
-                self._scene_opened_job = None
-            if self._new_scene_job is not None:
-                try:
-                    cmds.scriptJob(kill=self._new_scene_job, force=True)
-                except Exception:
-                    pass
-                self._new_scene_job = None
-        except ImportError:
-            pass
-
-    def _on_scene_opened(self) -> None:
-        """Re-sync the UI after a scene switch.
-
-        Explicitly invalidates ``ShotStore._active`` so that
-        ``_active_store()`` loads the new scene's data, regardless of
-        whether the persistence-layer scriptJob has already fired.
-        """
+    def _on_store_invalidated(self, event: StoreInvalidated) -> None:
+        """Re-sync the UI after the active store is discarded (scene change)."""
         self._unbind_store_listener()
-        ShotStore._active = None
         self._sync_from_store()
         self._bind_store_listener()
 
-    def _install_scene_jobs(self) -> None:
-        """Register persistent scriptJobs for scene lifecycle events."""
-        try:
-            import maya.cmds as cmds
-        except ImportError:
-            return
-
-        try:
-            if self._scene_opened_job is None or not cmds.scriptJob(
-                exists=self._scene_opened_job
-            ):
-                self._scene_opened_job = cmds.scriptJob(
-                    event=["SceneOpened", self._on_scene_opened],
-                )
-        except Exception:
-            pass
-
-        try:
-            if self._new_scene_job is None or not cmds.scriptJob(
-                exists=self._new_scene_job
-            ):
-                self._new_scene_job = cmds.scriptJob(
-                    event=["NewSceneOpened", self._on_scene_opened],
-                )
-        except Exception:
-            pass
-
     def _on_store_event(self, event: StoreEvent) -> None:
         """Re-sync widgets when the store changes externally."""
-        if isinstance(event, (BatchComplete, ShotDefined, ShotRemoved)):
+        if isinstance(
+            event, (BatchComplete, ShotDefined, ShotRemoved, SettingsChanged)
+        ):
             self._sync_from_store()
         elif isinstance(event, (ActiveShotChanged, ShotUpdated)):
             self._sync_shot_editor()
@@ -303,10 +265,19 @@ class ShotsController(ptk.LoggingMixin):
         # ---- Editing group ----
         has_shots = bool(store.shots)
 
+        # If shots exist but the persisted gap is zero, derive it from
+        # actual shot positions so the spinner reflects the scene state.
+        gap = store.gap
+        if has_shots and gap == 0.0:
+            gap = store.compute_gap()
+            if gap != store.gap:
+                store.gap = gap
+                store.mark_dirty()
+
         spn_gap = getattr(self.ui, "spn_gap", None)
         if spn_gap is not None:
             spn_gap.blockSignals(True)
-            spn_gap.setValue(int(store.gap))
+            spn_gap.setValue(int(gap))
             spn_gap.blockSignals(False)
             spn_gap.setEnabled(has_shots)
 
@@ -529,7 +500,26 @@ class ShotsController(ptk.LoggingMixin):
         self._push_shot_field(name=text)
 
     def on_shot_start_changed(self, value: float) -> None:
-        self._push_shot_field(start=value)
+        if self._refreshing_editor:
+            return
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+        shot = store.shot_by_id(store.active_shot_id)
+        if shot is None:
+            return
+        if abs(value - shot.start) < 1e-6:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+        import pymel.core as pm
+
+        seq = ShotSequencer(store=store)
+        with pm.UndoChunk():
+            seq.move_shot(shot.shot_id, value)
+        store.mark_dirty()
 
     def on_shot_end_changed(self, value: float) -> None:
         if self._refreshing_editor:
@@ -540,11 +530,21 @@ class ShotsController(ptk.LoggingMixin):
         shot = store.shot_by_id(store.active_shot_id)
         if shot is None:
             return
-        old_end = shot.end
-        delta = value - old_end
-        with store.batch_update():
-            store.update_shot(store.active_shot_id, end=value)
-            store.ripple_shift(old_end, delta, exclude_id=shot.shot_id)
+        delta = value - shot.end
+        if abs(delta) < 1e-6:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+        import pymel.core as pm
+
+        seq = ShotSequencer(store=store)
+        shifted_audio: set = set()
+        with pm.UndoChunk():
+            old_end = shot.end
+            store.update_shot(shot.shot_id, end=value)
+            seq._ripple_downstream(shot.shot_id, old_end, delta, shifted_audio)
 
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)

@@ -53,29 +53,25 @@ class GapManagerMixin:
             return
 
         widget = self._get_sequencer_widget()
-        shift_held = getattr(widget, "_shift_at_press", False)
+        shift_held = getattr(widget, "shift_held_at_press", False)
 
         ds = start - shot.start
         de = end - shot.end
 
         self._save_shot_state()
 
-        # Both edges moved by the same amount → translate entire shot
+        # Both edges moved by the same amount → translate entire shot.
+        # NOTE: body-drag requires Shift (to avoid rubber-band selection
+        # conflict), so shift_held is always True here.  We therefore
+        # ignore it and always call move_shot() which moves keys + ripples.
         if abs(ds - de) < TIME_SNAP_EPS and abs(ds) > TIME_SNAP_EPS:
             self._syncing = True
             try:
                 with pm.UndoChunk():
-                    if shift_held:
-                        duration = shot.end - shot.start
-                        self.sequencer.store.update_shot(
-                            self.active_shot_id, start=start, end=start + duration
-                        )
-                    else:
-                        self.sequencer.move_shot(self.active_shot_id, start)
+                    self.sequencer.move_shot(self.active_shot_id, start)
             finally:
                 self._syncing = False
-            self._sync_to_widget()
-            self._sync_combobox()
+            self._gap_edit_epilogue()
             return
 
         # Edge resize
@@ -90,23 +86,46 @@ class GapManagerMixin:
                     self.sequencer.resize_shot(self.active_shot_id, start, end)
         finally:
             self._syncing = False
+        self._gap_edit_epilogue()
+
+    # ---- helpers ---------------------------------------------------------
+
+    def _find_shot_by_start(self, frame: float):
+        """Return the shot whose start is closest to *frame*, or None."""
+        for shot in self.sequencer.sorted_shots():
+            if abs(shot.start - frame) < TIME_SNAP_EPS:
+                return shot
+        return None
+
+    def _find_shot_by_end(self, frame: float):
+        """Return the shot whose end is closest to *frame*, or None."""
+        for shot in self.sequencer.sorted_shots():
+            if abs(shot.end - frame) < TIME_SNAP_EPS:
+                return shot
+        return None
+
+    def _gap_edit_epilogue(self):
+        """Common cleanup after any gap edit."""
+        self._segment_cache.clear()
+        if self.sequencer is not None:
+            self.sequencer.store.mark_dirty()
         self._sync_to_widget()
         self._sync_combobox()
 
     # ---- gap resize / move -----------------------------------------------
 
     def on_gap_resized(self, original_next_start: float, new_next_start: float) -> None:
-        """Handle right-edge gap drag — adjust downstream shots.
+        """Handle right-edge gap drag.
 
-        The right edge of the gap is the start of the next shot.
+        The right edge of a gap is a shot's ``.start``.
 
-        **Normal drag** shifts the adjacent shot and all downstream
-        shots by the same delta so every shot keeps its original
-        duration and keyframes stay aligned.
-
-        **Shift+drag** only adjusts the adjacent shot's start
-        boundary without rippling downstream — the adjacent shot's
-        duration changes and keyframes stay in place.
+        * **Inner** (the touched shot is the active shot) — the active
+          shot is *scaled* so its start changes while its end is fixed.
+        * **Outer** (the touched shot is *not* the active shot) — the
+          adjacent shot is *slid* intact in the downstream direction
+          and all further downstream shots follow.
+        * **Shift+drag** — boundary-only update, no key movement or
+          ripple regardless of inner/outer.
         """
         if self.sequencer is None:
             return
@@ -115,63 +134,54 @@ class GapManagerMixin:
         if abs(delta) < TIME_SNAP_EPS:
             return
 
-        sorted_shots = self.sequencer.sorted_shots()
-
-        target_idx = None
-        for i, shot in enumerate(sorted_shots):
-            if abs(shot.start - original_next_start) < 1.0:
-                target_idx = i
-                break
-
-        if target_idx is None:
+        target = self._find_shot_by_start(original_next_start)
+        if target is None:
             return
 
         widget = self._get_sequencer_widget()
-        shift_held = getattr(widget, "_shift_at_press", False)
+        shift_held = getattr(widget, "shift_held_at_press", False)
 
         self._save_shot_state()
-
         self._syncing = True
         try:
             with pm.UndoChunk():
                 if shift_held:
-                    # Boundary only — no ripple, no key movement.
-                    target = sorted_shots[target_idx]
                     self.sequencer.store.update_shot(
                         target.shot_id, start=target.start + delta
                     )
-                else:
-                    for shot in sorted_shots[target_idx:]:
-                        new_start = shot.start + delta
-                        for obj in shot.objects:
-                            self.sequencer.move_object_keys(
-                                obj, shot.start, shot.end, new_start
-                            )
-                        duration = shot.end - shot.start
-                        self.sequencer.store.update_shot(
-                            shot.shot_id,
-                            start=new_start,
-                            end=new_start + duration,
+                elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
+                    # Inner: scale active shot (start moves, end fixed).
+                    # No ripple — the shot grows/shrinks into the gap.
+                    old_s, old_e = target.start, target.end
+                    for obj in target.objects:
+                        self.sequencer.scale_object_keys(
+                            obj, old_s, old_e, new_next_start, old_e
                         )
+                    target.start = new_next_start
+                    self.sequencer._enforce_gap_holds()
+                else:
+                    # Outer: slide adjacent shot downstream intact.
+                    self.sequencer.slide_shot(
+                        target.shot_id, new_next_start, direction="downstream"
+                    )
         finally:
             self._syncing = False
-        self._sync_to_widget()
-        self._sync_combobox()
+        self._gap_edit_epilogue()
 
     def on_gap_left_resized(
         self, original_prev_end: float, new_prev_end: float
     ) -> None:
-        """Handle left-edge gap drag — resize the preceding shot's end.
+        """Handle left-edge gap drag.
 
-        The gap's left edge is the previous shot's end frame.
-        Dragging it adjusts that shot's duration.
+        The left edge of a gap is a shot's ``.end``.
 
-        **Normal drag** scales keyframes in the preceding shot to fit
-        the new range and ripples all downstream shots by the same
-        delta so their durations and key alignment are preserved.
-
-        **Shift+drag** only changes the boundary without scaling
-        keys or rippling downstream shots.
+        * **Inner** (the touched shot is the active shot) — the active
+          shot is *scaled* so its end changes while its start is fixed.
+        * **Outer** (the touched shot is *not* the active shot) — the
+          adjacent shot is *slid* intact in the upstream direction
+          and all further upstream shots follow.
+        * **Shift+drag** — boundary-only update, no key movement or
+          ripple regardless of inner/outer.
         """
         if self.sequencer is None:
             return
@@ -180,53 +190,41 @@ class GapManagerMixin:
         if abs(delta) < TIME_SNAP_EPS:
             return
 
-        sorted_shots = self.sequencer.sorted_shots()
-
-        target = None
-        target_idx = None
-        for i, shot in enumerate(sorted_shots):
-            if abs(shot.end - original_prev_end) < 1.0:
-                target = shot
-                target_idx = i
-                break
-
+        target = self._find_shot_by_end(original_prev_end)
         if target is None:
             return
 
         widget = self._get_sequencer_widget()
-        shift_held = getattr(widget, "_shift_at_press", False)
+        shift_held = getattr(widget, "shift_held_at_press", False)
 
         self._save_shot_state()
         self._syncing = True
         try:
             with pm.UndoChunk():
                 if shift_held:
-                    # Boundary only — no key scaling, no ripple.
-                    self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
-                else:
+                    self.sequencer.store.update_shot(
+                        target.shot_id, end=new_prev_end
+                    )
+                elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
+                    # Inner: scale active shot (end moves, start fixed).
+                    # No ripple — the shot grows/shrinks into the gap.
+                    old_s, old_e = target.start, target.end
                     for obj in target.objects:
                         self.sequencer.scale_object_keys(
-                            obj, target.start, target.end, target.start, new_prev_end
+                            obj, old_s, old_e, old_s, new_prev_end
                         )
-                    self.sequencer.store.update_shot(target.shot_id, end=new_prev_end)
-                    # Ripple downstream shots so they accommodate the
-                    # boundary change — preserves durations and keys.
-                    for shot in sorted_shots[target_idx + 1 :]:
-                        new_start = shot.start + delta
-                        for obj in shot.objects:
-                            self.sequencer.move_object_keys(
-                                obj, shot.start, shot.end, new_start
-                            )
-                        duration = shot.end - shot.start
-                        self.sequencer.store.update_shot(
-                            shot.shot_id,
-                            start=new_start,
-                            end=new_start + duration,
-                        )
+                    target.end = new_prev_end
+                    self.sequencer._enforce_gap_holds()
+                else:
+                    # Outer: slide adjacent shot upstream intact.
+                    # Compute new start that preserves the shot's duration.
+                    new_start = target.start + delta
+                    self.sequencer.slide_shot(
+                        target.shot_id, new_start, direction="upstream"
+                    )
         finally:
             self._syncing = False
-        self._sync_to_widget()
-        self._sync_combobox()
+        self._gap_edit_epilogue()
 
     def on_gap_moved(
         self,
@@ -235,10 +233,18 @@ class GapManagerMixin:
         new_start: float,
         new_end: float,
     ) -> None:
-        """Handle body gap drag — slide the cut-point between two shots.
+        """Handle body gap drag — slide the gap while preserving its width.
 
-        The gap keeps its width; the left shot's end and the right
-        shot's start move by the same delta.
+        Determines which gap this is relative to the active shot:
+
+        * **Right gap of active shot** (left_shot == active):
+          the active shot's end *scales* (inner edge) and the right
+          shot *slides* downstream intact (outer edge).
+        * **Left gap of active shot** (right_shot == active):
+          the active shot's start *scales* (inner edge) and the left
+          shot *slides* upstream intact (outer edge).
+        * **Neither flanking shot is active**: both shots slide in
+          their respective directions (outer-only behavior).
         """
         if self.sequencer is None:
             return
@@ -247,39 +253,94 @@ class GapManagerMixin:
         if abs(delta) < TIME_SNAP_EPS:
             return
 
-        sorted_shots = self.sequencer.sorted_shots()
-
-        left_shot = None
-        for shot in sorted_shots:
-            if abs(shot.end - old_start) < 1.0:
-                left_shot = shot
-                break
-
-        right_shot = None
-        for shot in sorted_shots:
-            if abs(shot.start - old_end) < 1.0:
-                right_shot = shot
-                break
+        left_shot = self._find_shot_by_end(old_start)
+        right_shot = self._find_shot_by_start(old_end)
 
         if left_shot is None and right_shot is None:
             return
+
+        active_id = self.active_shot_id
 
         self._save_shot_state()
         self._syncing = True
         try:
             with pm.UndoChunk():
-                if left_shot is not None:
-                    self.sequencer.store.update_shot(
-                        left_shot.shot_id, end=left_shot.end + delta
-                    )
-                if right_shot is not None:
-                    self.sequencer.store.update_shot(
-                        right_shot.shot_id, start=right_shot.start + delta
-                    )
+                # Determine which shot is inner (active, gets scaled)
+                # and which is outer (gets slid intact).
+                # Order: slide the outer shot first, then resize the
+                # inner shot, to avoid stale-position issues.
+
+                left_is_active = (
+                    left_shot is not None
+                    and active_id is not None
+                    and left_shot.shot_id == active_id
+                )
+                right_is_active = (
+                    right_shot is not None
+                    and active_id is not None
+                    and right_shot.shot_id == active_id
+                )
+
+                if left_is_active:
+                    # Right gap of active shot.
+                    # Outer: slide right shot downstream first.
+                    if right_shot is not None:
+                        self.sequencer.slide_shot(
+                            right_shot.shot_id,
+                            right_shot.start + delta,
+                            direction="downstream",
+                            _enforce=False,
+                        )
+                    # Inner: scale active shot's end (no ripple — the
+                    # outer slide already repositioned the adjacent shot).
+                    old_s, old_e = left_shot.start, left_shot.end
+                    new_e = old_e + delta
+                    for obj in left_shot.objects:
+                        self.sequencer.scale_object_keys(
+                            obj, old_s, old_e, old_s, new_e
+                        )
+                    left_shot.end = new_e
+
+                elif right_is_active:
+                    # Left gap of active shot.
+                    # Outer: slide left shot upstream first.
+                    if left_shot is not None:
+                        self.sequencer.slide_shot(
+                            left_shot.shot_id,
+                            left_shot.start + delta,
+                            direction="upstream",
+                            _enforce=False,
+                        )
+                    # Inner: scale active shot's start (no ripple).
+                    old_s, old_e = right_shot.start, right_shot.end
+                    new_s = old_s + delta
+                    for obj in right_shot.objects:
+                        self.sequencer.scale_object_keys(
+                            obj, old_s, old_e, new_s, old_e
+                        )
+                    right_shot.start = new_s
+                else:
+                    # Neither flanking shot is active — outer-only.
+                    if right_shot is not None:
+                        self.sequencer.slide_shot(
+                            right_shot.shot_id,
+                            right_shot.start + delta,
+                            direction="downstream",
+                            _enforce=False,
+                        )
+                    if left_shot is not None:
+                        self.sequencer.slide_shot(
+                            left_shot.shot_id,
+                            left_shot.start + delta,
+                            direction="upstream",
+                            _enforce=False,
+                        )
+
+                # Single enforce pass for the whole compound operation.
+                self.sequencer._enforce_gap_holds()
         finally:
             self._syncing = False
-        self._sync_to_widget()
-        self._sync_combobox()
+        self._gap_edit_epilogue()
 
     # ---- gap lock --------------------------------------------------------
 
@@ -294,9 +355,9 @@ class GapManagerMixin:
         left_shot = None
         right_shot = None
         for shot in sorted_shots:
-            if abs(shot.end - gap_start) < 1.0:
+            if abs(shot.end - gap_start) < TIME_SNAP_EPS:
                 left_shot = shot
-            if abs(shot.start - gap_end) < 1.0:
+            if abs(shot.start - gap_end) < TIME_SNAP_EPS:
                 right_shot = shot
 
         if left_shot is None or right_shot is None:
