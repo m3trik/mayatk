@@ -1,4 +1,6 @@
 description: "Fade objects in at shot start via visibility."
+verify:
+  mode: values_in_range
 attributes:
   visibility:
     in:

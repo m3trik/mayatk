@@ -224,6 +224,17 @@ def verify_behavior(
 ) -> bool:
     """Check whether expected behavior keyframes exist on an object.
 
+    The verification strategy is controlled by the template's optional
+    ``verify.mode`` key:
+
+    ``"exact"`` (default)
+        Every keyframe must exist at the exact time computed from the
+        template offsets/durations.
+    ``"values_in_range"``
+        Every expected *value* must appear on at least one keyframe
+        somewhere within the shot range.  Timing is ignored, so
+        user-repositioned keys still pass.
+
     Parameters:
         obj: Maya node name.
         behavior_name: YAML template stem name (e.g. ``"fade_in"``).
@@ -232,38 +243,102 @@ def verify_behavior(
         search_path: Optional custom behaviors directory.
         keyframe_fn: Callable ``(obj, attribute, time) -> list``.
             Defaults to ``pm.keyframe(obj, q=True, at=attr, time=(t, t))``.
+            Only used for ``exact`` mode.
 
     Returns:
         ``True`` if every expected keyframe is found.
     """
     template = load_behavior(behavior_name, search_path)
+    verify_mode = (template.get("verify") or {}).get("mode", "exact")
 
-    if keyframe_fn is None:
-        try:
-            import maya.cmds as _cmds
-        except ImportError:
-            if pm is None:
-                raise RuntimeError("Maya is required to verify behaviors")
+    # Resolve Maya backend once — reused for keyframe queries and attr check.
+    _cmds_mod = None
+    try:
+        import maya.cmds as _cmds_mod
+    except ImportError:
+        pass
+
+    if keyframe_fn is None and verify_mode == "exact":
+        if _cmds_mod is not None:
+            keyframe_fn = lambda o, attr, t: _cmds_mod.keyframe(
+                o, q=True, at=attr, time=(t, t)
+            )
+        elif pm is not None:
             keyframe_fn = lambda o, attr, t: pm.keyframe(
                 o, q=True, at=attr, time=(t, t)
             )
         else:
-            keyframe_fn = lambda o, attr, t: _cmds.keyframe(
-                o, q=True, at=attr, time=(t, t)
-            )
+            raise RuntimeError("Maya is required to verify behaviors")
+
+    # Match the visibility → opacity redirect in apply_behavior so we
+    # verify the attribute where keys were actually placed.
+    if _cmds_mod is not None:
+        _has_opacity = _cmds_mod.objExists(f"{obj}.opacity")
+    elif pm is not None:
+        _has_opacity = pm.objExists(f"{obj}.opacity")
+    else:
+        _has_opacity = False
 
     for attr_name, attr_def in template.get("attributes", {}).items():
+        check_attr = attr_name
+        if attr_name == "visibility" and _has_opacity:
+            check_attr = "opacity"
+
         for phase in ("in", "out"):
             block = attr_def.get(phase)
             if not block:
                 continue
-            if "anchor" not in block:
-                block = dict(block, anchor="start" if phase == "in" else "end")
-            keys = resolve_keys(block, start, end)
-            for k in keys:
-                result = keyframe_fn(obj, attr_name, k["time"])
-                if not result:
+
+            if verify_mode == "values_in_range":
+                if not _verify_values_in_range(
+                    obj, check_attr, block, start, end, _cmds_mod
+                ):
                     return False
+            else:
+                if "anchor" not in block:
+                    block = dict(block, anchor="start" if phase == "in" else "end")
+                keys = resolve_keys(block, start, end)
+                for k in keys:
+                    result = keyframe_fn(obj, check_attr, k["time"])
+                    if not result:
+                        return False
+    return True
+
+
+def _verify_values_in_range(
+    obj: str,
+    attr: str,
+    block: Dict,
+    start: float,
+    end: float,
+    _cmds_mod: Optional[Any] = None,
+) -> bool:
+    """Check that every expected value exists on *attr* within the range.
+
+    Uses a small epsilon (0.01) for floating-point comparison so that
+    values like ``0.999999`` match an expected ``1.0``.
+    """
+    expected = block.get("values", [])
+    if not expected:
+        return True
+
+    # Query all keyframe values on this attribute within the shot range.
+    if _cmds_mod is not None:
+        vals = _cmds_mod.keyframe(
+            obj, q=True, at=attr, time=(start, end), valueChange=True
+        )
+    elif pm is not None:
+        vals = pm.keyframe(obj, q=True, at=attr, time=(start, end), valueChange=True)
+    else:
+        return False
+
+    if not vals:
+        return False
+
+    eps = 0.01
+    for ev in expected:
+        if not any(abs(v - ev) < eps for v in vals):
+            return False
     return True
 
 

@@ -195,6 +195,12 @@ def wire_cmds(mock_cmds, key_db: FakeKeyDB, obj_curves: dict):
 
     def _listConnections(node=None, type=None, s=None, d=None, plugs=None, **kw):
         if type == "animCurve" and s:
+            # node can be a list of names (batch query) or a single string
+            if isinstance(node, list):
+                result = []
+                for n in node:
+                    result.extend(obj_curves.get(n, []))
+                return result
             return obj_curves.get(node, [])
         if plugs and d:
             # Return fake plug names for the curve
@@ -773,6 +779,25 @@ class TestRangeHighlightEditing(ControllerTestCase):
             "Active shot changed after range move!",
         )
 
+    def test_range_highlight_clears_segment_cache(self):
+        """Segment cache must be cleared after range highlight drag.
+
+        Bug: move_shot ripples downstream shots but stale segment cache
+        caused adjacent clips to paint at old positions.
+        Fixed: 2026-04-07
+        """
+        shot = self.sequencer.shot_by_id(self._active_shot_id())
+        self.ctrl._segment_cache[999] = [{"fake": True}]
+
+        self.sequencer.move_shot = MagicMock()
+        self.ctrl.on_range_highlight_changed(shot.start + 10, shot.end + 10)
+
+        self.assertNotIn(
+            999,
+            self.ctrl._segment_cache,
+            "Stale cache entry not flushed after range highlight!",
+        )
+
 
 # ===========================================================================
 # Test: Shot Expansion When Clip Exceeds Boundaries
@@ -845,6 +870,37 @@ class TestShotExpansion(ControllerTestCase):
         # Move key within shot boundaries
         self.ctrl._apply_clip_move(stepped_clip.clip_id, 150.0)
         self.assertEqual(shot.end, old_end, "Shot end should not change")
+
+    def test_expand_clears_segment_cache(self):
+        """_expand_shot_for_clip must clear segment cache when it ripples.
+
+        Bug: Expansion rippled downstream shots but stale cache entries
+        caused adjacent clips to paint at old positions.
+        Fixed: 2026-04-07
+        """
+        stepped_clip = None
+        for cd in self._anim_clips():
+            if cd.data.get("is_stepped"):
+                stepped_clip = cd
+                break
+        self.assertIsNotNone(stepped_clip)
+
+        self.key_db.add_key("Obj_visibility", 250.0, 1.0, "spline", "step")
+        self.obj_curves["Obj"] = ["Obj_visibility"]
+        wire_cmds(_mock_cmds, self.key_db, self.obj_curves)
+
+        # Plant stale cache for Shot_B (non-active)
+        shot_b = self.sequencer.sorted_shots()[1]
+        self.ctrl._segment_cache[shot_b.shot_id] = [{"stale": True}]
+
+        # Move clip past shot end → triggers expand + ripple
+        self.ctrl._apply_clip_move(stepped_clip.clip_id, 310.0)
+
+        self.assertNotIn(
+            shot_b.shot_id,
+            self.ctrl._segment_cache,
+            "Stale cache for downstream shot not flushed after expand!",
+        )
 
 
 # ===========================================================================
@@ -1258,7 +1314,7 @@ class TestAudioClipMove(ControllerTestCase):
 
     @unittest.skipIf(AudioTrackManager is None, "AudioTrackManager not available")
     def test_audio_clip_uses_audio_manager(self):
-        """Moving an audio clip should call AudioTrackManager, not shift keys."""
+        """Moving an audio clip should call AudioTrackManager and expand shot."""
         tid = self.widget.tracks()[0].track_id
         cid = self.widget.add_clip(
             tid,
@@ -1269,13 +1325,103 @@ class TestAudioClipMove(ControllerTestCase):
             audio_source="dg",
             audio_node="audioNode1",
             orig_start=110,
+            orig_end=140,
             shot_id=self.sequencer.sorted_shots()[0].shot_id,
         )
 
         with patch.object(AudioTrackManager, "set_audio_offset") as mock_offset:
             result = self.ctrl._apply_clip_move(cid, 120.0)
             mock_offset.assert_called_once_with("audioNode1", 120.0)
+            # Audio moves now expand shots and trigger rebuild
             self.assertTrue(result)
+
+    @unittest.skipIf(AudioTrackManager is None, "AudioTrackManager not available")
+    def test_audio_clip_expands_shot_past_end(self):
+        """Audio clips dragged past shot end must expand the shot boundary.
+
+        Audio clips now behave like animation clips — moving them past the
+        shot edge triggers shot expansion and ripple.
+        Fixed: 2026-04-07
+        """
+        shot = self.sequencer.sorted_shots()[0]  # 100-200
+        orig_end = shot.end
+        tid = self.widget.tracks()[0].track_id
+        cid = self.widget.add_clip(
+            tid,
+            start=110,
+            duration=30,
+            label="Audio",
+            is_audio=True,
+            audio_source="dg",
+            audio_node="audioNode1",
+            orig_start=110,
+            orig_end=140,
+            shot_id=shot.shot_id,
+        )
+
+        # Drag past end: 180 + 30 = 210 > shot.end(200)
+        with patch.object(AudioTrackManager, "set_audio_offset") as mock_offset:
+            result = self.ctrl._apply_clip_move(cid, 180.0)
+            mock_offset.assert_called_once_with("audioNode1", 180.0)
+            self.assertTrue(result)
+        # Shot MUST have expanded
+        self.assertGreater(shot.end, orig_end)
+
+    @unittest.skipIf(AudioTrackManager is None, "AudioTrackManager not available")
+    def test_audio_clip_expands_shot_before_start(self):
+        """Audio clips dragged before shot start must expand the shot boundary.
+
+        Fixed: 2026-04-07
+        """
+        shot = self.sequencer.sorted_shots()[0]  # 100-200
+        orig_start = shot.start
+        tid = self.widget.tracks()[0].track_id
+        cid = self.widget.add_clip(
+            tid,
+            start=110,
+            duration=30,
+            label="Audio",
+            is_audio=True,
+            audio_source="dg",
+            audio_node="audioNode1",
+            orig_start=110,
+            orig_end=140,
+            shot_id=shot.shot_id,
+        )
+
+        # Drag before start: 80 < shot.start(100)
+        with patch.object(AudioTrackManager, "set_audio_offset") as mock_offset:
+            result = self.ctrl._apply_clip_move(cid, 80.0)
+            mock_offset.assert_called_once_with("audioNode1", 80.0)
+            self.assertTrue(result)
+        # Shot MUST have expanded to cover the audio
+        self.assertLess(shot.start, orig_start)
+
+    @unittest.skipIf(AudioTrackManager is None, "AudioTrackManager not available")
+    def test_audio_clip_zero_delta_is_noop(self):
+        """Dropping an audio clip at its original position must be a no-op.
+
+        Fixed: 2026-04-07
+        """
+        shot = self.sequencer.sorted_shots()[0]
+        tid = self.widget.tracks()[0].track_id
+        cid = self.widget.add_clip(
+            tid,
+            start=110,
+            duration=30,
+            label="Audio",
+            is_audio=True,
+            audio_source="dg",
+            audio_node="audioNode1",
+            orig_start=110,
+            orig_end=140,
+            shot_id=shot.shot_id,
+        )
+
+        with patch.object(AudioTrackManager, "set_audio_offset") as mock_offset:
+            result = self.ctrl._apply_clip_move(cid, 110.0)
+            mock_offset.assert_not_called()
+            self.assertFalse(result)
 
 
 # ===========================================================================
@@ -1361,7 +1507,7 @@ class TestShiftHeldMove(ControllerTestCase):
         shot = self.sequencer.sorted_shots()[0]
         old_end = shot.end
 
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
 
         clip = None
         for cd in self._anim_clips():
@@ -1382,7 +1528,7 @@ class TestShiftHeldMove(ControllerTestCase):
         shot = self.sequencer.sorted_shots()[0]
         old_start = shot.start
 
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
 
         clip = None
         for cd in self._anim_clips():
@@ -1450,7 +1596,7 @@ class TestStartExpansion(ControllerTestCase):
         """Shift held should suppress expansion -- shot.start stays unchanged."""
         shot = self.sequencer.sorted_shots()[0]
         old_start = shot.start
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
 
         clip = None
         for cd in self._anim_clips():
@@ -1859,7 +2005,7 @@ class TestGapResize(ControllerTestCase):
         orig_c_start = shot_c.start  # 320
         orig_c_end = shot_c.end  # 420
 
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
         self.ctrl.on_gap_resized(210.0, 220.0)
 
         # Shot_B start shifted, but end stays → duration changes
@@ -1868,6 +2014,54 @@ class TestGapResize(ControllerTestCase):
         # Shot_C untouched
         self.assertAlmostEqual(shot_c.start, orig_c_start)
         self.assertAlmostEqual(shot_c.end, orig_c_end)
+
+    def test_gap_resize_clears_segment_cache(self):
+        """Segment cache must be cleared so adjacent shot clips refresh.
+
+        Bug: on_gap_resized shifted downstream shot keys/boundaries but
+        never invalidated _segment_cache.  Adjacent shots painted with
+        stale positions after resize.
+        Fixed: 2026-04-07
+        """
+        # Prime the cache with a dummy entry for Shot_B
+        shot_b = self.sequencer.sorted_shots()[1]
+        self.ctrl._segment_cache[shot_b.shot_id] = [{"fake": True}]
+
+        self.ctrl.on_gap_resized(210.0, 220.0)
+
+        self.assertNotIn(
+            [{"fake": True}],
+            self.ctrl._segment_cache.values(),
+            "Stale cache entry not flushed after gap resize!",
+        )
+
+    def test_gap_resize_inner_scales_active(self):
+        """Inner right-edge drag scales the active shot, no ripple.
+
+        When the touched shot IS the active shot, the shot is scaled
+        in place and downstream shots are unaffected.
+        Fixed: 2026-04-07 (inner/outer paradigm)
+        """
+        # Make Shot_B active so its start (210) is the inner edge
+        self.slots.ui.cmb_shot.setCurrentIndex(1)
+
+        shot_a = self.sequencer.sorted_shots()[0]  # (100, 200)
+        shot_b = self.sequencer.sorted_shots()[1]  # (210, 310)
+        shot_c = self.sequencer.sorted_shots()[2]  # (320, 420)
+        orig_a = (shot_a.start, shot_a.end)
+        orig_c = (shot_c.start, shot_c.end)
+
+        # Drag right edge at 210 → 200 (delta=-10); Shot_B IS active → inner
+        self.ctrl.on_gap_resized(210.0, 200.0)
+
+        # Shot_B scaled: start moved, end stays → keys time-stretched
+        self.assertAlmostEqual(shot_b.start, 200.0)
+        self.assertAlmostEqual(shot_b.end, 310.0)
+        # Shot_A and Shot_C untouched
+        self.assertAlmostEqual(shot_a.start, orig_a[0])
+        self.assertAlmostEqual(shot_a.end, orig_a[1])
+        self.assertAlmostEqual(shot_c.start, orig_c[0])
+        self.assertAlmostEqual(shot_c.end, orig_c[1])
 
 
 # ===========================================================================
@@ -2038,7 +2232,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         shot = self.sequencer.sorted_shots()[0]
 
         # Step 1: shift-drag ARROW_L from 167→168
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
         arrow_l_clip = None
         for cd in self._anim_clips():
             if (
@@ -2058,7 +2252,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         self.assertIn(168.0, self.ctrl._shifted_out_keys["ARROW_L"])
 
         # Step 2: normal-drag ARROW_R from 166→168 (expands shot)
-        self.widget._shift_at_press = False
+        self.widget.shift_held_at_press = False
         # Update segments to reflect the new state after the moves
         self._set_segments(
             shot.shot_id,
@@ -2114,7 +2308,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         shot = self.sequencer.sorted_shots()[0]
 
         # Shift-move ARROW_L to 168 → excluded
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
         clip = None
         for cd in self._anim_clips():
             if (
@@ -2128,7 +2322,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         self.assertIn("ARROW_L", self.ctrl._shifted_out_keys)
 
         # Now normal-move ARROW_L@150→155 (within shot) → clears exclusion
-        self.widget._shift_at_press = False
+        self.widget.shift_held_at_press = False
         clip2 = None
         for cd in self._anim_clips():
             if (
@@ -2149,7 +2343,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
     def test_shot_change_clears_exclusions(self):
         """Switching shots should clear the exclusion set."""
         # Shift-move ARROW_L to 168 → excluded
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
         clip = None
         for cd in self._anim_clips():
             if (
@@ -2466,13 +2660,15 @@ class TestSyncDecoration(ControllerTestCase):
 
         self.assertAlmostEqual(self.widget._active_range[1], 220.0)
 
-    def test_range_highlight_not_used(self):
-        """Range highlight is no longer used; active range tint replaces it."""
+    def test_range_highlight_matches_active_shot(self):
+        """Range highlight is set to the active shot's boundaries."""
         self._set_segments(0, make_segments("ObjA", [(100, 200)]))
         self._do_initial_sync()
 
         rh = self.widget.range_highlight()
-        self.assertIsNone(rh)
+        self.assertIsNotNone(rh)
+        self.assertAlmostEqual(rh[0], 100.0)
+        self.assertAlmostEqual(rh[1], 200.0)
 
 
 class TestResolveAndSave(ControllerTestCase):
@@ -2884,28 +3080,51 @@ class TestGapLeftResize(ControllerTestCase):
         shot_a = self.sequencer.shot_by_id(0)
         self.assertAlmostEqual(shot_a.end, 190.0)
 
-    def test_left_resize_ripples_downstream(self):
-        """Normal left-edge drag must ripple all downstream shots.
+    def test_left_resize_inner_does_not_ripple(self):
+        """Inner left-edge drag scales the active shot but does NOT ripple.
 
-        Bug: on_gap_left_resized only adjusted the preceding shot's end
-        without shifting downstream shots to accommodate.
-        Fixed: 2026-04-04
+        When the touched shot IS the active shot, the shot scales
+        into/out of the gap and downstream shots are unaffected.
+        Fixed: 2026-04-07 (inner/outer paradigm)
         """
         shot_b = self.sequencer.sorted_shots()[1]
         shot_c = self.sequencer.sorted_shots()[2]
         orig_b = (shot_b.start, shot_b.end)  # (250, 350)
         orig_c = (shot_c.start, shot_c.end)  # (360, 460)
-        dur_b = orig_b[1] - orig_b[0]  # 100
-        dur_c = orig_c[1] - orig_c[0]  # 100
 
-        # Drag from 200 → 190 (delta = -10)
+        # Drag from 200 → 190 (delta = -10); Shot_A is active → inner
         self.ctrl.on_gap_left_resized(200.0, 190.0)
 
-        # Downstream shots shift by -10 but keep durations
-        self.assertAlmostEqual(shot_b.start, orig_b[0] - 10)
-        self.assertAlmostEqual(shot_b.end - shot_b.start, dur_b)
-        self.assertAlmostEqual(shot_c.start, orig_c[0] - 10)
-        self.assertAlmostEqual(shot_c.end - shot_c.start, dur_c)
+        # Downstream shots must be untouched (gap absorbs the change)
+        self.assertAlmostEqual(shot_b.start, orig_b[0])
+        self.assertAlmostEqual(shot_b.end, orig_b[1])
+        self.assertAlmostEqual(shot_c.start, orig_c[0])
+        self.assertAlmostEqual(shot_c.end, orig_c[1])
+
+    def test_left_resize_outer_ripples_upstream(self):
+        """Outer left-edge drag slides the non-active shot upstream.
+
+        When the touched shot is NOT the active shot, it slides intact
+        and all upstream shots follow.
+        Fixed: 2026-04-07 (inner/outer paradigm)
+        """
+        # Switch active to Shot_B so that Shot_A becomes outer.
+        self.slots.ui.cmb_shot.setCurrentIndex(1)
+
+        shot_a = self.sequencer.sorted_shots()[0]  # (100, 200)
+        shot_c = self.sequencer.sorted_shots()[2]  # (360, 460)
+        orig_a = (shot_a.start, shot_a.end)
+        dur_a = orig_a[1] - orig_a[0]  # 100
+
+        # Drag left edge at 200 → 190 (delta=-10); Shot_A ≠ active → outer
+        self.ctrl.on_gap_left_resized(200.0, 190.0)
+
+        # Shot_A slides upstream by -10, duration preserved
+        self.assertAlmostEqual(shot_a.start, orig_a[0] - 10)
+        self.assertAlmostEqual(shot_a.end - shot_a.start, dur_a)
+        # Shot_C (downstream) untouched
+        self.assertAlmostEqual(shot_c.start, 360.0)
+        self.assertAlmostEqual(shot_c.end, 460.0)
 
     def test_shift_left_resize_no_ripple(self):
         """Shift+drag left edge adjusts only the boundary, no ripple.
@@ -2917,7 +3136,7 @@ class TestGapLeftResize(ControllerTestCase):
         orig_b = (shot_b.start, shot_b.end)
         orig_c = (shot_c.start, shot_c.end)
 
-        self.widget._shift_at_press = True
+        self.widget.shift_held_at_press = True
         self.ctrl.on_gap_left_resized(200.0, 190.0)
 
         shot_a = self.sequencer.shot_by_id(0)
@@ -2933,6 +3152,24 @@ class TestGapLeftResize(ControllerTestCase):
         self.ctrl.on_gap_left_resized(200.0, 200.0001)
         shot_a = self.sequencer.shot_by_id(0)
         self.assertAlmostEqual(shot_a.end, 200.0)
+
+    def test_left_resize_clears_segment_cache(self):
+        """Segment cache must be cleared after left-edge gap resize.
+
+        Bug: Stale cache caused adjacent shot clips to paint at old
+        positions after boundary change.
+        Fixed: 2026-04-07
+        """
+        shot_b = self.sequencer.sorted_shots()[1]
+        self.ctrl._segment_cache[shot_b.shot_id] = [{"fake": True}]
+
+        self.ctrl.on_gap_left_resized(200.0, 190.0)
+
+        self.assertNotIn(
+            [{"fake": True}],
+            self.ctrl._segment_cache.values(),
+            "Stale cache entry not flushed after left resize!",
+        )
 
 
 class TestGapBodyMove(ControllerTestCase):
@@ -2960,6 +3197,21 @@ class TestGapBodyMove(ControllerTestCase):
         shot_b = self.sequencer.shot_by_id(1)
         self.assertAlmostEqual(shot_a.end, 200.0)
         self.assertAlmostEqual(shot_b.start, 250.0)
+
+    def test_gap_move_clears_segment_cache(self):
+        """Segment cache must be cleared after gap body move.
+
+        Fixed: 2026-04-07
+        """
+        self.ctrl._segment_cache[999] = [{"fake": True}]
+
+        self.ctrl.on_gap_moved(200.0, 250.0, 210.0, 260.0)
+
+        self.assertNotIn(
+            999,
+            self.ctrl._segment_cache,
+            "Stale cache entry not flushed after gap move!",
+        )
 
 
 # ===========================================================================

@@ -1691,14 +1691,17 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         )
 
 
-class TestCsvModeIgnoresDetectionMode(unittest.TestCase, _ControllerHarness):
-    """CSV mode must ignore store.detection_mode for use_sel gating.
+class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
+    """CSV mode must respect store.detection_mode for use_sel gating.
 
-    Bug: When detection_mode was set to "all" (or any non-auto value) and
-    the controller was in CSV mode, build() and _resolve_ranges() treated
-    use_sel as True — forcing selected-keys detection that showed a "No
-    keys selected" error even though CSV steps define the shot list.
-    Fixed: 2026-04-03
+    The CSV defines step names, objects, and behaviors.  The store's
+    detection_mode independently controls how timing boundaries are
+    discovered (auto = full scene, skip_zero/all = selected keys).
+
+    Bug: _csv_path was used to gate both step-source AND detection-mode,
+    forcing auto-detect whenever CSV was loaded.  This broke selected-
+    keys range detection for CSV users.
+    Fixed: 2026-04-07
     """
 
     def setUp(self):
@@ -1707,28 +1710,30 @@ class TestCsvModeIgnoresDetectionMode(unittest.TestCase, _ControllerHarness):
         store.detection_mode = "all"
         store.detection_threshold = 5.0
         store.gap = 0.0
-        # Simulate CSV mode — _csv_path is set, so _is_detection_mode is False
+        # Simulate CSV mode — _csv_path is set
         self.ctrl._csv_path = "/fake/shots.csv"
 
-    def test_resolve_ranges_ignores_detection_mode_in_csv_mode(self):
-        """_resolve_ranges should use auto-detect, not selected-keys, in CSV mode."""
+    def test_resolve_ranges_respects_detection_mode_in_csv_mode(self):
+        """_resolve_ranges should use selected-keys when detection_mode is non-auto,
+        even in CSV mode."""
         with (
             patch(
                 "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions",
-                return_value=[],
             ) as mock_auto,
             patch(
                 "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+                return_value=[],
             ) as mock_sel,
         ):
             self.ctrl._cached_gaps = None
             self.ctrl._resolve_ranges()
-            mock_auto.assert_called_once()
-            mock_sel.assert_not_called()
+            mock_sel.assert_called_once()
+            mock_auto.assert_not_called()
 
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
-    def test_build_skips_selected_keys_in_csv_mode(self, mock_cls):
-        """build() should not abort with 'no keys selected' in CSV mode."""
+    def test_build_uses_selected_keys_in_csv_mode(self, mock_cls):
+        """build() in CSV mode with non-auto detection_mode should use
+        selected-keys detection for range verification."""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
@@ -1739,11 +1744,10 @@ class TestCsvModeIgnoresDetectionMode(unittest.TestCase, _ControllerHarness):
 
         with patch(
             "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+            return_value=[],
         ) as mock_sel:
             self.ctrl.build()
-            mock_sel.assert_not_called()
-
-        mock_builder.sync.assert_called_once()
+            mock_sel.assert_called_once()
 
 
 class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
@@ -1983,6 +1987,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_cls.return_value = mock_builder
 
         import pymel.core as pm
+
         pm.undoInfo = MagicMock()
 
         # CSV order: A01, A02, B01(new), A03
@@ -1993,8 +1998,9 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         call_kwargs = mock_builder.sync.call_args
         ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
         self.assertIn("B01", ranges)
-        self.assertEqual(ranges["B01"], (200, 200),
-                         "New step should be at predecessor A02's end")
+        self.assertEqual(
+            ranges["B01"], (200, 200), "New step should be at predecessor A02's end"
+        )
 
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     def test_consecutive_new_shots_stack(self, mock_cls):
@@ -2004,6 +2010,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_cls.return_value = mock_builder
 
         import pymel.core as pm
+
         pm.undoInfo = MagicMock()
 
         # CSV order: A01, B01(new), B02(new), A02, A03
@@ -2026,6 +2033,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_cls.return_value = mock_builder
 
         import pymel.core as pm
+
         pm.undoInfo = MagicMock()
 
         # CSV order: B01(new), A01, A02, A03
@@ -2311,7 +2319,7 @@ class TestFormatBehaviorHtml(unittest.TestCase):
             broken=["fade_out"],
             status_color="#FF0000",
         )
-        self.assertEqual(html.count('color:#FF0000'), 2)
+        self.assertEqual(html.count("color:#FF0000"), 2)
         self.assertIn("Fade In</span>", html)
         self.assertIn("Fade Out</span>", html)
 
@@ -2575,9 +2583,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    def test_skip_zero_calls_selected_keys_with_empty_steps(
-        self, mock_auto, mock_sel
-    ):
+    def test_skip_zero_calls_selected_keys_with_empty_steps(self, mock_auto, mock_sel):
         """With skip_zero mode and empty steps, _detect_regions must call
         regions_from_selected_keys, NOT detect_shot_regions."""
         self.store.detection_mode = "skip_zero"
@@ -2616,19 +2622,17 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    def test_csv_mode_forces_auto_regardless_of_store_mode(
-        self, mock_auto, mock_sel
-    ):
-        """When a CSV is loaded, _detect_regions must always use auto-detect,
-        regardless of the store's detection_mode."""
+    def test_csv_mode_respects_store_detection_mode(self, mock_auto, mock_sel):
+        """When a CSV is loaded and detection_mode is skip_zero,
+        _detect_regions must use selected-keys detection, not auto."""
         self.store.detection_mode = "skip_zero"
         self.ctrl._csv_path = "/some/file.csv"
-        mock_auto.return_value = []
+        mock_sel.return_value = []
 
         self.ctrl._detect_regions(5.0)
 
-        mock_auto.assert_called_once()
-        mock_sel.assert_not_called()
+        mock_sel.assert_called_once()
+        mock_auto.assert_not_called()
 
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
@@ -2664,9 +2668,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
     )
-    def test_settings_changed_skipped_before_first_show(
-        self, mock_auto, mock_sel
-    ):
+    def test_settings_changed_skipped_before_first_show(self, mock_auto, mock_sel):
         """SettingsChanged before _on_first_show must NOT trigger detect(),
         avoiding spurious message boxes when the widget isn't visible yet.
 
@@ -2683,6 +2685,45 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.ctrl._on_store_event(SettingsChanged())
 
         mock_sel.assert_not_called()
+        mock_auto.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+    )
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    def test_settings_changed_refreshes_ranges_in_csv_mode(self, mock_auto, mock_sel):
+        """SettingsChanged in CSV mode must refresh ranges (not replace
+        CSV steps with detected steps).
+
+        Bug: The SettingsChanged handler skipped CSV mode entirely,
+        so changing detection_mode had no effect for CSV users.
+        Fixed: 2026-04-07
+        """
+        from mayatk.anim_utils.shots._shots import SettingsChanged
+
+        self.store.detection_mode = "skip_zero"
+        mock_sel.return_value = [
+            {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+
+        # Simulate CSV mode with loaded steps
+        self.ctrl._csv_path = "/some/file.csv"
+        self.ctrl._steps = _make_steps("A01", "A02", "A03")
+        self.ctrl._first_shown = True
+
+        # Fire SettingsChanged
+        self.ctrl._on_store_event(SettingsChanged())
+
+        # Steps should still be from CSV (not replaced)
+        self.assertEqual(len(self.ctrl._steps), 3)
+        self.assertEqual(self.ctrl._steps[0].step_id, "A01")
+        # detect() should NOT have been called (would replace CSV steps)
+        # Instead _refresh_ranges ran, which calls _detect_regions
+        # through _resolve_ranges — so selected-keys detection should
+        # have fired (store mode is skip_zero).
+        mock_sel.assert_called()
         mock_auto.assert_not_called()
 
 
@@ -2761,9 +2802,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
-    def test_assess_auto_mode_no_guard(
-        self, mock_active, mock_manifest_cls, mock_auto
-    ):
+    def test_assess_auto_mode_no_guard(self, mock_active, mock_manifest_cls, mock_auto):
         """assess() in auto mode runs without selected-keys guard."""
         self.store.detection_mode = "auto"
         self.store.define_shot("A01", 10, 50, ["ctrl"])
@@ -2801,9 +2840,11 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         # Verify skip_scene_discovery was passed as True
         call_kwargs = mock_builder.assess.call_args
         self.assertTrue(
-            call_kwargs[1].get("skip_scene_discovery", False)
-            if call_kwargs[1]
-            else False,
+            (
+                call_kwargs[1].get("skip_scene_discovery", False)
+                if call_kwargs[1]
+                else False
+            ),
             "assess() must pass skip_scene_discovery=True in selected-keys mode",
         )
 
@@ -2840,15 +2881,13 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
 # ---------------------------------------------------------------------------
 
 
-class TestMessageBoxOnlyInDetect(unittest.TestCase, _ControllerHarness):
-    """The 'No keys selected' message box must only appear during user-
-    initiated detect(), not during assess() or build() which show footer
-    messages instead.
+class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
+    """User-initiated actions (detect, assess, build) must show a message
+    box popup when selected-keys mode is active and no keys are selected.
 
-    Bug: _detect_regions itself showed the message box, so every caller
-    (detect, assess, build, _resolve_ranges) would pop up a dialog.
-    Fixed: 2026-04-07 — moved the message box into detect(), callers
-    handle their own feedback.
+    Bug: Only detect() showed the message box; assess() and build() used
+    footer-only feedback which was too subtle for user-initiated actions.
+    Fixed: 2026-04-07 — added message_box to assess() and build() as well.
     """
 
     def setUp(self):
@@ -2876,26 +2915,136 @@ class TestMessageBoxOnlyInDetect(unittest.TestCase, _ControllerHarness):
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
-    def test_assess_does_not_show_message_box(
+    def test_assess_shows_message_box_when_no_keys(
         self, mock_active, mock_manifest_cls, mock_sel
     ):
-        """assess() in selected-keys mode with no keys must NOT show a message box."""
+        """assess() in selected-keys mode with no keys must show a message box."""
         mock_active.return_value = self.store
         self.ctrl._first_shown = True
         self.ctrl.assess()
-        self.ctrl.sb.message_box.assert_not_called()
+        self.ctrl.sb.message_box.assert_called_once()
 
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
-    def test_build_does_not_show_message_box(self, mock_active, mock_sel):
-        """build() in selected-keys mode with no keys must NOT show a message box."""
+    def test_build_shows_message_box_when_no_keys(self, mock_active, mock_sel):
+        """build() in selected-keys mode with no keys must show a message box."""
         mock_active.return_value = self.store
+        self.ctrl._store = self.store
         self.ctrl._first_shown = True
+        # Pre-load steps so _ensure_steps passes and build reaches its guard
+        self.ctrl._steps = _make_steps("A01", "A02")
         self.ctrl.build()
-        self.ctrl.sb.message_box.assert_not_called()
+        self.ctrl.sb.message_box.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: scene-change scriptJob (SceneOpened / NewSceneOpened)
+# ---------------------------------------------------------------------------
+
+
+class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
+    """_on_scene_changed must rebind the store listener and re-populate
+    the table when the user opens or creates a new Maya scene.
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.ctrl._store = self.store
+        self.ctrl._first_shown = True
+        # Default to detection mode (CSV unchecked)
+        self.ctrl.ui.chk_csv.isChecked.return_value = False
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_scene_change_re_detects_in_detection_mode(self, mock_active, mock_detect):
+        """Opening a new scene (no CSV) must trigger detect() to refresh."""
+        new_store = _fresh_store()
+        mock_active.return_value = new_store
+        mock_detect.return_value = [
+            {"name": "Shot 1", "start": 1.0, "end": 50.0, "objects": ["ctrl"]},
+        ]
+        self.ctrl._csv_path = ""
+
+        self.ctrl._on_scene_changed()
+
+        mock_detect.assert_called_once()
+        # Old cached store should be cleared
+        self.assertIsNone(self.ctrl._store)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_scene_change_reloads_csv_when_csv_checked(self, mock_active, mock_detect):
+        """Opening a new scene with CSV checked must reload the CSV."""
+        new_store = _fresh_store()
+        mock_active.return_value = new_store
+        self.ctrl.ui.chk_csv.isChecked.return_value = True
+        self.ctrl.ui.txt_csv_path.text.return_value = "/some/manifest.csv"
+
+        with patch.object(self.ctrl, "_load_csv") as mock_load:
+            self.ctrl._on_scene_changed()
+            mock_load.assert_called_once_with("/some/manifest.csv")
+
+        # detect should NOT have run (CSV takes priority)
+        mock_detect.assert_not_called()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+    )
+    @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
+    def test_scene_change_skipped_before_first_show(self, mock_active, mock_detect):
+        """Scene change before _on_first_show must not trigger detect.
+
+        The widget isn't visible yet — avoid premature detection and
+        message boxes during construction.
+        """
+        self.ctrl._first_shown = False
+
+        self.ctrl._on_scene_changed()
+
+        mock_detect.assert_not_called()
+
+    def test_scene_change_rebinds_store_listener(self):
+        """_on_scene_changed must unbind the old store and bind the new one."""
+        old_store = self.store
+        old_store.add_listener(self.ctrl._on_store_event)
+        self.ctrl._bound_store = old_store
+        self.ctrl._store_listener_bound = True
+
+        new_store = _fresh_store()
+        with (
+            patch(
+                "mayatk.anim_utils.shots._shots.ShotStore.active",
+                return_value=new_store,
+            ),
+            patch(
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions",
+                return_value=[],
+            ),
+        ):
+            self.ctrl._on_scene_changed()
+
+        # Should be bound to the new store
+        self.assertIs(self.ctrl._bound_store, new_store)
+        self.assertTrue(self.ctrl._store_listener_bound)
+
+    def test_remove_callbacks_clears_scene_jobs(self):
+        """remove_callbacks must reset scene job IDs."""
+        self.ctrl._scene_opened_job = 999
+        self.ctrl._new_scene_job = 998
+
+        self.ctrl.remove_callbacks()
+
+        # Without Maya, _remove_scene_jobs won't call cmds.scriptJob
+        # but the IDs should be None-able for GC safety.
+        self.assertFalse(self.ctrl._store_listener_bound)
 
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,7 @@ __all__ = [
     "ActiveShotChanged",
     "SettingsChanged",
     "BatchComplete",
+    "StoreInvalidated",
     "ScenePersistence",
     "MayaScenePersistence",
 ]
@@ -192,6 +193,7 @@ class MayaScenePersistence:
     def _on_scene_changed(self) -> None:
         """Invalidate the cached store when a different scene is loaded."""
         ShotStore._active = None
+        ShotStore._notify_invalidated()
 
     def _on_time_unit_changed(self) -> None:
         """Rescale shot timings when the scene framerate changes."""
@@ -358,6 +360,18 @@ class BatchComplete(StoreEvent):
     name: ClassVar[str] = "batch_complete"
 
 
+@dataclass(frozen=True)
+class StoreInvalidated(StoreEvent):
+    """The active store was discarded (scene change / new scene).
+
+    Listeners should rebind to the new :meth:`ShotStore.active` instance.
+    Fired on class-level invalidation listeners registered via
+    :meth:`ShotStore.add_invalidation_listener`.
+    """
+
+    name: ClassVar[str] = "store_invalidated"
+
+
 # ---------------------------------------------------------------------------
 # ShotStore
 # ---------------------------------------------------------------------------
@@ -373,6 +387,7 @@ class ShotStore:
 
     _active: Optional["ShotStore"] = None
     _persistence: Optional[ScenePersistence] = None
+    _invalidation_listeners: ClassVar[List[Callable[["StoreInvalidated"], None]]] = []
     _QSETTINGS_PREFIX = "ShotStore"
     DETECTION_MODES = ("auto", "all", "skip_zero", "zero_as_end")
 
@@ -561,6 +576,41 @@ class ShotStore:
         """Reset the active store and persistence backend."""
         cls._active = None
         cls._persistence = None
+
+    # ---- invalidation listeners (class-level) ----------------------------
+
+    @classmethod
+    def add_invalidation_listener(
+        cls, callback: Callable[["StoreInvalidated"], None]
+    ) -> None:
+        """Register a callback fired when the active store is discarded.
+
+        Unlike instance-level :meth:`add_listener`, these survive across
+        store instances — useful for UI controllers that need to rebind
+        after a scene change.
+        """
+        if callback not in cls._invalidation_listeners:
+            cls._invalidation_listeners.append(callback)
+
+    @classmethod
+    def remove_invalidation_listener(
+        cls, callback: Callable[["StoreInvalidated"], None]
+    ) -> None:
+        """Remove a previously registered invalidation listener."""
+        try:
+            cls._invalidation_listeners.remove(callback)
+        except ValueError:
+            pass
+
+    @classmethod
+    def _notify_invalidated(cls) -> None:
+        """Fire all invalidation listeners."""
+        event = StoreInvalidated()
+        for cb in cls._invalidation_listeners:
+            try:
+                cb(event)
+            except Exception:
+                pass
 
     # ---- cross-scene user preferences ------------------------------------
 
@@ -751,6 +801,31 @@ class ShotStore:
             if s.shot_id == exclude_id:
                 continue
             if s.start >= after_frame - 1e-6:
+                s.start += delta
+                s.end += delta
+        self.mark_dirty()
+
+    def ripple_shift_upstream(
+        self,
+        before_frame: float,
+        delta: float,
+        exclude_id: Optional[int] = None,
+    ) -> None:
+        """Shift all shots ending at or before *before_frame* by *delta*.
+
+        Upstream counterpart of :meth:`ripple_shift`.
+
+        Parameters:
+            before_frame: Only shots whose end is <= this value are moved.
+            delta: Frames to add (positive) or subtract (negative).
+            exclude_id: Optional shot id to skip (the shot being resized).
+        """
+        if abs(delta) < 1e-6:
+            return
+        for s in self.sorted_shots():
+            if s.shot_id == exclude_id:
+                continue
+            if s.end <= before_frame + 1e-6:
                 s.start += delta
                 s.end += delta
         self.mark_dirty()

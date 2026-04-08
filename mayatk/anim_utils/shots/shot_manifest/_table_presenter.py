@@ -141,8 +141,9 @@ class ManifestTableMixin:
                 apply_behavior(obj.name, b, shot.start, shot.end)
 
             # Re-assess so the UI reflects the fixed state.
-            # assess() sets its own footer summary.
-            self.assess()
+            # Skip the selected-keys guard — we just applied known
+            # behaviors and only need a status refresh.
+            self.assess(skip_key_check=True)
         except Exception as exc:
             self.logger.error("Apply behavior failed: %s", exc)
             self._set_footer(f"Error: {exc}", color=ERROR_COLOR)

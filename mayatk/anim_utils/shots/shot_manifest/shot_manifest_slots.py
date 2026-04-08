@@ -84,7 +84,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
+        self._scene_opened_job: Optional[int] = None
+        self._new_scene_job: Optional[int] = None
         self._bind_store_listener()
+        self._install_scene_jobs()
         self._column_map = ColumnMap()
         self._setup_recent_csv()
         self._setup_csv_toggle()
@@ -98,12 +101,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _on_first_show(self) -> None:
         """Auto-populate the table the first time the window is shown."""
         self._first_shown = True
-        if self.ui.chk_csv.isChecked():
-            path = self.ui.txt_csv_path.text().strip()
-            if path:
-                self._load_csv(path)
-                return
-        self.detect()
+        self._populate_from_source()
 
     # ---- built state -----------------------------------------------------
 
@@ -136,9 +134,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     @property
     def _use_selected_keys(self) -> bool:
-        """True when a selected-keys detection mode is active (not CSV)."""
-        if self._csv_path:
-            return False
+        """True when a selected-keys detection mode is active.
+
+        The store's detection_mode controls this regardless of whether
+        steps came from a CSV or from scene detection.  CSV defines
+        step names/objects; the detection mode defines how ranges are
+        inferred.
+        """
         store = self._active_store()
         return store is not None and store.detection_mode != "auto"
 
@@ -172,13 +174,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         Returns an empty list when a selected-keys mode is active and
         no keys are selected.  Callers are responsible for showing
         appropriate user feedback (message box, footer, etc.).
-        CSV mode always uses auto-detect regardless of the store's
-        detection_mode setting.
+
+        The store's detection_mode is always respected regardless of
+        whether a CSV is loaded — CSV defines steps, detection_mode
+        controls how timing boundaries are discovered.
         """
         store = self._active_store()
         mode = store.detection_mode if store is not None else "auto"
-        if self._csv_path:
-            mode = "auto"
         if mode != "auto":
             return regions_from_selected_keys(
                 gap_threshold=gap_threshold, key_filter=mode
@@ -209,7 +211,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 self.sb.message_box(
                     "<b>No keys selected.</b><br>"
                     "Select keyframes in the Graph Editor first.",
-                    background_color="rgb(68, 44, 44)",
                 )
             footer = (
                 "No selected keys found (select keys in the Graph Editor)."
@@ -475,8 +476,90 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._store_listener_bound = False
 
     def remove_callbacks(self) -> None:
-        """Remove ShotStore listener (call on teardown)."""
+        """Remove ShotStore listener and Maya scriptJobs (call on teardown)."""
         self._unbind_store_listener()
+        self._remove_scene_jobs()
+
+    # ---- Maya scene-change scriptJobs ------------------------------------
+
+    def _install_scene_jobs(self) -> None:
+        """Register persistent scriptJobs for SceneOpened / NewSceneOpened.
+
+        These survive scene changes (no ``killWithScene``) so the
+        manifest refreshes automatically when the user opens or creates
+        a new scene.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return
+
+        for attr, event in (
+            ("_scene_opened_job", "SceneOpened"),
+            ("_new_scene_job", "NewSceneOpened"),
+        ):
+            job_id = getattr(self, attr, None)
+            try:
+                if job_id is not None and cmds.scriptJob(exists=job_id):
+                    continue
+            except Exception:
+                pass
+            try:
+                setattr(
+                    self,
+                    attr,
+                    cmds.scriptJob(event=[event, self._on_scene_changed]),
+                )
+            except Exception:
+                pass
+
+    def _remove_scene_jobs(self) -> None:
+        """Kill any scene-change scriptJobs we own."""
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return
+
+        for attr in ("_scene_opened_job", "_new_scene_job"):
+            job_id = getattr(self, attr, None)
+            if job_id is None:
+                continue
+            try:
+                if cmds.scriptJob(exists=job_id):
+                    cmds.scriptJob(kill=job_id, force=True)
+            except Exception:
+                pass
+            setattr(self, attr, None)
+
+    def _on_scene_changed(self) -> None:
+        """Handle a Maya scene open / new-scene event.
+
+        Re-binds the store listener (the old store is stale) and
+        re-populates the table from CSV or detection, mirroring the
+        logic in ``_on_first_show``.
+        """
+        # The old store is invalidated by ShotStore._on_scene_changed.
+        self._unbind_store_listener()
+        self._store = None
+        self._bind_store_listener()
+
+        if not self._first_shown:
+            return
+
+        self._populate_from_source()
+
+    def _populate_from_source(self) -> None:
+        """Load CSV or run detection based on the current UI state.
+
+        Shared by ``_on_first_show`` and ``_on_scene_changed`` to keep
+        the populate-on-open logic in one place.
+        """
+        if self.ui.chk_csv.isChecked():
+            path = self.ui.txt_csv_path.text().strip()
+            if path:
+                self._load_csv(path)
+                return
+        self.detect()
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations — refresh tree timing if steps are loaded."""
@@ -484,16 +567,20 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if self._building:
             return
         if isinstance(event, SettingsChanged):
-            # Detection settings changed — invalidate cache and re-detect
-            # when not in CSV mode.  Must trigger even when _steps is
-            # empty so that switching to a selected-keys mode after a
-            # failed initial auto-detect works.  Guard on _first_shown
-            # to avoid triggering detection (and message boxes) before
-            # the widget is visible.
+            # Detection settings changed — invalidate cache and re-detect.
+            # Guard on _first_shown to avoid triggering detection (and
+            # message boxes) before the widget is visible.
             self._cached_gaps = None
             self._cached_gap_ends = None
-            if not self._csv_path and self._first_shown:
-                self.detect()
+            if self._first_shown:
+                if self._csv_path:
+                    # CSV defines steps — don't replace them with detected
+                    # steps.  Just refresh auto-filled ranges so the new
+                    # detection mode takes effect.
+                    if self._steps:
+                        self._refresh_ranges()
+                else:
+                    self.detect()
             return
         if not self._steps:
             return
@@ -1067,6 +1154,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._csv_path = csv_path
         self._user_ranges = dict(ranges) if ranges else {}
         self._last_results = []
+        self._last_resolved = []
         self._built_this_round = False
         self._cached_gaps = None
         self._cached_gap_ends = None
@@ -1241,9 +1329,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             # When selected-keys mode is active, verify keys exist
             # before proceeding — even if user ranges are complete.
-            # CSV mode never uses selected-keys detection; the CSV
-            # defines the step list and ranges are resolved or seeded
-            # from the store directly.
             use_sel = self._use_selected_keys
             if use_sel:
                 self._cached_gaps = None
@@ -1251,6 +1336,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     store.detection_threshold if store else 5.0
                 )
                 if not regions:
+                    self.sb.message_box(
+                        "<b>No keys selected.</b><br>"
+                        "Select keyframes in the Graph Editor before building.",
+                    )
                     self._set_footer(
                         "No selected keys found \u2014 select keyframes first.",
                         color=ERROR_COLOR,
@@ -1315,6 +1404,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 resolved_ids = set(range_map)
                 build_steps = [s for s in self._steps if s.step_id in resolved_ids]
                 if not build_steps:
+                    self.sb.message_box(
+                        "<b>No matching steps.</b><br>"
+                        "Selected keys don't map to any CSV steps.",
+                    )
                     self._set_footer(
                         "Selected keys don't map to any CSV steps.",
                         color=ERROR_COLOR,
@@ -1376,6 +1469,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._update_build_button()
         except Exception as exc:
             self.logger.error("Build failed: %s", exc)
+            self.sb.message_box(
+                f"<b>Build failed.</b><br>{exc}",
+            )
             self._set_footer(f"Build error: {exc}", color=ERROR_COLOR)
 
     def _apply_post_build(self, results: list, store) -> None:
@@ -1403,8 +1499,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     # ---- assess ----------------------------------------------------------
 
-    def assess(self) -> None:
-        """Compare CSV steps against the live Maya shots and color the tree."""
+    def assess(self, skip_key_check: bool = False) -> None:
+        """Compare CSV steps against the live Maya shots and color the tree.
+
+        Parameters:
+            skip_key_check: When ``True``, bypass the selected-keys guard.
+                Used by internal callers (e.g. re-apply behavior) that
+                already know the scene state and just need a status refresh.
+        """
         if not self._ensure_steps():
             return
 
@@ -1420,13 +1522,17 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         builder = ShotManifest(store)
         use_sel = self._use_selected_keys
 
-        # In selected-keys mode, verify keys exist before proceeding.
-        if use_sel:
+        # In selected-keys mode, verify keys exist before proceeding —
+        # but only when shots haven't been built yet (key selection is for
+        # initial range discovery, not for re-assessment of existing shots).
+        if use_sel and not skip_key_check and not self._is_built:
             self._cached_gaps = None
-            regions = self._detect_regions(
-                store.detection_threshold if store else 5.0
-            )
+            regions = self._detect_regions(store.detection_threshold if store else 5.0)
             if not regions:
+                self.sb.message_box(
+                    "<b>No keys selected.</b><br>"
+                    "Select keyframes in the Graph Editor before assessing.",
+                )
                 self._set_footer(
                     "No selected keys found \u2014 select keyframes first.",
                     color=ERROR_COLOR,
@@ -1437,9 +1543,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._cached_gaps = None
         self._cached_gap_ends = None
 
-        results = builder.assess(
-            self._steps, skip_scene_discovery=use_sel
-        )
+        results = builder.assess(self._steps, skip_scene_discovery=use_sel)
 
         # Write per-object statuses back to shot metadata so that
         # both the manifest and sequencer share the same classification.

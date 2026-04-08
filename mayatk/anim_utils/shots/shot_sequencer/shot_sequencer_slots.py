@@ -613,6 +613,10 @@ class ShotSequencerController(
 
         Called before ``menu.exec_`` so consumers can append actions.
         Override or extend in subclasses for custom clip menu items.
+
+        When multiple clips are selected the actions operate on all of
+        them.  The *clip_id* parameter identifies the right-clicked clip
+        for actions that need a single target (e.g. "Lock Others").
         """
         if pm is None:
             return
@@ -625,9 +629,16 @@ class ShotSequencerController(
 
         obj_name = clip.data.get("obj")
 
+        # Gather all selected clip IDs for batch operations.
+        selected_ids = widget.selected_clips() or [clip_id]
+        if clip_id not in selected_ids:
+            selected_ids = [clip_id]
+        multi = len(selected_ids) > 1
+
         menu.addSeparator()
-        act_delete = menu.addAction("Delete Key")
-        act_delete.triggered.connect(lambda: self._delete_clip_keys([clip_id]))
+        label = f"Delete Keys ({len(selected_ids)})" if multi else "Delete Key"
+        act_delete = menu.addAction(label)
+        act_delete.triggered.connect(lambda: self._delete_clip_keys(selected_ids))
 
         # Per-object lock helpers
         if obj_name and self.sequencer:
@@ -763,6 +774,7 @@ class ShotSequencerController(
         h_scroll, zoom, expanded_names = self._save_viewport_state(widget)
         widget.clear()
         self._sync_header_settings(widget)
+        self._audio_mgr.invalidate()
 
         if end <= start:
             self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
@@ -829,7 +841,7 @@ class ShotSequencerController(
         h_scroll, zoom, expanded_names = self._save_viewport_state(widget)
         visible_shots = self._visible_shots(shot)
 
-        widget.clear_decorations()
+        widget.clear_decorations(keep_range_highlight=True)
         self._rebuild_decoration(widget, shot, visible_shots)
         self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
 
@@ -876,8 +888,9 @@ class ShotSequencerController(
         # trigger a nested _sync_to_widget mid-build → duplicate tracks.
         self._syncing = True
         try:
-            widget.clear()
+            widget.clear(keep_range_highlight=True)
             self._sub_row_cache.clear()
+            self._audio_mgr.invalidate()
             self._sync_header_settings(widget)
 
             # Re-resolve any stale DAG paths (e.g. parent renamed) across
@@ -922,6 +935,7 @@ class ShotSequencerController(
         widget.set_playhead(current_time)
         widget.set_hidden_tracks(sorted(self.sequencer.hidden_objects))
         widget.set_active_range(shot.start, shot.end)
+        widget.set_range_highlight(shot.start, shot.end)
 
         # Populate the shot lane with all shots so the user always sees
         # the full shot structure (including gaps) regardless of display mode.
@@ -1269,7 +1283,9 @@ class ShotSequencerController(
                     file_path=seg["file_path"],
                     waveform=vis_waveform,
                     orig_start=seg["start"],
+                    orig_end=seg["end"],
                     event_key_frame=seg.get("event_key_frame"),
+                    shot_id=shot.shot_id,
                 )
 
     def hide_track(self, track_names) -> None:
@@ -1582,9 +1598,7 @@ class ShotSequencerController(
             self._sub_row_cache.clear()
             self._sync_to_widget()
             n = len(clip_ids)
-            self._set_footer(
-                f"Deleted {n} clip{'s' if n != 1 else ''}"
-            )
+            self._set_footer(f"Deleted {n} clip{'s' if n != 1 else ''}")
 
     def _delete_selected_clip_keys(self) -> None:
         """Delete selected keyframes or, if none, all keys on selected clips.
@@ -1643,9 +1657,7 @@ class ShotSequencerController(
                 self._segment_cache.clear()
                 self._sub_row_cache.clear()
                 self._sync_to_widget(shot_id=shot_id)
-                self._set_footer(
-                    f"Deleted {deleted} key{'s' if deleted != 1 else ''}"
-                )
+                self._set_footer(f"Deleted {deleted} key{'s' if deleted != 1 else ''}")
             return
 
         # Fallback: delete entire clips when no individual keys are selected.
@@ -1758,6 +1770,31 @@ class ShotSequencerController(
         store = self.sequencer.store if self.sequencer else None
         is_obj_locked = bool(store and obj_name in store.locked_objects)
 
+        # Build a map from attribute name to its animCurve node so we can
+        # produce full-range background curve previews after the per-segment
+        # clips are assembled.
+        attr_to_curve: dict = {}
+        for curve in all_curves:
+            try:
+                conns = (
+                    cmds.listConnections(
+                        str(curve), plugs=True, destination=True, source=False
+                    )
+                    or []
+                )
+                for conn in conns:
+                    if "." in conn:
+                        a = conn.rsplit(".", 1)[-1]
+                        attr_to_curve.setdefault(a, curve)
+            except Exception:
+                continue
+
+        # Determine the visible time range for the full-range curve based
+        # on the current display mode.
+        visible = self._visible_shots(shot)
+        curve_range_start = min(s.start for s in visible)
+        curve_range_end = max(s.end for s in visible)
+
         result = []
         for attr_name in sorted(attr_names):
             # Reuse the same collect_segments pipeline as the object row.
@@ -1828,6 +1865,22 @@ class ShotSequencerController(
                     extra["locked"] = True
                 segments.append((s, dur, attr_name, color, extra))
             result.append((attr_name, segments))
+
+        # Push full-range background curve previews to the widget for each
+        # attribute sub-row.  These are static reference lines painted in
+        # drawBackground — no interaction, no updates during drag.
+        if widget is not None:
+            for attr_name, _ in result:
+                crv = attr_to_curve.get(attr_name)
+                if crv is None:
+                    continue
+                bg_preview = build_curve_preview(
+                    crv, curve_range_start, curve_range_end
+                )
+                hex_color = color_map.get(attr_name, "#CCCCCC")
+                widget.set_bg_curve_preview(
+                    track_id, attr_name, bg_preview, color=hex_color or "#CCCCCC"
+                )
 
         self._sub_row_cache[cache_key] = result
         return result
@@ -1983,6 +2036,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             )
             sequencer.clip_menu_requested.connect(self.controller.on_clip_menu)
             sequencer.gap_menu_requested.connect(self.controller.on_gap_menu)
+            sequencer.range_highlight_changed.connect(
+                self.controller.on_range_highlight_changed
+            )
             sequencer.zone_context_menu_requested.connect(
                 self.controller.on_zone_context_menu
             )
