@@ -11,6 +11,7 @@ import pythontk as ptk
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.cam_utils._cam_utils import CamUtils
+from mayatk.display_utils.color_manager import ColorUtils
 
 
 # ---------------------------------------------------------------------------
@@ -627,204 +628,23 @@ class HierarchyManager(ptk.LoggingMixin):
                 self.clean_to_raw_reference[clean_hierarchy_path(raw_path)] = raw_path
 
             # ── Detect reparented items ──
-            # Same leaf name appears in both missing and extra but under different parents.
-            reparented: list = []
             remaining_missing = list(self.missing_objects)
             remaining_extra = list(self.extra_objects)
 
-            try:
-                # Build leaf-name → [cleaned_path] indexes for both pools
-                missing_by_leaf: Dict[str, List[str]] = {}
-                for p in remaining_missing:
-                    leaf = p.rsplit("|", 1)[-1]
-                    missing_by_leaf.setdefault(leaf, []).append(p)
-
-                extra_by_leaf: Dict[str, List[str]] = {}
-                for p in remaining_extra:
-                    leaf = p.rsplit("|", 1)[-1]
-                    extra_by_leaf.setdefault(leaf, []).append(p)
-
-                # Match strictly: only when there's exactly 1 candidate on each side
-                matched_missing = set()
-                matched_extra = set()
-                for leaf, missing_paths in missing_by_leaf.items():
-                    extra_paths = extra_by_leaf.get(leaf, [])
-                    if len(missing_paths) == 1 and len(extra_paths) == 1:
-                        ref_path = missing_paths[0]
-                        cur_path = extra_paths[0]
-                        reparented.append(
-                            {
-                                "leaf": leaf,
-                                "reference_path": ref_path,
-                                "current_path": cur_path,
-                            }
-                        )
-                        matched_missing.add(ref_path)
-                        matched_extra.add(cur_path)
-
-                # Remove reparented items from the missing/extra pools
-                remaining_missing = [
-                    p for p in remaining_missing if p not in matched_missing
-                ]
-                remaining_extra = [p for p in remaining_extra if p not in matched_extra]
-
-                if reparented:
-                    self.logger.debug(
-                        f"Detected {len(reparented)} reparented items "
-                        f"(e.g. {reparented[0]['leaf']}: "
-                        f"{reparented[0]['reference_path']} → {reparented[0]['current_path']})"
-                    )
-            except Exception as rp_err:
-                self.logger.debug(f"Reparented detection failed: {rp_err}")
+            reparented, remaining_missing, remaining_extra = self._detect_reparented(
+                remaining_missing, remaining_extra
+            )
 
             # ── Detect renamed (fuzzy) items ──
-            fuzzy_matches: list = []
-            try:
-                if remaining_missing and remaining_extra and self.fuzzy_matching:
-                    missing_leaves = [p.rsplit("|", 1)[-1] for p in remaining_missing]
-                    extra_leaves = [p.rsplit("|", 1)[-1] for p in remaining_extra]
-
-                    raw_matches = ptk.FuzzyMatcher.find_all_matches(
-                        missing_leaves,
-                        extra_leaves,
-                        score_threshold=0.7,
-                    )
-                    # raw_matches: Dict[str, Tuple[str, float]]
-                    matched_fm_missing = set()
-                    matched_fm_extra = set()
-                    for query_leaf, (best_leaf, score) in raw_matches.items():
-                        # Skip same-name matches — identical leaf names are
-                        # reparented items (different parent), not renames.
-                        if query_leaf == best_leaf:
-                            continue
-                        # Map leaves back to full cleaned paths
-                        ref_path = next(
-                            (
-                                p
-                                for p in remaining_missing
-                                if p.rsplit("|", 1)[-1] == query_leaf
-                            ),
-                            None,
-                        )
-                        cur_path = next(
-                            (
-                                p
-                                for p in remaining_extra
-                                if p.rsplit("|", 1)[-1] == best_leaf
-                            ),
-                            None,
-                        )
-                        if (
-                            ref_path
-                            and cur_path
-                            and ref_path not in matched_fm_missing
-                            and cur_path not in matched_fm_extra
-                        ):
-                            fuzzy_matches.append(
-                                {
-                                    "target_name": ref_path,
-                                    "current_name": cur_path,
-                                    "score": score,
-                                }
-                            )
-                            matched_fm_missing.add(ref_path)
-                            matched_fm_extra.add(cur_path)
-
-                    # Remove fuzzy-matched from the remaining pools
-                    remaining_missing = [
-                        p for p in remaining_missing if p not in matched_fm_missing
-                    ]
-                    remaining_extra = [
-                        p for p in remaining_extra if p not in matched_fm_extra
-                    ]
-
-                    if fuzzy_matches:
-                        self.logger.debug(
-                            f"Detected {len(fuzzy_matches)} fuzzy renamed matches "
-                            f"(e.g. {fuzzy_matches[0]['target_name']} ↔ {fuzzy_matches[0]['current_name']} "
-                            f"score={fuzzy_matches[0]['score']:.2f})"
-                        )
-            except Exception as fz_err:
-                self.logger.debug(f"Fuzzy renamed detection failed: {fz_err}")
+            fuzzy_matches, remaining_missing, remaining_extra = (
+                self._detect_fuzzy_renames(remaining_missing, remaining_extra)
+            )
 
             # ── Detect FBX name-flattening (suffix matching) ──
-            # FBX export can prepend parent group names to child node names,
-            # e.g. "BOOSTER_OFF_6_SWITCH" → "OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH".
-            # Detect these by checking if an extra leaf is a suffix of a missing leaf
-            # (or vice versa) at the same parent path.
-            try:
-                if remaining_missing and remaining_extra:
-                    # Group by parent path for efficient matching
-                    missing_by_parent: Dict[str, List[tuple]] = {}
-                    for p in remaining_missing:
-                        if "|" in p:
-                            parent, leaf = p.rsplit("|", 1)
-                        else:
-                            parent, leaf = "", p
-                        missing_by_parent.setdefault(parent, []).append((leaf, p))
-
-                    extra_by_parent: Dict[str, List[tuple]] = {}
-                    for p in remaining_extra:
-                        if "|" in p:
-                            parent, leaf = p.rsplit("|", 1)
-                        else:
-                            parent, leaf = "", p
-                        extra_by_parent.setdefault(parent, []).append((leaf, p))
-
-                    matched_sfx_missing: set = set()
-                    matched_sfx_extra: set = set()
-
-                    for parent in missing_by_parent:
-                        if parent not in extra_by_parent:
-                            continue
-                        m_items = missing_by_parent[parent]
-                        e_items = extra_by_parent[parent]
-                        # For each missing leaf, look for an extra leaf that is
-                        # a suffix (the shorter name is contained at the end of
-                        # the longer name preceded by _ or matching exactly).
-                        for m_leaf, m_path in m_items:
-                            if m_path in matched_sfx_missing:
-                                continue
-                            for e_leaf, e_path in e_items:
-                                if e_path in matched_sfx_extra:
-                                    continue
-                                if m_leaf == e_leaf:
-                                    continue
-                                # Determine which is the longer (flattened) name
-                                if len(m_leaf) > len(e_leaf):
-                                    longer, shorter = m_leaf, e_leaf
-                                else:
-                                    longer, shorter = e_leaf, m_leaf
-                                # The shorter name must appear at the end of the
-                                # longer name, preceded by '_'
-                                if (
-                                    longer.endswith(shorter)
-                                    and longer[len(longer) - len(shorter) - 1] == "_"
-                                ):
-                                    fuzzy_matches.append(
-                                        {
-                                            "target_name": m_path,
-                                            "current_name": e_path,
-                                            "score": 1.0,
-                                        }
-                                    )
-                                    matched_sfx_missing.add(m_path)
-                                    matched_sfx_extra.add(e_path)
-                                    break  # move to next missing item
-
-                    if matched_sfx_missing:
-                        remaining_missing = [
-                            p for p in remaining_missing if p not in matched_sfx_missing
-                        ]
-                        remaining_extra = [
-                            p for p in remaining_extra if p not in matched_sfx_extra
-                        ]
-                        self.logger.debug(
-                            f"Detected {len(matched_sfx_missing)} FBX name-flattening "
-                            f"matches (suffix matching)"
-                        )
-            except Exception as sfx_err:
-                self.logger.debug(f"Suffix matching failed: {sfx_err}")
+            suffix_matches, remaining_missing, remaining_extra = (
+                self._detect_suffix_flattening(remaining_missing, remaining_extra)
+            )
+            fuzzy_matches.extend(suffix_matches)
 
             # Update missing/extra to only contain truly-missing/truly-extra items
             self.missing_objects = remaining_missing
@@ -858,6 +678,211 @@ class HierarchyManager(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"Failed to analyze hierarchies: {e}")
             return {}
+
+    # ------------------------------------------------------------------ #
+    # Detection passes (called by analyze_hierarchies)
+    # ------------------------------------------------------------------ #
+
+    def _detect_reparented(
+        self,
+        remaining_missing: List[str],
+        remaining_extra: List[str],
+    ) -> Tuple[List[Dict], List[str], List[str]]:
+        """Detect items that exist in both pools under different parents.
+
+        Returns ``(reparented, remaining_missing, remaining_extra)`` with
+        matched items removed from the remaining pools.
+        """
+        reparented: List[Dict] = []
+        try:
+            missing_by_leaf: Dict[str, List[str]] = {}
+            for p in remaining_missing:
+                missing_by_leaf.setdefault(p.rsplit("|", 1)[-1], []).append(p)
+
+            extra_by_leaf: Dict[str, List[str]] = {}
+            for p in remaining_extra:
+                extra_by_leaf.setdefault(p.rsplit("|", 1)[-1], []).append(p)
+
+            matched_missing: set = set()
+            matched_extra: set = set()
+            for leaf, m_paths in missing_by_leaf.items():
+                e_paths = extra_by_leaf.get(leaf, [])
+                if len(m_paths) == 1 and len(e_paths) == 1:
+                    reparented.append(
+                        {
+                            "leaf": leaf,
+                            "reference_path": m_paths[0],
+                            "current_path": e_paths[0],
+                        }
+                    )
+                    matched_missing.add(m_paths[0])
+                    matched_extra.add(e_paths[0])
+
+            remaining_missing = [
+                p for p in remaining_missing if p not in matched_missing
+            ]
+            remaining_extra = [p for p in remaining_extra if p not in matched_extra]
+
+            if reparented:
+                self.logger.debug(
+                    f"Detected {len(reparented)} reparented items "
+                    f"(e.g. {reparented[0]['leaf']}: "
+                    f"{reparented[0]['reference_path']} → {reparented[0]['current_path']})"
+                )
+        except Exception as e:
+            self.logger.debug(f"Reparented detection failed: {e}")
+
+        return reparented, remaining_missing, remaining_extra
+
+    def _detect_fuzzy_renames(
+        self,
+        remaining_missing: List[str],
+        remaining_extra: List[str],
+    ) -> Tuple[List[Dict], List[str], List[str]]:
+        """Detect items that were renamed (fuzzy leaf-name matching).
+
+        Returns ``(fuzzy_matches, remaining_missing, remaining_extra)``.
+        """
+        fuzzy_matches: List[Dict] = []
+        try:
+            if not (remaining_missing and remaining_extra and self.fuzzy_matching):
+                return fuzzy_matches, remaining_missing, remaining_extra
+
+            missing_leaves = [p.rsplit("|", 1)[-1] for p in remaining_missing]
+            extra_leaves = [p.rsplit("|", 1)[-1] for p in remaining_extra]
+
+            raw_matches = ptk.FuzzyMatcher.find_all_matches(
+                missing_leaves,
+                extra_leaves,
+                score_threshold=0.7,
+            )
+
+            matched_fm_missing: set = set()
+            matched_fm_extra: set = set()
+            for query_leaf, (best_leaf, score) in raw_matches.items():
+                if query_leaf == best_leaf:
+                    continue
+                ref_path = next(
+                    (
+                        p
+                        for p in remaining_missing
+                        if p.rsplit("|", 1)[-1] == query_leaf
+                    ),
+                    None,
+                )
+                cur_path = next(
+                    (p for p in remaining_extra if p.rsplit("|", 1)[-1] == best_leaf),
+                    None,
+                )
+                if (
+                    ref_path
+                    and cur_path
+                    and ref_path not in matched_fm_missing
+                    and cur_path not in matched_fm_extra
+                ):
+                    fuzzy_matches.append(
+                        {
+                            "target_name": ref_path,
+                            "current_name": cur_path,
+                            "score": score,
+                        }
+                    )
+                    matched_fm_missing.add(ref_path)
+                    matched_fm_extra.add(cur_path)
+
+            remaining_missing = [
+                p for p in remaining_missing if p not in matched_fm_missing
+            ]
+            remaining_extra = [p for p in remaining_extra if p not in matched_fm_extra]
+
+            if fuzzy_matches:
+                self.logger.debug(
+                    f"Detected {len(fuzzy_matches)} fuzzy renamed matches "
+                    f"(e.g. {fuzzy_matches[0]['target_name']} ↔ "
+                    f"{fuzzy_matches[0]['current_name']} "
+                    f"score={fuzzy_matches[0]['score']:.2f})"
+                )
+        except Exception as e:
+            self.logger.debug(f"Fuzzy renamed detection failed: {e}")
+
+        return fuzzy_matches, remaining_missing, remaining_extra
+
+    def _detect_suffix_flattening(
+        self,
+        remaining_missing: List[str],
+        remaining_extra: List[str],
+    ) -> Tuple[List[Dict], List[str], List[str]]:
+        """Detect FBX name-flattening where parent names are prepended to children.
+
+        e.g. ``BOOSTER_OFF_6_SWITCH`` → ``OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH``.
+        Matched pairs share the same parent path, and the shorter name is a
+        ``_``-delimited suffix of the longer name.
+
+        Returns ``(suffix_matches, remaining_missing, remaining_extra)``.
+        """
+        suffix_matches: List[Dict] = []
+        try:
+            if not (remaining_missing and remaining_extra):
+                return suffix_matches, remaining_missing, remaining_extra
+
+            def _group_by_parent(paths):
+                result: Dict[str, List[Tuple[str, str]]] = {}
+                for p in paths:
+                    if "|" in p:
+                        parent, leaf = p.rsplit("|", 1)
+                    else:
+                        parent, leaf = "", p
+                    result.setdefault(parent, []).append((leaf, p))
+                return result
+
+            missing_by_parent = _group_by_parent(remaining_missing)
+            extra_by_parent = _group_by_parent(remaining_extra)
+
+            matched_missing: set = set()
+            matched_extra: set = set()
+
+            for parent, m_items in missing_by_parent.items():
+                e_items = extra_by_parent.get(parent)
+                if not e_items:
+                    continue
+                for m_leaf, m_path in m_items:
+                    if m_path in matched_missing:
+                        continue
+                    for e_leaf, e_path in e_items:
+                        if e_path in matched_extra or m_leaf == e_leaf:
+                            continue
+                        longer, shorter = (
+                            (m_leaf, e_leaf)
+                            if len(m_leaf) > len(e_leaf)
+                            else (e_leaf, m_leaf)
+                        )
+                        if (
+                            longer.endswith(shorter)
+                            and longer[len(longer) - len(shorter) - 1] == "_"
+                        ):
+                            suffix_matches.append(
+                                {
+                                    "target_name": m_path,
+                                    "current_name": e_path,
+                                    "score": 1.0,
+                                }
+                            )
+                            matched_missing.add(m_path)
+                            matched_extra.add(e_path)
+                            break
+
+            if matched_missing:
+                remaining_missing = [
+                    p for p in remaining_missing if p not in matched_missing
+                ]
+                remaining_extra = [p for p in remaining_extra if p not in matched_extra]
+                self.logger.debug(
+                    f"Detected {len(matched_missing)} FBX name-flattening matches (suffix matching)"
+                )
+        except Exception as e:
+            self.logger.debug(f"Suffix matching failed: {e}")
+
+        return suffix_matches, remaining_missing, remaining_extra
 
     # ------------------------------------------------------------------ #
     # Hierarchy repair methods (operate on results from analyze_hierarchies)
@@ -928,7 +953,10 @@ class HierarchyManager(ptk.LoggingMixin):
                     current_parent = pm.PyNode(match)
                 else:
                     new_grp = pm.createNode("transform", name=component)
+                    HierarchyManager._unlock_if_stub(current_parent)
                     pm.parent(new_grp, current_parent)
+                    HierarchyManager._relock_if_stub(current_parent)
+                    HierarchyManager._finalize_stub_node(new_grp)
                     current_parent = new_grp
             else:
                 # Root level — use leading pipe for unambiguous lookup
@@ -937,6 +965,7 @@ class HierarchyManager(ptk.LoggingMixin):
                     current_parent = pm.PyNode(root_path)
                 else:
                     current_parent = pm.createNode("transform", name=component)
+                    HierarchyManager._finalize_stub_node(current_parent)
         return current_parent
 
     def create_stubs(self, paths: Optional[List[str]] = None) -> List[str]:
@@ -995,7 +1024,10 @@ class HierarchyManager(ptk.LoggingMixin):
 
                 stub = pm.createNode("transform", name=leaf)
                 if parent:
+                    self._unlock_if_stub(parent)
                     pm.parent(stub, parent)
+                    self._relock_if_stub(parent)
+                self._finalize_stub_node(stub)
                 created.append(stub.nodeName())
                 self.logger.debug(f"Created stub: {stub.fullPath()}")
             except Exception as e:
@@ -1004,21 +1036,422 @@ class HierarchyManager(ptk.LoggingMixin):
         self.logger.result(f"Created {len(created)} stub transform(s).")
         return created
 
+    # -- stub protection -----------------------------------------------
+
+    #: Outliner colour for stub transforms (muted teal, consistent
+    #: with the "informational" palette used in diff formatting).
+    STUB_OUTLINER_COLOR = (0.42, 0.55, 0.62)
+
+    #: Custom attribute name used to identify stub transforms.
+    STUB_ATTR = "hierarchyManagerStub"
+
+    #: Human-readable note stored on every stub node.
+    STUB_NOTE = (
+        "Placeholder created by Hierarchy Manager. "
+        "This empty transform preserves the reference hierarchy structure. "
+        "Locked to prevent accidental deletion by scene-cleanup operations."
+    )
+
     @staticmethod
-    def _has_animated_ancestor(node) -> bool:
-        """Return True if *node* or any of its ancestors has animation curves."""
-        current = node
-        while current is not None:
-            if pm.keyframe(current, query=True, keyframeCount=True):
+    def _finalize_stub_node(node) -> None:
+        """Tag, colour, and lock a newly created stub transform.
+
+        Applies:
+        * A boolean ``hierarchyManagerStub`` attribute (for programmatic
+          discovery via ``*.hierarchyManagerStub``).
+        * A ``notes`` attribute with a human-readable explanation.
+        * A teal outliner colour so stubs are visually distinct.
+        * A node lock so Maya's *Optimize Scene Size* cannot delete them.
+        """
+        name = str(node)
+        try:
+            # Tag ----------------------------------------------------------
+            if not cmds.attributeQuery(
+                HierarchyManager.STUB_ATTR, node=name, exists=True
+            ):
+                cmds.addAttr(name, ln=HierarchyManager.STUB_ATTR, at="bool", dv=True)
+                cmds.setAttr(f"{name}.{HierarchyManager.STUB_ATTR}", True)
+
+            # Note ---------------------------------------------------------
+            if not cmds.attributeQuery("notes", node=name, exists=True):
+                cmds.addAttr(name, ln="notes", dt="string")
+            cmds.setAttr(f"{name}.notes", HierarchyManager.STUB_NOTE, type="string")
+
+            # Colour -------------------------------------------------------
+            ColorUtils.set_color_attribute(
+                node,
+                HierarchyManager.STUB_OUTLINER_COLOR,
+                attr_type="outliner",
+                force=True,
+            )
+
+            # Lock ---------------------------------------------------------
+            cmds.lockNode(name, lock=True)
+        except Exception:
+            pass  # best-effort; don't block stub creation
+
+    @staticmethod
+    def _unlock_if_stub(node) -> None:
+        """Unlock *node* if it was locked by :meth:`_finalize_stub_node`.
+
+        Call before ``pm.delete`` or ``pm.parent`` on a node that may be a
+        locked stub.  Safe to call on any node (non-stubs are ignored).
+        """
+        name = str(node)
+        try:
+            if cmds.attributeQuery(HierarchyManager.STUB_ATTR, node=name, exists=True):
+                cmds.lockNode(name, lock=False)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _relock_if_stub(node) -> None:
+        """Re-lock *node* if it carries the stub attribute.
+
+        Call after ``pm.parent`` to restore the protection that was
+        temporarily lifted by :meth:`_unlock_if_stub`.
+        """
+        name = str(node)
+        try:
+            if cmds.attributeQuery(HierarchyManager.STUB_ATTR, node=name, exists=True):
+                cmds.lockNode(name, lock=True)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _has_animation_data(node, check_descendants=False) -> bool:
+        """Return True if *node* has animation curves, constraints, or expressions.
+
+        Unlike the former ``_has_animated_ancestor`` (which walked *up* the
+        hierarchy checking only keyframes), this checks the node itself for
+        a broader set of animation connections:
+
+        * Time-based and set-driven key curves (``animCurve``).
+        * Constraints (``parentConstraint``, ``aimConstraint``, …).
+        * Expressions.
+        * Anim-layer blend nodes (``animBlendNodeBase`` subtypes).
+
+        When *check_descendants* is True the check also recurses into all
+        descendants — useful before deleting a parent (the subtree would be
+        destroyed too).
+        """
+        try:
+            name = str(node)
+            if not cmds.objExists(name):
+                return False
+
+            # Direct anim curves (time-based + driven keys)
+            if cmds.listConnections(name, type="animCurve", s=True, d=False):
                 return True
-            current = current.getParent()
+            # Constraints (inherit from transform, but type filter works)
+            if cmds.listRelatives(name, type="constraint"):
+                return True
+            # Expressions
+            if cmds.listConnections(name, type="expression"):
+                return True
+            # Anim-layer blend nodes
+            if cmds.listConnections(name, type="animBlendNodeBase"):
+                return True
+
+            if check_descendants:
+                descendants = (
+                    cmds.listRelatives(
+                        name, allDescendents=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
+                for desc in descendants:
+                    if cmds.listConnections(desc, type="animCurve", s=True, d=False):
+                        return True
+                    if cmds.listRelatives(desc, type="constraint"):
+                        return True
+                    if cmds.listConnections(desc, type="expression"):
+                        return True
+                    if cmds.listConnections(desc, type="animBlendNodeBase"):
+                        return True
+        except Exception:
+            pass
         return False
+
+    @staticmethod
+    def _is_locator_transform(node) -> bool:
+        """Return True if *node* is a transform with a locator shape child."""
+        try:
+            # Use fullPath when available to avoid ambiguity with
+            # duplicate short names at different hierarchy levels.
+            name = node.fullPath() if hasattr(node, "fullPath") else str(node)
+            if not cmds.objExists(name):
+                return False
+            shapes = cmds.listRelatives(name, shapes=True, fullPath=True) or []
+            return any(cmds.nodeType(s) == "locator" for s in shapes)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _find_locator_group_root(node):
+        """Walk up the hierarchy to find the root of a locator-group chain.
+
+        A locator-group chain is: ``GRP → LOC → children``.  If an object
+        sits under a locator (transform with a ``locatorShape``), the
+        locator and its parent group form an atomic unit that must be moved
+        together.  If the GRP is itself under another locator the walk
+        continues upward.
+
+        Returns the root transform of the chain (always the GRP *above*
+        the highest locator), or *None* if *node* is not inside a
+        locator-group chain.
+        """
+        try:
+            current = node
+            root = None
+
+            # If the node itself is a locator, start from its parent GRP
+            if HierarchyManager._is_locator_transform(current):
+                parent = current.getParent()
+                if parent is not None:
+                    root = parent
+                    current = parent
+                else:
+                    return current  # locator at world root
+
+            while True:
+                parent = current.getParent()
+                if parent is None:
+                    break
+                if HierarchyManager._is_locator_transform(parent):
+                    # Parent is a locator — the GRP above it is the root
+                    grandparent = parent.getParent()
+                    if grandparent is not None:
+                        root = grandparent
+                        current = grandparent
+                        continue  # keep walking up
+                    else:
+                        # Locator is at world root — locator itself is root
+                        root = parent
+                        break
+                elif root is not None:
+                    # Parent is not a locator and we already found a root
+                    break
+                else:
+                    current = parent
+                    continue
+            return root
+        except Exception:
+            return None
+
+    def _promote_to_locator_groups(
+        self,
+        paths: List[str],
+        extras_set: Optional[set] = None,
+    ) -> List[str]:
+        """Promote paths to their locator-group roots if applicable.
+
+        For each cleaned path, resolve it to a live node and check if it
+        sits inside a locator-group chain.  If so, replace the path with
+        the root of that chain (the GRP above the locator).  Deduplicates
+        the result.
+
+        Args:
+            paths: Cleaned hierarchy paths (e.g. from ``differences["extra"]``).
+            extras_set: Full set of extra paths.  When provided, promotion
+                is only applied if the locator-group root is itself extra.
+                This prevents quarantining a matched root just because one
+                of its locator-group children is extra.
+
+        Returns:
+            Deduplicated list of paths with locator-group promotion applied.
+        """
+        promoted: Dict[str, str] = {}  # original_path -> promoted_path
+        for p in paths:
+            node = self._resolve_node(p, source="current")
+            if not node:
+                promoted[p] = p
+                continue
+
+            root = self._find_locator_group_root(node)
+            if root is not None:
+                root_full = root.fullPath().lstrip("|")
+                # Find the cleaned path for this root
+                root_cleaned = None
+                for clean, raw in self.clean_to_raw_current.items():
+                    if raw == root_full or raw == root.fullPath():
+                        root_cleaned = clean
+                        break
+                if root_cleaned is None:
+                    # Build cleaned path from full path components
+                    root_cleaned = clean_hierarchy_path(root_full)
+
+                # Only promote when the root is itself extra.  If the root
+                # is a matched/expected node we must not quarantine it.
+                if extras_set is not None and root_cleaned not in extras_set:
+                    promoted[p] = p
+                else:
+                    promoted[p] = root_cleaned
+            else:
+                promoted[p] = p
+
+        # Deduplicate while preserving order
+        seen = set()
+        result = []
+        for orig in paths:
+            target = promoted.get(orig, orig)
+            if target not in seen:
+                seen.add(target)
+                result.append(target)
+        return result
+
+    @staticmethod
+    def _classify_animation(node) -> dict:
+        """Return a structured breakdown of animation on *node*.
+
+        Separates time-based anim curves (safe to transfer via
+        disconnect/reconnect) from non-transferable connections
+        (constraints, driven keys, expressions, anim layers).
+
+        Returns a dict with keys:
+            ``curves``        – list of ``(src_plug, dest_plug)`` for time-based curves
+            ``driven_keys``   – list of ``(src_plug, dest_plug)`` for set-driven keys
+            ``constraints``   – list of constraint node names
+            ``expressions``   – list of expression node names
+            ``is_referenced`` – True if the node comes from a Maya file reference
+            ``has_anim_layers`` – True if anim-layer blend nodes are connected
+        """
+        name = str(node)
+        result = {
+            "curves": [],
+            "driven_keys": [],
+            "constraints": [],
+            "expressions": [],
+            "is_referenced": False,
+            "has_anim_layers": False,
+        }
+        try:
+            pairs = (
+                cmds.listConnections(
+                    name,
+                    type="animCurve",
+                    s=True,
+                    d=False,
+                    connections=True,
+                    plugs=True,
+                )
+                or []
+            )
+            for i in range(0, len(pairs), 2):
+                dest_plug = pairs[i]
+                src_plug = pairs[i + 1]
+                curve = src_plug.split(".")[0]
+                input_conns = (
+                    cmds.listConnections(curve + ".input", s=True, d=False) or []
+                )
+                if input_conns and input_conns[0] != "time1":
+                    result["driven_keys"].append((src_plug, dest_plug))
+                else:
+                    result["curves"].append((src_plug, dest_plug))
+
+            result["constraints"] = cmds.listRelatives(name, type="constraint") or []
+            result["expressions"] = list(
+                set(cmds.listConnections(name, type="expression") or [])
+            )
+            try:
+                result["is_referenced"] = cmds.referenceQuery(
+                    name, isNodeReferenced=True
+                )
+            except Exception:
+                result["is_referenced"] = False
+            result["has_anim_layers"] = bool(
+                cmds.listConnections(name, type="animBlendNodeBase")
+            )
+        except Exception:
+            pass
+        return result
+
+    @staticmethod
+    def _transfer_anim_curves(old_node, new_node, logger=None) -> dict:
+        """Transfer time-based anim curves from *old_node* to *new_node*.
+
+        Uses a lossless disconnect/reconnect approach for normal nodes,
+        falling back to ``copyKey``/``pasteKey`` for referenced nodes
+        whose connections cannot be disconnected.
+
+        Returns a dict::
+
+            {"transferred": int,
+             "skipped": [{"attr": str, "reason": str}, ...],
+             "method": "rewire" | "copyKey"}
+        """
+        classification = HierarchyManager._classify_animation(old_node)
+        old_name, new_name = str(old_node), str(new_node)
+        result = {"transferred": 0, "skipped": [], "method": "rewire"}
+
+        # Anim layers — too complex for automatic transfer
+        if classification["has_anim_layers"]:
+            for src_plug, dest_plug in classification["curves"]:
+                attr = dest_plug.split(".")[-1]
+                result["skipped"].append(
+                    {"attr": attr, "reason": "animation on anim layers"}
+                )
+            return result
+
+        use_copy = classification["is_referenced"]
+        if use_copy:
+            result["method"] = "copyKey"
+
+        # Transfer time-based curves
+        for src_plug, dest_plug in classification["curves"]:
+            attr_name = dest_plug.split(".")[-1]
+            new_dest = f"{new_name}.{attr_name}"
+            try:
+                if not cmds.attributeQuery(attr_name, node=new_name, exists=True):
+                    result["skipped"].append(
+                        {
+                            "attr": attr_name,
+                            "reason": "attribute not found on replacement",
+                        }
+                    )
+                    continue
+
+                # Unlock destination if needed
+                if cmds.getAttr(new_dest, lock=True):
+                    cmds.setAttr(new_dest, lock=False)
+
+                # Remove any existing curves on the replacement attr
+                existing_curves = (
+                    cmds.listConnections(new_dest, type="animCurve", s=True, d=False)
+                    or []
+                )
+                if existing_curves:
+                    cmds.delete(existing_curves)
+
+                if use_copy:
+                    cmds.copyKey(old_name, attribute=attr_name)
+                    cmds.pasteKey(
+                        new_name, attribute=attr_name, option="replaceCompletely"
+                    )
+                else:
+                    cmds.disconnectAttr(src_plug, dest_plug)
+                    cmds.connectAttr(src_plug, new_dest, force=True)
+
+                result["transferred"] += 1
+            except Exception as exc:
+                result["skipped"].append({"attr": attr_name, "reason": str(exc)})
+
+        # Report non-transferable connections
+        for src_plug, dest_plug in classification["driven_keys"]:
+            attr = dest_plug.split(".")[-1]
+            result["skipped"].append({"attr": attr, "reason": "driven key"})
+        for c in classification["constraints"]:
+            result["skipped"].append({"attr": c, "reason": "constraint"})
+        for e in classification["expressions"]:
+            result["skipped"].append({"attr": e, "reason": "expression"})
+
+        return result
 
     def quarantine_extras(
         self,
         group: str = "_QUARANTINE",
         paths: Optional[List[str]] = None,
-        skip_animated: bool = False,
+        skip_animated: bool = True,
     ) -> List[str]:
         """Move extra (scene-only) items to a root-level quarantine group.
 
@@ -1064,6 +1497,24 @@ class HierarchyManager(ptk.LoggingMixin):
                 "|".join(parts[: i + 1]) in targets_set for i in range(len(parts) - 1)
             ):
                 roots_only.append(p)
+
+        # ── Locator-group promotion ──
+        # If an extra item sits under a locator (GRP → LOC → children),
+        # promote the move target to the GRP so the entire atomic unit
+        # stays together.  Re-run ancestor dedup after promotion.
+        # Only promote when the root GRP is itself extra — otherwise
+        # we would quarantine matched/expected content.
+        promoted = self._promote_to_locator_groups(roots_only, extras_set=targets_set)
+        if promoted != roots_only:
+            promoted_set = set(promoted)
+            roots_only = []
+            for p in sorted(promoted, key=lambda x: x.count("|")):
+                parts = p.split("|")
+                if not any(
+                    "|".join(parts[: i + 1]) in promoted_set
+                    for i in range(len(parts) - 1)
+                ):
+                    roots_only.append(p)
 
         # ── Auto-detect existing container ──
         # If the user hasn't set a custom name (still default) and all
@@ -1125,8 +1576,8 @@ class HierarchyManager(ptk.LoggingMixin):
         if self.dry_run:
             for p in needs_move:
                 node = self._resolve_node(p, source="current")
-                if skip_animated and node and self._has_animated_ancestor(node):
-                    self.logger.info(f"[DRY-RUN] Would skip (animated ancestor): {p}")
+                if skip_animated and node and self._has_animation_data(node):
+                    self.logger.info(f"[DRY-RUN] Would skip (animated): {p}")
                     continue
                 self.logger.info(f"[DRY-RUN] Would quarantine: {p}")
                 moved.append(p.rsplit("|", 1)[-1])
@@ -1147,7 +1598,7 @@ class HierarchyManager(ptk.LoggingMixin):
                     f"Quarantine skipped (node not found): {cleaned_path}"
                 )
                 continue
-            if skip_animated and self._has_animated_ancestor(node):
+            if skip_animated and self._has_animation_data(node):
                 skipped_animated.append(cleaned_path)
                 continue
             try:
@@ -1158,15 +1609,19 @@ class HierarchyManager(ptk.LoggingMixin):
                 self.logger.warning(f"Failed to quarantine {cleaned_path}: {e}")
 
         if skipped_animated:
+            for path in skipped_animated:
+                self.logger.debug(f"Skipped (animated): {path}")
             self.logger.info(
-                f"{len(skipped_animated)} extra(s) skipped (under animated ancestor)."
+                f"{len(skipped_animated)} extra(s) skipped (has animation data)."
             )
 
         self.logger.result(f"Quarantined {len(moved)} item(s) under '{group}'.")
         return moved
 
     def fix_fuzzy_renames(
-        self, items: Optional[List[Dict[str, str]]] = None
+        self,
+        items: Optional[List[Dict[str, str]]] = None,
+        skip_animated: bool = True,
     ) -> List[str]:
         """Rename nodes identified as fuzzy matches to their reference names.
 
@@ -1208,6 +1663,14 @@ class HierarchyManager(ptk.LoggingMixin):
                 self.logger.debug(f"Rename skipped (node not found): {current_path}")
                 continue
 
+            if skip_animated:
+                exprs = cmds.listConnections(str(node), type="expression") or []
+                if exprs:
+                    self.logger.debug(
+                        f"Rename skipped (expression-connected): {current_path}"
+                    )
+                    continue
+
             try:
                 old_name = node.nodeName()
                 node.rename(ref_leaf)
@@ -1239,6 +1702,7 @@ class HierarchyManager(ptk.LoggingMixin):
             return []
 
         fixed: List[str] = []
+        skipped_locator: List[str] = []
         for entry in targets:
             current_path = entry.get("current_path", "")
             reference_path = entry.get("reference_path", "")
@@ -1257,11 +1721,20 @@ class HierarchyManager(ptk.LoggingMixin):
                 self.logger.debug(f"Reparent skipped (node not found): {current_path}")
                 continue
 
+            # Nodes inside a locator-group chain (GRP > LOC > children)
+            # must not be reparented individually — that would break
+            # the atomic unit.  Skip and log instead.
+            if self._find_locator_group_root(node) is not None:
+                skipped_locator.append(current_path)
+                continue
+
             try:
                 old_parent = node.getParent()
                 target_parent = self._ensure_parent_chain(reference_path)
                 if target_parent:
+                    self._unlock_if_stub(target_parent)
                     pm.parent(node, target_parent)
+                    self._relock_if_stub(target_parent)
                 else:
                     pm.parent(node, world=True)
                 fixed.append(node.nodeName())
@@ -1272,11 +1745,28 @@ class HierarchyManager(ptk.LoggingMixin):
                     children = old_parent.getChildren(type="transform")
                     shapes = old_parent.getShapes()
                     if not children and not shapes:
-                        old_name = old_parent.nodeName()
-                        pm.delete(old_parent)
-                        self.logger.debug(f"Deleted empty source parent: {old_name}")
+                        if HierarchyManager._has_animation_data(old_parent):
+                            self.logger.debug(
+                                f"Preserved empty parent "
+                                f"'{old_parent.nodeName()}' (has animation data)"
+                            )
+                        else:
+                            old_name = old_parent.nodeName()
+                            HierarchyManager._unlock_if_stub(old_parent)
+                            pm.delete(old_parent)
+                            self.logger.debug(
+                                f"Deleted empty source parent: {old_name}"
+                            )
             except Exception as e:
                 self.logger.warning(f"Failed to reparent {current_path}: {e}")
+
+        if skipped_locator:
+            for path in skipped_locator:
+                self.logger.debug(f"Reparent skipped (inside locator group): {path}")
+            self.logger.info(
+                f"{len(skipped_locator)} reparent(s) skipped "
+                f"(inside locator-group chains)."
+            )
 
         self.logger.result(f"Fixed {len(fixed)} reparented item(s).")
         return fixed
@@ -1378,93 +1868,37 @@ class ObjectSwapper(ptk.LoggingMixin):
 
     def _process_found_objects(self, found_objects: List, fuzzy_match_map: Dict):
         """Process and integrate found objects into current scene based on pull mode."""
+        merge = self.pull_mode == "Merge Hierarchies"
 
         self.logger.debug(
-            f" _process_found_objects called with pull_children={self.pull_children}"
+            f"_process_found_objects: pull_children={self.pull_children}, merge={merge}"
         )
-        self.logger.debug(f" Found {len(found_objects)} objects to process")
 
-        # Log the names of found objects for debugging
-        for i, obj in enumerate(found_objects[:5]):  # Show first 5
-            try:
-                obj_name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
-                self.logger.debug(f" Found object [{i}]: {obj_name}")
-            except Exception:
-                self.logger.debug(f" Found object [{i}]: <name unavailable>")
-
-        # When pull_children is enabled, filter to only root objects to avoid processing
-        # hierarchies multiple times. Root objects will naturally include their children.
+        # When pull_children is enabled, filter to only root objects to avoid
+        # processing hierarchies multiple times.
         if self.pull_children:
-            self.logger.debug(" Pull children is ENABLED - filtering to root objects")
-            # Filter to root objects only (objects that are not children of other selected objects)
-            root_objects = self._filter_to_root_objects(found_objects)
+            objects_to_process = self._filter_to_root_objects(found_objects)
             self.logger.debug(
-                f" Filtered {len(found_objects)} objects to {len(root_objects)} root objects for hierarchy pulling"
+                f"Filtered {len(found_objects)} objects to {len(objects_to_process)} roots"
             )
-
-            # Log the root objects for debugging
-            for i, obj in enumerate(root_objects):
-                try:
-                    obj_name = obj.nodeName() if hasattr(obj, "nodeName") else str(obj)
-                    self.logger.debug(f" Root object [{i}]: {obj_name}")
-                except Exception:
-                    self.logger.debug(f" Root object [{i}]: <name unavailable>")
-
-            objects_to_process = root_objects
         else:
-            self.logger.debug(
-                " Pull children is DISABLED - processing individual objects"
-            )
-            # Process individual objects without their children
             objects_to_process = found_objects
-
-        self.logger.debug(f" Processing {len(objects_to_process)} objects")
 
         for i, obj in enumerate(objects_to_process):
             try:
-                # Check if object still exists before processing
                 if not obj.exists():
                     self.logger.warning(f"Object {obj} no longer exists, skipping")
                     continue
 
                 clean_name = get_clean_node_name(obj)
                 self.logger.debug(
-                    f"Processing object [{i}]: {clean_name} (pull_mode={self.pull_mode})"
+                    f"Processing [{i}]: {clean_name} (merge={merge}, children={self.pull_children})"
                 )
-
-                if self.pull_mode == "Merge Hierarchies":
-                    # Merge Hierarchies: preserve parent hierarchy structure
-                    if self.pull_children:
-                        self.logger.debug(
-                            f" Calling _process_with_hierarchy_and_children for {clean_name}"
-                        )
-                        self._process_with_hierarchy_and_children(obj, clean_name)
-                    else:
-                        self.logger.debug(
-                            f" Calling _process_with_hierarchy for {clean_name}"
-                        )
-                        self._process_with_hierarchy(obj, clean_name)
-                else:
-                    # Add to Scene: add object to scene, maintaining hierarchy if pull_children=True
-                    if self.pull_children:
-                        self.logger.debug(
-                            f" Calling _process_with_hierarchy_non_destructive_and_children for {clean_name}"
-                        )
-                        self._process_with_hierarchy_non_destructive_and_children(
-                            obj, clean_name
-                        )
-                    else:
-                        self.logger.debug(
-                            f" Calling _process_as_root_object for {clean_name}"
-                        )
-                        self._process_as_root_object(obj, clean_name)
-
-                self.logger.debug(f" Successfully processed object: {clean_name}")
+                self._integrate_object(obj, clean_name, merge=merge)
+                self.logger.debug(f"Successfully processed: {clean_name}")
 
             except Exception as e:
                 self.logger.error(f"Failed to process object {obj}: {e}")
-                import traceback
-
                 self.logger.debug(f"Full traceback: {traceback.format_exc()}")
 
     def _filter_to_root_objects(self, objects: List) -> List:
@@ -1539,112 +1973,233 @@ class ObjectSwapper(ptk.LoggingMixin):
         except Exception as e:
             self.logger.debug(f"Error collecting children for {obj}: {e}")
 
-    def _process_with_hierarchy_and_children(self, obj, clean_name: str):
-        """Process object and all its children preserving hierarchy for Merge mode."""
-        try:
-            # Get the complete hierarchy for this root object
-            all_objects = []
-            self._collect_object_and_children(obj, all_objects, set())
+    def _integrate_object(self, obj, clean_name: str, *, merge: bool):
+        """Integrate a single imported object into the current scene.
 
-            self.logger.debug(
-                f"Processing hierarchy root '{clean_name}' with {len(all_objects)} total objects for Merge mode"
+        This is the unified entry point that replaces the former matrix of
+        ``_process_with_hierarchy*`` / ``_process_as_root_object`` methods.
+
+        Args:
+            obj: PyMEL transform node from the imported namespace.
+            clean_name: Namespace-stripped leaf name for the object.
+            merge: When True (Merge Hierarchies mode), existing objects with
+                the same name are replaced.  When False (Add to Scene mode),
+                Maya auto-renames to avoid conflicts.
+        """
+        allow_auto_rename = not merge
+
+        if self.pull_children:
+            # Whole-hierarchy pull: parent root to world, keeping children intact.
+            self._integrate_hierarchy(
+                obj, clean_name, merge=merge, allow_auto_rename=allow_auto_rename
+            )
+        else:
+            # Single-object pull: rebuild parent chain, then place the object.
+            self._integrate_single(
+                obj, clean_name, merge=merge, allow_auto_rename=allow_auto_rename
             )
 
-            # For Merge Hierarchies mode with pull_children:
-            # IMPORTANT: Don't delete existing objects from previous pull operations
-            # Let Maya handle naming conflicts naturally instead of manual renaming
-            if pm.objExists(clean_name):
-                existing_obj = pm.PyNode(clean_name)
-                # Check if the existing object is at world level (from "Add to Scene")
-                parent = existing_obj.getParent()
-                if parent is None:  # Object is at world level
-                    self.logger.debug(
-                        f"Existing object '{clean_name}' from previous pull found at world level - preserving it"
-                    )
-                    self.logger.debug(
-                        f"Maya will automatically rename new object to avoid conflict"
-                    )
-                    # Let Maya handle the naming - don't pre-rename
-                else:
-                    # Object is part of another hierarchy, safe to replace
-                    self.logger.debug(
-                        f"Replacing existing hierarchy root: {clean_name}"
-                    )
-                    pm.delete(existing_obj)
+    # -- animation-safe merge helpers ------------------------------------
 
-            # Process the root object to establish hierarchy
-            self._process_with_hierarchy_merge_root_only(obj, clean_name)
+    def _safe_merge_delete(self, existing, replacement) -> bool:
+        """Attempt to safely delete *existing*, transferring animation first.
 
-            self.logger.debug(f"Successfully merged hierarchy root: {obj.nodeName()}")
+        Returns True if *existing* was deleted (caller proceeds normally).
+        Returns False if *existing* was preserved because it has
+        non-transferable animation — the caller should clean up *replacement*.
+        """
+        name = str(existing)
 
-        except Exception as e:
-            self.logger.warning(f"Failed to process hierarchy for {clean_name}: {e}")
-            # Fallback to processing just the root object
-            self._process_with_hierarchy(obj, clean_name)
+        if not HierarchyManager._has_animation_data(existing, check_descendants=True):
+            # No animation at all — safe to delete unconditionally
+            HierarchyManager._unlock_if_stub(existing)
+            pm.delete(existing)
+            return True
 
-    def _process_with_hierarchy_merge_root_only(self, obj, clean_name: str):
-        """Process root object preserving hierarchy for Merge mode without aggressive deletion."""
+        classification = HierarchyManager._classify_animation(existing)
+        has_non_transferable = (
+            classification["constraints"]
+            or classification["expressions"]
+            or classification["driven_keys"]
+            or classification["has_anim_layers"]
+        )
+
+        # Check descendants for any animation
+        descendants = (
+            cmds.listRelatives(
+                name, allDescendents=True, type="transform", fullPath=True
+            )
+            or []
+        )
+        descendant_animated = any(
+            HierarchyManager._has_animation_data(d) for d in descendants
+        )
+
+        if has_non_transferable or descendant_animated:
+            reasons = []
+            if classification["constraints"]:
+                reasons.append(f"{len(classification['constraints'])} constraint(s)")
+            if classification["expressions"]:
+                reasons.append(f"{len(classification['expressions'])} expression(s)")
+            if classification["driven_keys"]:
+                reasons.append(f"{len(classification['driven_keys'])} driven key(s)")
+            if classification["has_anim_layers"]:
+                reasons.append("anim layers")
+            if descendant_animated:
+                reasons.append("animated descendants")
+            self.logger.info(f"Preserved '{name}' (has {', '.join(reasons)})")
+            return False
+
+        # Only transferable (time-based) curves on the root node
+        transfer_result = HierarchyManager._transfer_anim_curves(
+            existing, replacement, logger=self.logger
+        )
+        if transfer_result["skipped"]:
+            skipped_reasons = [s["reason"] for s in transfer_result["skipped"]]
+            self.logger.info(
+                f"Preserved '{name}' (could not transfer: "
+                f"{', '.join(skipped_reasons)})"
+            )
+            return False
+
+        self.logger.debug(
+            f"Transferred {transfer_result['transferred']} anim curve(s) "
+            f"from '{name}' to replacement ({transfer_result['method']})"
+        )
+        HierarchyManager._unlock_if_stub(existing)
+        pm.delete(existing)
+        return True
+
+    # -- hierarchy (pull_children=True) --------------------------------
+
+    def _integrate_hierarchy(
+        self, obj, clean_name: str, *, merge: bool, allow_auto_rename: bool
+    ):
+        """Pull an entire hierarchy rooted at *obj* into the scene."""
         try:
-            self.logger.debug(
-                f" _process_with_hierarchy_merge_root_only called for {clean_name}"
+            # In merge mode, delete any pre-existing object with the same
+            # name so the pulled version can take its place.
+            if merge and pm.objExists(clean_name):
+                existing = pm.PyNode(clean_name)
+                self.logger.debug(f"Replacing existing object: {clean_name}")
+                if not self._safe_merge_delete(existing, obj):
+                    try:
+                        pm.delete(obj)
+                    except Exception:
+                        pass
+                    return
+
+            # Build the parent chain above the root, then parent the object.
+            self._build_parent_chain_and_reparent(
+                obj, allow_auto_rename=allow_auto_rename
             )
 
-            # Get the full path of the object in the imported scene
-            original_path = obj.fullPath()
-            path_components = original_path.split("|")
+            # Strip temp namespace from the whole subtree + connected materials.
+            self._cleanup_namespaces(obj, allow_auto_rename=allow_auto_rename)
 
-            # Remove namespace from each component
-            clean_path_components = []
-            for component in path_components:
-                if component:  # Skip empty components
-                    clean_component = get_clean_node_name_from_string(component)
-                    clean_path_components.append(clean_component)
-
-            # Build the hierarchy in current scene (similar to non-destructive but for root only)
-            current_parent = None
-            for i, component_name in enumerate(
-                clean_path_components[:-1]
-            ):  # Exclude the object itself
-                if not pm.objExists(component_name):
-                    # Create parent transform if it doesn't exist
-                    parent_obj = pm.createNode("transform", name=component_name)
-                    if current_parent:
-                        pm.parent(parent_obj, current_parent)
-                    current_parent = parent_obj
-                else:
-                    current_parent = pm.PyNode(component_name)
-
-            # Now parent the object to its proper parent (or root if no parents)
-            if current_parent:
-                pm.parent(obj, current_parent)
-            else:
-                pm.parent(obj, world=True)
-
-            # CRITICAL FIX: Remove namespace from the entire hierarchy
-            # When we pull a hierarchy, we need to remove the temp namespace from ALL objects
-            if ":" in obj.nodeName():
-                self.logger.debug(
-                    f" Removing namespace from entire hierarchy under {obj.nodeName()}"
-                )
-                # Let Maya handle naming conflicts naturally
-                self._remove_namespace_from_hierarchy(obj, allow_maya_auto_rename=True)
-                # Also remove namespace from materials and shading engines
-                self._remove_namespace_from_materials(obj, allow_maya_auto_rename=True)
-
-            # Rename root if needed (after namespace removal)
-            current_name = obj.nodeName()
-            if current_name != clean_name:
-                self.logger.debug(f" Renaming {current_name} to {clean_name}")
+            # Final rename of the root if needed (after namespace removal).
+            if obj.nodeName() != clean_name:
                 obj.rename(clean_name)
 
         except Exception as e:
-            self.logger.warning(
-                f"Failed to preserve hierarchy for {clean_name}, falling back to root: {e}"
-            )
-            import traceback
-
+            self.logger.warning(f"Hierarchy integration failed for {clean_name}: {e}")
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
-            self._process_as_root_object(obj, clean_name)
+            # Fallback: treat as single-object at scene root.
+            self._place_at_root(obj, clean_name)
+
+    # -- single object (pull_children=False) ---------------------------
+
+    def _integrate_single(
+        self, obj, clean_name: str, *, merge: bool, allow_auto_rename: bool
+    ):
+        """Pull a single object (no children) into the scene."""
+        try:
+            if merge and pm.objExists(clean_name):
+                existing = pm.PyNode(clean_name)
+                self.logger.debug(f"Replacing existing object: {clean_name}")
+                if not self._safe_merge_delete(existing, obj):
+                    try:
+                        pm.delete(obj)
+                    except Exception:
+                        pass
+                    return
+
+            self._build_parent_chain_and_reparent(
+                obj, allow_auto_rename=allow_auto_rename
+            )
+
+            # Single objects don't carry a subtree, but may still have a
+            # namespace prefix that needs stripping.
+            if ":" in obj.nodeName():
+                _rename_node_removing_namespace(
+                    obj, allow_maya_auto_rename=allow_auto_rename, logger=self.logger
+                )
+
+            if obj.nodeName() != clean_name:
+                obj.rename(clean_name)
+                actual = obj.nodeName()
+                if actual != clean_name:
+                    self.logger.debug(f"Maya auto-renamed to: {actual}")
+
+        except Exception as e:
+            self.logger.warning(
+                f"Single-object integration failed for {clean_name}: {e}"
+            )
+            self._place_at_root(obj, clean_name)
+
+    # -- shared helpers ------------------------------------------------
+
+    def _build_parent_chain_and_reparent(self, obj, *, allow_auto_rename: bool):
+        """Build the parent hierarchy for *obj* in the current scene, then reparent it.
+
+        Reads the object's full DAG path, strips namespaces from each
+        component, and ensures each ancestor exists.  Finally parents *obj*
+        under the deepest ancestor (or at world if there are none).
+        """
+        original_path = obj.fullPath()
+        path_components = [
+            get_clean_node_name_from_string(c) for c in original_path.split("|") if c
+        ]
+
+        if len(path_components) <= 1:
+            # Root-level object — just parent to world.
+            pm.parent(obj, world=True)
+            return
+
+        # Ensure each ancestor exists (everything except the leaf).
+        current_parent = None
+        for component_name in path_components[:-1]:
+            if pm.objExists(component_name):
+                current_parent = pm.PyNode(component_name)
+            else:
+                parent_obj = pm.createNode("transform", name=component_name)
+                if current_parent:
+                    pm.parent(parent_obj, current_parent)
+                current_parent = parent_obj
+
+        if current_parent:
+            pm.parent(obj, current_parent)
+        else:
+            pm.parent(obj, world=True)
+
+    def _cleanup_namespaces(self, obj, *, allow_auto_rename: bool):
+        """Strip temp-import namespaces from *obj*'s hierarchy and materials."""
+        if ":" not in obj.nodeName():
+            return
+        self.logger.debug(f"Removing namespace from hierarchy under {obj.nodeName()}")
+        self._remove_namespace_from_hierarchy(
+            obj, allow_maya_auto_rename=allow_auto_rename
+        )
+        self._remove_namespace_from_materials(
+            obj, allow_maya_auto_rename=allow_auto_rename
+        )
+
+    @staticmethod
+    def _place_at_root(obj, clean_name: str):
+        """Last-resort fallback: parent *obj* to world and rename."""
+        pm.parent(obj, world=True)
+        if obj.nodeName() != clean_name:
+            obj.rename(clean_name)
 
     def _remove_namespace_from_hierarchy(self, root_obj, allow_maya_auto_rename=False):
         """Remove namespace from an entire hierarchy of objects.
@@ -1880,223 +2435,6 @@ class ObjectSwapper(ptk.LoggingMixin):
 
         except Exception as e:
             self.logger.warning(f"Failed to remove namespace from materials: {e}")
-
-    def _process_with_hierarchy_non_destructive_and_children(
-        self, obj, clean_name: str
-    ):
-        """Process object and all its children preserving hierarchy for Add to Scene mode."""
-        try:
-            self.logger.debug(
-                f" _process_with_hierarchy_non_destructive_and_children called for {clean_name}"
-            )
-
-            # Get the complete hierarchy for this root object
-            all_objects = []
-            self._collect_object_and_children(obj, all_objects, set())
-
-            self.logger.debug(
-                f" Processing hierarchy root '{clean_name}' with {len(all_objects)} total objects for Add to Scene mode"
-            )
-
-            # Log a few child names for debugging
-            for i, child_obj in enumerate(all_objects[:5]):  # Show first 5
-                try:
-                    child_name = (
-                        child_obj.nodeName()
-                        if hasattr(child_obj, "nodeName")
-                        else str(child_obj)
-                    )
-                    self.logger.debug(f" Child object [{i}]: {child_name}")
-                except Exception:
-                    self.logger.debug(f" Child object [{i}]: <name unavailable>")
-
-            # For Add to Scene mode, just parent the root object to world
-            # and let Maya handle any naming conflicts automatically
-            # This preserves the entire hierarchy intact
-
-            # Simply parent the root object to world - Maya will handle naming automatically
-            pm.parent(obj, world=True)
-            self.logger.debug(f" Parented {clean_name} to world successfully")
-
-            # CRITICAL FIX: Remove namespace from the entire hierarchy
-            # When we pull a hierarchy, we need to remove the temp namespace from ALL objects
-            if ":" in obj.nodeName():
-                self.logger.debug(
-                    f" Removing namespace from entire hierarchy under {obj.nodeName()}"
-                )
-                # For Add to Scene mode: Let Maya handle naming conflicts automatically
-                self._remove_namespace_from_hierarchy(obj, allow_maya_auto_rename=True)
-                # Also remove namespace from materials and shading engines
-                self._remove_namespace_from_materials(obj, allow_maya_auto_rename=True)
-
-            self.logger.debug(f"Added hierarchy root to scene: {obj.nodeName()}")
-
-            # Log the actual hierarchy that was added
-            final_objects = []
-            self._collect_object_and_children(obj, final_objects, set())
-            self.logger.debug(
-                f" Successfully added hierarchy with {len(final_objects)} objects"
-            )
-
-        except Exception as e:
-            self.logger.warning(f"Failed to process hierarchy for {clean_name}: {e}")
-            import traceback
-
-            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
-            # Fallback to non-destructive single object processing
-            self._process_with_hierarchy_non_destructive(obj, clean_name)
-
-    def _process_with_hierarchy(self, obj, clean_name: str):
-        """Process object preserving its parent hierarchy."""
-        try:
-            # Check if object already exists in current scene and handle replacement
-            if pm.objExists(clean_name):
-                existing_obj = pm.PyNode(clean_name)
-                self.logger.debug(f"Replacing existing object: {clean_name}")
-                # If pull_children is enabled, also delete all children to avoid orphans
-                if self.pull_children:
-                    children = existing_obj.getChildren(
-                        allDescendents=True, type="transform"
-                    )
-                    if children:
-                        self.logger.debug(
-                            f"Deleting {len(children)} children of {clean_name}"
-                        )
-                        pm.delete(children)
-                pm.delete(existing_obj)
-
-            # Get the full path of the object in the imported scene
-            original_path = obj.fullPath()
-            path_components = original_path.split("|")
-
-            # Remove namespace from each component
-            clean_path_components = []
-            for component in path_components:
-                if component:  # Skip empty components
-                    clean_component = get_clean_node_name_from_string(component)
-                    clean_path_components.append(clean_component)
-
-            # Build the hierarchy in current scene
-            current_parent = None
-            for i, component_name in enumerate(
-                clean_path_components[:-1]
-            ):  # Exclude the object itself
-                if not pm.objExists(component_name):
-                    # Create parent transform if it doesn't exist
-                    parent_obj = pm.createNode("transform", name=component_name)
-                    if current_parent:
-                        pm.parent(parent_obj, current_parent)
-                    current_parent = parent_obj
-                else:
-                    current_parent = pm.PyNode(component_name)
-
-            # Now parent the object to its proper parent (or root if no parents)
-            if current_parent:
-                pm.parent(obj, current_parent)
-            else:
-                pm.parent(obj, world=True)
-
-            # Rename if needed
-            if obj.nodeName() != clean_name:
-                obj.rename(clean_name)
-
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to preserve hierarchy for {clean_name}, falling back to root: {e}"
-            )
-            self._process_as_root_object(obj, clean_name)
-
-    def _process_with_hierarchy_non_destructive(self, obj, clean_name: str):
-        """Process object preserving hierarchy but without replacing existing objects."""
-        try:
-            # Let Maya handle naming conflicts automatically instead of pre-renaming
-            final_name = clean_name
-            if pm.objExists(clean_name):
-                self.logger.debug(
-                    f"Object {clean_name} already exists, Maya will automatically rename"
-                )
-
-            # Get the full path of the object in the imported scene
-            original_path = obj.fullPath()
-            path_components = original_path.split("|")
-
-            # Remove namespace from each component and create unique names if needed
-            clean_path_components = []
-            for component in path_components:
-                if component:  # Skip empty components
-                    clean_component = get_clean_node_name_from_string(component)
-                    clean_path_components.append(clean_component)
-
-            # For non-destructive mode, we need to handle name conflicts for the entire hierarchy
-            # Start building from the top of the hierarchy
-            current_parent = None
-
-            # Build hierarchy with unique names for any conflicts
-            for i, component_name in enumerate(
-                clean_path_components[:-1]
-            ):  # Exclude the object itself
-                # Check if this component needs a unique name
-                unique_component_name = component_name
-                if pm.objExists(component_name):
-                    # Find a unique name for this parent
-                    counter = 1
-                    while pm.objExists(f"{component_name}_{counter}"):
-                        counter += 1
-                    unique_component_name = f"{component_name}_{counter}"
-                    self.logger.debug(
-                        f"Parent {component_name} exists, using: {unique_component_name}"
-                    )
-
-                if not pm.objExists(unique_component_name):
-                    # Create parent transform with unique name
-                    parent_obj = pm.createNode("transform", name=unique_component_name)
-                    if current_parent:
-                        pm.parent(parent_obj, current_parent)
-                    current_parent = parent_obj
-                else:
-                    current_parent = pm.PyNode(unique_component_name)
-
-            # Now parent the object to its proper parent (or root if no parents)
-            if current_parent:
-                pm.parent(obj, current_parent)
-            else:
-                pm.parent(obj, world=True)
-
-            # Rename to clean name - Maya will handle conflicts automatically
-            if obj.nodeName() != final_name:
-                obj.rename(final_name)
-                # Log the actual final name after Maya's automatic handling
-                actual_final_name = obj.nodeName()
-                if actual_final_name != final_name:
-                    self.logger.debug(f"Maya auto-renamed to: {actual_final_name}")
-
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to preserve hierarchy for {clean_name}, falling back to root: {e}"
-            )
-            self._process_as_root_object(obj, clean_name)
-
-    def _process_as_root_object(self, obj, clean_name: str):
-        """Process object by adding it to scene root (original behavior)."""
-        # In "Add to Scene" mode, we should NOT replace existing objects
-        # Instead, create additional objects (potentially with different names if conflicts exist)
-        # Let Maya handle naming conflicts automatically
-        final_name = clean_name
-        if pm.objExists(clean_name):
-            self.logger.debug(
-                f"Object {clean_name} already exists, Maya will automatically rename"
-            )
-
-        # Remove namespace and parent to scene root
-        pm.parent(obj, world=True)
-
-        # Rename to final name - Maya will handle conflicts by adding suffixes automatically
-        if obj.nodeName() != final_name:
-            obj.rename(final_name)
-            # Log the actual final name after Maya's automatic handling
-            actual_final_name = obj.nodeName()
-            if actual_final_name != final_name:
-                self.logger.debug(f"Maya auto-renamed to: {actual_final_name}")
 
 
 # Export the main classes and key functions

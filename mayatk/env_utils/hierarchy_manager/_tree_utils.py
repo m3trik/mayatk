@@ -6,15 +6,12 @@ Separated from _hierarchy_manager.py to keep Qt imports out of the core module.
 """
 from typing import Dict, List, Tuple, Any
 
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 import pythontk as ptk
 from pythontk.core_utils.hierarchy_utils.hierarchy_matching import HierarchyMatching
 from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import HierarchyIndexer
 
-from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
-    clean_hierarchy_path,
-    get_clean_node_name_from_string,
-)
+from mayatk.env_utils.hierarchy_manager._hierarchy_manager import clean_hierarchy_path
 
 
 class TreePathMatcher(ptk.LoggingMixin):

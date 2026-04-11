@@ -602,6 +602,321 @@ class TestSceneExporter(MayaTkTestCase):
                 "SmartBake must receive optimize_keys=False; standalone task handles optimization",
             )
 
+    # ------------------------------------------------------------------
+    # Hierarchy manifest & diff check
+    # ------------------------------------------------------------------
+
+    def test_manifest_path_for(self):
+        """Verify sidecar manifest path derivation."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        result = HierarchySidecar.manifest_path_for("/assets/hero.fbx")
+        self.assertTrue(result.endswith(".hero.hierarchy.json"))
+
+    def test_diff_report_path_for(self):
+        """Verify sidecar diff report path derivation."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        result = HierarchySidecar.diff_report_path_for("/assets/hero.fbx")
+        self.assertTrue(result.endswith(".hero.hierarchy_diff.txt"))
+
+    def test_build_clean_path_set_strips_namespace(self):
+        """Verify namespace stripping and leading pipe removal."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        objects = ["|ns:group|ns:child", "|group2|child2"]
+        result = HierarchySidecar.build_clean_path_set(objects)
+        self.assertEqual(result, {"group|child", "group2|child2"})
+
+    def test_get_top_level_collapses_children(self):
+        """Verify that children are collapsed under their top-level parent."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        paths = ["group", "group|child", "group|child|grandchild", "other"]
+        result = HierarchySidecar.get_top_level(paths)
+        self.assertEqual(sorted(result), ["group", "other"])
+
+    def test_get_top_level_preserves_siblings(self):
+        """Verify that siblings with similar prefix names are NOT collapsed."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        paths = ["group", "group_alt", "group|child"]
+        result = HierarchySidecar.get_top_level(paths)
+        self.assertEqual(sorted(result), ["group", "group_alt"])
+
+    def test_detect_reparenting_finds_moved_subtree(self):
+        """detect_reparenting recognises a subtree moved under a new parent."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        missing = [
+            "GRP",
+            "GRP|LOC",
+            "GRP|LOC|GEO",
+            "GRP|LOC|GEOShape",
+            "GRP|LOC|LOCShape",
+        ]
+        extra = [
+            "new",
+            "new|GRP",
+            "new|GRP|LOC",
+            "new|GRP|LOC|GEO",
+            "new|GRP|LOC|GEOShape",
+            "new|GRP|LOC|LOCShape",
+        ]
+        result = HierarchySidecar.detect_reparenting(missing, extra)
+        self.assertEqual(len(result), 1)
+        root, parent, count = result[0]
+        self.assertEqual(root, "GRP")
+        self.assertEqual(parent, "new")
+        self.assertEqual(count, 5)
+
+    def test_detect_reparenting_returns_empty_on_unrelated_changes(self):
+        """detect_reparenting returns empty when changes are not reparenting."""
+        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+            HierarchySidecar,
+        )
+
+        missing = ["OldNode", "OldNode|Child"]
+        extra = ["CompletelyDifferent"]
+        result = HierarchySidecar.detect_reparenting(missing, extra)
+        self.assertEqual(result, [])
+
+    def test_hierarchy_check_no_manifest(self):
+        """Check passes when no manifest exists yet."""
+        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.export_path = os.path.join(self.temp_dir, "test.fbx")
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed)
+
+    def test_hierarchy_check_detects_missing_node(self):
+        """Check fails when a node from the manifest is missing.
+
+        Bug: Hierarchy tests were not exercised at all.
+        Fixed: 2026-04-10
+        """
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+
+        # Build manifest from actual scene hierarchy, then add an extra node
+        self.exporter.task_manager.objects = [
+            self.group.longName(),
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+        self.exporter.task_manager.export_path = export_path
+        current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
+        current.append("ExportGroup|ExtraNode")
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": current, "object_count": len(current)}, f)
+
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed)
+        self.assertTrue(any("missing" in m.lower() for m in messages))
+
+    def test_hierarchy_check_writes_diff_report(self):
+        """Verify sidecar .hierarchy_diff.txt is created on failure."""
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+        diff_path = os.path.join(self.temp_dir, ".test.hierarchy_diff.txt")
+
+        # Build manifest from actual hierarchy, then add a node that will be "missing"
+        self.exporter.task_manager.objects = [
+            self.group.longName(),
+            self.cube.longName(),
+        ]
+        self.exporter.task_manager.export_path = export_path
+        current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
+        current.append("ExportGroup|Gone")
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": current, "object_count": len(current)}, f)
+
+        self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(os.path.exists(diff_path))
+
+        with open(diff_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("ExportGroup|Gone", content)
+
+    def test_hierarchy_check_cleans_stale_diff(self):
+        """Verify stale diff report is removed when check passes."""
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+        diff_path = os.path.join(self.temp_dir, ".test.hierarchy_diff.txt")
+
+        with open(diff_path, "w") as f:
+            f.write("stale")
+
+        # Build manifest from actual expanded hierarchy so check passes
+        self.exporter.task_manager.objects = [
+            self.group.longName(),
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+        self.exporter.task_manager.export_path = export_path
+        current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": current, "object_count": len(current)}, f)
+
+        passed, _ = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed)
+        self.assertFalse(os.path.exists(diff_path))
+
+    def test_hierarchy_check_top_level_rollup(self):
+        """Verify log messages show top-level parents, not every child."""
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+
+        # Manifest with a deep hierarchy that won't match empty objects
+        previous = [
+            "group",
+            "group|childA",
+            "group|childA|grandchild",
+            "group|childB",
+        ]
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": previous, "object_count": len(previous)}, f)
+
+        # Empty objects → _build_full_hierarchy_set returns empty set
+        self.exporter.task_manager.objects = []
+        self.exporter.task_manager.export_path = export_path
+
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed)
+        # 4 missing nodes rolled up to 1 top-level
+        self.assertTrue(any("1 top-level" in m for m in messages))
+        detail_lines = [m for m in messages if m.strip().startswith("−")]
+        self.assertEqual(len(detail_lines), 1)
+        self.assertIn("group", detail_lines[0])
+
+    def test_hierarchy_check_detects_reparenting(self):
+        """Check fails when scene contents are grouped under a new parent.
+
+        Bug: self.objects only contained selected roots, not descendants.
+        _build_clean_path_set produced a shallow manifest that missed
+        structural changes below the selected level.
+        Fixed: 2026-04-10
+        """
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+
+        # Write manifest from current hierarchy (before reparenting)
+        self.exporter.task_manager.objects = [self.group.longName()]
+        self.exporter.task_manager.export_path = export_path
+        original = sorted(self.exporter.task_manager._build_full_hierarchy_set())
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": original, "object_count": len(original)}, f)
+
+        # Reparent everything under a new group
+        new_parent = pm.group(self.group, name="NewParent")
+        self.exporter.task_manager.objects = [new_parent.longName()]
+
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(
+            passed,
+            "Hierarchy check must detect reparenting under a new group",
+        )
+
+    def test_root_transforms_detects_offset_group(self):
+        """Root transform check finds group ancestors of geometry objects.
+
+        Bug: check_root_default_transforms used cmds.ls(self.objects,
+        assemblies=True) but self.objects only contained geometry
+        transforms (never assemblies), so the check always passed.
+        Fixed: 2026-04-10
+        """
+        cmds.setAttr(f"{self.group.longName()}.translateX", 10)
+
+        # Objects are geometry — exactly what get_visible_geometry returns
+        self.exporter.task_manager.objects = [
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+
+        passed, messages = self.exporter.task_manager.check_root_default_transforms()
+        self.assertFalse(passed, "Should fail — root group has non-default transforms")
+        found = any("ExportGroup" in m for m in messages)
+        self.assertTrue(found, "ExportGroup should be flagged in messages")
+
+    def test_root_transforms_passes_for_default_group(self):
+        """Root transform check passes when root group has identity transforms."""
+        self.exporter.task_manager.objects = [
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+
+        passed, _ = self.exporter.task_manager.check_root_default_transforms()
+        self.assertTrue(passed)
+
+    def test_root_transforms_detects_wrapper_group(self):
+        """Root transform check catches a wrapper group with non-default transforms.
+
+        Bug: Wrapping the entire scene in a new group was undetected.
+        Fixed: 2026-04-10
+        """
+        wrapper = pm.group(self.group, name="WrapperGroup")
+        cmds.setAttr(f"{wrapper.longName()}.translateY", 5)
+
+        self.exporter.task_manager.objects = [
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+
+        passed, messages = self.exporter.task_manager.check_root_default_transforms()
+        self.assertFalse(passed, "Wrapper group with offset should be caught")
+        found = any("WrapperGroup" in m for m in messages)
+        self.assertTrue(found, "WrapperGroup should be flagged")
+
+    def test_hierarchy_check_detects_wrapper_group(self):
+        """Hierarchy diff check catches a new wrapper group.
+
+        Bug: Wrapping the entire scene in a new group was undetected.
+        Fixed: 2026-04-10
+        """
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
+
+        # Manifest from a previous export (no wrapper)
+        previous = ["ExportGroup|ExportCube", "ExportGroup|ExportSphere"]
+        with open(manifest_path, "w") as f:
+            json.dump({"paths": previous, "object_count": len(previous)}, f)
+
+        # Now wrap everything — long paths gain a prefix
+        wrapper = pm.group(self.group, name="WrapperGroup")
+        self.exporter.task_manager.objects = [
+            self.cube.longName(),
+            self.sphere.longName(),
+        ]
+        self.exporter.task_manager.export_path = export_path
+
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed, "Wrapped hierarchy should differ from manifest")
+        self.assertTrue(any("missing" in m.lower() for m in messages))
+        self.assertTrue(any("new" in m.lower() for m in messages))
+
 
 if __name__ == "__main__":
     unittest.main()

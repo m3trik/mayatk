@@ -1,8 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Optional, Dict, Any, List
+import os
 import re
 import math
+from typing import Optional, Dict, Any, List
 
 try:
     import pymel.core as pm
@@ -19,6 +20,7 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils.scene_exporter.task_factory import TaskFactory
+from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import HierarchySidecar
 
 
 class _TaskDataMixin:
@@ -329,6 +331,16 @@ class _TaskChecksMixin(_TaskDataMixin):
 
     _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
 
+    def _obj_link(self, node: str, action: str = "reveal") -> str:
+        """Return a clickable log link for a Maya scene node.
+
+        Parameters:
+            node:   Full or short DAG path (used as both label and param).
+            action: ``"select"`` or ``"reveal"`` (default).
+        """
+        short = node.rsplit("|", 1)[-1]
+        return self.logger.log_link(short, action, node=node)
+
     def check_geometry_lod_suffix(self) -> tuple:
         """Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
 
@@ -344,7 +356,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not self.objects:
             return True, messages
 
-        matches = []
+        matches = {}
         for obj in self.objects:
             # Check if geometry (has shapes)
             # Use cmds for speed
@@ -354,12 +366,13 @@ class _TaskChecksMixin(_TaskDataMixin):
 
             name = obj.split("|")[-1]
             if self._LOD_SUFFIX_REGEX.search(name):
-                matches.append(name)
+                matches.setdefault(name, obj)
 
         if matches:
             messages.append("Geometry with LOD suffix detected (informational):")
-            for n in sorted(set(matches)):
-                messages.append(f"  - {n}")
+            for n in sorted(matches):
+                link = self._obj_link(matches[n], "reveal")
+                messages.append(f"  - {link}")
 
         return True, messages
 
@@ -410,12 +423,22 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check if all root group nodes have default transforms."""
         log_messages = []
         box_logged = False
-        root_nodes = cmds.ls(self.objects, assemblies=True, long=True)
         tolerance = 1e-5
         has_non_default_transforms = False
 
+        # self.objects contains only geometry transforms (never assemblies),
+        # so we walk up each object's DAG path to find the root ancestor.
+        root_groups = set()
+        for obj in self.objects:
+            # Long path: "|root|child|...|geo" — the root is segment [1]
+            parts = obj.split("|")
+            if len(parts) > 2:
+                root_long = "|" + parts[1]
+                root_groups.add(root_long)
+
+        root_nodes = cmds.ls(list(root_groups), long=True) or []
+
         for node in root_nodes:
-            # Check if it's a group (has children but no shape children usually, or just check transforms)
             if not NodeUtils.is_group(node):
                 continue
 
@@ -435,8 +458,9 @@ class _TaskChecksMixin(_TaskDataMixin):
                     box_logged = True
 
                 has_non_default_transforms = True
+                link = self._obj_link(node)
                 log_messages.append(
-                    f"Node: {node}, Translate: {translate}, Rotate: {rotate}, Scale: {scale}"
+                    f"Node: {link}, Translate: {translate}, Rotate: {rotate}, Scale: {scale}"
                 )
 
         if has_non_default_transforms:
@@ -464,7 +488,8 @@ class _TaskChecksMixin(_TaskDataMixin):
             if typ == "Absolute":
                 all_relative = False
                 mat_name = mat.name() if hasattr(mat, "name") else str(mat)
-                log_messages.append(f"Absolute path - {mat_name} - {pth}")
+                link = self._obj_link(mat_name, "select")
+                log_messages.append(f"Absolute path - {link} - {pth}")
 
         return all_relative, log_messages
 
@@ -494,7 +519,8 @@ class _TaskChecksMixin(_TaskDataMixin):
             if os.path.isabs(expanded_path):
                 if not os.path.exists(expanded_path):
                     all_valid = False
-                    log_messages.append(f"Missing Texture: {node} -> {path}")
+                    link = self._obj_link(node, "select")
+                    log_messages.append(f"Missing Texture: {link} -> {path}")
             else:
                 # If relative, try to resolve
                 workspace_root = cmds.workspace(query=True, rootDirectory=True)
@@ -514,7 +540,8 @@ class _TaskChecksMixin(_TaskDataMixin):
 
                 if not found:
                     all_valid = False
-                    log_messages.append(f"Missing Texture (Relative): {node} -> {path}")
+                    link = self._obj_link(node, "select")
+                    log_messages.append(f"Missing Texture (Relative): {link} -> {path}")
 
         # 2. Reference Paths
         references = cmds.ls(references=True) or []
@@ -526,7 +553,8 @@ class _TaskChecksMixin(_TaskDataMixin):
                     expanded_path = os.path.expandvars(path)
                     if not os.path.exists(expanded_path):
                         all_valid = False
-                        log_messages.append(f"Missing Reference: {ref} -> {path}")
+                        link = self._obj_link(ref, "select")
+                        log_messages.append(f"Missing Reference: {link} -> {path}")
             except Exception:
                 continue
 
@@ -566,7 +594,10 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         if duplicates:
             for name in sorted(duplicates):
-                log_messages.append(f"Duplicate locator name: {name}")
+                # Short names may be ambiguous; link uses the first full path
+                full_path = seen.get(name, name)
+                link = self._obj_link(full_path, "reveal")
+                log_messages.append(f"Duplicate locator name: {link}")
             return False, log_messages
         return True, log_messages
 
@@ -580,7 +611,9 @@ class _TaskChecksMixin(_TaskDataMixin):
         if duplicate_mapping:
             for original, duplicates in duplicate_mapping.items():
                 for duplicate in duplicates:
-                    log_messages.append(f"Duplicate: {duplicate} -> {original}")
+                    dup_link = self._obj_link(str(duplicate), "select")
+                    orig_link = self._obj_link(str(original), "select")
+                    log_messages.append(f"Duplicate: {dup_link} -> {orig_link}")
             return False, log_messages  # Failed, log the duplicates
 
         return True, log_messages  # All checks passed, no duplicates found
@@ -593,30 +626,28 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         if referenced_objects:
             for ref in referenced_objects:
-                log_messages.append(f"Referenced Object: {ref}")
+                link = self._obj_link(ref, "select")
+                log_messages.append(f"Referenced Object: {link}")
             return False, log_messages  # Failed, log the referenced objects
 
         return True, log_messages  # All checks passed, no referenced objects found
 
     def check_framerate(self, target_framerate: Optional[str]) -> tuple:
         """Check if the scene's current framerate matches the target framerate."""
+        if not target_framerate or str(target_framerate).upper() == "OFF":
+            return True, []
+
         if not self._has_keyframes:
             self.logger.debug("No keyframes found. Skipping framerate check.")
             return True, []
 
-        log_messages = []
+        current_time_unit = pm.currentUnit(query=True, time=True)
+        if current_time_unit != target_framerate:
+            return False, [
+                f"Framerate mismatch: Current time unit is {current_time_unit}, expected {target_framerate}."
+            ]
 
-        if target_framerate and str(target_framerate).lower() != "none":
-            current_time_unit = pm.currentUnit(query=True, time=True)
-            if current_time_unit != target_framerate:
-                log_messages.append(
-                    f"Framerate mismatch: Current time unit is {current_time_unit}, expected {target_framerate}."
-                )
-                return False, log_messages  # Failed, log the mismatch
-
-            pass  # Match confirmed; no message needed for a pass
-
-        return True, []  # All checks passed
+        return True, []
 
     def check_objects_below_floor(self, tolerance: float = 0.5) -> tuple:
         """Check if any object's geometry is below the floor plane (Y=0).
@@ -643,8 +674,9 @@ class _TaskChecksMixin(_TaskDataMixin):
             ymin = bbox[1]
             if ymin < limit:
                 has_objects_below = True
+                link = self._obj_link(obj)
                 log_messages.append(
-                    f"Object: {obj} - Below Floor: True (Y-min: {ymin:.3f})"
+                    f"Object: {link} - Below Floor: True (Y-min: {ymin:.3f})"
                 )
 
         if has_objects_below:
@@ -668,7 +700,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         duplicates = EditUtils.get_overlapping_duplicates(objects=self.objects)
         if duplicates:
-            messages = [f"Overlapping duplicate object: {obj}" for obj in duplicates]
+            messages = [
+                f"Overlapping duplicate object: {self._obj_link(obj)}"
+                for obj in duplicates
+            ]
             return False, messages  # Failed, duplicates found
         return True, []  # Passed, no duplicates
 
@@ -699,7 +734,10 @@ class _TaskChecksMixin(_TaskDataMixin):
                 hidden_objects.append(obj)
 
         if hidden_objects:
-            return False, [f"Hidden geometry detected: {obj}" for obj in hidden_objects]
+            return False, [
+                f"Hidden geometry detected: {self._obj_link(obj)}"
+                for obj in hidden_objects
+            ]
         return True, []
 
     def check_untied_keyframes(self) -> tuple:
@@ -760,16 +798,17 @@ class _TaskChecksMixin(_TaskDataMixin):
                     max_end = e
 
             # Check for mismatches
+            obj_link = self._obj_link(obj)
             for curve, s, e in curve_data:
                 if s > min_start:
                     untied_keyframes_found = True
                     log_messages.append(
-                        f"Untied keyframes found on curve: {curve} on {obj} (Start {s} != {min_start})"
+                        f"Untied keyframes found on curve: {curve} on {obj_link} (Start {s} != {min_start})"
                     )
                 if e < max_end:
                     untied_keyframes_found = True
                     log_messages.append(
-                        f"Untied keyframes found on curve: {curve} on {obj} (End {e} != {max_end})"
+                        f"Untied keyframes found on curve: {curve} on {obj_link} (End {e} != {max_end})"
                     )
 
         if untied_keyframes_found:
@@ -817,10 +856,143 @@ class _TaskChecksMixin(_TaskDataMixin):
         if offenders:
             log_messages.append("Floating point keys found on:")
             for offender in offenders:
-                log_messages.append(f"  - {offender}")
+                # offender format: "objName (frame N.NNN)" — link the object part
+                name = offender.split(" (frame")[0]
+                link = self._obj_link(name, "select")
+                detail = offender[len(name) :]
+                log_messages.append(f"  - {link}{detail}")
             return False, log_messages
 
         return True, log_messages
+
+    # ------------------------------------------------------------------
+    # Hierarchy diff check — delegates to HierarchySidecar
+    # ------------------------------------------------------------------
+
+    # Backward-compatible aliases so existing call-sites still work.
+    _manifest_path_for = staticmethod(HierarchySidecar.manifest_path_for)
+    _diff_report_path_for = staticmethod(HierarchySidecar.diff_report_path_for)
+    _build_clean_path_set = staticmethod(HierarchySidecar.build_clean_path_set)
+    _get_top_level = staticmethod(HierarchySidecar.get_top_level)
+    rename_hierarchy_sidecar = HierarchySidecar.rename
+
+    def _build_full_hierarchy_set(self) -> set:
+        """Build a clean path set including all descendants of ``self.objects``."""
+        return HierarchySidecar.build_full_path_set(self.objects)
+
+    def write_hierarchy_manifest(self) -> None:
+        """Write a sidecar JSON manifest of the exported hierarchy paths.
+
+        Only writes when the manifest already exists (maintaining it for
+        future checks) or the check was enabled in the current run.
+        """
+        export_path = getattr(self, "export_path", None)
+        if not export_path or not self.objects:
+            return
+
+        manifest_path = HierarchySidecar.manifest_path_for(export_path)
+
+        check_ran = getattr(self, "_hierarchy_check_ran", False)
+        if not check_ran and not os.path.exists(manifest_path):
+            return
+
+        paths = HierarchySidecar.build_full_path_set(self.objects)
+        if HierarchySidecar.write_manifest(export_path, paths) is None:
+            self.logger.debug("Could not write hierarchy manifest")
+
+    def check_hierarchy_vs_existing_fbx(self) -> tuple:
+        """Check export objects against the hierarchy manifest of the previous export.
+
+        Compares namespace-stripped DAG paths of the current export objects
+        against the sidecar ``.hierarchy.json`` written during the last
+        successful export to the same path.  Detects missing or extra nodes
+        that would indicate accidental structural changes.
+        """
+        self._hierarchy_check_ran = True
+
+        export_path = getattr(self, "export_path", None)
+        if not export_path:
+            return True, []
+
+        manifest_path = HierarchySidecar.manifest_path_for(export_path)
+
+        if not os.path.exists(manifest_path):
+            if os.path.exists(export_path):
+                return True, [
+                    "No hierarchy manifest found for existing FBX. "
+                    "A manifest will be created after this export."
+                ]
+            return True, []
+
+        current_paths = HierarchySidecar.build_full_path_set(self.objects)
+
+        match, missing, extra = HierarchySidecar.compare(
+            export_path, current_paths
+        )
+
+        if match:
+            HierarchySidecar.clean_stale_diff(export_path)
+            return True, []
+
+        messages = []
+
+        # Detect reparenting patterns for a cleaner summary
+        reparented = HierarchySidecar.detect_reparenting(missing, extra)
+
+        diff_path = HierarchySidecar.write_diff_report(
+            export_path, missing, extra, reparented=reparented
+        )
+
+        if reparented:
+            for root, new_parent, count in reparented:
+                messages.append(
+                    f"Reparenting detected: '{root}' moved under '{new_parent}' "
+                    f"({count} node(s) affected)"
+                )
+            # Report any remaining missing/extra not explained by reparenting
+            explained_missing = set()
+            explained_extra = set()
+            for root, new_parent, _ in reparented:
+                for p in missing:
+                    if p.split("|")[0] == root:
+                        explained_missing.add(p)
+                        explained_extra.add(f"{new_parent}|{p}")
+                explained_extra.add(new_parent)
+            remaining_missing = [p for p in missing if p not in explained_missing]
+            remaining_extra = [p for p in extra if p not in explained_extra]
+        else:
+            remaining_missing = missing
+            remaining_extra = extra
+
+        if remaining_missing:
+            top_missing = HierarchySidecar.get_top_level(remaining_missing)
+            messages.append(
+                f"{len(remaining_missing)} node(s) in previous export but missing now "
+                f"({len(top_missing)} top-level):"
+            )
+            for p in top_missing[:20]:
+                messages.append(f"  − {p}")
+            if len(top_missing) > 20:
+                messages.append(f"  … and {len(top_missing) - 20} more")
+
+        if remaining_extra:
+            top_extra = HierarchySidecar.get_top_level(remaining_extra)
+            messages.append(
+                f"{len(remaining_extra)} new node(s) not in previous export "
+                f"({len(top_extra)} top-level):"
+            )
+            for p in top_extra[:20]:
+                messages.append(f"  + {p}")
+            if len(top_extra) > 20:
+                messages.append(f"  … and {len(top_extra) - 20} more")
+
+        if diff_path:
+            link = self.logger.log_link(
+                "Open full diff report", "open", filepath=diff_path
+            )
+            messages.append(link)
+
+        return False, messages
 
 
 class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
@@ -850,8 +1022,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     ]
 
     _frame_rate_options: Dict[str, Any] = {
-        f"Check Scene FPS: {v}": k
-        for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
+        f"Check Scene FPS: {k}": k if v is not None else None
+        for k, v in ptk.insert_into_dict(
+            ptk.VidUtils.FRAME_RATES, "OFF", None
+        ).items()
     }
 
     _scene_unit_options: Dict[str, Any] = {
@@ -1018,6 +1192,16 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Check Root Default Transforms",
                 "setToolTip": "Check for default transforms on root group nodes.\nTranslate, rotate, and scale should be (0, 0, 0) and (1, 1, 1) respectively.",
                 "setChecked": True,
+            },
+            "check_hierarchy_vs_existing_fbx": {
+                "widget_type": "QCheckBox",
+                "setText": "Check Hierarchy vs Existing FBX",
+                "setToolTip": (
+                    "Compare the current export hierarchy against the previous export.\n"
+                    "Detects missing or extra nodes that may indicate accidental changes.\n"
+                    "Uses a lightweight sidecar manifest — no FBX reimport required."
+                ),
+                "setChecked": False,
             },
             "sep_geometry": {
                 "widget_type": "Separator",

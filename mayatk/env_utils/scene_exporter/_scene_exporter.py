@@ -154,6 +154,9 @@ class SceneExporter(ptk.LoggingMixin):
         if self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
 
+        # Make export path available to checks (e.g. hierarchy diff)
+        self.task_manager.export_path = self.export_path
+
         export_succeeded = False
         try:
             # Run tasks and checks
@@ -187,6 +190,9 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 export_succeeded = True
                 elapsed = time.time() - start_time
+
+                # Write hierarchy manifest for future diff checks
+                self.task_manager.write_hierarchy_manifest()
 
                 # Build the single, consolidated success banner.
                 export_info_lines = [
@@ -445,6 +451,16 @@ class SceneExporterSlots(SceneExporter):
         self.logger.hide_logger_name(True)  # Hide the logger name in output
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt003)
+
+        # Connect clickable log links (action:// URIs in QTextBrowser)
+        if hasattr(self.ui.txt003, "anchorClicked"):
+            self.ui.txt003.anchorClicked.connect(self._on_log_link_clicked)
+
+    def _on_log_link_clicked(self, url) -> None:
+        """Dispatch clickable ``action://`` links from the log panel."""
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        UiUtils.dispatch_log_link(url, self.logger)
 
     @property
     def workspace(self) -> Optional[str]:
