@@ -163,6 +163,70 @@ class UiUtils:
         pm.select(objects, replace=True)
         pm.outlinerEditor(outliner_editor, edit=True, showSelected=True)
 
+    @staticmethod
+    def dispatch_log_link(url, logger=None) -> bool:
+        """Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.
+
+        Supported actions:
+            ``select`` — select *node* in the Maya viewport.
+            ``reveal`` — select *node* and reveal it in the Outliner.
+
+        Parameters:
+            url:    A ``QUrl`` from ``QTextBrowser.anchorClicked``.
+            logger: Optional logger for debug/warning messages.
+
+        Returns:
+            True if the link was handled, False otherwise.
+        """
+        import os
+        from urllib.parse import parse_qs
+        from maya import cmds
+
+        if url.scheme() != "action":
+            return False
+
+        action = url.host()
+        params = parse_qs(url.query())
+
+        # Non-node actions -------------------------------------------------
+        if action == "open":
+            filepath = params.get("filepath", [""])[0]
+            if not filepath:
+                return False
+            try:
+                os.startfile(filepath)
+            except OSError as e:
+                if logger:
+                    logger.warning(f"Could not open file: {e}")
+                return False
+            return True
+
+        # Node-based actions -----------------------------------------------
+        node = params.get("node", [""])[0]
+
+        if not node:
+            return False
+
+        if not cmds.objExists(node):
+            if logger:
+                logger.warning(f"Object not found: {node}")
+            return False
+
+        if action == "select":
+            cmds.select(node, replace=True)
+        elif action == "reveal":
+            cmds.select(node, replace=True)
+            panels = cmds.getPanel(type="outlinerPanel") or []
+            if panels:
+                editor = cmds.outlinerPanel(panels[0], query=True, outlinerEditor=True)
+                cmds.outlinerEditor(editor, edit=True, showSelected=True)
+        else:
+            if logger:
+                logger.debug(f"Unknown log link action: {action}")
+            return False
+
+        return True
+
 
 # --------------------------------------------------------------------------------------------
 

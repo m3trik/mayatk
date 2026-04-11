@@ -180,8 +180,18 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         self.logger.setup_logging_redirect(self.ui.txt003)
         self.logger.info("Telescope Rig Tool initialized.", preset="italic")
 
+        # Connect clickable log links (action:// URIs in QTextBrowser)
+        if hasattr(self.ui.txt003, "anchorClicked"):
+            self.ui.txt003.anchorClicked.connect(self._on_log_link_clicked)
+
         # Connect Signals
         self.ui.btn_build.clicked.connect(self.build_rig)
+
+    def _on_log_link_clicked(self, url) -> None:
+        """Dispatch clickable ``action://`` links from the log panel."""
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        UiUtils.dispatch_log_link(url, self.logger)
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
@@ -229,8 +239,14 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             rig.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
             rig.logger.setup_logging_redirect(self.ui.txt003)
 
-            self.logger.info(f"Base detected: <hl>{base_locator}</hl>")
-            self.logger.info(f"End detected: <hl>{end_locator}</hl>")
+            base_link = self.logger.log_link(
+                str(base_locator), "select", node=str(base_locator)
+            )
+            end_link = self.logger.log_link(
+                str(end_locator), "select", node=str(end_locator)
+            )
+            self.logger.info(f"Base detected: {base_link}")
+            self.logger.info(f"End detected: {end_link}")
             self.logger.info(f"Segments detected: <hl>{len(segments)}</hl>")
 
             rig.setup_telescope_rig(

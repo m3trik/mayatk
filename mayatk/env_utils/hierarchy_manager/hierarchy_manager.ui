@@ -51,7 +51,7 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="Header" name="header">
+       <widget class="Header" name="header" native="true">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -64,42 +64,14 @@
           <bold>true</bold>
          </font>
         </property>
-        <property name="text">
+        <property name="text" stdset="0">
          <string>HIERARCHY MGR</string>
         </property>
        </widget>
       </item>
       <item>
        <layout class="QGridLayout" name="gridLayout">
-        <item row="4" column="0">
-         <widget class="PushButton" name="tb001">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>38</height>
-           </size>
-          </property>
-          <property name="text">
-           <string>Diff</string>
-          </property>
-         </widget>
-        </item>
-        <item row="3" column="1">
-         <widget class="TreeWidget" name="tree001">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>500</height>
-           </size>
-          </property>
-          <column>
-           <property name="text">
-            <string notr="true">1</string>
-           </property>
-          </column>
-         </widget>
-        </item>
-        <item row="3" column="0">
+        <item row="0" column="0">
          <widget class="TreeWidget" name="tree000">
           <property name="minimumSize">
            <size>
@@ -114,14 +86,35 @@
           </column>
          </widget>
         </item>
-        <item row="0" column="0" colspan="2">
-         <widget class="LineEdit" name="txt001">
-          <property name="placeholderText">
-           <string>Source Directiory:</string>
+        <item row="0" column="1">
+         <widget class="TreeWidget" name="tree001">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>500</height>
+           </size>
+          </property>
+          <column>
+           <property name="text">
+            <string notr="true">1</string>
+           </property>
+          </column>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="PushButton" name="tb001">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Diff</string>
           </property>
          </widget>
         </item>
-        <item row="4" column="1">
+        <item row="1" column="1">
          <widget class="PushButton" name="tb002">
           <property name="minimumSize">
            <size>
@@ -134,29 +127,22 @@
           </property>
          </widget>
         </item>
-        <item row="5" column="0" colspan="2">
+        <item row="2" column="0" colspan="2">
          <widget class="PushButton" name="tb003">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>38</height>
-           </size>
-          </property>
-          <property name="text">
-           <string>Fix</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="0" colspan="2">
-         <widget class="PushButton" name="b000">
           <property name="minimumSize">
            <size>
             <width>0</width>
             <height>20</height>
            </size>
           </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>20</height>
+           </size>
+          </property>
           <property name="text">
-           <string>Refresh</string>
+           <string>Fix</string>
           </property>
          </widget>
         </item>
@@ -187,7 +173,7 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="QTextEdit" name="txt003">
+          <widget class="QTextBrowser" name="txt003">
            <property name="verticalScrollBarPolicy">
             <enum>Qt::ScrollBarAlwaysOff</enum>
            </property>
@@ -207,19 +193,14 @@
  <customwidgets>
   <customwidget>
    <class>Header</class>
-   <extends>QLabel</extends>
-   <header>uitk.widgets.header.Header.h</header>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
   </customwidget>
   <customwidget>
    <class>CollapsableGroup</class>
    <extends>QGroupBox</extends>
    <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
    <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>LineEdit</class>
-   <extends>QLineEdit</extends>
-   <header>widgets.lineedit.h</header>
   </customwidget>
   <customwidget>
    <class>PushButton</class>

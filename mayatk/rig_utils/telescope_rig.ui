@@ -145,12 +145,18 @@
         <number>0</number>
        </property>
        <item>
-        <widget class="QTextEdit" name="txt003">
+        <widget class="QTextBrowser" name="txt003">
          <property name="verticalScrollBarPolicy">
           <enum>Qt::ScrollBarAlwaysOff</enum>
          </property>
          <property name="sizeAdjustPolicy">
           <enum>QAbstractScrollArea::AdjustIgnored</enum>
+         </property>
+         <property name="openLinks">
+          <bool>false</bool>
+         </property>
+         <property name="openExternalLinks">
+          <bool>false</bool>
          </property>
         </widget>
        </item>

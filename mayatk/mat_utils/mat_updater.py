@@ -166,8 +166,9 @@ class MatUpdater(ptk.LoggingMixin):
 
             for mat in materials:
                 mat_name = mat.name()
+                mat_link = cls.logger.log_link(mat_name, "select", node=mat_name)
                 cls.logger.log_divider()
-                cls.logger.info(f"Material: {mat_name}")
+                cls.logger.info(f"Material: {mat_link}")
 
                 # Get source files
                 if run_factory and mat in mat_to_files:
@@ -175,7 +176,7 @@ class MatUpdater(ptk.LoggingMixin):
                 else:
                     file_nodes = pm.listHistory(mat, type="file")
                     if not file_nodes:
-                        cls.logger.info(f"No file nodes found connected to {mat_name}.")
+                        cls.logger.info(f"No file nodes found connected to {mat_link}.")
                         continue
 
                     files = []
@@ -186,12 +187,18 @@ class MatUpdater(ptk.LoggingMixin):
                             if resolved and os.path.isfile(resolved):
                                 files.append(resolved)
                             elif resolved:
+                                node_link = cls.logger.log_link(
+                                    f.name(), "select", node=f.name()
+                                )
                                 cls.logger.warning(
-                                    f"Resolved path is not a file: '{resolved}' for node '{f.name()}'"
+                                    f"Resolved path is not a file: '{resolved}' for node {node_link}"
                                 )
                             elif path:
+                                node_link = cls.logger.log_link(
+                                    f.name(), "select", node=f.name()
+                                )
                                 cls.logger.info(
-                                    f"Could not resolve path: '{path}' for node '{f.name()}'"
+                                    f"Could not resolve path: '{path}' for node {node_link}"
                                 )
                         except Exception:
                             continue
@@ -201,7 +208,7 @@ class MatUpdater(ptk.LoggingMixin):
 
                     if not files:
                         cls.logger.warning(
-                            f"Found {len(file_nodes)} file nodes on {mat_name}, but no valid paths could be resolved."
+                            f"Found {len(file_nodes)} file nodes on {mat_link}, but no valid paths could be resolved."
                         )
                         continue
 
@@ -213,7 +220,7 @@ class MatUpdater(ptk.LoggingMixin):
 
                     # 1. Check Cache
                     if cache_key in texture_cache:
-                        cls.logger.log_raw(f"  Using cached maps for {mat_name}")
+                        cls.logger.log_raw(f"  Using cached maps for {mat_link}")
                         processed_files = texture_cache[cache_key]
 
                     else:
@@ -595,6 +602,10 @@ class MatUpdaterSlots(MatUpdater):
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt001)
 
+        # Connect clickable log links (action:// URIs in QTextBrowser)
+        if hasattr(self.ui.txt001, "anchorClicked"):
+            self.ui.txt001.anchorClicked.connect(self._on_log_link_clicked)
+
         try:
             sourceimages = EnvUtils.get_env_info("sourceimages")
             info = ptk.truncate(
@@ -604,6 +615,12 @@ class MatUpdaterSlots(MatUpdater):
             self.ui.txt001.setText(self.msg_intro + info)
         except Exception:
             self.ui.txt001.setText(self.msg_intro)
+
+    def _on_log_link_clicked(self, url) -> None:
+        """Dispatch clickable ``action://`` links from the log panel."""
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        UiUtils.dispatch_log_link(url, self.logger)
 
     def header_init(self, widget):
         """Format global options in the header menu."""
