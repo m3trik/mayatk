@@ -665,16 +665,16 @@ class ShotsSlots(ptk.LoggingMixin):
             setText="Instructions",
             setObjectName="btn_instructions",
             setToolTip=(
-                "Shots \u2014 Detection settings, shot properties, and gap\n"
+                "Shots \u2014 Generation settings, shot properties, and gap\n"
                 "control for the Shot Manifest and Shot Sequencer.\n\n"
                 "Quick Start:\n"
-                "  1. Choose a Detection Mode and set Min Gap.\n"
-                "  2. Open the Shot Manifest or Shot Sequencer to trigger\n"
-                "     detection (settings here are shared by both tools).\n"
+                "  1. Choose a generation mode and set Min Gap.\n"
+                "  2. Open the Shot Manifest or Shot Sequencer to generate\n"
+                "     shots (settings here are shared by both tools).\n"
                 "  3. Edit individual shot properties in the Shot Editor\n"
                 "     section below, or adjust the Gap spinner to respace\n"
                 "     all shots at once.\n\n"
-                "Detection:\n"
+                "Generate from Animation:\n"
                 "  \u2022 Auto-Detect \u2014 Scans all scene animation and groups\n"
                 "    contiguous segments separated by gaps larger than\n"
                 "    the Min Gap threshold.\n"

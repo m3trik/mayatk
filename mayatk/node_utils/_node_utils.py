@@ -1079,6 +1079,53 @@ class NodeUtils(ptk.HelpMixin):
                 filtered.append(t)
         return filtered
 
+    # -------------------------------------------------------------------------
+    # Persistent Data Nodes
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def ensure_data_node(node_name: str, attr_name: str) -> "pm.PyNode":
+        """Get or create a locked network node with a writable string attribute.
+
+        The node's **name** is locked to protect it from accidental
+        renaming.  The node itself is left unlocked so callers can
+        write to data attributes without friction.  (Maya 2025 does
+        not allow selectively unlocking attributes on a node-locked
+        node, so full ``lockNode(lock=True)`` is not used.)
+
+        Existing nodes that were locked in older scenes are
+        transparently unlocked and migrated.
+
+        Parameters:
+            node_name (str): Name of the network node.
+            attr_name (str): Long name of the string attribute.
+
+        Returns:
+            pm.PyNode: The (possibly newly created) network node.
+        """
+        import maya.cmds as cmds
+
+        if pm.objExists(node_name):
+            node = pm.PyNode(node_name)
+        else:
+            node = pm.createNode("network", name=node_name)
+
+        # Ensure the data attribute exists — temporarily unlock if
+        # the node was already locked (migration / additional attrs).
+        node_str = str(node)
+        is_locked = cmds.lockNode(node_str, q=True, lock=True)[0]
+        if is_locked:
+            cmds.lockNode(node_str, lock=False)
+
+        if not node.hasAttr(attr_name):
+            pm.addAttr(node, longName=attr_name, dataType="string")
+
+        # Lock the name only — prevents renaming while keeping
+        # attributes writable (Maya 2025 compatible).
+        cmds.lockNode(node_str, lock=False, lockName=True)
+
+        return node
+
 
 # -----------------------------------------------------------------------------
 

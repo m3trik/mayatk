@@ -377,6 +377,73 @@ class AudioEvents(ptk.LoggingMixin):
         return count
 
     @classmethod
+    @CoreUtils.undoable
+    def remove_by_owner(
+        cls,
+        owner: str,
+        category: Optional[str] = None,
+    ) -> int:
+        """Delete audio nodes owned by a specific carrier.
+
+        Only removes members of the category audio set whose
+        ``audio_event_owner`` matches *owner*.  The set itself is
+        deleted only if it becomes empty.
+
+        Parameters:
+            owner:    Name of the carrier node whose audio to remove.
+            category: Attribute prefix (default ``"event"``).
+
+        Returns:
+            Number of audio nodes deleted.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        cat = category or EventTriggers.DEFAULT_CATEGORY
+        audio_set = cls._find_audio_set(cat)
+        if not audio_set:
+            return 0
+
+        to_delete = []
+        for m in audio_set.members():
+            name = str(m)
+            if cmds.attributeQuery(cls.NODE_OWNER_ATTR, node=name, exists=True):
+                if (cmds.getAttr(f"{name}.{cls.NODE_OWNER_ATTR}") or "") == owner:
+                    to_delete.append(m)
+
+        if not to_delete:
+            return 0
+
+        # Clean composite WAV files from disk
+        for m in to_delete:
+            name = str(m)
+            if name.endswith("_composite"):
+                filepath = cmds.getAttr(f"{name}.filename")
+                if (
+                    filepath
+                    and os.path.isfile(filepath)
+                    and "_composite_" in os.path.basename(filepath)
+                ):
+                    try:
+                        os.remove(filepath)
+                    except OSError:
+                        pass
+
+        member_names = {str(m) for m in to_delete}
+        cls._clear_active_if_member(member_names)
+
+        pm.delete(to_delete)
+        count = len(to_delete)
+        cls.logger.info(
+            f"Deleted {count} audio node(s) owned by '{owner}' from '{audio_set}'"
+        )
+
+        # If the set is now empty, remove it too.
+        if not audio_set.members():
+            pm.delete(audio_set)
+
+        return count
+
+    @classmethod
     def set_active(
         cls,
         node_name: str,

@@ -232,6 +232,15 @@
            <property name="spacing">
             <number>1</number>
            </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
            <item>
             <widget class="QPushButton" name="b000">
              <property name="minimumSize">

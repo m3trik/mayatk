@@ -55,7 +55,7 @@
     <item>
      <widget class="CollapsableGroup" name="detection">
       <property name="title">
-       <string>Detection</string>
+       <string>Generate from Animation</string>
       </property>
       <layout class="QVBoxLayout" name="verticalLayout_2">
        <property name="spacing">
@@ -88,7 +88,7 @@
           </size>
          </property>
          <property name="toolTip">
-          <string>How to detect shot boundaries.
+          <string>How to generate shot boundaries from animation.
 • Auto-Detect – scan scene animation and cluster by gap.
 • All Keys – every selected key is a boundary (contiguous shots).
 • Skip Zero-Value – ignore keys with value 0.
@@ -131,7 +131,7 @@
           </size>
          </property>
          <property name="toolTip">
-          <string>Minimum gap (frames) between detected shots.
+          <string>Minimum gap (frames) between generated shots.
 In Auto-Detect mode, clusters animation by this gap.
 In All Keys / Skip Zero mode, merges keys within this distance.
 Unused in Zero = Shot End mode.</string>

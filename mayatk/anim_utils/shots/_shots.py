@@ -108,6 +108,7 @@ class MayaScenePersistence:
             return
         import json
         import maya.cmds as cmds
+        from mayatk.node_utils._node_utils import NodeUtils
 
         # Persistence writes must not pollute the undo queue.  They
         # fire via evalDeferred AFTER an UndoChunk closes and would
@@ -115,13 +116,7 @@ class MayaScenePersistence:
         # operation (e.g. keyframe move) from being undone.
         cmds.undoInfo(stateWithoutFlush=False)
         try:
-            node = None
-            if pm.objExists(self._node_name):
-                node = pm.PyNode(self._node_name)
-            else:
-                node = pm.createNode("network", name=self._node_name)
-                pm.addAttr(node, longName=self._attr_name, dataType="string")
-
+            node = NodeUtils.ensure_data_node(self._node_name, self._attr_name)
             node.attr(self._attr_name).set(json.dumps(data))
         finally:
             cmds.undoInfo(stateWithoutFlush=True)
@@ -382,7 +377,6 @@ class ShotStore:
 
     Parameters:
         shots: Initial shot list.  Copied on construction.
-        anim_layer: Optional animation layer name for future layer support.
     """
 
     _active: Optional["ShotStore"] = None
@@ -394,7 +388,6 @@ class ShotStore:
     def __init__(
         self,
         shots: Optional[List[ShotBlock]] = None,
-        anim_layer: Optional[str] = None,
     ):
         self.shots: List[ShotBlock] = list(shots) if shots else []
         self.hidden_objects: set = set()
@@ -407,7 +400,6 @@ class ShotStore:
         self.frame_on_shot_change: bool = True
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.locked_objects: set = set()  # object names locked in the sequencer
-        self.anim_layer: Optional[str] = anim_layer
         self.scene_fps: float = _get_scene_fps()
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
         self._listeners: List[Callable[[StoreEvent], None]] = []

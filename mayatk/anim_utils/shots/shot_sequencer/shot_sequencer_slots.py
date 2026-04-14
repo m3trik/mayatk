@@ -210,7 +210,7 @@ class ShotSequencerController(
 
     def _register_maya_undo_callbacks(self) -> None:
         """Listen for Maya Undo/Redo events to refresh the widget."""
-        if om2 is None:
+        if om2 is None or self._undo_callback_ids:
             return
         for event_name in ("Undo", "Redo"):
             cb_id = om2.MEventMessage.addEventCallback(event_name, self._on_maya_undo)
@@ -222,7 +222,10 @@ class ShotSequencerController(
         if om2 is None:
             return
         for cb_id in self._undo_callback_ids:
-            om2.MMessage.removeCallback(cb_id)
+            try:
+                om2.MMessage.removeCallback(cb_id)
+            except Exception:
+                pass
         self._undo_callback_ids.clear()
         if self._time_change_cb is not None:
             try:
@@ -258,7 +261,7 @@ class ShotSequencerController(
         once per anim-curve change.  A debounce timer coalesces rapid
         bursts (e.g. keying 10 attributes at once) into a single refresh.
         """
-        if oma is None:
+        if oma is None or self._keyframe_cb is not None:
             return
         try:
             self._keyframe_cb = oma.MAnimMessage.addAnimKeyframeEditedCallback(
@@ -378,7 +381,7 @@ class ShotSequencerController(
         fires on every DG time change including during playback in all
         evaluation modes (DG, Serial, Parallel).
         """
-        if om2 is None:
+        if om2 is None or self._time_change_cb is not None:
             return
         self._time_change_cb = om2.MDGMessage.addTimeChangeCallback(
             self._on_time_changed
@@ -2279,7 +2282,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.controller._set_footer(f"Deleted {shot.name}")
 
     def _detect_next_shot(self) -> None:
-        """Detect and create the next unregistered animation cluster."""
+        """Generate a shot from the next unregistered animation cluster."""
         if self.controller.sequencer is None or pm is None:
             return
         widget = self.controller._get_sequencer_widget()
@@ -2295,7 +2298,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             name=cand["name"],
             start=cand["start"],
             end=cand["end"],
-            title="Detected Shot",
+            title="Generated Shot",
         )
         if result is None:
             return
@@ -2325,7 +2328,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
         menu = QtWidgets.QMenu(cmb)
         menu.addAction("New Shot", self.controller._create_shot_one_click)
-        menu.addAction("Detect Next Shot\u2026", self._detect_next_shot)
+        menu.addAction("Generate Next Shot\u2026", self._detect_next_shot)
         menu.addSeparator()
 
         has_shot = self.controller.active_shot_id is not None
@@ -2425,7 +2428,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             "QPushButton",
             setText="Shots\u2026",
             setObjectName="btn_shot_settings",
-            setToolTip="Open shared shot detection, gap, and editing settings.",
+            setToolTip="Open shared shot generation, gap, and editing settings.",
         )
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
@@ -2449,7 +2452,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "  \u2022 View Mode (cycles): Current \u2192 Adjacent \u2192 All.\n"
                 "  \u2022 Shots / Markers selector \u2014 Switch dropdown content.\n"
                 "  \u2022 Refresh \u2014 Rebuild from Maya.\n"
-                "  \u2022 Right-click dropdown: New Shot, Detect Next Shot\n"
+                "  \u2022 Right-click dropdown: New Shot, Generate Next Shot\n"
                 "    (finds the next unregistered animation cluster),\n"
                 "    Edit Shot, Delete Shot.\n\n"
                 "Ruler: Click/drag to move playhead, double-click to\n"

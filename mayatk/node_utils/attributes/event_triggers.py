@@ -525,6 +525,7 @@ class EventTriggers(ptk.LoggingMixin):
         cls,
         objects: Optional[List] = None,
         category: Optional[str] = None,
+        clean_audio: bool = True,
     ) -> None:
         """Remove event trigger attributes and animation curves.
 
@@ -533,6 +534,10 @@ class EventTriggers(ptk.LoggingMixin):
             category: Attribute prefix to remove (default ``"event"``).
                 Pass ``"*"`` to remove **all** event trigger categories
                 found on the objects.
+            clean_audio: If True (default), also delete the category's
+                audio set and all its member audio nodes.  Set to False
+                when the caller handles audio cleanup separately (e.g.
+                owner-scoped removal).
         """
         if objects is None:
             objects = pm.selected()
@@ -564,11 +569,12 @@ class EventTriggers(ptk.LoggingMixin):
             cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
 
         # Also clean up any imported audio nodes for this category.
-        from mayatk.node_utils.attributes.audio_events._audio_events import (
-            AudioEvents,
-        )
+        if clean_audio:
+            from mayatk.node_utils.attributes.audio_events._audio_events import (
+                AudioEvents,
+            )
 
-        AudioEvents.remove(category=category)
+            AudioEvents.remove(category=category)
 
     @classmethod
     def _remove_all_categories(cls, objects) -> None:
@@ -643,10 +649,8 @@ class EventTriggers(ptk.LoggingMixin):
                 parent=str(obj),
                 skipSelect=True,
             )
-            # Hide it: template display + zero scale + invisible
-            cmds.setAttr(f"{shape_name}.visibility", 0)
-            cmds.setAttr(f"{shape_name}.overrideEnabled", 1)
-            cmds.setAttr(f"{shape_name}.overrideDisplayType", 1)  # template
+            # Zero-scale the locator so it is invisible in the viewport.
+            # Keeping visibility=1 avoids the hidden-object icon clutter.
             cmds.setAttr(f"{shape_name}.localScaleX", 0)
             cmds.setAttr(f"{shape_name}.localScaleY", 0)
             cmds.setAttr(f"{shape_name}.localScaleZ", 0)

@@ -55,8 +55,8 @@ class AudioEventsSlots:
         self._last_enum_idx = None  # Cached enum index for timeChanged throttle
         self._sync_fingerprints = {}  # {obj_name: fingerprint} after last sync
         self._deferred_sync_pending = False  # Coalescing flag for deferred syncs
-        # b002/b003/b004 are auto-connected by switchboard (name-matching),
-        # same as b000.  No manual .clicked.connect() needed.
+        # b002/b003/b004 are auto-connected by switchboard (name-matching).
+        # No manual .clicked.connect() needed.
 
         # Deferred so Maya's event loop is ready before scriptJob creation
         try:
@@ -70,15 +70,6 @@ class AudioEventsSlots:
 
     def header_init(self, widget):
         """Configure header menu with tool description and workflow instructions."""
-        widget.menu.add("Separator", setTitle="Create")
-        btn_new = widget.menu.add(
-            "QPushButton",
-            setText="New Audio Object",
-            setObjectName="btn_new_audio_object",
-            setToolTip="Create a new empty audio-trigger locator and select it.",
-        )
-        btn_new.clicked.connect(self._create_new_audio_object)
-
         widget.menu.add("Separator", setTitle="Import")
         widget.menu.add(
             "QCheckBox",
@@ -148,7 +139,8 @@ class AudioEventsSlots:
                 "Audio Events — Keys audio clip triggers on a scene object\n"
                 "and imports matching audio nodes onto the Maya timeline.\n\n"
                 "Workflow:\n"
-                "  1. Press 'Add' to browse and select audio tracks.\n"
+                "  1. Click the folder icon on the tracks combo to browse\n"
+                "     for audio files.\n"
                 "     • File stems become event trigger names.\n"
                 "     • Re-adding a file with the same name replaces\n"
                 "       it at the same enum index (keyframes kept).\n"
@@ -395,24 +387,40 @@ class AudioEventsSlots:
         self.tb000()
 
     @staticmethod
-    def _create_audio_locator(name="audio_events"):
-        """Create a hidden locator as a data-carrier for audio triggers.
+    def _create_audio_carrier(name="audio_events"):
+        """Create a hidden transform as a data-carrier for audio triggers.
 
-        The locator's shape is hidden and all transform channels are
-        locked + hidden so it serves purely as a non-visual data carrier.
+        The carrier is an empty group with a zero-scale locator shape
+        stamped with ``event_trigger_locator``.  All transform channels
+        (translate, rotate, scale) are locked and hidden from the
+        channel box so the carrier is completely inert.
+        This keeps it invisible in the viewport while remaining
+        FBX-exportable (the ``audio_trigger`` enum, animation curves,
+        and manifest string survive export as user properties).
+
+        The node's name is locked to prevent accidental renaming.
+        An ``audio_trigger`` enum attr is added immediately so the
+        node is discoverable by ``find_event_carriers()``.
 
         Parameters:
             name: Desired Maya node name (spaces replaced with underscores).
 
         Returns:
-            PyNode — the newly created locator transform.
+            PyNode — the newly created transform.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
 
         name = name.replace(" ", "_")
-        loc_name = cmds.spaceLocator(name=name)[0]
+        node = pm.group(empty=True, name=name)
+        node_str = str(node)
 
-        # Lock and hide all transform attributes
+        # Add a hidden locator shape so Maya's "Optimize Scene Size"
+        # does not delete this empty transform and so _is_tool_created_carrier
+        # can identify it later.
+        EventTriggers._protect_empty_transforms([node])
+
+        # Lock and hide transform channels so the carrier is
+        # completely inert — artists cannot accidentally move it.
         for attr in (
             "translateX",
             "translateY",
@@ -423,85 +431,333 @@ class AudioEventsSlots:
             "scaleX",
             "scaleY",
             "scaleZ",
-            "visibility",
         ):
             cmds.setAttr(
-                f"{loc_name}.{attr}", lock=True, keyable=False, channelBox=False
+                f"{node_str}.{attr}", lock=True, keyable=False, channelBox=False
             )
 
-        # Hide the locator shape in the viewport
-        shape = (cmds.listRelatives(loc_name, shapes=True, fullPath=True) or [None])[0]
-        if shape:
-            cmds.setAttr(f"{shape}.visibility", 0)
-            cmds.setAttr(f"{shape}.overrideEnabled", 1)
-            cmds.setAttr(f"{shape}.overrideDisplayType", 1)  # template
-            cmds.setAttr(f"{shape}.localScaleX", 0)
-            cmds.setAttr(f"{shape}.localScaleY", 0)
-            cmds.setAttr(f"{shape}.localScaleZ", 0)
-            # Stamp so _is_tool_created_carrier() can identify this locator.
-            stamp = EventTriggers._LOCATOR_ATTR
-            if not cmds.attributeQuery(stamp, node=shape, exists=True):
-                cmds.addAttr(shape, ln=stamp, at="bool", dv=True)
-                cmds.setAttr(f"{shape}.{stamp}", True)
+        if not cmds.attributeQuery("audio_trigger", node=node_str, exists=True):
+            cmds.addAttr(
+                node_str,
+                longName="audio_trigger",
+                attributeType="enum",
+                enumName="None",
+                keyable=True,
+            )
+        cmds.lockNode(node_str, lock=False, lockName=True)
+        return node
 
-        return pm.PyNode(loc_name)
+    # ------------------------------------------------------------------
+    # Carrier
+    # ------------------------------------------------------------------
 
-    def _create_new_audio_object(self):
-        """Prompt for a name, then create an empty audio-trigger locator.
+    def cmb001_init(self, widget):
+        """Init the carrier combo with option-box actions.
 
-        The locator's shape is hidden and all transform channels are
-        locked + hidden so it serves purely as a data carrier.  The new
-        object is selected after creation.
+        The option-box menu provides Create / Rename / Remove actions.
+        A "Select" action button selects the carrier in the Maya viewport.
         """
-        name = self.sb.input_dialog(
-            title="New Audio Object",
-            label="Object name:",
-            text="audio_events",
-            parent=self.ui,
-            placeholder="e.g. dialogue_triggers",
-            validate=lambda t: bool(t.strip()),
-            error_text="Name cannot be empty.",
+        widget.option_box.set_action(
+            callback=self._select_carrier_in_viewport,
+            icon="select",
+            tooltip="Select the active carrier in the Maya viewport.",
         )
+        widget.option_box.menu.setTitle("Carrier")
+
+        btn_new = widget.option_box.menu.add(
+            "QPushButton",
+            setText="New Carrier",
+            setObjectName="btn_new_carrier",
+            setToolTip="Create a new data-carrier transform.",
+        )
+        btn_new.clicked.connect(self._create_carrier_from_menu)
+
+        btn_rename = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Rename",
+            setObjectName="btn_rename_carrier",
+            setToolTip="Rename the active carrier node.",
+        )
+        btn_rename.clicked.connect(self._rename_carrier_from_menu)
+
+        btn_remove = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Remove",
+            setObjectName="btn_remove_carrier",
+            setToolTip=(
+                "Remove the active carrier and all its audio data.\n"
+                "Only tool-created carriers are deleted;\n"
+                "user scene objects keep their geometry."
+            ),
+        )
+        btn_remove.clicked.connect(self._remove_carrier_from_menu)
+
+        self._refresh_carrier_combo()
+
+    def cmb001(self, index, widget):
+        """Carrier selection changed — switch the active target."""
+        if index < 0:
+            return
+
+        name = widget.currentText()
         if not name:
             return
 
-        grp = self._create_audio_locator(name)
-        pm.select(grp, replace=True)
+        # Avoid re-hydration if already on this target
+        if (
+            self._current_target
+            and pm.objExists(self._current_target)
+            and self._current_target.name() == name
+        ):
+            return
+
+        try:
+            obj = pm.PyNode(name)
+        except Exception:
+            self.ui.footer.setText(f"Carrier '{name}' not found in scene.")
+            return
+
+        old = self._current_target
+        self._hydrate_from_target(obj, old)
+
+    def _refresh_carrier_combo(self):
+        """Populate cmb001 with all carriers in the scene.
+
+        Selects the entry matching ``_current_target`` if it exists.
+        """
+        from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import (
+            AudioTrackManager,
+        )
+
+        cmb = self.ui.cmb001
+        cmb.blockSignals(True)
+        cmb.clear()
+
+        carriers = AudioTrackManager.find_event_carriers()
+        if carriers:
+            cmb.addItems(carriers)
+
+        # Sync selection to current target
+        target = self._current_target
+        if target and pm.objExists(target):
+            idx = cmb.findText(target.name())
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
+            else:
+                cmb.setCurrentIndex(-1)
+        else:
+            cmb.setCurrentIndex(-1)
+
+        cmb.blockSignals(False)
+
+    def _select_carrier_in_viewport(self):
+        """Select the current carrier in the Maya viewport."""
+        target = self._current_target
+        if target and pm.objExists(target):
+            pm.select(target, replace=True)
+            self.ui.footer.setText(f"Selected '{target.name()}'.")
+        else:
+            self.ui.footer.setText("No active carrier to select.")
+
+    def _next_carrier_name(self, base="audio_events"):
+        """Return an unused carrier name like ``audio_events``, ``audio_events1``, etc."""
+        if not cmds.objExists(base):
+            return base
+        i = 1
+        while cmds.objExists(f"{base}{i}"):
+            i += 1
+        return f"{base}{i}"
+
+    def _create_carrier_from_menu(self):
+        """Create a new carrier and enter inline-edit mode on the combo."""
+        name = self._next_carrier_name()
+        node = self._create_audio_carrier(name)
         self._audio_files.clear()
-        self._current_target = grp
-        self.ui.footer.setText(f"Created '{grp.name()}'.")
-        logging.info("AudioEvents: created empty audio object '%s'", grp.name())
+        self._current_target = node
+        self._refresh_carrier_combo()
+        self._refresh_combo_from_target()
+        self.ui.footer.setText(f"Created carrier '{node.name()}'.")
+        self._begin_carrier_edit()
+
+    def _rename_carrier_from_menu(self):
+        """Enter inline-edit mode on the carrier combo for renaming."""
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self.ui.footer.setText("No active carrier to rename.")
+            return
+        self._begin_carrier_edit()
+
+    def _begin_carrier_edit(self):
+        """Put cmb001 into editable mode and select all text."""
+        cmb = self.ui.cmb001
+
+        # Connect *before* setEditable so the signal is ready.  Use
+        # uitk's on_editing_finished (emitted by the ComboBox override
+        # of setEditable(False)) — not the raw Qt editingFinished on
+        # the lineEdit, which races with focusOutEvent destroying the
+        # lineEdit before the signal fires.
+        try:
+            cmb.on_editing_finished.disconnect(self._commit_carrier_rename)
+        except (TypeError, RuntimeError):
+            pass
+        cmb.on_editing_finished.connect(self._commit_carrier_rename)
+
+        cmb.setEditable(True)
+        line_edit = cmb.lineEdit()
+        line_edit.selectAll()
+        line_edit.setFocus()
+
+    def _commit_carrier_rename(self, new_text):
+        """Apply the inline-edited name to the Maya carrier node.
+
+        Parameters:
+            new_text: The text emitted by ``on_editing_finished``.
+        """
+        cmb = self.ui.cmb001
+        try:
+            cmb.on_editing_finished.disconnect(self._commit_carrier_rename)
+        except (TypeError, RuntimeError):
+            pass
+
+        new_name = (new_text or "").strip().replace(" ", "_")
+
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self._refresh_carrier_combo()
+            return
+
+        old_name = target.name()
+        if not new_name or new_name == old_name:
+            self._refresh_carrier_combo()
+            return
+
+        node_str = str(target)
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        try:
+            cmds.lockNode(node_str, lock=False, lockName=False)
+            result = cmds.rename(node_str, new_name)
+            # Rename the stamped locator shape to follow Maya convention.
+            # Use `result` (the actual name Maya assigned) rather than
+            # `new_name` in case Maya uniquified the name.
+            shapes = cmds.listRelatives(result, shapes=True, fullPath=True) or []
+            for shp in shapes:
+                if cmds.attributeQuery(
+                    EventTriggers._LOCATOR_ATTR, node=shp, exists=True
+                ):
+                    cmds.rename(shp, f"{result}Shape")
+                    break
+            cmds.lockNode(result, lock=False, lockName=True)
+            self._current_target = pm.PyNode(result)
+        except Exception as exc:
+            self.ui.footer.setText(f"Rename failed: {exc}")
+            self._refresh_carrier_combo()
+            return
+
+        self._refresh_carrier_combo()
+        self.ui.footer.setText(f"Renamed '{old_name}' → '{result}'.")
+
+    def _remove_carrier_from_menu(self):
+        """Remove the active carrier from the option-box menu.
+
+        Delegates to b003() which handles full teardown (trigger attrs,
+        audio nodes, carrier deletion for tool-created nodes).
+        """
+        target = self._current_target
+        if not target or not pm.objExists(target):
+            self.ui.footer.setText("No active carrier to remove.")
+            return
+
+        reply = self.sb.message_box(
+            f"Remove '{target.name()}' and all its audio data?",
+            "Yes",
+            "No",
+        )
+        if reply != "Yes":
+            return
+
+        self.b003()  # Full teardown
+        self._refresh_carrier_combo()
 
     # ------------------------------------------------------------------
     # Audio Tracks
     # ------------------------------------------------------------------
 
     def cmb000_init(self, widget):
-        """Init track combo and selection-sync job."""
+        """Init track combo with browse option_box and management menu."""
+        from uitk.widgets.optionBox.options.browse import BrowseOption
+
+        widget.option_box.add_option(
+            BrowseOption(
+                wrapped_widget=widget,
+                file_types=self.AUDIO_FILTER,
+                mode="files",
+                title="Select Audio Tracks",
+                tooltip="Browse for audio files to add or replace tracks.",
+                callback=self._browse_audio_files_cb,
+            )
+        )
+
+        widget.option_box.menu.setTitle("Tracks")
+
+        btn_rename = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Rename Track",
+            setObjectName="btn_rename_track",
+            setToolTip=(
+                "Rename the currently selected track.\n"
+                "Updates the enum label, audio nodes, file map,\n"
+                "and re-syncs if keyed events exist."
+            ),
+        )
+        btn_rename.clicked.connect(self.b006)
+
+        btn_replace = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Replace Track",
+            setObjectName="btn_replace_track",
+            setToolTip=(
+                "Replace the selected track with a different audio file.\n"
+                "Preserves the index and all keyframes."
+            ),
+        )
+        btn_replace.clicked.connect(self.b005)
+
+        btn_cleanup = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Cleanup Unused",
+            setObjectName="btn_cleanup_unused",
+            setToolTip=(
+                "Remove enum entries that have no keyframes\n"
+                "and delete their preview audio nodes."
+            ),
+        )
+        btn_cleanup.clicked.connect(self.b004)
+
+        btn_remove = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Remove Audio",
+            setObjectName="btn_remove_audio",
+            setToolTip="Delete imported audio nodes and composite WAV.",
+        )
+        btn_remove.clicked.connect(self.b002)
+
         self._ensure_sync_job()
 
-    def b000(self):
-        """Add — browse for audio files and load/update tracks.
+    def _browse_audio_files_cb(self, paths):
+        """BrowseOption callback — import selected audio file paths."""
+        if paths:
+            self._import_audio_paths(paths if isinstance(paths, list) else [paths])
 
-        Opens a file dialog.  Selected files are merged into the
-        existing track map (keyed by lowercase stem).  Re-adding a
-        file with the same stem overwrites the path at the same
-        enum index — existing keyframes are preserved.
-
-        If keyed events already exist on the target, a full sync
-        is triggered automatically to rebuild synced nodes and the
-        composite WAV.
-        """
-        self._browse_audio_files()
-
-    def _browse_audio_files(self):
-        """Browse for audio files and load/update tracks.
+    def _import_audio_paths(self, paths):
+        """Merge *paths* into the track map and update the scene.
 
         Merge-upsert workflow:
 
-        1. Open a file dialog — cancel leaves the scene untouched.
-        2. Selected paths are merged into ``_audio_files`` keyed by
-           lowercase stem.  Re-selecting a file with the same stem
+        1. Paths are filtered via ``_prepare_selected_paths`` (format
+           check, optional FFmpeg conversion prompt).
+        2. Filtered paths are merged into ``_audio_files`` keyed by
+           lowercase stem.  Re-adding a file with the same stem
            **overwrites** the path (same dict key = same enum index).
         3. ``EventTriggers.ensure()`` adds any new event names to the
            enum without disturbing existing indices or keyframes.
@@ -511,17 +767,7 @@ class AudioEventsSlots:
            rebuilds synced audio nodes and the composite WAV so the
            timeline reflects the updated tracks immediately.
         """
-        from qtpy.QtWidgets import QFileDialog
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
-
-        # Dialog first — all cancellation gates must fire before any scene
-        # mutation so that cancelling (dialog or format-conversion prompt)
-        # leaves the scene untouched.
-        paths, _ = QFileDialog.getOpenFileNames(
-            self.ui, "Select Audio Tracks", "", self.AUDIO_FILTER
-        )
-        if not paths:
-            return
 
         paths = self._prepare_selected_paths(paths)
         if not paths:
@@ -613,13 +859,35 @@ class AudioEventsSlots:
 
             # Auto-convert enabled — convert without prompting.
             if not ptk.AudioUtils.resolve_ffmpeg(required=False):
-                QMessageBox.warning(
+                reply = QMessageBox.question(
                     self.ui,
                     "FFmpeg Not Found",
-                    "FFmpeg is required to convert selected files to WAV.\n"
-                    "Install FFmpeg or choose only WAV/AIF/AIFF files.",
+                    "FFmpeg is required to convert selected files to WAV.\n\n"
+                    "Would you like to download and install it now?\n"
+                    "(This may take a moment for the initial download.)",
+                    QMessageBox.Yes,
+                    QMessageBox.No,
                 )
-                return playable
+                if reply == QMessageBox.Yes:
+                    self.ui.footer.setText("Downloading FFmpeg …")
+                    from qtpy.QtWidgets import QApplication
+
+                    QApplication.processEvents()
+                    path = ptk.AudioUtils.resolve_ffmpeg(
+                        required=False, auto_install=True
+                    )
+                    self.ui.footer.setText("")
+                    if not path:
+                        QMessageBox.warning(
+                            self.ui,
+                            "Install Failed",
+                            "FFmpeg could not be installed automatically.\n"
+                            "Please install it manually and ensure it is on "
+                            "your system PATH.",
+                        )
+                        return playable
+                else:
+                    return playable
 
             return playable + convertible
 
@@ -1101,7 +1369,7 @@ class AudioEventsSlots:
 
         **Single source of truth** for the shared post-key/post-sync flow
         used by ``tb000``, ``tb001``, ``_key_all_events``,
-        ``_browse_audio_files``, ``b005`` (Replace), ``_export_composite``,
+        ``_import_audio_paths``, ``b005`` (Replace), ``_export_composite``,
         and ``_run_deferred_sync``.
 
         After syncing audio nodes it:
@@ -1378,7 +1646,7 @@ class AudioEventsSlots:
         """Move ``None`` end-keys for *event_label* to match the current clip duration.
 
         After an audio file is swapped (``b005``) or re-added via browse
-        (``_browse_audio_files``), the ``None`` keyframes that mark the
+        (``_import_audio_paths``), the ``None`` keyframes that mark the
         end of each occurrence of *event_label* may be stale — they were
         placed using the old clip's duration.  This method recalculates
         the correct end frame from the **current** file in
@@ -1648,10 +1916,10 @@ class AudioEventsSlots:
     def b003(self):
         """Remove — clean up trigger attributes and audio nodes.
 
-        If the target is a tool-created data-carrier (its only shapes are
-        the hidden locator added by ``EventTriggers._protect_empty_transforms``),
-        it is deleted entirely.  Otherwise the object is left in the scene
-        and only the audio trigger attributes and audio nodes are removed.
+        If the target is a tool-created data-carrier (a hidden transform
+        with stamped locator shape), it is deleted entirely.  Otherwise
+        the object is left in the scene and only the audio trigger
+        attributes and audio nodes are removed.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
 
@@ -1667,7 +1935,25 @@ class AudioEventsSlots:
         # trigger/manifest attrs, persisted file_map, anim curves, and
         # category audio nodes.
         if target and pm.objExists(target):
-            EventTriggers.remove(objects=[target], category=self.CATEGORY)
+            # Unlock the node so deleteAttr / delete can proceed
+            # (carriers are name-locked at creation).
+            try:
+                cmds.lockNode(str(target), lock=False, lockName=False)
+            except Exception:
+                pass
+
+            # Remove only audio nodes owned by this carrier (not the
+            # entire category set, which may contain other carriers'
+            # audio).
+            from mayatk.node_utils.attributes.audio_events._audio_events import (
+                AudioEvents,
+            )
+
+            AudioEvents.remove_by_owner(owner=target.name(), category=self.CATEGORY)
+
+            EventTriggers.remove(
+                objects=[target], category=self.CATEGORY, clean_audio=False
+            )
 
         # Delete the object only if it was a tool-created data carrier.
         if target and pm.objExists(target) and tool_created:
@@ -1678,6 +1964,7 @@ class AudioEventsSlots:
         self._trigger_attr_path = None
         self._last_enum_idx = None
         self._refresh_combo_from_target()
+        self._refresh_carrier_combo()
         self.ui.footer.setText(
             f"Removed audio data from '{name}'." if name else "Removed audio data."
         )
@@ -1685,17 +1972,22 @@ class AudioEventsSlots:
     def _is_tool_created_carrier(self, target):
         """Return True if *target* is a pure tool-created data-carrier object.
 
-        A target is considered tool-created when all of its shape children
-        are hidden locator shapes stamped with ``event_trigger_locator`` by
-        ``EventTriggers._protect_empty_transforms``.  User scene objects
-        (meshes, joints, nurbs curves, …) always have at least one
-        non-stamped shape and return False.
+        Tool-created carriers are hidden transforms whose only shape
+        children are stamped with ``event_trigger_locator``.
+        User scene objects (meshes, joints, …) return False.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
 
-        shapes = cmds.listRelatives(str(target), shapes=True, fullPath=True) or []
+        node_str = str(target)
+
+        # Must be a transform (not a DG node, not a shape).
+        if cmds.nodeType(node_str) != "transform":
+            return False
+
+        # Check shape stamps — all shapes must be our hidden locators.
+        shapes = cmds.listRelatives(node_str, shapes=True, fullPath=True) or []
         if not shapes:
-            return False  # already shapeless after EventTriggers.remove — treat as user object
+            return False
         return all(
             cmds.attributeQuery(EventTriggers._LOCATOR_ATTR, node=s, exists=True)
             for s in shapes
@@ -1829,7 +2121,7 @@ class AudioEventsSlots:
         labels against the original-cased file stems and renames any
         that differ only in casing, preserving keyframe indices.
 
-        Only called from ``_browse_audio_files`` where ``_audio_files``
+        Only called from ``_import_audio_paths`` where ``_audio_files``
         values are guaranteed to be **original** (non-cache) file paths.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
@@ -1866,34 +2158,38 @@ class AudioEventsSlots:
 
         Checks (in order):
         1. Current selection with audio_trigger attr.
-        2. Any selected transform (will get trigger added on browse/sync).
+        2. Any selected object (will get trigger added on browse/sync).
         3. Cached ``_current_target`` if still valid and nothing selected.
-        4. Auto-create an ``audio_events`` locator (hidden) as a dedicated data carrier.
+        4. Auto-create a hidden transform as a dedicated data carrier.
 
         Returns:
             PyNode — always succeeds.
         """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
         # 1. Check selection for object with trigger attr
         obj = self._get_selected_trigger_object()
         if obj:
             self._current_target = obj
             return obj
 
-        # 2. Check selection for ANY transform (will get trigger added)
+        # 2. Any selected object (will get trigger added on browse/sync)
         sel = pm.selected()
         if sel:
-            self._current_target = sel[0]
-            return sel[0]
+            first = sel[0]
+            self._current_target = first
+            return first
 
         # 3. Use cached target if still alive and nothing is selected
         if self._current_target and pm.objExists(self._current_target):
             return self._current_target
 
-        # 4. Auto-create a dedicated data-carrier locator (hidden in viewport)
-        grp = self._create_audio_locator("audio_events")
+        # 4. Auto-create a dedicated data-carrier transform
+        grp = self._create_audio_carrier("audio_events")
         pm.select(grp, replace=True)
         self._audio_files.clear()
         self._current_target = grp
+        self._refresh_carrier_combo()
         self.ui.footer.setText(f"Created '{grp.name()}' for audio triggers.")
         return grp
 
@@ -2129,6 +2425,7 @@ class AudioEventsSlots:
 
         # Re-create volatile jobs and run initial sync
         self._ensure_sync_job()
+        self._refresh_carrier_combo()
 
     def _connect_cb_signal(self):
         """Connect to the Channel Box’s QItemSelectionModel signal.
@@ -2323,6 +2620,7 @@ class AudioEventsSlots:
         if not track_names:
             self.ui.footer.setText(f"{obj.name()} (no events)")
             self._refresh_combo_from_target()
+            self._refresh_carrier_combo()
             return
 
         # Show feedback immediately so the user always sees target status,
@@ -2406,6 +2704,9 @@ class AudioEventsSlots:
         else:
             self._activate_composite_for(obj)
 
+        # Keep carrier combo in sync with the active target.
+        self._refresh_carrier_combo()
+
     # -- OpenMaya attribute-changed callback ------------------------------
 
     def _register_attr_change_callback(self, target):
@@ -2483,6 +2784,35 @@ class AudioEventsSlots:
                 "_register_attr_change_callback failed", exc_info=True
             )
 
+    def remove_callbacks(self):
+        """Kill all scriptJobs and OpenMaya callbacks owned by this instance.
+
+        Call on teardown (e.g. when the UI is destroyed) to prevent
+        leaked persistent scriptJobs and orphaned OM callbacks.
+        """
+        self._cleanup_attr_callbacks()
+
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return
+
+        for attr in (
+            "_scene_opened_job_id",
+            "_new_scene_job_id",
+            "_selection_sync_job_id",
+            "_time_changed_job_id",
+        ):
+            job_id = getattr(self, attr, None)
+            if job_id is None:
+                continue
+            try:
+                if cmds.scriptJob(exists=job_id):
+                    cmds.scriptJob(kill=job_id, force=True)
+            except Exception:
+                pass
+            setattr(self, attr, None)
+
     def _cleanup_attr_callbacks(self):
         """Remove OpenMaya attribute-changed callbacks."""
 
@@ -2506,7 +2836,7 @@ class AudioEventsSlots:
 
         Uses ``pm.hasAttr`` as the primary check, with a ``cmds.attributeQuery``
         fallback in case the PyMEL wrapper returns stale results.
-        Also walks DAG ancestors so clicking a locator shape in the viewport
+        Also walks DAG ancestors so clicking a shape in the viewport
         picks up its parent transform.
         """
         from mayatk.node_utils.attributes.event_triggers import EventTriggers
@@ -2537,28 +2867,29 @@ class AudioEventsSlots:
                 pass
 
             # -- Walk up the DAG (shape → transform, nested groups) --
-            try:
-                for parent in obj.getAllParents():
-                    try:
-                        if parent.hasAttr(trigger_attr):
-                            return parent
-                    except Exception:
-                        pass
-                    try:
-                        parent_str = str(parent)
-                        if cmds.attributeQuery(
-                            trigger_attr, node=parent_str, exists=True
-                        ):
-                            log.debug(
-                                "_get_selected_trigger_object: cmds "
-                                "parent fallback found trigger on %s",
-                                parent_str,
-                            )
-                            return parent
-                    except Exception:
-                        pass
-            except Exception:
-                continue
+            if isinstance(obj, pm.nt.DagNode):
+                try:
+                    for parent in obj.getAllParents():
+                        try:
+                            if parent.hasAttr(trigger_attr):
+                                return parent
+                        except Exception:
+                            pass
+                        try:
+                            parent_str = str(parent)
+                            if cmds.attributeQuery(
+                                trigger_attr, node=parent_str, exists=True
+                            ):
+                                log.debug(
+                                    "_get_selected_trigger_object: cmds "
+                                    "parent fallback found trigger on %s",
+                                    parent_str,
+                                )
+                                return parent
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
 
         return None
 
@@ -2570,9 +2901,9 @@ class AudioEventsSlots:
 
         1. ``cmds.ls("*.attr")`` — fast but unreliable for user-defined
            enum attrs in some Maya builds.
-        2. ``audio_file_map`` marker — any transform carrying the
+        2. ``audio_file_map`` marker — any node carrying the
            persisted file-map attr is almost certainly a trigger object.
-        3. Brute-force ``attributeQuery`` over scene transforms.
+        3. Brute-force ``attributeQuery`` over transforms.
 
         Returns:
             PyNode or None.
@@ -2601,7 +2932,7 @@ class AudioEventsSlots:
         except Exception:
             pass
 
-        # Strategy 3: brute-force check on all transforms (slow but reliable)
+        # Strategy 3: brute-force check on transforms
         try:
             for node in cmds.ls(type="transform", long=True):
                 try:
@@ -2614,7 +2945,7 @@ class AudioEventsSlots:
             pass
 
         # Strategy 4: check the audio set — if audio nodes exist, trace
-        # back through all transforms with the file_map attr.
+        # back through transforms with the file_map attr.
         try:
             audio_set = AudioEvents._find_audio_set(self.CATEGORY)
             if audio_set and audio_set.members():

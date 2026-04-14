@@ -246,6 +246,143 @@ class TestNodeUtils(MayaTkTestCase):
     # Assembly Tests
     # -------------------------------------------------------------------------
 
+    # -------------------------------------------------------------------------
+    # Persistent Data Node Tests
+    # -------------------------------------------------------------------------
+
+    def test_ensure_data_node_creates_locked_network(self):
+        """ensure_data_node creates a locked network node with a writable attr."""
+        import maya.cmds as cmds
+
+        name = "testDataNode"
+        attr = "testPayload"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        node = NodeUtils.ensure_data_node(name, attr)
+        try:
+            self.assertTrue(pm.objExists(name))
+            self.assertEqual(node.nodeType(), "network")
+            self.assertTrue(node.hasAttr(attr))
+            # Node is locked
+            self.assertTrue(cmds.lockNode(str(node), q=True, lock=True)[0])
+            # Name is locked
+            self.assertTrue(cmds.lockNode(str(node), q=True, lockName=True)[0])
+            # Data attr is writable
+            node.attr(attr).set("hello")
+            self.assertEqual(node.attr(attr).get(), "hello")
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+    def test_ensure_data_node_prevents_deletion(self):
+        """Locked node cannot be deleted by pm.delete or cmds.delete."""
+        import maya.cmds as cmds
+
+        name = "testProtected"
+        attr = "protData"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        NodeUtils.ensure_data_node(name, attr)
+        try:
+            with self.assertRaises(RuntimeError):
+                pm.delete(name)
+            self.assertTrue(pm.objExists(name))
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+    def test_ensure_data_node_prevents_rename(self):
+        """Locked node cannot be renamed."""
+        import maya.cmds as cmds
+
+        name = "testNoRename"
+        attr = "nrData"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        NodeUtils.ensure_data_node(name, attr)
+        try:
+            with self.assertRaises(RuntimeError):
+                pm.rename(name, "sneakyRename")
+            self.assertTrue(pm.objExists(name))
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+    def test_ensure_data_node_migrates_unlocked(self):
+        """Existing unlocked node is locked on next ensure_data_node call."""
+        import maya.cmds as cmds
+
+        name = "testMigrate"
+        attr = "migData"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        # Create an unlocked node manually (simulating old scene)
+        node = pm.createNode("network", name=name)
+        pm.addAttr(node, longName=attr, dataType="string")
+        self.assertFalse(cmds.lockNode(str(node), q=True, lock=True)[0])
+
+        # ensure_data_node should migrate it
+        result = NodeUtils.ensure_data_node(name, attr)
+        try:
+            self.assertTrue(cmds.lockNode(str(result), q=True, lock=True)[0])
+            # Attr still writable after migration
+            result.attr(attr).set("migrated")
+            self.assertEqual(result.attr(attr).get(), "migrated")
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+    def test_ensure_data_node_idempotent(self):
+        """Calling ensure_data_node twice is safe and returns same node."""
+        import maya.cmds as cmds
+
+        name = "testIdempotent"
+        attr = "idemData"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        node1 = NodeUtils.ensure_data_node(name, attr)
+        node1.attr(attr).set("first")
+        node2 = NodeUtils.ensure_data_node(name, attr)
+        try:
+            self.assertEqual(str(node1), str(node2))
+            self.assertEqual(node2.attr(attr).get(), "first")
+            self.assertTrue(cmds.lockNode(str(node2), q=True, lock=True)[0])
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+    def test_ensure_data_node_adds_missing_attr_to_existing(self):
+        """If node exists but attr is missing, attr is added and node locked."""
+        import maya.cmds as cmds
+
+        name = "testAddAttr"
+        attr = "newAttr"
+        if pm.objExists(name):
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
+        # Create node without the expected attribute
+        pm.createNode("network", name=name)
+        node = NodeUtils.ensure_data_node(name, attr)
+        try:
+            self.assertTrue(node.hasAttr(attr))
+            self.assertTrue(cmds.lockNode(str(node), q=True, lock=True)[0])
+            node.attr(attr).set("works")
+            self.assertEqual(node.attr(attr).get(), "works")
+        finally:
+            cmds.lockNode(name, lock=False)
+            pm.delete(name)
+
     def test_create_assembly(self):
         """Test create_assembly."""
         try:

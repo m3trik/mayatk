@@ -2438,16 +2438,26 @@ class TestEventAudioTrackManager(unittest.TestCase):
 
         return loc
 
-    def test_find_event_locators(self):
-        """Locators with audio_trigger are found."""
+    def test_find_event_carriers(self):
+        """Carriers (transforms and network nodes) with audio_trigger are found."""
         self._create_event_locator(
             "ev_loc",
             ["None", "clip_a"],
             {"clip_a": self._wav_path},
             [(10, 1)],
         )
-        locs = AudioTrackManager.find_event_audio_locators()
+        locs = AudioTrackManager.find_event_carriers()
         self.assertEqual(locs, ["ev_loc"])
+
+    def test_find_event_carriers_network_node(self):
+        """Network-node carriers with audio_trigger are also discovered."""
+        from maya import cmds
+
+        net = cmds.createNode("network", name="ev_net")
+        labels = "None:clip_a"
+        cmds.addAttr(net, ln="audio_trigger", at="enum", en=labels, keyable=True)
+        found = AudioTrackManager.find_event_carriers()
+        self.assertIn("ev_net", found)
 
     def test_collect_event_segments(self):
         """Event segments are discovered with correct frame and duration."""

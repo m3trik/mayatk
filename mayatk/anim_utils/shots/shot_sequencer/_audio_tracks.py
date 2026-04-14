@@ -197,17 +197,17 @@ class AudioTrackManager:
     _FILEMAP_ATTR = "audio_file_map"
 
     @staticmethod
-    def find_event_audio_locators() -> List[str]:
-        """Return names of locators that carry AudioEvents trigger attrs."""
+    def find_event_carriers() -> List[str]:
+        """Return names of transforms that carry AudioEvents trigger attrs."""
         if cmds is None:
             return []
-        locators = []
-        for xform in cmds.ls(type="transform") or []:
+        carriers = []
+        for node in cmds.ls(type="transform") or []:
             if cmds.attributeQuery(
-                AudioTrackManager._TRIGGER_ATTR, node=xform, exists=True
+                AudioTrackManager._TRIGGER_ATTR, node=node, exists=True
             ):
-                locators.append(xform)
-        return sorted(locators)
+                carriers.append(node)
+        return sorted(carriers)
 
     @staticmethod
     def _parse_enum_labels(node: str) -> List[str]:
@@ -279,7 +279,7 @@ class AudioTrackManager:
         scene_end: Optional[float] = None,
         include_waveform: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Discover audio clips from AudioEvents keyed-enum locators.
+        """Discover audio clips from AudioEvents keyed-enum carriers.
 
         Each keyed non-None event on an ``audio_trigger`` enum produces
         one segment.  The segment starts at the key's frame and its
@@ -289,16 +289,16 @@ class AudioTrackManager:
             return []
 
         fps = _get_fps()
-        locators = self.find_event_audio_locators()
+        carriers = self.find_event_carriers()
         segments: List[Dict[str, Any]] = []
 
-        for loc in locators:
-            labels = self._parse_enum_labels(loc)
-            file_map = self._load_file_map(loc)
+        for carrier in carriers:
+            labels = self._parse_enum_labels(carrier)
+            file_map = self._load_file_map(carrier)
             if not labels or not file_map:
                 continue
 
-            attr = f"{loc}.{self._TRIGGER_ATTR}"
+            attr = f"{carrier}.{self._TRIGGER_ATTR}"
             keys = cmds.keyframe(attr, q=True) or []
             vals = cmds.keyframe(attr, q=True, valueChange=True) or []
 
@@ -323,7 +323,7 @@ class AudioTrackManager:
                     continue
 
                 seg: Dict[str, Any] = {
-                    "node": loc,
+                    "node": carrier,
                     "file_path": file_path,
                     "start": frame,
                     "end": end_frame,
@@ -331,7 +331,6 @@ class AudioTrackManager:
                     "label": label,
                     "is_audio": True,
                     "audio_source": "event",
-                    "event_locator": loc,
                     "event_key_frame": frame,
                 }
 
@@ -378,11 +377,11 @@ class AudioTrackManager:
         cmds.setAttr(f"{node_name}.offset", new_offset)
 
     @staticmethod
-    def move_event_key(locator: str, old_frame: float, new_frame: float) -> None:
+    def move_event_key(carrier: str, old_frame: float, new_frame: float) -> None:
         """Shift a keyed audio event trigger from *old_frame* to *new_frame*."""
         if cmds is None:
             return
-        attr = f"{locator}.{AudioTrackManager._TRIGGER_ATTR}"
+        attr = f"{carrier}.{AudioTrackManager._TRIGGER_ATTR}"
         cmds.keyframe(
             attr, edit=True, time=(old_frame, old_frame), timeChange=new_frame
         )

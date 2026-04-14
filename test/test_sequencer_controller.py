@@ -3993,11 +3993,13 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
 
         persistence = MayaScenePersistence()
         _mock_cmds.undoInfo = MagicMock()
-        _mock_pm.objExists.return_value = True
         mock_node = MagicMock()
-        _mock_pm.PyNode.return_value = mock_node
 
-        persistence.save({"test": "data"})
+        with patch(
+            "mayatk.node_utils._node_utils.NodeUtils.ensure_data_node",
+            return_value=mock_node,
+        ):
+            persistence.save({"test": "data"})
 
         # undoInfo should have been called to disable then re-enable
         calls = _mock_cmds.undoInfo.call_args_list
@@ -4011,13 +4013,15 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
 
         persistence = MayaScenePersistence()
         _mock_cmds.undoInfo = MagicMock()
-        _mock_pm.objExists.return_value = True
         mock_node = MagicMock()
         mock_node.attr.return_value.set.side_effect = RuntimeError("boom")
-        _mock_pm.PyNode.return_value = mock_node
 
-        with self.assertRaises(RuntimeError):
-            persistence.save({"test": "data"})
+        with patch(
+            "mayatk.node_utils._node_utils.NodeUtils.ensure_data_node",
+            return_value=mock_node,
+        ):
+            with self.assertRaises(RuntimeError):
+                persistence.save({"test": "data"})
 
         # Even after an error, undo must be re-enabled
         last_call = _mock_cmds.undoInfo.call_args_list[-1]
@@ -4444,6 +4448,145 @@ class TestKeyDeletionUndo(ControllerTestCase):
             initial_stack,
             "No undo entry should be pushed when nothing was deleted",
         )
+
+
+# ===========================================================================
+# Callback registration idempotency tests
+# ===========================================================================
+
+
+class TestCallbackIdempotency(unittest.TestCase):
+    """Verify that calling registration methods twice doesn't create
+    duplicate OpenMaya callbacks.
+
+    Bug: _register_maya_undo_callbacks, _register_keyframe_callback, and
+    _register_time_change_callback had no idempotency guard — calling them
+    twice appended duplicate callback IDs.
+    Fixed: 2026-04-13
+    """
+
+    def setUp(self):
+        _mock_pm.reset_mock()
+        _mock_cmds.reset_mock()
+        _mock_cmds.objExists.return_value = True
+        _mock_pm.objExists.return_value = True
+        _mock_pm.playbackOptions.return_value = 0.0
+        _mock_pm.currentTime.return_value = 1.0
+        _mock_pm.scriptJob.return_value = 999
+        _mock_pm.scriptJob.side_effect = lambda **kw: 999 if "event" in kw else True
+
+        store = ShotStore()
+        store.define_shot(name="Shot_A", start=100, end=200, objects=["ObjA"])
+        ShotStore._active = None
+
+        self.sequencer = ShotSequencer(store=store)
+        self.widget = SequencerWidget()
+        self.slots = FakeSlotsInstance(self.widget)
+
+        # Build controller WITHOUT patching registration methods
+        with patch.object(ShotSequencerController, "_bind_store_listener"):
+            self.ctrl = ShotSequencerController(self.slots)
+        self.ctrl.sequencer = self.sequencer
+
+    def test_undo_callbacks_not_duplicated(self):
+        """Calling _register_maya_undo_callbacks twice must not double the callbacks."""
+        self.ctrl._undo_callback_ids.clear()
+
+        self.ctrl._register_maya_undo_callbacks()
+        first_count = len(self.ctrl._undo_callback_ids)
+        self.assertEqual(first_count, 2, "Should register Undo + Redo")
+
+        self.ctrl._register_maya_undo_callbacks()
+        self.assertEqual(
+            len(self.ctrl._undo_callback_ids),
+            first_count,
+            "Second call must be a no-op — callbacks already registered",
+        )
+
+    def test_keyframe_callback_not_duplicated(self):
+        """Calling _register_keyframe_callback twice must not replace the ID."""
+        self.ctrl._keyframe_cb = None
+
+        self.ctrl._register_keyframe_callback()
+        first_id = self.ctrl._keyframe_cb
+        self.assertIsNotNone(first_id)
+
+        self.ctrl._register_keyframe_callback()
+        self.assertIs(
+            self.ctrl._keyframe_cb,
+            first_id,
+            "Second call must be a no-op — callback already registered",
+        )
+
+    def test_time_change_callback_not_duplicated(self):
+        """Calling _register_time_change_callback twice must not replace the ID."""
+        self.ctrl._time_change_cb = None
+
+        self.ctrl._register_time_change_callback()
+        first_id = self.ctrl._time_change_cb
+        self.assertIsNotNone(first_id)
+
+        self.ctrl._register_time_change_callback()
+        self.assertIs(
+            self.ctrl._time_change_cb,
+            first_id,
+            "Second call must be a no-op — callback already registered",
+        )
+
+    def test_remove_clears_all_callback_state(self):
+        """remove_callbacks must reset all IDs so re-registration works."""
+        self.ctrl._undo_callback_ids.clear()
+        self.ctrl._keyframe_cb = None
+        self.ctrl._time_change_cb = None
+
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+        self.assertTrue(len(self.ctrl._undo_callback_ids) > 0)
+        self.assertIsNotNone(self.ctrl._keyframe_cb)
+        self.assertIsNotNone(self.ctrl._time_change_cb)
+
+        self.ctrl.remove_callbacks()
+
+        self.assertEqual(self.ctrl._undo_callback_ids, [])
+        self.assertIsNone(self.ctrl._keyframe_cb)
+        self.assertIsNone(self.ctrl._time_change_cb)
+
+    def test_remove_then_reregister(self):
+        """After remove_callbacks, registration methods must work again.
+
+        Bug: undo loop lacked try/except — a failed removeCallback left
+        stale IDs in the list, permanently blocking re-registration.
+        Fixed: 2026-04-13
+        """
+        self.ctrl._undo_callback_ids.clear()
+        self.ctrl._keyframe_cb = None
+        self.ctrl._time_change_cb = None
+
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+
+        self.ctrl.remove_callbacks()
+
+        # Re-register must succeed
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+
+        self.assertEqual(len(self.ctrl._undo_callback_ids), 2)
+        self.assertIsNotNone(self.ctrl._keyframe_cb)
+        self.assertIsNotNone(self.ctrl._time_change_cb)
+
+    def test_remove_stops_keyframe_debounce(self):
+        """remove_callbacks must stop and discard the debounce timer."""
+        timer = MagicMock()
+        self.ctrl._keyframe_debounce = timer
+
+        self.ctrl.remove_callbacks()
+
+        timer.stop.assert_called_once()
+        self.assertIsNone(self.ctrl._keyframe_debounce)
 
 
 if __name__ == "__main__":

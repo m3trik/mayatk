@@ -596,6 +596,134 @@ class TestAnimUtils(MayaTkTestCase):
                 itt[0], "stepnext", f"In tangent at {t} should be stepnext"
             )
 
+    def test_copy_keys_tangent_detail_captures_angles_and_weights(self):
+        """copy_keys tangent_detail=True captures angles, weights, and infinity.
+
+        Verifies the lossless snapshot format includes per-key inAngle,
+        outAngle, inWeight, outWeight and per-curve preInfinity/postInfinity.
+        """
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        cmds.selectKey(plug, time=(1, 10), add=True)
+
+        result = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=True
+        )
+        self.assertTrue(result, "tangent_detail copy returned empty")
+
+        obj_data = list(result.values())[0]
+        attr_data = obj_data["translateX"]
+
+        # tangent_detail wraps in a dict with "keys" + infinity fields
+        self.assertIsInstance(attr_data, dict, "tangent_detail should wrap in dict")
+        self.assertIn("keys", attr_data)
+        self.assertIn("preInfinity", attr_data)
+        self.assertIn("postInfinity", attr_data)
+
+        keys = attr_data["keys"]
+        self.assertEqual(len(keys), 2)
+
+        for kd in keys:
+            for field in ("inAngle", "outAngle", "inWeight", "outWeight"):
+                self.assertIn(field, kd, f"Missing {field} in tangent_detail key")
+                self.assertIsInstance(kd[field], float)
+
+    def test_copy_keys_tangent_detail_false_unchanged(self):
+        """copy_keys tangent_detail=False (default) returns the original list format."""
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        cmds.selectKey(plug, time=(1, 10), add=True)
+
+        result = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=False
+        )
+        obj_data = list(result.values())[0]
+        attr_data = obj_data["translateX"]
+
+        # Without tangent_detail, attr_data is a plain list
+        self.assertIsInstance(attr_data, list)
+        self.assertNotIn("inAngle", attr_data[0])
+
+    def test_paste_keys_tangent_detail_roundtrip(self):
+        """Paste restores angles, weights, and infinity from tangent_detail data.
+
+        Full round-trip: copy with tangent_detail, paste onto another object,
+        verify the tangent properties match.
+        """
+        import maya.cmds as cmds
+
+        src_plug = f"{self.cube}.translateX"
+        # Set a known non-default tangent angle on the source
+        cmds.keyTangent(
+            src_plug,
+            time=(1, 1),
+            edit=True,
+            inTangentType="spline",
+            outTangentType="spline",
+        )
+        cmds.setInfinity(src_plug, preInfinite="cycle", postInfinite="oscillate")
+
+        cmds.selectKey(src_plug, time=(1, 10), add=True)
+        copied = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=True
+        )
+
+        # Paste onto sphere (match_source=False so all data goes to sphere)
+        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        AnimUtils.paste_keys(
+            objects=[self.sphere],
+            copied_data=copied,
+            target_time=1,
+            match_source=False,
+            refresh_channel_box=False,
+        )
+
+        dst_plug = f"{self.sphere}.translateX"
+        # Verify infinity was restored
+        pre = cmds.setInfinity(dst_plug, q=True, preInfinite=True)
+        post = cmds.setInfinity(dst_plug, q=True, postInfinite=True)
+        self.assertEqual(pre[0], "cycle", "preInfinity not restored")
+        self.assertEqual(post[0], "oscillate", "postInfinity not restored")
+
+        # Verify tangent type was restored on the first key
+        itt = cmds.keyTangent(dst_plug, q=True, time=(1, 1), inTangentType=True)
+        self.assertEqual(itt[0], "spline", "inTangentType not restored")
+
+    def test_paste_keys_tangent_detail_skips_angles_for_step(self):
+        """Paste with tangent_detail data skips angle/weight for step tangents."""
+        import maya.cmds as cmds
+
+        plug = f"{self.cube}.translateX"
+        cmds.keyTangent(
+            plug,
+            edit=True,
+            outTangentType="step",
+            inTangentType="stepnext",
+        )
+
+        cmds.selectKey(plug, time=(1, 10), add=True)
+        copied = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=True
+        )
+
+        # Paste onto sphere — should not error even though step tangents
+        # have angle/weight fields that Maya ignores
+        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        count = AnimUtils.paste_keys(
+            objects=[self.sphere],
+            copied_data=copied,
+            target_time=1,
+            match_source=False,
+            refresh_channel_box=False,
+        )
+        self.assertEqual(count, 1)
+
+        dst_plug = f"{self.sphere}.translateX"
+        ott = cmds.keyTangent(dst_plug, q=True, time=(1, 1), outTangentType=True)
+        self.assertEqual(ott[0], "step", "Step tangent was not preserved")
+
     def test_move_keys_to_frame(self):
         """Test moving keys to a specific frame."""
         # Move keys from frame 1 to frame 5

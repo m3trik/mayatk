@@ -167,10 +167,10 @@ class ClipMotionMixin:
                 return False
             source = clip.data.get("audio_source", "dg")
             if source == "event":
-                locator = clip.data.get("audio_node")
+                carrier = clip.data.get("audio_node")
                 old_frame = clip.data.get("event_key_frame")
-                if locator and old_frame is not None:
-                    AudioTrackManager.move_event_key(locator, old_frame, new_start)
+                if carrier and old_frame is not None:
+                    AudioTrackManager.move_event_key(carrier, old_frame, new_start)
                     clip.data["event_key_frame"] = new_start
             else:
                 audio_node = clip.data.get("audio_node")
@@ -333,10 +333,14 @@ class ClipMotionMixin:
             shifted_audio: set = set()
             start_delta = expanded_start - prior_start
             if abs(start_delta) > 1e-6:
-                self.sequencer._ripple_upstream(shot_id, prior_start, start_delta, shifted_audio)
+                self.sequencer._ripple_upstream(
+                    shot_id, prior_start, start_delta, shifted_audio
+                )
             end_delta = expanded_end - prior_end
             if abs(end_delta) > 1e-6:
-                self.sequencer._ripple_downstream(shot_id, prior_end, end_delta, shifted_audio)
+                self.sequencer._ripple_downstream(
+                    shot_id, prior_end, end_delta, shifted_audio
+                )
             # Downstream/upstream shots may have moved — flush stale cache
             # so _sync_to_widget re-collects their segments.
             self._segment_cache.clear()

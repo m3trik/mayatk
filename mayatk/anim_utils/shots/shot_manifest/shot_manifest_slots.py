@@ -215,7 +215,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             footer = (
                 "No selected keys found (select keys in the Graph Editor)."
                 if use_sel
-                else "No animation detected in scene."
+                else "No animation found in scene."
             )
             self._load_data([], footer=footer)
             return
@@ -226,7 +226,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._load_data(
             steps,
             ranges=dict(ranges),
-            footer=f"Detected {len(steps)} shots, {n_obj} objects from {source}.",
+            footer=f"Found {len(steps)} shots, {n_obj} objects from {source}.",
         )
 
     def _on_range_double_clicked(self, item, column) -> None:
@@ -918,8 +918,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _setup_header_menu(self) -> None:
         """Configure the header option menu.
 
-        Detection settings (threshold, use-selected-keys) now live in
-        the shared ``shots.ui`` panel, opened via the Settings button.
+        Generation settings (threshold, mode) now live in the shared
+        ``shots.ui`` panel, opened via the Settings button.
         """
         menu = self.ui.header.menu
         menu.setTitle("Shot Manifest:")
@@ -955,7 +955,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             "QPushButton",
             setText="Shots\u2026",
             setObjectName="btn_settings",
-            setToolTip="Open shared shot detection, gap, and editing settings.",
+            setToolTip="Open shared shot generation, gap, and editing settings.",
         )
 
         menu.add("Separator", setTitle="About")
@@ -965,16 +965,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             setObjectName="btn_instructions",
             setToolTip=(
                 "Shot Manifest \u2014 Build and validate shots from a CSV\n"
-                "file or by auto-detecting animation in the scene.\n\n"
+                "file or by generating from animation in the scene.\n\n"
                 "Quick Start (CSV):\n"
                 "  1. Check the CSV checkbox and browse to a CSV file.\n"
                 "  2. Review parsed steps in the table; edit ranges\n"
                 "     or exclude steps as needed.\n"
                 "  3. Click Build to create shots with behaviors applied.\n"
                 "  4. Click Assess to verify completeness.\n\n"
-                "Quick Start (Scene Detection):\n"
-                "  1. Uncheck CSV \u2014 animation is auto-detected using\n"
-                "     the settings in Shot Settings.\n"
+                "Quick Start (Generate from Animation):\n"
+                "  1. Uncheck CSV \u2014 shots are generated from animation\n"
+                "     using the settings in Shot Settings.\n"
                 "  2. Refine ranges in the table if needed.\n"
                 "  3. Click Build, then Assess.\n\n"
                 "Table Columns:\n"
@@ -990,7 +990,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 "    (e.g. '120-250'). Downstream steps re-flow.\n"
                 "  \u2022 Right-click a range cell:\n"
                 "    \u2013 Set Start to Current Frame\n"
-                "    \u2013 Auto-fill from Gaps (re-detect and reflow)\n"
+                "    \u2013 Auto-fill from Gaps (regenerate and reflow)\n"
                 "    \u2013 Clear Range (revert to auto-fill)\n\n"
                 "Buttons:\n"
                 "  \u2022 Assess \u2014 Read-only comparison against live shots.\n"

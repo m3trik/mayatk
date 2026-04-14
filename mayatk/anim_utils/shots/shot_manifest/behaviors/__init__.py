@@ -200,10 +200,23 @@ def apply_behavior(
                 # Use explicit attr path to target the transform only —
                 # the kwarg form also hits the shape node.
                 if mirror_to_vis:
+                    vis_plug = f"{node}.visibility"
+                    t = k["time"]
                     pm.setKeyframe(
-                        f"{node}.visibility",
-                        time=k["time"],
+                        vis_plug,
+                        time=t,
                         value=1.0 if k["value"] > 0 else 0.0,
+                        inTangentType="stepnext",
+                        outTangentType="step",
+                    )
+                    # Belt-and-suspenders: pm.setKeyframe may not
+                    # honour stepnext on creation — force via keyTangent.
+                    import maya.cmds as cmds
+
+                    cmds.keyTangent(
+                        vis_plug,
+                        edit=True,
+                        time=(t, t),
                         inTangentType="stepnext",
                         outTangentType="step",
                     )
