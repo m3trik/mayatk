@@ -24,7 +24,7 @@ except ImportError:
     cmds = None
 
 from mayatk.anim_utils.segment_keys import SegmentKeys
-from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import AudioTrackManager
+from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
 if TYPE_CHECKING:
     pass
@@ -91,7 +91,6 @@ class ClipMotionMixin:
 
     * ``sequencer`` — :class:`ShotSequencer` instance
     * ``_get_sequencer_widget()``
-    * ``_audio_mgr`` — :class:`AudioTrackManager`
     * ``_shifted_out_keys`` — dict
     * ``_save_shot_state()`` / ``_sync_to_widget()`` / ``_sync_combobox()``
     * ``_set_footer()``
@@ -159,33 +158,27 @@ class ClipMotionMixin:
         if clip is None:
             return False
 
-        # Audio clip move — persist the new offset in Maya, then expand
-        # the shot boundary if the audio clip now extends beyond it.
+        # Audio clip move — shift the track's keys in the canonical
+        # store; the compositor (via batch.mark_dirty) re-syncs the
+        # derived DG node automatically.
         if clip.data.get("is_audio"):
             orig_start = clip.data.get("orig_start")
-            if orig_start is not None and abs(new_start - orig_start) < FLOAT_ZERO_EPS:
-                return False
-            source = clip.data.get("audio_source", "dg")
-            if source == "event":
-                locator = clip.data.get("audio_node")
-                old_frame = clip.data.get("event_key_frame")
-                if locator and old_frame is not None:
-                    AudioTrackManager.move_event_key(locator, old_frame, new_start)
-                    clip.data["event_key_frame"] = new_start
-            else:
-                audio_node = clip.data.get("audio_node")
-                if audio_node:
-                    AudioTrackManager.set_audio_offset(audio_node, new_start)
-            # Compute the true audio end from the full duration.
             orig_end = clip.data.get("orig_end")
-            if orig_end is not None and orig_start is not None:
-                full_dur = orig_end - orig_start
-            else:
-                full_dur = clip.rect().width() if hasattr(clip, "rect") else 0
+            track_id = clip.data.get("audio_track_id")
+            if orig_start is None or orig_end is None or not track_id:
+                return False
+            delta = new_start - orig_start
+            if abs(delta) < FLOAT_ZERO_EPS:
+                return False
+            with audio_utils.batch() as b:
+                audio_utils.shift_keys_in_range(
+                    orig_start, orig_end, delta, track_ids=[track_id]
+                )
+                b.mark_dirty([track_id])
+            full_dur = orig_end - orig_start
             new_end = new_start + full_dur
             clip.data["orig_start"] = new_start
             clip.data["orig_end"] = new_end
-            self._audio_mgr.invalidate()
             self._expand_shot_for_clip(clip, new_start, new_end)
             return True
 
@@ -333,10 +326,14 @@ class ClipMotionMixin:
             shifted_audio: set = set()
             start_delta = expanded_start - prior_start
             if abs(start_delta) > 1e-6:
-                self.sequencer._ripple_upstream(shot_id, prior_start, start_delta, shifted_audio)
+                self.sequencer._ripple_upstream(
+                    shot_id, prior_start, start_delta, shifted_audio
+                )
             end_delta = expanded_end - prior_end
             if abs(end_delta) > 1e-6:
-                self.sequencer._ripple_downstream(shot_id, prior_end, end_delta, shifted_audio)
+                self.sequencer._ripple_downstream(
+                    shot_id, prior_end, end_delta, shifted_audio
+                )
             # Downstream/upstream shots may have moved — flush stale cache
             # so _sync_to_widget re-collects their segments.
             self._segment_cache.clear()

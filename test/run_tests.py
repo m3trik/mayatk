@@ -16,6 +16,8 @@ Usage:
     python run_tests.py --quick                  # Run quick validation test
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
+    python run_tests.py --no-wait                # Fire-and-forget (don't poll for results)
+    python run_tests.py --keep-maya              # Keep Maya open after tests (default: close)
     python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene)
 
 Directory Structure:
@@ -24,7 +26,6 @@ Directory Structure:
 """
 import re
 import sys
-import time
 import textwrap
 from pathlib import Path
 
@@ -92,10 +93,51 @@ class MayaTestRunner:
             confirm_existing=not self.reuse_instance,
         ):
             print(f"[OK] Connected to Maya in {self.connection.mode} mode")
+            if not self.verify_connection():
+                print("[ERROR] Connection verification failed — Maya not responding")
+                return False
             return True
         else:
             print("[ERROR] Failed to connect to Maya")
             return False
+
+    def verify_connection(self):
+        """Verify Maya connection with a round-trip data check.
+
+        Sends a trivial expression to Maya and checks it returns the
+        expected result.  This catches cases where ``connect()`` reports
+        success but the command port is not actually functional.
+
+        Returns:
+            True if Maya responded correctly.
+        """
+        if not self.connection or not self.connection.is_connected:
+            return False
+
+        if self.connection.mode == "port":
+            try:
+                result = self.connection.execute(
+                    "str(1+1)", wait_for_response=True, timeout=10
+                )
+                if result and result.strip() == "2":
+                    print(
+                        "[VERIFIED] Maya connection confirmed (round-trip data check)"
+                    )
+                    return True
+                print(f"[WARNING] Unexpected verification response: {result!r}")
+                return False
+            except Exception as e:
+                print(f"[WARNING] Connection verification failed: {e}")
+                return False
+        else:
+            # Standalone/interactive — just check we can execute
+            try:
+                self.connection.execute("pass")
+                print("[VERIFIED] Maya connection confirmed")
+                return True
+            except Exception as e:
+                print(f"[WARNING] Connection verification failed: {e}")
+                return False
 
     def send_code(self, code):
         """Send Python code to Maya."""
@@ -418,6 +460,16 @@ except Exception as e:
             # Final status
             if total_failures == 0 and total_errors == 0:
                 print("\\n[PASS] ALL TESTS PASSED!")
+
+            # Expose summary to __main__ for socket-based polling
+            import __main__ as _mayatk_main
+            _mayatk_main._mayatk_test_summary = (
+                f"Total: {{total_tests}} tests, {{total_failures}} failures, "
+                f"{{total_errors}} errors, {{total_skipped}} skipped"
+            )
+            _mayatk_main._mayatk_test_passed = (
+                total_failures == 0 and total_errors == 0
+            )
             """
         )
 
@@ -459,6 +511,8 @@ for mod in mods_to_clear:
 print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
 
 # Force reload/execution of the temp runner
+import __main__ as _mayatk_main
+_mayatk_main._mayatk_test_complete = False
 try:
     import _temp_test_runner
     import importlib
@@ -467,7 +521,13 @@ except Exception as e:
     print(f"Error executing test runner: {{e}}")
     import traceback
     traceback.print_exc()
+finally:
+    _mayatk_main._mayatk_test_complete = True
 """
+
+        # Clear stale results before sending
+        if self.results_file.exists():
+            self.results_file.unlink()
 
         print("\nSending test code to Maya (via file)...")
 
@@ -476,30 +536,104 @@ except Exception as e:
             print("\n" + "=" * 70)
             print("TESTS ARE RUNNING IN MAYA")
             print("=" * 70)
-            print("\n1. Check Maya's Script Editor for real-time output")
-            print(f"2. Results will be saved to: {self.results_file}")
-
-            # Estimate time based on module count
-            estimated_seconds = len(test_modules) * 10
-            minutes = estimated_seconds // 60
-            seconds = estimated_seconds % 60
-            if minutes > 0:
-                print(f"3. Estimated time: ~{minutes}m {seconds}s")
-            else:
-                print(f"3. Estimated time: ~{seconds}s")
-
-            print("\nTo view results after completion:")
-            print(f"  Get-Content {self.results_file}")
-            print("\nTo monitor progress:")
-            print(f"  Get-Content {self.results_file} -Wait")
+            print(f"Results file: {self.results_file}")
             print("=" * 70)
-
-            # Store estimated time for badge update waiting
-            self.estimated_wait_time = estimated_seconds
             return True
         else:
             print("[ERROR] Failed to send test code")
             return False
+
+    def wait_for_results(self, timeout: int = 600, poll_interval: float = 2.0) -> bool:
+        """Poll Maya for test completion, with file-based fallback.
+
+        Primary: asks Maya directly via socket whether the
+        ``_mayatk_test_complete`` sentinel (set by the test code) is True.
+        Fallback: watches the results file for the ``SUMMARY`` marker.
+
+        Parameters:
+            timeout: Maximum seconds to wait (default 10 minutes).
+            poll_interval: Seconds between checks.
+
+        Returns:
+            True if results were found before timeout, False otherwise.
+        """
+        import time as _time
+
+        start = _time.monotonic()
+        last_size = 0
+        use_socket = (
+            self.connection
+            and self.connection.is_connected
+            and self.connection.mode == "port"
+        )
+
+        print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
+
+        while (_time.monotonic() - start) < timeout:
+            elapsed = int(_time.monotonic() - start)
+
+            # ---- primary: socket-based sentinel check ----
+            if use_socket:
+                try:
+                    done = self.connection.execute(
+                        "getattr(__import__('__main__'), '_mayatk_test_complete', False)",
+                        wait_for_response=True,
+                        timeout=5,
+                    )
+                    if done and str(done).strip().lower() == "true":
+                        print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
+                        # Retrieve summary directly from Maya
+                        summary = self.connection.execute(
+                            "getattr(__import__('__main__'), '_mayatk_test_summary', '')",
+                            wait_for_response=True,
+                            timeout=5,
+                        )
+                        if summary and summary.strip():
+                            print(f"  Maya reports: {summary.strip()}")
+                        return True
+                except Exception:
+                    pass  # fall through to file check
+
+            # ---- fallback: file-based polling ----
+            if self.results_file.exists():
+                try:
+                    content = self.results_file.read_text(encoding="utf-8")
+                except (OSError, PermissionError):
+                    _time.sleep(poll_interval)
+                    continue
+
+                cur_size = len(content)
+                if cur_size != last_size:
+                    module_count = (
+                        content.count(": PASS")
+                        + content.count(": FAIL")
+                        + content.count(": LOAD ERROR")
+                    )
+                    print(
+                        f"\r  [{elapsed}s] {module_count} module(s) finished ...",
+                        end="",
+                        flush=True,
+                    )
+                    last_size = cur_size
+
+                if "SUMMARY" in content:
+                    print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
+                    return True
+
+            _time.sleep(poll_interval)
+
+        elapsed = int(_time.monotonic() - start)
+        print(f"\n[TIMEOUT] Results not found after {elapsed}s.")
+        return False
+
+    def print_results(self) -> None:
+        """Read and print the results file contents to console."""
+        if not self.results_file.exists():
+            print("[WARNING] No results file found.")
+            return
+
+        content = self.results_file.read_text(encoding="utf-8")
+        print("\n" + content)
 
     def update_readme_badge(self, passed: int, failed: int) -> bool:
         """Update the README with a test status badge.
@@ -623,49 +757,82 @@ def main():
     # Check for flags
     dry_run = "--dry-run" in args or "-d" in args
     no_badge = "--no-badge" in args
+    no_wait = "--no-wait" in args
+    keep_maya = "--keep-maya" in args
     extended = "--extended" in args or "-e" in args
 
     if dry_run:
         args = [arg for arg in args if arg not in ("--dry-run", "-d")]
     if no_badge:
         args = [arg for arg in args if arg != "--no-badge"]
+    if no_wait:
+        args = [arg for arg in args if arg != "--no-wait"]
+    if keep_maya:
+        args = [arg for arg in args if arg != "--keep-maya"]
     if extended:
         args = [arg for arg in args if arg not in ("--extended", "-e")]
 
-    if not args:
-        # No arguments - run default tests
-        success = runner.run_tests(dry_run=dry_run, extended=extended)
-    elif "--list" in args or "-l" in args:
-        # List available tests
+    if "--list" in args or "-l" in args:
         runner.list_tests()
         return
-    elif "--quick" in args or "-q" in args:
-        # Quick validation test
-        runner.run_quick_test()
-        return
     elif "--help" in args or "-h" in args:
-        # Show help
         print(__doc__)
         return
-    elif "--all" in args or "-a" in args:
-        # Run ALL tests (not just default)
-        all_modules = runner.discover_tests()
-        print(f"\nRunning ALL {len(all_modules)} test modules...")
-        success = runner.run_tests(all_modules, dry_run=dry_run, extended=extended)
-    else:
-        # Run specific modules
-        success = runner.run_tests(args, dry_run=dry_run, extended=extended)
 
-    # Update README badge with test results (unless disabled or dry run)
-    if success and not dry_run and not no_badge:
-        # Wait for tests to complete based on estimated time
-        wait_time = getattr(runner, "estimated_wait_time", 10) + 5  # Add 5s buffer
-        print(f"\nWaiting {wait_time}s for tests to complete...")
-        time.sleep(wait_time)
+    # Everything below may launch Maya — wrap in try/finally for cleanup
+    try:
+        if not args:
+            success = runner.run_tests(dry_run=dry_run, extended=extended)
+        elif "--quick" in args or "-q" in args:
+            success = runner.run_quick_test()
+            # Quick test is fire-and-forget (no results file to poll)
+            return
+        elif "--all" in args or "-a" in args:
+            all_modules = runner.discover_tests()
+            print(f"\nRunning ALL {len(all_modules)} test modules...")
+            success = runner.run_tests(all_modules, dry_run=dry_run, extended=extended)
+        else:
+            success = runner.run_tests(args, dry_run=dry_run, extended=extended)
 
-        passed, failed = runner.parse_test_results()
-        if passed > 0 or failed > 0:
-            runner.update_readme_badge(passed, failed)
+        if not success or dry_run:
+            return
+
+        # Wait for results (default) or fire-and-forget (--no-wait)
+        if no_wait:
+            print(f"\n--no-wait: results will be written to {runner.results_file}")
+            print(f'  Get-Content "{runner.results_file}" -Wait')
+            return  # finally block handles Maya cleanup
+
+        if runner.wait_for_results():
+            runner.print_results()
+
+            # Update README badge with test results (unless disabled)
+            if not no_badge:
+                passed, failed = runner.parse_test_results()
+                if passed > 0 or failed > 0:
+                    runner.update_readme_badge(passed, failed)
+        else:
+            # Timed out — still try to show partial results
+            if runner.results_file.exists():
+                print("\n[PARTIAL RESULTS]")
+                runner.print_results()
+    except KeyboardInterrupt:
+        print("\n[INTERRUPTED] Cleaning up ...")
+    finally:
+        if not keep_maya and runner.connection and runner.connection.is_connected:
+            print("\nClosing Maya instance ...")
+            try:
+                runner.connection.shutdown(force=True)
+                print("[OK] Maya closed.")
+            except Exception as e:
+                print(f"[WARNING] Failed to close Maya gracefully: {e}")
+                # Last resort: kill by PID
+                try:
+                    port = getattr(runner.connection, "port", None)
+                    if port:
+                        runner.connection.close_instance(port=port, force=True)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

@@ -22,34 +22,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
-# Mock Maya modules BEFORE any mayatk imports
+# Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
+from test.conftest import mock_pm, mock_cmds
 
-_mock_pm = MagicMock()
-_mock_pm.objExists.return_value = True
-_mock_pm.playbackOptions.return_value = 0.0
-_mock_pm.currentTime.return_value = 120.0
-_mock_pm.select = MagicMock()
-_mock_pm.undoInfo = MagicMock()
-_mock_pm.ls.return_value = []
-_mock_pm.keyframe.return_value = []
-
-_mock_cmds = MagicMock()
-_mock_cmds.objExists.return_value = True
-_mock_cmds.ls.return_value = []
-_mock_cmds.keyframe.return_value = []
-
-sys.modules.setdefault("pymel", types.ModuleType("pymel"))
-sys.modules.setdefault("pymel.core", _mock_pm)
-sys.modules["pymel.core"] = _mock_pm
-sys.modules.setdefault("maya", types.ModuleType("maya"))
-sys.modules.setdefault("maya.api", types.ModuleType("maya.api"))
-sys.modules.setdefault("maya.api.OpenMaya", MagicMock())
-sys.modules.setdefault("maya.cmds", _mock_cmds)
-sys.modules["maya.cmds"] = _mock_cmds
-sys.modules.setdefault("maya.mel", MagicMock())
-sys.modules.setdefault("maya.OpenMaya", MagicMock())
-sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
+# Aliases for backward-compat with existing test code
+_mock_pm = mock_pm
+_mock_cmds = mock_cmds
 
 # Ensure workspace roots are on sys.path
 _WORKSPACE = Path(__file__).parent.parent.parent.absolute()
@@ -67,10 +46,26 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderObject,
     ShotManifest,
     ColumnMap,
+    ObjectStatus,
+    StepStatus,
     parse_csv,
     detect_behaviors,
     detect_shot_regions,
 )
+from mayatk.anim_utils.shots.shot_manifest.mapping import (
+    _audio_prefix,
+    _audio_regex,
+    _audio_map,
+    _audio_derive,
+    _build_default_behaviors,
+)
+from mayatk.anim_utils.shots.shot_manifest.behaviors import (
+    apply_behavior,
+    list_behaviors,
+    load_behavior,
+    verify_behavior,
+)
+from mayatk.anim_utils.shots.shot_manifest.range_resolver import resolve_ranges
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +94,7 @@ def _make_steps(*names, behaviors=None):
 
 def _fresh_store():
     """Create and activate a fresh ShotStore."""
+    ShotStore._persistence = None  # clear class-level persistence from prior tests
     store = ShotStore()
     ShotStore._active = store
     return store
@@ -126,12 +122,12 @@ class TestDetectBehaviors(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests: ShotManifest.update (baseline Ã¢â‚¬â€ no ranges)
+# Tests: ShotManifest.update (baseline ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no ranges)
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateBaseline(unittest.TestCase):
-    """Test update() without ranges Ã¢â‚¬â€ sequential cursor placement."""
+    """Test update() without ranges ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sequential cursor placement."""
 
     def setUp(self):
         self.store = _fresh_store()
@@ -219,7 +215,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assembler.update(self.steps)
         shots_before = {s.name: (s.start, s.end) for s in self.store.shots}
 
-        # Rebuild with ranges Ã¢â‚¬â€ should reposition
+        # Rebuild with ranges ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â should reposition
         ranges = {
             "A01": (500.0, 600.0),
             "A02": (700.0, 800.0),
@@ -230,7 +226,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 500.0)
         self.assertEqual(shots["A01"].end, 600.0)
-        # repositioned Ã¢â€ â€™ patched
+        # repositioned ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ patched
         self.assertEqual(actions["A01"], "patched")
 
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
@@ -291,7 +287,7 @@ if _app is None:
 from mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots import (
     ShotManifestController,
 )
-from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     COL_STEP,
     COL_DESC,
     COL_START,
@@ -385,7 +381,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         """When more regions than steps, largest gaps become boundaries."""
         mock_dur.return_value = 30.0
         # 6 region starts (5 gaps) but only 3 steps.
-        # Diffs: 5, 5, 90, 5, 95 Ã¢â€ â€™ top 2 are 95 (idx 4) and 90 (idx 2)
+        # Diffs: 5, 5, 90, 5, 95 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ top 2 are 95 (idx 4) and 90 (idx 2)
         # Selected regions: [0, 100, 200]
         mock_regions.return_value = [
             {"name": "S", "start": 0.0, "end": 30.0, "objects": []},
@@ -429,7 +425,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
             {"name": "S", "start": 200.0, "end": 230.0, "objects": []},
         ]
 
-        # First full resolve Ã¢â‚¬â€ gaps assigned to all 3 steps
+        # First full resolve ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gaps assigned to all 3 steps
         resolved_full = self.ctrl._resolve_ranges()
         self.assertEqual(resolved_full[0][1], 10.0)  # A01 at gap 1
         self.assertEqual(resolved_full[1][1], 100.0)  # A02 at gap 2
@@ -439,7 +435,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         resolved_partial = self.ctrl._resolve_ranges(from_step_idx=2)
         self.assertEqual(resolved_partial[0], resolved_full[0])  # A01 frozen
         self.assertEqual(resolved_partial[1], resolved_full[1])  # A02 frozen
-        # A03 re-resolves Ã¢â‚¬â€ gap 200 is past A02's end, so it uses it
+        # A03 re-resolves ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gap 200 is past A02's end, so it uses it
         self.assertEqual(resolved_partial[2][1], 200.0)
 
     @patch(
@@ -554,7 +550,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.ctrl._populate_table()
         self.ctrl._validate_range_collisions()
 
-        # Find A01 item â€” should have collision background
+        # Find A01 item Ã¢â‚¬â€ should have collision background
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             step_data = item.data(0, Qt.UserRole)
@@ -769,7 +765,7 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 â€” A02 should be removed
+        # Now update with only A01 Ã¢â‚¬â€ A02 should be removed
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=True)
         self.assertEqual(actions.get("A02"), "removed")
@@ -786,7 +782,7 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 â€” A02 should be kept
+        # Now update with only A01 Ã¢â‚¬â€ A02 should be kept
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=False)
         self.assertNotIn("A02", actions)
@@ -957,7 +953,7 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
     def test_description_edit_csv_mode(self):
         """Editing Description column in CSV mode updates step.description."""
         # Steps from setup_controller (CSV mode: _csv_path is empty but
-        # steps exist â€” simulate CSV mode by setting a path)
+        # steps exist Ã¢â‚¬â€ simulate CSV mode by setting a path)
         self.ctrl._csv_path = "/some/file.csv"
 
         tree = self.ui.tbl_steps
@@ -1279,7 +1275,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ctrl._cached_gaps = None
         resolved = self.ctrl._resolve_ranges()
 
-        # Only 1 detected region â†’ at most 1 step should have a range.
+        # Only 1 detected region Ã¢â€ â€™ at most 1 step should have a range.
         self.assertEqual(len(resolved), 1, "Extra steps received fallback ranges")
         self.assertEqual(resolved[0][0], "A01")
 
@@ -1443,91 +1439,66 @@ class TestCrossScenePrefs(unittest.TestCase):
         self.assertEqual(store.detection_mode, "auto")
 
 
-class TestCsvLayoutPresets(unittest.TestCase, _ControllerHarness):
-    """Integration tests for CSV layout preset save/load on the controller."""
+class TestMappingCombo(unittest.TestCase, _ControllerHarness):
+    """Integration tests for JSON mapping combo on the controller."""
 
     def setUp(self):
         self.setup_controller()
 
-    def test_preset_manager_wired_on_construction(self):
-        """Controller has a _csv_layout_presets PresetManager after init."""
-        self.assertTrue(hasattr(self.ctrl, "_csv_layout_presets"))
-        self.assertIsNotNone(self.ctrl._csv_layout_presets)
+    def test_mapping_combo_exists(self):
+        """Controller has a _cmb_mapping combo after init."""
+        self.assertTrue(hasattr(self.ctrl, "_cmb_mapping"))
+        self.assertIsNotNone(self.ctrl._cmb_mapping)
 
-    def test_metadata_provider_serializes_column_map(self):
-        """metadata_provider returns the current ColumnMap as a dict."""
-        self.ctrl._column_map = ColumnMap(
-            description=("Desc",), assets=("Obj",), audio=("VO",)
-        )
-        meta = self.ctrl._csv_layout_presets.metadata_provider()
-        cm = meta["column_map"]
-        self.assertEqual(cm["description"], ["Desc"])
-        self.assertEqual(cm["assets"], ["Obj"])
-        self.assertEqual(cm["audio"], ["VO"])
+    def test_active_mapping_defaults_to_none(self):
+        """No mapping is active by default."""
+        self.assertIsNone(self.ctrl._active_mapping)
 
-    def test_on_csv_layout_loaded_restores_column_map(self):
-        """_on_csv_layout_loaded restores a ColumnMap from metadata."""
-        meta = {
-            "column_map": {
-                "step_id": ["ID"],
-                "description": ["Body"],
-                "assets": ["Thing"],
-                "audio": ["Narration"],
-                "exclude_steps": [],
-            }
-        }
-        self.ctrl._on_csv_layout_loaded(meta)
-        cm = self.ctrl._column_map
-        self.assertEqual(cm.step_id, ("ID",))
-        self.assertEqual(cm.description, ("Body",))
-        self.assertEqual(cm.assets, ("Thing",))
-        self.assertEqual(cm.audio, ("Narration",))
-        self.assertEqual(cm.exclude_steps, ())
+    def test_on_mapping_changed_sets_active(self):
+        """Selecting a mapping name loads the JSON dict."""
+        import os, tempfile, shutil, json
 
-    def test_on_csv_layout_loaded_missing_key_uses_defaults(self):
-        """Empty metadata falls back to default ColumnMap."""
-        self.ctrl._column_map = ColumnMap(description=("Custom",))
-        self.ctrl._on_csv_layout_loaded({})
-        # Should reset to defaults
-        cm = self.ctrl._column_map
-        self.assertEqual(cm.description, ("Step Contents", "Contents"))
+        tmp = tempfile.mkdtemp()
+        try:
+            data = {"columns": {"step_id": ["ID"]}}
+            path = os.path.join(tmp, "test_map.json")
+            with open(path, "w") as f:
+                json.dump(data, f)
+            self.ctrl._mapping_dir = tmp
+            self.ctrl._load_csv = MagicMock()
+            self.ctrl._on_mapping_changed("test_map")
+            self.assertIsNotNone(self.ctrl._active_mapping)
+            self.assertEqual(self.ctrl._active_mapping["columns"]["step_id"], ["ID"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_on_csv_layout_applied_reparses_csv(self):
-        """Applying a preset re-parses the active CSV file."""
+    def test_on_mapping_changed_none_clears(self):
+        """Selecting '(none)' clears the active mapping."""
+        self.ctrl._active_mapping = {"columns": {}}
+        self.ctrl._load_csv = MagicMock()
+        self.ctrl._on_mapping_changed("(none)")
+        self.assertIsNone(self.ctrl._active_mapping)
+
+    def test_on_mapping_changed_reparses_csv(self):
+        """Changing mapping re-parses the current CSV."""
         self.ctrl._csv_path = "/fake/path.csv"
         self.ctrl._load_csv = MagicMock()
-        self.ctrl._on_csv_layout_applied()
+        self.ctrl._active_mapping = None
+        self.ctrl._on_mapping_changed("(none)")
         self.ctrl._load_csv.assert_called_once_with("/fake/path.csv")
 
-    def test_on_csv_layout_applied_no_path_is_noop(self):
-        """Applying a preset with no CSV path does nothing."""
-        self.ctrl._csv_path = ""
-        self.ui.txt_csv_path.text.return_value = ""
-        self.ctrl._load_csv = MagicMock()
-        self.ctrl._on_csv_layout_applied()
-        self.ctrl._load_csv.assert_not_called()
+    def test_on_mapping_changed_bad_name_clears(self):
+        """Bad mapping name logs error and clears active mapping."""
+        import tempfile, shutil
 
-    def test_round_trip_through_callbacks(self):
-        """Saving then loading via callbacks preserves the ColumnMap."""
-        original = ColumnMap(
-            step_id=("ID",),
-            description=("Desc",),
-            assets=("Obj",),
-            audio=("VO",),
-            exclude_steps=("INTRO",),
-        )
-        self.ctrl._column_map = original
-        # Simulate save: capture what metadata_provider returns
-        meta = self.ctrl._csv_layout_presets.metadata_provider()
-        # Simulate load: feed it back through the load callback
-        self.ctrl._column_map = ColumnMap()  # Reset first
-        self.ctrl._on_csv_layout_loaded(meta)
-        restored = self.ctrl._column_map
-        self.assertEqual(restored.step_id, ("ID",))
-        self.assertEqual(restored.description, ("Desc",))
-        self.assertEqual(restored.assets, ("Obj",))
-        self.assertEqual(restored.audio, ("VO",))
-        self.assertEqual(restored.exclude_steps, ("INTRO",))
+        tmp = tempfile.mkdtemp()
+        try:
+            self.ctrl._mapping_dir = tmp
+            self.ctrl._load_csv = MagicMock()
+            self.ctrl._on_mapping_changed("nonexistent")
+            self.assertIsNone(self.ctrl._active_mapping)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1710,7 +1681,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         store.detection_mode = "all"
         store.detection_threshold = 5.0
         store.gap = 0.0
-        # Simulate CSV mode — _csv_path is set
+        # Simulate CSV mode â€” _csv_path is set
         self.ctrl._csv_path = "/fake/shots.csv"
 
     def test_resolve_ranges_respects_detection_mode_in_csv_mode(self):
@@ -1751,9 +1722,10 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
 
 
 class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
-    """_sync_detection_widgets disables detection controls after build.
+    """_sync_detection_widgets delegates to ShotsController.refresh_state.
 
     Fixed: 2026-04-03
+    Updated: 2026-04-16 â€” Now delegates to refresh_state via slot_instances.
     """
 
     def setUp(self):
@@ -1764,19 +1736,35 @@ class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
         self.mock_shots_ui.spn_detection = MagicMock()
         self.sb.loaded_ui.shots = self.mock_shots_ui
 
-    def test_widgets_disabled_when_built(self):
+    def test_delegates_to_refresh_state(self):
+        """When slot_instances has a shots controller, delegates to it."""
+        store = _fresh_store()
+        mock_ctrl = MagicMock()
+        mock_slots = MagicMock()
+        mock_slots.controller = mock_ctrl
+        self.sb.slot_instances = {"shots": mock_slots}
+
+        self.ctrl._sync_detection_widgets()
+        mock_ctrl.refresh_state.assert_called_once()
+
+    def test_fallback_widgets_disabled_when_built(self):
+        """Fallback: direct widget manipulation when controller unavailable."""
         store = _fresh_store()
         store.define_shot("A01", 1, 31, ["obj_A01"])
         self.assertTrue(self.ctrl._is_built)
+        # No slots controller available
+        self.sb.slot_instances = {}
 
         self.ctrl._sync_detection_widgets()
 
         self.mock_shots_ui.cmb_detection_mode.setEnabled.assert_called_with(False)
         self.mock_shots_ui.spn_detection.setEnabled.assert_called_with(False)
 
-    def test_widgets_enabled_when_not_built(self):
+    def test_fallback_widgets_enabled_when_not_built(self):
+        """Fallback: widgets enabled when no shots exist."""
         _fresh_store()
         self.assertFalse(self.ctrl._is_built)
+        self.sb.slot_instances = {}
 
         self.ctrl._sync_detection_widgets()
 
@@ -1785,6 +1773,7 @@ class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
 
     def test_tolerates_missing_shots_ui(self):
         """Should not raise if shots UI is not loaded."""
+        self.sb.slot_instances = {}
         del self.sb.loaded_ui.shots
         _fresh_store()
         # Should not raise
@@ -1910,7 +1899,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
     in incremental build mode.
 
     Flow: CSV has new step A03, user enters range (100, 150) in table,
-    build runs incremental — A03 should get (100, 150), not zero-duration.
+    build runs incremental â€” A03 should get (100, 150), not zero-duration.
     Fixed: 2026-04-03
     """
 
@@ -1981,7 +1970,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     def test_new_shot_placed_between_neighbors(self, mock_cls):
         """A new step B01 inserted between A02 and A03 should get
-        (200, 200) — A02's end — not (300+, 300+)."""
+        (200, 200) â€” A02's end â€” not (300+, 300+)."""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
@@ -2068,7 +2057,7 @@ class TestShortName(unittest.TestCase):
         self.assertEqual(short_name(""), "")
 
     def test_none_safe(self):
-        """short_name('') returns '' — callers should guard against None."""
+        """short_name('') returns '' â€” callers should guard against None."""
         self.assertEqual(short_name(""), "")
 
 
@@ -2173,7 +2162,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
     def test_restore_mutates_palette(self):
         """Persisted fg override is applied to PASTEL_STATUS."""
         from uitk.widgets.mixins.settings_manager import SettingsManager
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import PASTEL_STATUS
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import PASTEL_STATUS
 
         settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
         orig_fg = str(PASTEL_STATUS["missing_object"][0])
@@ -2192,7 +2181,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
     def test_restore_updates_behavior_status_colors(self):
         """Persisted missing_behavior override propagates to BEHAVIOR_STATUS_COLORS."""
         from uitk.widgets.mixins.settings_manager import SettingsManager
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
         )
@@ -2214,7 +2203,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
     def test_restore_updates_error_color(self):
         """Persisted missing_object override propagates to BEHAVIOR_STATUS_COLORS['error']."""
         from uitk.widgets.mixins.settings_manager import SettingsManager
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
         )
@@ -2290,7 +2279,7 @@ class TestFormatBehaviorHtml(unittest.TestCase):
     """Verify behaviour label HTML respects broken / status_color flags."""
 
     def setUp(self):
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             format_behavior_html,
             BEHAVIOR_STATUS_COLORS,
         )
@@ -2456,7 +2445,7 @@ class TestDetectAndDefine(unittest.TestCase):
         self.store.define_shot("existing", 20, 50, [])
         mock_detect.return_value = self.regions
         created = self.store.detect_and_define()
-        # R1 overlaps [20,50], R2 overlaps [20,50] — both skipped
+        # R1 overlaps [20,50], R2 overlaps [20,50] â€” both skipped
         self.assertEqual(len(created), 0)
         self.assertEqual(len(self.store.shots), 1)  # only "existing"
 
@@ -2659,7 +2648,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         # Simulate SettingsChanged event
         self.ctrl._on_store_event(SettingsChanged())
 
-        # Should have triggered detect → regions_from_selected_keys
+        # Should have triggered detect â†’ regions_from_selected_keys
         mock_sel.assert_called_once()
 
     @patch(
@@ -2721,7 +2710,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._steps[0].step_id, "A01")
         # detect() should NOT have been called (would replace CSV steps)
         # Instead _refresh_ranges ran, which calls _detect_regions
-        # through _resolve_ranges — so selected-keys detection should
+        # through _resolve_ranges â€” so selected-keys detection should
         # have fired (store mode is skip_zero).
         mock_sel.assert_called()
         mock_auto.assert_not_called()
@@ -2736,7 +2725,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
     """assess() must re-verify selected-keys exist and skip full-scene
     discovery when using a selected-keys detection mode.
 
-    Bug: assess() had no selected-keys guard — it always ran full scene
+    Bug: assess() had no selected-keys guard â€” it always ran full scene
     assessment including _discover_scene_objects(), adding all animated
     scene objects even in skip_zero mode.  No warning was shown when
     no keys were selected.
@@ -2887,7 +2876,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
 
     Bug: Only detect() showed the message box; assess() and build() used
     footer-only feedback which was too subtle for user-initiated actions.
-    Fixed: 2026-04-07 — added message_box to assess() and build() as well.
+    Fixed: 2026-04-07 â€” added message_box to assess() and build() as well.
     """
 
     def setUp(self):
@@ -3002,7 +2991,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
     def test_scene_change_skipped_before_first_show(self, mock_active, mock_detect):
         """Scene change before _on_first_show must not trigger detect.
 
-        The widget isn't visible yet — avoid premature detection and
+        The widget isn't visible yet â€” avoid premature detection and
         message boxes during construction.
         """
         self.ctrl._first_shown = False
@@ -3045,6 +3034,933 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         # Without Maya, _remove_scene_jobs won't call cmds.scriptJob
         # but the IDs should be None-able for GC safety.
         self.assertFalse(self.ctrl._store_listener_bound)
+
+
+# ---------------------------------------------------------------------------
+# Tests: audio objects excluded from shot.objects
+# ---------------------------------------------------------------------------
+
+
+class TestAudioExcludedFromShotObjects(unittest.TestCase):
+    """Audio BuilderObjects must not leak into ShotBlock.objects."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_creation_excludes_audio_from_shot_objects(self, mock_dur):
+        """Audio object names are not in store shot.objects after creation."""
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="Sec",
+            description="d",
+        )
+        step.objects.append(BuilderObject(name="obj_A01"))
+        step.objects.append(BuilderObject(name="narration_A01", kind="audio"))
+        builder = ShotManifest(self.store)
+        builder.update([step])
+
+        shot = self.store.shots[0]
+        self.assertIn("obj_A01", shot.objects)
+        self.assertNotIn("narration_A01", shot.objects)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_metadata_still_contains_audio(self, mock_dur):
+        """Audio object is serialized in metadata.csv_objects for round-trip."""
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="Sec",
+            description="d",
+        )
+        step.objects.append(BuilderObject(name="obj_A01"))
+        step.objects.append(BuilderObject(name="clip_A01", kind="audio"))
+        builder = ShotManifest(self.store)
+        builder.update([step])
+
+        shot = self.store.shots[0]
+        csv_objs = shot.metadata["csv_objects"]
+        kinds = {e["name"]: e["kind"] for e in csv_objs}
+        self.assertEqual(kinds["obj_A01"], "scene")
+        self.assertEqual(kinds["clip_A01"], "audio")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_audio_change_triggers_patched(self, mock_dur):
+        """Changing audio clip name (no scene changes) yields 'patched'."""
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="Sec",
+            description="d",
+        )
+        step.objects.append(BuilderObject(name="obj_A01"))
+        step.objects.append(BuilderObject(name="clip_v1", kind="audio"))
+        builder = ShotManifest(self.store)
+        builder.update([step])
+
+        # Rebuild with changed audio name
+        step2 = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="Sec",
+            description="d",
+        )
+        step2.objects.append(BuilderObject(name="obj_A01"))
+        step2.objects.append(BuilderObject(name="clip_v2", kind="audio"))
+        actions = builder.update([step2])
+        self.assertEqual(actions["A01"], "patched")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_same_audio_yields_skipped(self, mock_dur):
+        """Identical audio on rebuild yields 'skipped'."""
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="Sec",
+            description="d",
+        )
+        step.objects.append(BuilderObject(name="obj_A01"))
+        step.objects.append(BuilderObject(name="clip_A01", kind="audio"))
+        builder = ShotManifest(self.store)
+        builder.update([step])
+
+        actions = builder.update([step])
+        self.assertEqual(actions["A01"], "skipped")
+
+    def tearDown(self):
+        ShotStore._active = None
+
+
+# ---------------------------------------------------------------------------
+# Tests: assess() audio_status
+# ---------------------------------------------------------------------------
+
+
+class TestAssessAudioStatus(unittest.TestCase):
+    """ShotManifest.assess() handles audio BuilderObjects in the objects list."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+
+    def _make_step_with_audio(self, step_id="A01", audio_name="narration_A01"):
+        step = BuilderStep(
+            step_id=step_id,
+            section="A",
+            section_title="Section A",
+            description=f"Content for {step_id}",
+        )
+        step.objects.append(BuilderObject(name=f"obj_{step_id}"))
+        step.objects.append(BuilderObject(name=audio_name, kind="audio"))
+        return step
+
+    def _find_audio_status(self, result):
+        """Return the ObjectStatus for kind='audio' from result.objects."""
+        for o in result.objects:
+            # ObjectStatus carries the name but not kind; match by name pattern
+            # Since we know the audio object is the last, check objects in order
+            pass
+        # The assess loop processes step.objects in order; audio objects are
+        # checked via audio_exists_fn.  We find audio by matching the name
+        # we passed to _make_step_with_audio.
+        return next(
+            (o for o in result.objects if o.name.startswith("narration")),
+            None,
+        )
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_audio_exists_valid(self, mock_dur):
+        """assess() marks audio object as 'valid' when audio node found."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+        )
+        self.assertEqual(len(results), 1)
+        audio_st = self._find_audio_status(results[0])
+        self.assertIsNotNone(audio_st)
+        self.assertEqual(audio_st.name, "narration_A01")
+        self.assertTrue(audio_st.exists)
+        self.assertEqual(audio_st.status, "valid")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_audio_missing_object(self, mock_dur):
+        """assess() marks audio object as 'missing_object' when not found."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: False,
+        )
+        audio_st = self._find_audio_status(results[0])
+        self.assertEqual(audio_st.status, "missing_object")
+        self.assertFalse(audio_st.exists)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_no_audio_object_no_audio_status(self, mock_dur):
+        """assess() produces no audio ObjectStatus when step has no audio objects."""
+        steps = _make_steps("A01")
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+        )
+        audio_st = next(
+            (o for o in results[0].objects if o.name.startswith("narration")),
+            None,
+        )
+        self.assertIsNone(audio_st)
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_missing_audio_affects_rollup(self, mock_dur):
+        """StepStatus.status rollup returns 'missing_object' when audio missing."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: False,
+        )
+        self.assertEqual(results[0].status, "missing_object")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_valid_audio_does_not_degrade_rollup(self, mock_dur):
+        """Valid audio doesn't turn a 'valid' overall status into something worse."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+        )
+        self.assertEqual(results[0].status, "valid")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_locked_shot_skips_audio_check(self, mock_dur):
+        """Locked shots skip detailed checking â€” no audio ObjectStatus."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+        shot = self.store.shots[0]
+        self.store.update_shot(shot.shot_id, locked=True)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+        )
+        # Locked shots produce empty objects list
+        self.assertEqual(results[0].status, "locked")
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_default_audio_exists_fn(self, mock_dur):
+        """Default audio_exists_fn delegates to cmds.ls(name, type='audio')."""
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        _mock_cmds.ls.return_value = ["narration_A01"]
+        try:
+            results = builder.assess(
+                steps,
+                exists_fn=lambda n: True,
+                # audio_exists_fn intentionally omitted â€” exercises default
+            )
+            audio_st = self._find_audio_status(results[0])
+            self.assertIsNotNone(audio_st)
+            self.assertTrue(audio_st.exists)
+            _mock_cmds.ls.assert_any_call("narration_A01", type="audio")
+        finally:
+            _mock_cmds.ls.reset_mock()
+            _mock_cmds.ls.return_value = []
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_audio_never_gets_user_animated(self, mock_dur):
+        """Audio objects must not hit the keyframe check path.
+
+        Bug fixed: audio objects with built=True and no behaviors would
+        fall into the keyframe_range_fn branch and get 'user_animated'.
+        """
+        steps = [self._make_step_with_audio()]
+        builder = ShotManifest(self.store)
+        builder.update(steps)
+
+        kf_called_for = []
+
+        def spy_kf(name):
+            kf_called_for.append(name)
+            return (1.0, 30.0)
+
+        results = builder.assess(
+            steps,
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+            keyframe_range_fn=spy_kf,
+        )
+        audio_st = self._find_audio_status(results[0])
+        self.assertEqual(audio_st.status, "valid")
+        self.assertNotIn("narration_A01", kf_called_for)
+
+    def tearDown(self):
+        ShotStore._active = None
+
+
+class TestStepStatusAudioRollup(unittest.TestCase):
+    """Direct unit tests for StepStatus.status with audio objects in objects list."""
+
+    def test_missing_audio_returns_missing_object(self):
+        objs = [ObjectStatus(name="clip", exists=False, status="missing_object")]
+        ss = StepStatus(step_id="A01", built=True, objects=objs)
+        self.assertEqual(ss.status, "missing_object")
+
+    def test_valid_audio_returns_valid(self):
+        objs = [ObjectStatus(name="clip", exists=True, status="valid")]
+        ss = StepStatus(step_id="A01", built=True, objects=objs)
+        self.assertEqual(ss.status, "valid")
+
+    def test_no_audio_returns_valid(self):
+        ss = StepStatus(step_id="A01", built=True)
+        self.assertEqual(ss.status, "valid")
+
+    def test_missing_object_takes_priority_over_valid_audio(self):
+        """Object missing trumps valid audio."""
+        objs = [
+            ObjectStatus(name="obj", exists=False, status="missing_object"),
+            ObjectStatus(name="clip", exists=True, status="valid"),
+        ]
+        ss = StepStatus(step_id="A01", built=True, objects=objs)
+        self.assertEqual(ss.status, "missing_object")
+
+
+class TestSetClipBehavior(unittest.TestCase):
+    """The set_clip YAML and its verify/apply routing."""
+
+    def test_list_behaviors_audio_kind(self):
+        """list_behaviors(kind='audio') includes set_clip."""
+        names = list_behaviors(kind="audio")
+        self.assertIn("set_clip", names)
+
+    def test_list_behaviors_scene_kind_excludes_set_clip(self):
+        """list_behaviors(kind='scene') does not include set_clip."""
+        names = list_behaviors(kind="scene")
+        self.assertNotIn("set_clip", names)
+
+    def test_load_set_clip_template(self):
+        """set_clip.yaml is loadable and has audio_clip verify mode."""
+        tmpl = load_behavior("set_clip")
+        self.assertEqual(tmpl["kind"], ["audio"])
+        self.assertEqual(tmpl["verify"]["mode"], "audio_clip")
+
+    def test_verify_behavior_routes_to_audio_clip(self):
+        """verify_behavior with audio_clip mode delegates to _verify_audio_clip."""
+        from unittest.mock import patch as _p
+
+        with _p(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._verify_audio_clip",
+            return_value=True,
+        ) as mock_v:
+            result = verify_behavior("node", "set_clip", 1, 30)
+        mock_v.assert_called_once_with("node", 1)
+        self.assertTrue(result)
+
+    def test_verify_returns_false_when_clip_missing(self):
+        """verify_behavior returns False when _verify_audio_clip returns False."""
+        from unittest.mock import patch as _p
+
+        with _p(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._verify_audio_clip",
+            return_value=False,
+        ):
+            self.assertFalse(verify_behavior("node", "set_clip", 1, 30))
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_assess_audio_with_set_clip_behavior(self, mock_dur):
+        """assess() checks audio behaviors and reports missing_behavior when unverified."""
+        store = _fresh_store()
+        step = BuilderStep(
+            step_id="A01", section="A", section_title="A", description="test"
+        )
+        audio_obj = BuilderObject(
+            name="narration_A01", kind="audio", behaviors=["set_clip"]
+        )
+        step.objects.append(audio_obj)
+        builder = ShotManifest(store)
+        builder.update([step])
+
+        results = builder.assess(
+            [step],
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+            verify_fn=lambda obj, beh, s, e: False,  # clip not verified
+        )
+        audio_st = next(o for o in results[0].objects if o.name == "narration_A01")
+        self.assertEqual(audio_st.status, "missing_behavior")
+        self.assertEqual(audio_st.broken_behaviors, ["set_clip"])
+
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        return_value=30,
+    )
+    def test_assess_audio_set_clip_valid(self, mock_dur):
+        """assess() marks audio 'valid' when set_clip verifies."""
+        store = _fresh_store()
+        step = BuilderStep(
+            step_id="A01", section="A", section_title="A", description="test"
+        )
+        audio_obj = BuilderObject(
+            name="narration_A01", kind="audio", behaviors=["set_clip"]
+        )
+        step.objects.append(audio_obj)
+        builder = ShotManifest(store)
+        builder.update([step])
+
+        results = builder.assess(
+            [step],
+            exists_fn=lambda n: True,
+            audio_exists_fn=lambda n: True,
+            verify_fn=lambda obj, beh, s, e: True,
+        )
+        audio_st = next(o for o in results[0].objects if o.name == "narration_A01")
+        self.assertEqual(audio_st.status, "valid")
+        self.assertEqual(audio_st.behaviors, ["set_clip"])
+
+    def test_apply_behavior_routes_source_path_to_audio_clip(self):
+        """apply_behavior threads source_path to apply_audio_clip for audio_clip mode."""
+        from unittest.mock import patch as _p
+
+        with _p(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
+        ) as mock_apply:
+            apply_behavior("my_node", "set_clip", 1, 30, source_path="/audio/clip.wav")
+        mock_apply.assert_called_once_with("my_node", 1, source_path="/audio/clip.wav")
+
+    def test_apply_behavior_defaults_empty_source_path(self):
+        """apply_behavior passes empty source_path by default."""
+        from unittest.mock import patch as _p
+
+        with _p(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
+        ) as mock_apply:
+            apply_behavior("my_node", "set_clip", 1, 30)
+        mock_apply.assert_called_once_with("my_node", 1, source_path="")
+
+    def test_apply_audio_clip_warns_when_no_node_no_source(self):
+        """apply_audio_clip logs warning when node missing and no source_path."""
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
+            apply_audio_clip,
+        )
+
+        _mock_cmds.ls.return_value = []
+        with self.assertLogs(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors",
+            level="WARNING",
+        ) as cm:
+            apply_audio_clip("missing_node", 10.0)
+        self.assertTrue(any("missing_node" in m for m in cm.output))
+
+    def tearDown(self):
+        ShotStore._active = None
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestAudioResolverPath(unittest.TestCase):
+    """Audio resolvers create BuilderObject(kind='audio') in step.objects."""
+
+    _TEMP = Path(__file__).parent / "temp_tests" / "audio_resolver"
+
+    def setUp(self):
+        self._TEMP.mkdir(parents=True, exist_ok=True)
+        for name in ("A01_narration.wav", "A02_intro.mp3"):
+            (self._TEMP / name).write_bytes(b"RIFF")
+        self._tmpdir = str(self._TEMP)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self._TEMP, ignore_errors=True)
+
+    def _audio_obj(self, step):
+        """Return the first audio BuilderObject from step.objects, or None."""
+        return next((o for o in step.objects if o.kind == "audio"), None)
+
+    def test_prefix_sets_audio_object(self):
+        """_audio_prefix appends audio BuilderObject with source_path."""
+        resolver = _audio_prefix(self._tmpdir)
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertIsNotNone(ao)
+        self.assertEqual(ao.name, "A01_narration")
+        self.assertEqual(ao.source_path, str(Path(self._tmpdir, "A01_narration.wav")))
+
+    def test_prefix_no_match_leaves_no_audio_object(self):
+        """_audio_prefix doesn't add audio object when no file matches."""
+        resolver = _audio_prefix(self._tmpdir)
+        step = BuilderStep(
+            step_id="Z99",
+            section="Z",
+            section_title="S",
+            description="d",
+        )
+        resolver(step)
+        self.assertIsNone(self._audio_obj(step))
+
+    def test_regex_sets_audio_object(self):
+        """_audio_regex appends audio BuilderObject with source_path."""
+        resolver = _audio_regex(
+            self._tmpdir,
+            r"{step_id}_.*",
+        )
+        step = BuilderStep(
+            step_id="A02",
+            section="A",
+            section_title="S",
+            description="d",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertIsNotNone(ao)
+        self.assertEqual(ao.name, "A02_intro")
+        self.assertEqual(ao.source_path, str(Path(self._tmpdir, "A02_intro.mp3")))
+
+    def test_map_sets_audio_object_no_source_path(self):
+        """_audio_map appends audio BuilderObject with no source_path."""
+        resolver = _audio_map({"A01": "narration_A01"})
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertIsNotNone(ao)
+        self.assertEqual(ao.name, "narration_A01")
+        self.assertEqual(ao.source_path, "")
+
+    def test_derive_generates_clip_from_audio_text(self):
+        """_audio_derive builds clip name from step_id + first N words."""
+        resolver = _audio_derive(words=3)
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="Welcome to the C-130H flight control surface",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertIsNotNone(ao)
+        self.assertEqual(ao.name, "A01_WelcomeToThe")
+        self.assertEqual(ao.source_path, "")
+
+    def test_derive_skips_na_audio(self):
+        """_audio_derive does nothing when audio is N/A."""
+        resolver = _audio_derive(words=3)
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="N/A",
+        )
+        resolver(step)
+        self.assertIsNone(self._audio_obj(step))
+
+    def test_derive_skips_empty_audio(self):
+        """_audio_derive does nothing when audio is empty."""
+        resolver = _audio_derive(words=3)
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="",
+        )
+        resolver(step)
+        self.assertIsNone(self._audio_obj(step))
+
+    def test_derive_strips_punctuation(self):
+        """_audio_derive strips non-alphanumeric chars from words."""
+        resolver = _audio_derive(words=3)
+        step = BuilderStep(
+            step_id="A08",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="There's currently warning tags on the control wheels.",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertEqual(ao.name, "A08_TheresCurrentlyWarning")
+
+    def test_derive_fewer_words_than_requested(self):
+        """_audio_derive works when audio has fewer words than requested."""
+        resolver = _audio_derive(words=3)
+        step = BuilderStep(
+            step_id="A14",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="Push in.",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertEqual(ao.name, "A14_PushIn")
+
+    def test_derive_sets_source_path_when_file_exists(self):
+        """_audio_derive sets source_path when matching file found in dir."""
+        resolver = _audio_derive(words=3, directory=self._tmpdir)
+        expected = Path(self._tmpdir, "A01_WelcomeToThe.wav")
+        expected.write_bytes(b"RIFF")
+        step = BuilderStep(
+            step_id="A01",
+            section="A",
+            section_title="S",
+            description="d",
+            audio="Welcome to the C-130H verification",
+        )
+        resolver(step)
+        ao = self._audio_obj(step)
+        self.assertEqual(ao.name, "A01_WelcomeToThe")
+        self.assertEqual(ao.source_path, str(expected))
+
+
+# ---------------------------------------------------------------------------
+# Tests: default_behaviors pipeline stage
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultBehaviors(unittest.TestCase):
+    """Tests for ``_build_default_behaviors`` pipeline processor."""
+
+    @staticmethod
+    def _step(*objects):
+        s = BuilderStep(step_id="A01", section="A", section_title="S", description="d")
+        s.objects.extend(objects)
+        return s
+
+    def test_adds_behavior_to_matching_kind(self):
+        """Behavior is added to objects whose kind matches the config."""
+        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        obj = BuilderObject(name="clip", kind="audio")
+        step = self._step(obj)
+        proc(step)
+        self.assertEqual(obj.behaviors, ["set_clip"])
+
+    def test_skips_non_matching_kind(self):
+        """Scene objects are not affected by audio-only config."""
+        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        obj = BuilderObject(name="asset", kind="scene")
+        step = self._step(obj)
+        proc(step)
+        self.assertEqual(obj.behaviors, [])
+
+    def test_does_not_duplicate_existing(self):
+        """Already-present behaviors are not duplicated."""
+        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        obj = BuilderObject(name="clip", kind="audio", behaviors=["set_clip"])
+        step = self._step(obj)
+        proc(step)
+        self.assertEqual(obj.behaviors, ["set_clip"])
+
+    def test_appends_to_existing_behaviors(self):
+        """New behaviors are appended alongside existing ones."""
+        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        obj = BuilderObject(name="clip", kind="audio", behaviors=["fade_in"])
+        step = self._step(obj)
+        proc(step)
+        self.assertEqual(obj.behaviors, ["fade_in", "set_clip"])
+
+    def test_multiple_kinds(self):
+        """Config can target multiple kinds simultaneously."""
+        proc = _build_default_behaviors(
+            {
+                "audio": ["set_clip"],
+                "scene": ["fade_in"],
+            }
+        )
+        audio = BuilderObject(name="clip", kind="audio")
+        scene = BuilderObject(name="asset", kind="scene")
+        step = self._step(audio, scene)
+        proc(step)
+        self.assertEqual(audio.behaviors, ["set_clip"])
+        self.assertEqual(scene.behaviors, ["fade_in"])
+
+    def test_empty_config_is_noop(self):
+        """Empty config dict leaves objects unchanged."""
+        proc = _build_default_behaviors({})
+        obj = BuilderObject(name="asset", kind="scene")
+        step = self._step(obj)
+        proc(step)
+        self.assertEqual(obj.behaviors, [])
+
+
+# ---------------------------------------------------------------------------
+# Tests: default_duration / resolve_ranges with no animation
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultDurationResolveRanges(unittest.TestCase):
+    """resolve_ranges with default_duration produces uniform ranges when
+    no animation regions exist in the scene.
+
+    Bug: Without animation, auto-detect fell through to sequential
+    placement using compute_duration (behavior-derived ~30f), producing
+    tiny unusable ranges.  Now passes default_duration=200 for uniform
+    placement starting at frame 0.
+    Fixed: 2026-04-16
+    """
+
+    def setUp(self):
+        self.steps = _make_steps("A01", "A02", "A03")
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_uniform_200_frame_ranges(self, mock_dur):
+        """Three steps with default_duration=200 yield [0,200], [200,400], [400,600]."""
+        mock_dur.return_value = 30.0
+
+        resolved = resolve_ranges(
+            steps=self.steps,
+            user_ranges={},
+            gap_starts=[],
+            gap_end_map={},
+            gap=0,
+            use_selected_keys=False,
+            last_resolved=[],
+            default_duration=200,
+        )
+
+        self.assertEqual(len(resolved), 3)
+        self.assertEqual(resolved[0], ("A01", 0.0, 200.0, False))
+        self.assertEqual(resolved[1], ("A02", 200.0, 400.0, False))
+        self.assertEqual(resolved[2], ("A03", 400.0, 600.0, False))
+        mock_dur.assert_not_called()
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_uniform_ranges_with_gap(self, mock_dur):
+        """Gap is respected between default-duration steps."""
+        mock_dur.return_value = 30.0
+
+        resolved = resolve_ranges(
+            steps=self.steps,
+            user_ranges={},
+            gap_starts=[],
+            gap_end_map={},
+            gap=10,
+            use_selected_keys=False,
+            last_resolved=[],
+            default_duration=200,
+        )
+
+        self.assertEqual(resolved[0], ("A01", 0.0, 200.0, False))
+        # 200 + 10 gap = 210
+        self.assertEqual(resolved[1], ("A02", 210.0, 410.0, False))
+        # 410 + 10 gap = 420
+        self.assertEqual(resolved[2], ("A03", 420.0, 620.0, False))
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_user_range_overrides_default(self, mock_dur):
+        """User-pinned ranges still take priority over default_duration."""
+        mock_dur.return_value = 30.0
+
+        resolved = resolve_ranges(
+            steps=self.steps,
+            user_ranges={"A02": (500.0, 700.0)},
+            gap_starts=[],
+            gap_end_map={},
+            gap=0,
+            use_selected_keys=False,
+            last_resolved=[],
+            default_duration=200,
+        )
+
+        self.assertEqual(resolved[0][:2], ("A01", 0.0))
+        self.assertEqual(resolved[1], ("A02", 500.0, 700.0, True))
+        # A03 follows after A02's end
+        self.assertEqual(resolved[2][1], 700.0)
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_zero_default_duration_uses_compute(self, mock_dur):
+        """default_duration=0 preserves legacy behavior (compute_duration)."""
+        mock_dur.return_value = 30.0
+
+        resolved = resolve_ranges(
+            steps=self.steps,
+            user_ranges={},
+            gap_starts=[],
+            gap_end_map={},
+            gap=0,
+            use_selected_keys=False,
+            last_resolved=[],
+            default_duration=0,
+        )
+
+        # Starts at cursor=1.0 (old behavior), uses compute_duration=30
+        self.assertEqual(resolved[0][1], 1.0)
+        self.assertEqual(resolved[1][1], 31.0)  # 1 + 30
+        self.assertEqual(resolved[2][1], 61.0)  # 31 + 30
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    def test_default_not_used_when_regions_exist(self, mock_dur):
+        """When gap_starts are present, default_duration is ignored."""
+        mock_dur.return_value = 30.0
+
+        resolved = resolve_ranges(
+            steps=self.steps,
+            user_ranges={},
+            gap_starts=[10.0, 100.0, 200.0],
+            gap_end_map={},
+            gap=0,
+            use_selected_keys=False,
+            last_resolved=[],
+            default_duration=200,
+        )
+
+        # Should use gap_starts, not default_duration
+        self.assertEqual(resolved[0][1], 10.0)
+        self.assertEqual(resolved[1][1], 100.0)
+        self.assertEqual(resolved[2][1], 200.0)
+
+    def test_starts_at_zero_not_one(self):
+        """Default ranges start at frame 0, not frame 1."""
+        with patch(
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration"
+        ) as mock_dur:
+            mock_dur.return_value = 30.0
+
+            resolved = resolve_ranges(
+                steps=_make_steps("A01"),
+                user_ranges={},
+                gap_starts=[],
+                gap_end_map={},
+                gap=0,
+                use_selected_keys=False,
+                last_resolved=[],
+                default_duration=200,
+            )
+
+            self.assertEqual(resolved[0][1], 0.0)
+            self.assertEqual(resolved[0][2], 200.0)
+
+
+class TestHasAnimation(unittest.TestCase):
+    """ShotStore.has_animation() returns False outside Maya."""
+
+    def test_returns_false_without_maya(self):
+        self.assertFalse(ShotStore.has_animation())
+
+
+class TestRefreshState(unittest.TestCase):
+    """ShotsController.refresh_state() centralizes widget enable/disable."""
+
+    def setUp(self):
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        _fresh_store()
+        self.ctrl = object.__new__(ShotsController)
+        # Mock UI widgets
+        self.ctrl.ui = MagicMock()
+        self.ctrl.ui.cmb_detection_mode = MagicMock()
+        self.ctrl.ui.spn_detection = MagicMock()
+        self.ctrl.ui.spn_gap = MagicMock()
+
+    def test_no_shots_detection_relevant(self):
+        """With no shots and animation, detection widgets are enabled."""
+        store = _fresh_store()
+        store.detection_mode = "auto"
+        with patch.object(ShotStore, "has_animation", return_value=True):
+            self.ctrl.refresh_state()
+        self.ctrl.ui.cmb_detection_mode.setEnabled.assert_called_with(True)
+        self.ctrl.ui.spn_detection.setEnabled.assert_called_with(True)
+        self.ctrl.ui.spn_gap.setEnabled.assert_called_with(False)
+
+    def test_with_shots_detection_disabled(self):
+        """With existing shots, detection widgets are disabled."""
+        store = _fresh_store()
+        store.define_shot("S01", 0, 100, ["obj"])
+        with patch.object(ShotStore, "has_animation", return_value=True):
+            self.ctrl.refresh_state()
+        self.ctrl.ui.cmb_detection_mode.setEnabled.assert_called_with(False)
+        self.ctrl.ui.spn_detection.setEnabled.assert_called_with(False)
+        self.ctrl.ui.spn_gap.setEnabled.assert_called_with(True)
+
+    def test_auto_no_animation_disables_threshold(self):
+        """In auto mode with no animation, min gap spinner is disabled."""
+        store = _fresh_store()
+        store.detection_mode = "auto"
+        with patch.object(ShotStore, "has_animation", return_value=False):
+            self.ctrl.refresh_state()
+        self.ctrl.ui.cmb_detection_mode.setEnabled.assert_called_with(True)
+        self.ctrl.ui.spn_detection.setEnabled.assert_called_with(False)
+
+    def test_zero_as_end_disables_threshold(self):
+        """zero_as_end mode always disables the min gap spinner."""
+        store = _fresh_store()
+        store.detection_mode = "zero_as_end"
+        with patch.object(ShotStore, "has_animation", return_value=True):
+            self.ctrl.refresh_state()
+        self.ctrl.ui.spn_detection.setEnabled.assert_called_with(False)
 
 
 # ---------------------------------------------------------------------------

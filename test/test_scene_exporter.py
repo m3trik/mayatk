@@ -608,7 +608,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_manifest_path_for(self):
         """Verify sidecar manifest path derivation."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -617,7 +617,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_diff_report_path_for(self):
         """Verify sidecar diff report path derivation."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -626,7 +626,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_build_clean_path_set_strips_namespace(self):
         """Verify namespace stripping and leading pipe removal."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -636,7 +636,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_get_top_level_collapses_children(self):
         """Verify that children are collapsed under their top-level parent."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -646,7 +646,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_get_top_level_preserves_siblings(self):
         """Verify that siblings with similar prefix names are NOT collapsed."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -656,7 +656,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_detect_reparenting_finds_moved_subtree(self):
         """detect_reparenting recognises a subtree moved under a new parent."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -684,7 +684,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_detect_reparenting_returns_empty_on_unrelated_changes(self):
         """detect_reparenting returns empty when changes are not reparenting."""
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 

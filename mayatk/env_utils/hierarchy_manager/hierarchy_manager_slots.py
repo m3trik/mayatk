@@ -10,6 +10,7 @@ import pythontk as ptk
 import pymel.core as pm
 
 # From this package
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
@@ -19,8 +20,8 @@ from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
     is_default_maya_camera,
     select_objects_in_maya,
 )
-import mayatk.env_utils.hierarchy_manager._tree_utils as tree_utils
-from mayatk.env_utils.hierarchy_manager._tree_renderer import HierarchyTreeRenderer
+import mayatk.env_utils.hierarchy_manager.tree_utils as tree_utils
+from mayatk.env_utils.hierarchy_manager.tree_renderer import HierarchyTreeRenderer
 from mayatk.ui_utils.node_icons import NodeIcons
 
 
@@ -854,7 +855,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         self.logger.log_divider()
 
-        from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1158,14 +1159,11 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Startup welcome text
         self._show_startup_text()
 
-        # Re-show startup text when a new scene is opened or created
-        self._scene_script_jobs = []
-        for event in ("SceneOpened", "NewSceneOpened"):
-            job_id = pm.scriptJob(event=[event, self._on_scene_changed])
-            self._scene_script_jobs.append(job_id)
-
-        # Kill scriptJobs when the UI is destroyed
-        self.ui.destroyed.connect(self._cleanup_script_jobs)
+        # Scene-change callbacks via centralized manager
+        mgr = ScriptJobManager.instance()
+        mgr.subscribe("SceneOpened", self._on_scene_changed, owner=self)
+        mgr.subscribe("NewSceneOpened", self._on_scene_changed, owner=self)
+        mgr.connect_cleanup(self.ui, owner=self)
 
         # Unload reference scene when the manager window is hidden
         if hasattr(self.ui, "on_hide"):
@@ -1177,23 +1175,19 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Set initial header tooltips
         self.controller._update_header_tooltips()
 
-    def _cleanup_script_jobs(self):
-        """Kill registered Maya scriptJobs to prevent stale callbacks."""
-        for job_id in self._scene_script_jobs:
-            try:
-                pm.scriptJob(kill=job_id, force=True)
-            except Exception:
-                pass
-        self._scene_script_jobs.clear()
-
     def _on_scene_changed(self):
         """Reset UI state when a new scene is loaded."""
         self.controller._clear_analysis_cache()
+
+        # Only re-import the reference and refresh trees when the window
+        # is actually visible.  When the window is hidden the cached
+        # import was already cleaned up by _on_window_hidden; re-importing
+        # here would silently add namespaced objects into the new scene.
+        if not self.ui.isVisible():
+            return
+
         self.controller.tree.populate_current_scene_tree(self.ui.tree001)
 
-        # Re-populate the reference tree if a path is set.  The import
-        # uses a NamespaceSandbox which is isolated from scene content,
-        # so re-importing after a scene change is safe.
         ref_path = self.controller.reference_path
         if ref_path and os.path.exists(ref_path):
             self.controller.populate_reference_tree(self.ui.tree000, ref_path)

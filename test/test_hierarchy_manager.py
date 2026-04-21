@@ -3615,7 +3615,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
 
     def test_build_hierarchy_structure_basic(self):
         """build_hierarchy_structure returns correct parent/type info using cmds."""
-        from mayatk.env_utils.hierarchy_manager._tree_utils import (
+        from mayatk.env_utils.hierarchy_manager.tree_utils import (
             build_hierarchy_structure,
         )
 
@@ -3963,12 +3963,12 @@ class TestHierarchyTreeRenderer(MayaTkTestCase):
 
 
 class TestDiffFormattingAndDelegate(MayaTkTestCase):
-    """Tests for _DiffSelectionDelegate, _apply_diff_color, tooltips, and
+    """Tests for selection_style integration, _apply_diff_color, tooltips, and
     the full apply_difference_formatting / clear_tree_colors cycle.
 
-    Validates the delegate composites selection correctly, diff tooltips
-    are applied without clobbering existing ones, and clear_tree_colors
-    restores the default delegate.
+    Validates that selection_style switches to 'tint' during diff mode,
+    diff tooltips are applied without clobbering existing ones, and
+    clear_tree_colors restores 'border' selection style.
     Added: 2026-04-10
     """
 
@@ -3980,6 +3980,7 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
             def __init__(self):
                 super().__init__()
                 self.setColumnCount(1)
+                self.selection_style = "border"
                 self.menu = type(
                     "Menu",
                     (),
@@ -4025,14 +4026,10 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
         return QtWidgets.QTreeWidgetItem(parent or tree, [name])
 
-    # -- _DiffSelectionDelegate --
+    # -- selection_style integration --
 
-    def test_delegate_installed_after_apply_difference_formatting(self):
-        """apply_difference_formatting wraps existing delegate with _DiffSelectionDelegate."""
-        from mayatk.env_utils.hierarchy_manager._tree_renderer import (
-            _DiffSelectionDelegate,
-        )
-
+    def test_selection_style_set_after_apply_difference_formatting(self):
+        """apply_difference_formatting sets selection_style to 'tint'."""
         # Need a diff result so formatting proceeds.
         self.controller._current_diff_result = {
             "missing": [],
@@ -4040,31 +4037,15 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
             "reparented": [],
             "fuzzy_matches": [],
         }
-        original_001 = self.tree001.itemDelegate()
-        original_000 = self.tree000.itemDelegate()
         self.renderer.apply_difference_formatting(self.tree001, self.tree000)
-        self.assertIsInstance(self.tree001.itemDelegate(), _DiffSelectionDelegate)
-        self.assertIsInstance(self.tree000.itemDelegate(), _DiffSelectionDelegate)
-        # The original delegates are preserved inside the wrapper.
-        self.assertIs(self.tree001.itemDelegate()._original, original_001)
-        self.assertIs(self.tree000.itemDelegate()._original, original_000)
+        self.assertEqual(self.tree001.selection_style, "tint")
+        self.assertEqual(self.tree000.selection_style, "tint")
 
-    def test_delegate_removed_after_clear_tree_colors(self):
-        """clear_tree_colors restores the original wrapped delegate."""
-        from mayatk.env_utils.hierarchy_manager._tree_renderer import (
-            _DiffSelectionDelegate,
-        )
-
-        # Record the original delegate, then wrap it.
-        original = self.tree001.itemDelegate()
-        self.tree001.setItemDelegate(
-            _DiffSelectionDelegate(self.tree001, original_delegate=original)
-        )
-        self.assertIsInstance(self.tree001.itemDelegate(), _DiffSelectionDelegate)
-
+    def test_selection_style_restored_after_clear_tree_colors(self):
+        """clear_tree_colors restores selection_style to 'border'."""
+        self.tree001.selection_style = "tint"
         self.renderer.clear_tree_colors(self.tree001)
-        self.assertNotIsInstance(self.tree001.itemDelegate(), _DiffSelectionDelegate)
-        self.assertIs(self.tree001.itemDelegate(), original)
+        self.assertEqual(self.tree001.selection_style, "border")
 
     def test_delegate_has_diff_detects_solid_brush(self):
         """Delegate identifies items with SolidPattern background as diff-coloured."""
@@ -4225,7 +4206,7 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def test_diff_colors_has_all_domain_aliases(self):
         """DIFF_COLORS palette has aliases for all four domain categories."""
-        from mayatk.env_utils.hierarchy_manager._tree_renderer import (
+        from mayatk.env_utils.hierarchy_manager.tree_renderer import (
             HierarchyTreeRenderer,
         )
 

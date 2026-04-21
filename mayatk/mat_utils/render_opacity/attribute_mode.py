@@ -1,13 +1,15 @@
 # !/usr/bin/python
 # coding=utf-8
 import re
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
 
 try:
     import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
-    pass
+    pm = None  # type: ignore[assignment]
+    cmds = None  # type: ignore[assignment]
 
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -59,6 +61,133 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         return results
 
     @classmethod
+    def key_fade(
+        cls,
+        objects,
+        start: float,
+        end: float,
+        direction: str = "in",
+        auto_create: bool = True,
+        tangent: str = "linear",
+    ) -> List[Tuple[str, str]]:
+        """Key an opacity fade and mirror to visibility.
+
+        Creates two keyframes on ``opacity`` (smooth channel) and two
+        matching keyframes on ``visibility`` (stepped binary) so that
+        FBX export produces native tracks for both channels.
+
+        Parameters:
+            objects: Maya nodes to key.
+            start: First frame of the fade.
+            end: Last frame of the fade.
+            direction: ``"in"`` (0→1), ``"out"`` (1→0), or ``"auto"``
+                (detect from the last keyed opacity value).
+            auto_create: When ``True``, create the ``opacity`` attribute
+                on objects that lack it before keying.
+            tangent: Tangent type for the opacity keys (default ``"linear"``).
+
+        Returns:
+            List of ``(object_name, "in"|"out")`` for each keyed object.
+        """
+        objects = pm.ls(objects)
+        if not objects:
+            return []
+
+        if auto_create:
+            missing = [o for o in objects if not o.hasAttr(cls.ATTR_NAME)]
+            if missing:
+                cls.create(missing)
+
+        keyed: List[Tuple[str, str]] = []
+        for obj in objects:
+            if not obj.hasAttr(cls.ATTR_NAME):
+                continue
+
+            # Resolve direction
+            if direction == "auto":
+                fade_in = cls._resolve_auto_fade(obj, start)
+            else:
+                fade_in = direction == "in"
+
+            start_val, end_val = (0.0, 1.0) if fade_in else (1.0, 0.0)
+
+            # Maya's inTangentType doesn't accept "step"; use "stepnext".
+            itt = "stepnext" if tangent == "step" else tangent
+
+            # Key opacity (smooth channel)
+            # Use explicit plug path to target the transform only —
+            # the kwarg form (attribute=) also hits the shape node.
+            opacity_plug = f"{obj.longName()}.{cls.ATTR_NAME}"
+            pm.setKeyframe(
+                opacity_plug,
+                time=start,
+                value=start_val,
+                inTangentType=itt,
+                outTangentType=tangent,
+            )
+            pm.setKeyframe(
+                opacity_plug,
+                time=end,
+                value=end_val,
+                inTangentType=itt,
+                outTangentType=tangent,
+            )
+
+            # Mirror to visibility (stepped binary)
+            # Use longName to unambiguously target the transform —
+            # short names also match the shape node.
+            vis_plug = f"{obj.longName()}.visibility"
+            for t, v in ((start, start_val), (end, end_val)):
+                pm.setKeyframe(
+                    vis_plug,
+                    time=t,
+                    value=1.0 if v > 0 else 0.0,
+                    inTangentType="stepnext",
+                    outTangentType="step",
+                )
+                cmds.keyTangent(
+                    vis_plug,
+                    edit=True,
+                    time=(t, t),
+                    inTangentType="stepnext",
+                    outTangentType="step",
+                )
+
+            keyed.append((obj.name(), "in" if fade_in else "out"))
+
+        return keyed
+
+    @staticmethod
+    def _resolve_auto_fade(obj, reference_time: float) -> bool:
+        """Return ``True`` for fade-in, ``False`` for fade-out.
+
+        Inspects the most recent opacity key at or before *reference_time*.
+        If its value is >= 0.5 (opaque), the object needs a fade-out.
+        Defaults to fade-in when no previous key exists.
+        """
+        key_times = (
+            pm.keyframe(obj, attribute="opacity", query=True, timeChange=True) or []
+        )
+        prev_time = None
+        for t in sorted(key_times):
+            if t <= reference_time:
+                prev_time = t
+            else:
+                break
+        if prev_time is None:
+            return True
+        vals = pm.keyframe(
+            obj,
+            attribute="opacity",
+            query=True,
+            time=(prev_time, prev_time),
+            valueChange=True,
+        )
+        if vals:
+            return vals[0] < 0.5
+        return True
+
+    @classmethod
     def _remove_legacy_vis_driver(cls, obj):
         """Disconnect and delete any condition-node visibility driver.
 
@@ -82,9 +211,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
         # Also clean orphaned VisDrivers still connected via opacity
         if obj.hasAttr(cls.ATTR_NAME):
-            conds = (
-                pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
-            )
+            conds = pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
             for c in conds:
                 if cls._VIS_DRIVER_RE.search(c.name()):
                     pm.delete(c)
@@ -128,9 +255,9 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             )
 
             # Clear existing visibility keys so repeated calls don't
-            # accumulate duplicates.  Use explicit attr path to target
-            # the transform only — the kwarg form also hits the shape.
-            vis_attr = f"{obj}.visibility"
+            # accumulate duplicates.  Use full DAG path to target the
+            # transform only — short names also match the shape.
+            vis_attr = f"{obj.longName()}.visibility"
             pm.cutKey(vis_attr, clear=True)
 
             for t, v, it, ot in zip(times, values, in_tans, out_tans):

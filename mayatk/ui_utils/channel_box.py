@@ -566,7 +566,7 @@ class ChannelBox:
     # Callbacks / watchers
     # ------------------------------------------------------------------
 
-    _selection_callback_id = None
+    _selection_token = None
     _selection_watchers = []
 
     @classmethod
@@ -574,18 +574,19 @@ class ChannelBox:
         """Register a callback that fires when channel box selection changes.
 
         The callback receives ``(selected_attrs: list[str])``.
-        Internally uses a Maya ``SelectionChanged`` scriptJob to poll
-        the channel box state.
+        Internally uses :class:`ScriptJobManager` to subscribe to
+        ``SelectionChanged`` events.
 
         Parameters:
             callback (callable): ``callback(attrs: list[str])``.
 
         Returns:
-            int: scriptJob ID (pass to ``unwatch_selection`` to remove).
+            int: SJM token (pass callback to ``unwatch_selection`` to remove).
         """
         cls._selection_watchers.append(callback)
 
-        if cls._selection_callback_id is None:
+        if cls._selection_token is None:
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
 
             def _on_selection_changed():
                 attrs = cls.get_selected_attrs()
@@ -595,11 +596,12 @@ class ChannelBox:
                     except Exception as e:
                         print(f"ChannelBox watcher error: {e}")
 
-            cls._selection_callback_id = cmds.scriptJob(
-                event=["SelectionChanged", _on_selection_changed],
-                protected=True,
+            cls._selection_token = ScriptJobManager.instance().subscribe(
+                "SelectionChanged",
+                _on_selection_changed,
+                owner=cls,
             )
-        return cls._selection_callback_id
+        return cls._selection_token
 
     @classmethod
     def unwatch_selection(cls, callback=None):
@@ -615,12 +617,11 @@ class ChannelBox:
                 cb for cb in cls._selection_watchers if cb is not callback
             ]
 
-        if not cls._selection_watchers and cls._selection_callback_id is not None:
-            try:
-                cmds.scriptJob(kill=cls._selection_callback_id, force=True)
-            except Exception:
-                pass
-            cls._selection_callback_id = None
+        if not cls._selection_watchers and cls._selection_token is not None:
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+            ScriptJobManager.instance().unsubscribe(cls._selection_token)
+            cls._selection_token = None
 
     # ------------------------------------------------------------------
     # Context menu extraction

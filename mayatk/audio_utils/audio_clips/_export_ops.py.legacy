@@ -1,0 +1,244 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Export operations for Audio Events.
+
+Provides ``ExportMixin`` — handles exporting the composite WAV and
+individual audio clips to disk via file dialogs.
+
+Dependency
+----------
+- Calls ``SyncEngineMixin`` methods through ``self``:
+  ``_sync_if_dirty``.
+- Calls ``AudioEventsSlots`` methods/state through ``self``:
+  ``_require_target``, ``_get_clip_length_frames``, ``_audio_files``,
+  ``CATEGORY``, ``self.ui``, ``self.sb``.
+"""
+import logging
+import os
+
+try:
+    import maya.cmds as cmds
+except ImportError:
+    pass
+
+from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
+
+
+class ExportMixin:
+    """Composite and per-clip WAV export."""
+
+    def _export(self):
+        """Dispatch export based on the mode combobox selection."""
+        combo = getattr(
+            getattr(getattr(self.ui, "header", None), "menu", None),
+            "cmb_export_mode",
+            None,
+        )
+        mode = combo.currentText() if combo else "Composite"
+        if mode == "Composite":
+            self._export_composite()
+        elif mode == "Keyed Tracks":
+            self._export_clips(keyed_only=True)
+        else:  # "All Tracks"
+            self._export_clips(keyed_only=False)
+
+    def _export_composite(self):
+        """Export the current target's composite WAV to a user-chosen file path.
+
+        Auto-syncs the current target first so the composite is up to
+        date, then locates the ``{objName}_composite`` audio node,
+        reads its filename attribute, and copies the WAV to the
+        destination selected via a Save-File dialog.
+        """
+        import shutil
+
+        import pythontk as ptk
+
+        log = logging.getLogger(__name__)
+        target = self._require_target()
+
+        # Auto-sync so the composite reflects the latest keyframes
+        if self._audio_files:
+            self._sync_if_dirty(target)
+
+        # Find the per-object composite audio node — exact name match first,
+        # then fall back to the legacy global composite.
+        target_name = target.name()
+        comp_path = None
+        per_obj_name = f"{target_name}_composite"
+        legacy_name = f"{self.CATEGORY}_composite"
+
+        for candidate in (per_obj_name, legacy_name):
+            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                if node_name != candidate:
+                    continue
+                try:
+                    comp_path = cmds.getAttr(f"{node_name}.filename") or ""
+                except Exception:
+                    comp_path = ""
+                if comp_path and os.path.isfile(comp_path):
+                    break
+                comp_path = None
+            if comp_path:
+                break
+
+        if not comp_path or not os.path.isfile(comp_path):
+            self.ui.footer.setText(
+                "No composite WAV found — key events and sync first."
+            )
+            return
+
+        # Navigate up from the cache directory so the save dialog opens
+        # in the project's audio folder, not the internal cache.
+        export_dir = os.path.dirname(comp_path)
+        _CACHE_DIRS = {"_audio_cache", "_maya_audio_cache"}
+        while os.path.basename(export_dir) in _CACHE_DIRS:
+            export_dir = os.path.dirname(export_dir)
+
+        dest = self.sb.save_file_dialog(
+            file_types=["*.wav"],
+            title="Export Composite WAV",
+            start_dir=os.path.join(
+                export_dir,
+                f"{target_name}_composite.wav",
+            ),
+            filter_description="WAV Files",
+        )
+        if not dest:
+            return
+
+        try:
+            shutil.copy2(comp_path, dest)
+
+            # Optionally trim leading/trailing silence
+            trimmed = False
+            trim = getattr(self.ui.header.menu, "chk_trim_silence", None)
+            if trim and trim.isChecked():
+                try:
+                    ptk.AudioUtils.trim_silence(dest)
+                    trimmed = True
+                except Exception as exc:
+                    log.warning("trim failed: %s", exc)
+
+            suffix = ""
+            if trim and trim.isChecked() and not trimmed:
+                suffix = " (trim failed)"
+            self.ui.footer.setText(
+                f"Exported composite → {os.path.basename(dest)}{suffix}"
+            )
+            log.info("exported composite to '%s'", dest)
+        except OSError as exc:
+            self.ui.footer.setText(f"Export failed: {exc}")
+            log.warning("export failed: %s", exc)
+
+    def _export_clips(self, keyed_only=True):
+        """Export audio clips to a user-chosen directory.
+
+        Parameters:
+            keyed_only: When True, only clips that are keyed on the
+                current target are exported.  When False, every loaded
+                clip is exported.
+
+        When *Suffix Time Range* is enabled (keyed-only mode), each
+        filename is appended with the keyed frame range
+        (e.g. ``Footstep_12-47.wav``).  If a clip is keyed multiple
+        times, one copy per occurrence is exported with its own suffix.
+        """
+        import math
+        import shutil
+
+        log = logging.getLogger(__name__)
+        target = self._require_target()
+
+        if not self._audio_files:
+            self.ui.footer.setText("No audio clips loaded.")
+            return
+
+        # Build per-stem data depending on mode
+        keyed_ranges = {}  # {lower_stem: [(start, end), ...]}
+
+        if keyed_only:
+            from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+            keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+            if not keyed:
+                self.ui.footer.setText("No keyed events — nothing to export.")
+                return
+
+            for start_frame, label in keyed:
+                key = label.lower()
+                source = self._audio_files.get(key)
+                if source:
+                    length = self._get_clip_length_frames(source)
+                    end_frame = (
+                        math.ceil(start_frame + length)
+                        if length > 0
+                        else int(start_frame)
+                    )
+                    keyed_ranges.setdefault(key, []).append(
+                        (int(start_frame), end_frame)
+                    )
+
+            if not keyed_ranges:
+                self.ui.footer.setText("No keyed clips have matching audio files.")
+                return
+        else:
+            # All loaded tracks — no time-range data needed
+            for stem in self._audio_files:
+                keyed_ranges[stem] = []
+
+        # Pick export directory
+        start_dir = os.path.dirname(next(iter(self._audio_files.values()), ""))
+        export_dir = self.sb.dir_dialog(
+            title="Export Audio Clips",
+            start_dir=start_dir,
+        )
+        if not export_dir:
+            return
+
+        suffix_range = getattr(
+            getattr(getattr(self.ui, "header", None), "menu", None),
+            "chk_suffix_time_range",
+            None,
+        )
+        use_suffix = keyed_only and suffix_range and suffix_range.isChecked()
+
+        exported = 0
+        errors = []
+        already_exported = set()
+
+        for stem, ranges in keyed_ranges.items():
+            source_path = self._audio_files.get(stem)
+            if not source_path or not os.path.isfile(source_path):
+                errors.append(stem)
+                continue
+
+            ext = os.path.splitext(source_path)[1]
+            original_stem = os.path.splitext(os.path.basename(source_path))[0]
+
+            if use_suffix and ranges:
+                for start_f, end_f in ranges:
+                    out_name = f"{original_stem}_{start_f}-{end_f}{ext}"
+                    dest = os.path.join(export_dir, out_name)
+                    try:
+                        shutil.copy2(source_path, dest)
+                        exported += 1
+                    except OSError as exc:
+                        log.warning("clip export failed: %s", exc)
+            else:
+                if stem in already_exported:
+                    continue
+                already_exported.add(stem)
+                dest = os.path.join(export_dir, f"{original_stem}{ext}")
+                try:
+                    shutil.copy2(source_path, dest)
+                    exported += 1
+                except OSError as exc:
+                    log.warning("clip export failed: %s", exc)
+                    errors.append(stem)
+
+        suffix = f" ({len(errors)} failed)" if errors else ""
+        self.ui.footer.setText(
+            f"Exported {exported} clip(s) → {os.path.basename(export_dir)}{suffix}"
+        )
+        log.info("exported %d clip(s) to '%s'", exported, export_dir)

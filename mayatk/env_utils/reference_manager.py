@@ -13,6 +13,8 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
+from mayatk.core_utils.script_job_manager import ScriptJobManager
+
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
@@ -1726,9 +1728,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller = ReferenceManagerController(self)
         self.ui.txt000.setText(self.controller.current_working_dir)
 
-        self.script_job = pm.scriptJob(
-            event=["SceneOpened", self.controller.refresh_file_list]
+        mgr = ScriptJobManager.instance()
+        mgr.subscribe(
+            "SceneOpened",
+            self.controller.refresh_file_list,
+            owner=self,
         )
+        mgr.connect_cleanup(self.ui, owner=self)
 
         # Initialization complete
         self._initializing = False
@@ -1739,12 +1745,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             lambda: self.controller.sync_selection_to_references(), ms=100
         )
 
-        self.logger.debug("ReferenceManagerSlots initialized and scriptJob created.")
-
-    def __del__(self):
-        if hasattr(self, "script_job") and pm.scriptJob(exists=self.script_job):
-            pm.scriptJob(kill=self.script_job, force=True)
-            self.logger.debug("ScriptJob killed in __del__.")
+        self.logger.debug("ReferenceManagerSlots initialized.")
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""

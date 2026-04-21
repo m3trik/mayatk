@@ -35,6 +35,14 @@ try:
 except ImportError:
     QSettings = None  # type: ignore[misc,assignment]
 
+from mayatk.anim_utils.shots._detection import (
+    STANDARD_TRANSFORM_ATTRS,
+    _map_standard_curves_to_transforms,
+    detect_shot_regions,
+    _filter_flat_objects,
+    regions_from_selected_keys,
+)
+
 NODE_NAME = "shotStore"
 ATTR_NAME = "shotData"
 _DEFAULT_FPS = 24.0
@@ -64,6 +72,9 @@ __all__ = [
     "StoreInvalidated",
     "ScenePersistence",
     "MayaScenePersistence",
+    "STANDARD_TRANSFORM_ATTRS",
+    "detect_shot_regions",
+    "regions_from_selected_keys",
 ]
 
 
@@ -84,10 +95,11 @@ class ScenePersistence(Protocol):
 class MayaScenePersistence:
     """Persist ShotStore data to a Maya network-node attribute.
 
-    Registers ``SceneOpened`` / ``NewSceneOpened`` scriptJobs so that
-    :attr:`ShotStore._active` is automatically invalidated when the
-    user opens or creates a scene.  The jobs are *persistent* (not
-    ``killWithScene``) so they survive across scene switches.
+    Registers ``SceneOpened`` / ``NewSceneOpened`` subscriptions via
+    :class:`ScriptJobManager` so that :attr:`ShotStore._active` is
+    automatically invalidated when the user opens or creates a scene.
+    The subscriptions are *persistent* (not ephemeral) so they survive
+    across scene switches.
     """
 
     def __init__(
@@ -97,10 +109,8 @@ class MayaScenePersistence:
     ):
         self._node_name = node_name
         self._attr_name = attr_name
-        self._scene_opened_job: Optional[int] = None
-        self._new_scene_job: Optional[int] = None
-        self._time_unit_job: Optional[int] = None
         self._before_save_cb_id = None  # OpenMaya callback id
+        self._scene_subs_installed = False
         self._install_scene_jobs()
 
     def save(self, data: Dict[str, Any]) -> None:
@@ -108,6 +118,7 @@ class MayaScenePersistence:
             return
         import json
         import maya.cmds as cmds
+        from mayatk.node_utils._node_utils import NodeUtils
 
         # Persistence writes must not pollute the undo queue.  They
         # fire via evalDeferred AFTER an UndoChunk closes and would
@@ -115,13 +126,7 @@ class MayaScenePersistence:
         # operation (e.g. keyframe move) from being undone.
         cmds.undoInfo(stateWithoutFlush=False)
         try:
-            node = None
-            if pm.objExists(self._node_name):
-                node = pm.PyNode(self._node_name)
-            else:
-                node = pm.createNode("network", name=self._node_name)
-                pm.addAttr(node, longName=self._attr_name, dataType="string")
-
+            node = NodeUtils.ensure_data_node(self._node_name, self._attr_name)
             node.attr(self._attr_name).set(json.dumps(data))
         finally:
             cmds.undoInfo(stateWithoutFlush=True)
@@ -141,44 +146,22 @@ class MayaScenePersistence:
             return None
         return json.loads(raw)
 
-    # ---- scene lifecycle scriptJobs --------------------------------------
+    # ---- scene lifecycle subscriptions ------------------------------------
 
     def _install_scene_jobs(self) -> None:
-        """Register persistent scriptJobs for scene lifecycle events."""
+        """Register persistent subscriptions via ScriptJobManager."""
         try:
-            import maya.cmds as cmds
-        except ImportError:
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+        except Exception:
             return
 
-        try:
-            if self._scene_opened_job is None or not cmds.scriptJob(
-                exists=self._scene_opened_job
-            ):
-                self._scene_opened_job = cmds.scriptJob(
-                    event=["SceneOpened", self._on_scene_changed],
-                )
-        except Exception:
-            pass
+        mgr = ScriptJobManager.instance()
 
-        try:
-            if self._new_scene_job is None or not cmds.scriptJob(
-                exists=self._new_scene_job
-            ):
-                self._new_scene_job = cmds.scriptJob(
-                    event=["NewSceneOpened", self._on_scene_changed],
-                )
-        except Exception:
-            pass
-
-        try:
-            if self._time_unit_job is None or not cmds.scriptJob(
-                exists=self._time_unit_job
-            ):
-                self._time_unit_job = cmds.scriptJob(
-                    event=["timeUnitChanged", self._on_time_unit_changed],
-                )
-        except Exception:
-            pass
+        if not self._scene_subs_installed:
+            mgr.subscribe("SceneOpened", self._on_scene_changed, owner=self)
+            mgr.subscribe("NewSceneOpened", self._on_scene_changed, owner=self)
+            mgr.subscribe("timeUnitChanged", self._on_time_unit_changed, owner=self)
+            self._scene_subs_installed = True
 
         try:
             import maya.api.OpenMaya as om
@@ -189,6 +172,22 @@ class MayaScenePersistence:
                 )
         except Exception:
             pass
+
+    def remove_callbacks(self) -> None:
+        """Remove all ScriptJobManager subscriptions and OM callbacks."""
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.instance().unsubscribe_all(self)
+        self._scene_subs_installed = False
+
+        if self._before_save_cb_id is not None:
+            try:
+                import maya.api.OpenMaya as om
+
+                om.MMessage.removeCallback(self._before_save_cb_id)
+            except Exception:
+                pass
+            self._before_save_cb_id = None
 
     def _on_scene_changed(self) -> None:
         """Invalidate the cached store when a different scene is loaded."""
@@ -285,7 +284,8 @@ class ShotBlock:
         classification logic lives in one place.
         """
         statuses = self.metadata.get("object_status", {})
-        csv_objs = set(self.metadata.get("csv_objects", []))
+        raw_csv = self.metadata.get("csv_objects", [])
+        csv_objs = set((e["name"] if isinstance(e, dict) else e) for e in raw_csv)
         result: Dict[str, str] = {}
         for obj in self.objects:
             if obj in statuses:
@@ -382,7 +382,6 @@ class ShotStore:
 
     Parameters:
         shots: Initial shot list.  Copied on construction.
-        anim_layer: Optional animation layer name for future layer support.
     """
 
     _active: Optional["ShotStore"] = None
@@ -390,11 +389,14 @@ class ShotStore:
     _invalidation_listeners: ClassVar[List[Callable[["StoreInvalidated"], None]]] = []
     _QSETTINGS_PREFIX = "ShotStore"
     DETECTION_MODES = ("auto", "all", "skip_zero", "zero_as_end")
+    FIT_MODES = ("extend_only", "fit_contents")
+    DEFAULT_INITIAL_SHOT_LENGTH: float = 200.0
+    DEFAULT_FIT_MODE: str = "extend_only"
+    DEFAULT_SNAP_WHOLE_FRAMES: bool = True
 
     def __init__(
         self,
         shots: Optional[List[ShotBlock]] = None,
-        anim_layer: Optional[str] = None,
     ):
         self.shots: List[ShotBlock] = list(shots) if shots else []
         self.hidden_objects: set = set()
@@ -403,12 +405,23 @@ class ShotStore:
         self.gap: float = 0.0
         self.detection_threshold: float = 5.0
         self.detection_mode: str = "auto"  # "auto", "all", "skip_zero", "zero_as_end"
+        # Shot construction policy (applies to any caller that builds shots —
+        # manifest, sequencer, future tools).  ``fit_mode`` governs whether a
+        # shot may shrink below ``initial_shot_length`` to fit its contents.
+        self.initial_shot_length: float = self.DEFAULT_INITIAL_SHOT_LENGTH
+        self.fit_mode: str = self.DEFAULT_FIT_MODE
+        # When enabled, every frame value written through ``snap()`` is
+        # rounded to the nearest integer.  Applied at mutation sites so the
+        # in-memory model is always valid (see ``ShotStore.snap``).
+        self.snap_whole_frames: bool = self.DEFAULT_SNAP_WHOLE_FRAMES
         self.select_on_load: bool = False
         self.frame_on_shot_change: bool = True
         self.locked_gaps: set = set()  # {(left_shot_id, right_shot_id), ...}
         self.locked_objects: set = set()  # object names locked in the sequencer
-        self.anim_layer: Optional[str] = anim_layer
         self.scene_fps: float = _get_scene_fps()
+        # Source CSV path (when the store was populated from a manifest CSV).
+        # Purely informational — lets the user retrace provenance on reopen.
+        self.source_csv: str = ""
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
         self._listeners: List[Callable[[StoreEvent], None]] = []
         self._batch_depth: int = 0
@@ -644,6 +657,24 @@ class ShotStore:
             sol = s.value(f"{self._QSETTINGS_PREFIX}/select_on_load")
             if sol is not None and sol in (True, "true", 1, "1"):
                 self.select_on_load = True
+            dt = s.value(f"{self._QSETTINGS_PREFIX}/detection_threshold")
+            if dt is not None:
+                try:
+                    self.detection_threshold = float(dt)
+                except (TypeError, ValueError):
+                    pass
+            fm = s.value(f"{self._QSETTINGS_PREFIX}/fit_mode")
+            if fm is not None and str(fm) in self.FIT_MODES:
+                self.fit_mode = str(fm)
+            isl = s.value(f"{self._QSETTINGS_PREFIX}/initial_shot_length")
+            if isl is not None:
+                try:
+                    self.initial_shot_length = float(isl)
+                except (TypeError, ValueError):
+                    pass
+            snap = s.value(f"{self._QSETTINGS_PREFIX}/snap_whole_frames")
+            if snap is not None:
+                self.snap_whole_frames = snap in (True, "true", 1, "1")
         except Exception:
             pass
 
@@ -661,8 +692,34 @@ class ShotStore:
                 f"{self._QSETTINGS_PREFIX}/select_on_load",
                 self.select_on_load,
             )
+            s.setValue(
+                f"{self._QSETTINGS_PREFIX}/detection_threshold",
+                self.detection_threshold,
+            )
+            s.setValue(f"{self._QSETTINGS_PREFIX}/fit_mode", self.fit_mode)
+            s.setValue(
+                f"{self._QSETTINGS_PREFIX}/initial_shot_length",
+                self.initial_shot_length,
+            )
+            s.setValue(
+                f"{self._QSETTINGS_PREFIX}/snap_whole_frames",
+                self.snap_whole_frames,
+            )
         except Exception:
             pass
+
+    # ---- frame snapping --------------------------------------------------
+
+    def snap(self, frame: float) -> float:
+        """Return *frame* rounded to the nearest integer when snapping is on.
+
+        Single chokepoint for the ``snap_whole_frames`` policy.  Call at
+        any site that writes a frame value to a shot, keyframe, or
+        timeline range to guarantee the in-memory model stays valid.
+        """
+        if self.snap_whole_frames:
+            return float(round(frame))
+        return float(frame)
 
     # ---- derived queries --------------------------------------------------
 
@@ -735,8 +792,8 @@ class ShotStore:
         block = ShotBlock(
             shot_id=new_id,
             name=name,
-            start=float(start),
-            end=float(end),
+            start=self.snap(start),
+            end=self.snap(end),
             objects=sorted(set(objects)),
             metadata=dict(metadata) if metadata else {},
             locked=locked,
@@ -764,9 +821,9 @@ class ShotStore:
         if shot is None:
             return None
         if start is not None:
-            shot.start = float(start)
+            shot.start = self.snap(start)
         if end is not None:
-            shot.end = float(end)
+            shot.end = self.snap(end)
         if name is not None:
             shot.name = name
         if objects is not None:
@@ -797,12 +854,13 @@ class ShotStore:
         """
         if abs(delta) < 1e-6:
             return
+        delta = self.snap(delta)
         for s in self.sorted_shots():
             if s.shot_id == exclude_id:
                 continue
             if s.start >= after_frame - 1e-6:
-                s.start += delta
-                s.end += delta
+                s.start = self.snap(s.start + delta)
+                s.end = self.snap(s.end + delta)
         self.mark_dirty()
 
     def ripple_shift_upstream(
@@ -822,12 +880,13 @@ class ShotStore:
         """
         if abs(delta) < 1e-6:
             return
+        delta = self.snap(delta)
         for s in self.sorted_shots():
             if s.shot_id == exclude_id:
                 continue
             if s.end <= before_frame + 1e-6:
-                s.start += delta
-                s.end += delta
+                s.start = self.snap(s.start + delta)
+                s.end = self.snap(s.end + delta)
         self.mark_dirty()
 
     def remove_shot(self, shot_id: int) -> bool:
@@ -944,10 +1003,14 @@ class ShotStore:
             "gap": self.gap,
             "detection_threshold": self.detection_threshold,
             "detection_mode": self.detection_mode,
+            "initial_shot_length": self.initial_shot_length,
+            "fit_mode": self.fit_mode,
+            "snap_whole_frames": self.snap_whole_frames,
             "select_on_load": self.select_on_load,
             "frame_on_shot_change": self.frame_on_shot_change,
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
             "scene_fps": self.scene_fps,
+            "source_csv": self.source_csv,
         }
 
     @classmethod
@@ -990,11 +1053,24 @@ class ShotStore:
                 str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
             )
         store.select_on_load = bool(data.get("select_on_load", False))
+        try:
+            store.initial_shot_length = float(
+                data.get("initial_shot_length", cls.DEFAULT_INITIAL_SHOT_LENGTH)
+            )
+        except (TypeError, ValueError):
+            store.initial_shot_length = cls.DEFAULT_INITIAL_SHOT_LENGTH
+        fm = data.get("fit_mode")
+        store.fit_mode = str(fm) if fm in cls.FIT_MODES else cls.DEFAULT_FIT_MODE
+        snap = data.get("snap_whole_frames")
+        store.snap_whole_frames = (
+            bool(snap) if snap is not None else cls.DEFAULT_SNAP_WHOLE_FRAMES
+        )
         store.frame_on_shot_change = bool(data.get("frame_on_shot_change", True))
         store.locked_gaps = {tuple(pair) for pair in data.get("locked_gaps", [])}
         stored_fps = data.get("scene_fps")
         if stored_fps is not None:
             store.scene_fps = float(stored_fps)
+        store.source_csv = str(data.get("source_csv", "") or "")
         return store
 
     # ---- persistence convenience -----------------------------------------
@@ -1057,6 +1133,37 @@ class ShotStore:
         self._save_user_prefs()
 
     # ---- detection convenience -------------------------------------------
+
+    @staticmethod
+    def has_animation() -> bool:
+        """True if the scene contains animCurves driving transforms.
+
+        This is a lightweight check — it only looks for the existence
+        of animCurve nodes connected to transforms, not whether they
+        contain meaningful motion.  Returns ``False`` outside Maya.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return False
+        curves = cmds.ls(type="animCurve") or []
+        if not curves:
+            return False
+        # Check a sample — if any curve drives a transform, we have animation
+        for crv in curves[:50]:
+            conns = cmds.listConnections(crv, d=True, s=False) or []
+            for node in conns:
+                if cmds.nodeType(node) == "transform":
+                    return True
+                parents = (
+                    cmds.listRelatives(
+                        node, parent=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
+                if parents:
+                    return True
+        return False
 
     @property
     def is_detection_relevant(self) -> bool:
@@ -1146,32 +1253,6 @@ class ShotStore:
         return result
 
 
-# ---------------------------------------------------------------------------
-# Standard attribute filtering  (shared by sequencer + manifest)
-# ---------------------------------------------------------------------------
-
-STANDARD_TRANSFORM_ATTRS = frozenset(
-    {
-        "translateX",
-        "translateY",
-        "translateZ",
-        "rotateX",
-        "rotateY",
-        "rotateZ",
-        "scaleX",
-        "scaleY",
-        "scaleZ",
-        "visibility",
-    }
-)
-"""Attributes considered genuine scene content.
-
-Objects animated only on attributes *outside* this set (e.g.
-``audio_trigger``) are treated as boundary markers and excluded
-from shot object lists.
-"""
-
-
 def _resolve_long_names(names):
     """Resolve object names to long DAG paths.
 
@@ -1186,369 +1267,3 @@ def _resolve_long_names(names):
     if not names:
         return []
     return cmds.ls(names, long=True) or []
-
-
-def _map_standard_curves_to_transforms(curves=None):
-    """Map each transform to anim curves driving standard attrs.
-
-    Returns ``dict[str, list[str]]`` — *transform_name* → [*curve_names*].
-    Curves that only drive custom/user-defined attributes are skipped.
-    Intermediate nodes (e.g. ``unitConversion``, ``pairBlend``) are
-    resolved to their parent transform.
-    """
-    import maya.cmds as cmds
-    from collections import defaultdict
-
-    if curves is None:
-        curves = cmds.ls(type="animCurve") or []
-
-    result = defaultdict(list)
-    for crv in curves:
-        plugs = cmds.listConnections(crv, d=True, s=False, plugs=True) or []
-        for plug_str in plugs:
-            attr = plug_str.rsplit(".", 1)[-1] if "." in plug_str else ""
-            if attr not in STANDARD_TRANSFORM_ATTRS:
-                continue
-            node = plug_str.split(".")[0]
-            if cmds.nodeType(node) == "transform":
-                long = cmds.ls(node, long=True)
-                result[long[0] if long else node].append(crv)
-            else:
-                parents = (
-                    cmds.listRelatives(
-                        node, parent=True, type="transform", fullPath=True
-                    )
-                    or []
-                )
-                if parents:
-                    result[parents[0]].append(crv)
-            break  # one standard destination per curve is sufficient
-    return dict(result)
-
-
-# ---------------------------------------------------------------------------
-# Shot-region detection  (shared by sequencer + manifest)
-# ---------------------------------------------------------------------------
-
-
-def detect_shot_regions(
-    objects: Optional[List[str]] = None,
-    gap_threshold: float = 5.0,
-    ignore: Optional[str] = None,
-    motion_rate: float = 1e-3,
-    min_duration: float = 2.0,
-) -> List[Dict[str, Any]]:
-    """Detect animation regions by clustering per-object segments.
-
-    Scans the full timeline using ``SegmentKeys`` and groups contiguous
-    segments into regions separated by gaps of at least *gap_threshold*
-    frames.  This is the single source of truth for shot-boundary
-    detection — used by both the shot sequencer and the shot manifest.
-
-    Flat/constant-value intervals are always excluded so that
-    boundaries hidden by baked animation are correctly detected.
-
-    Parameters:
-        objects: Transform names to scan.  ``None`` discovers all
-            transforms driven by animation curves.
-        gap_threshold: Minimum gap (frames) between clusters.
-        ignore: Attribute pattern(s) to exclude from segment collection.
-        motion_rate: Per-frame rate-of-change threshold.  Intervals
-            whose per-frame rate falls below this are treated as static.
-        min_duration: Minimum shot duration in frames.  Clusters
-            shorter than this are discarded.  Default ``2.0``.
-
-    Returns:
-        List of dicts with ``"name"``, ``"start"``, ``"end"``, and
-        ``"objects"`` keys, sorted by start time.
-    """
-    try:
-        import maya.cmds as cmds
-    except ImportError:
-        return []
-
-    from mayatk.anim_utils.segment_keys import SegmentKeys
-
-    # Discover objects if not provided
-    if objects is None:
-        curves = cmds.ls(type="animCurve") or []
-        found: set = set()
-        for crv in curves:
-            conns = cmds.listConnections(crv, d=True, s=False) or []
-            for node in conns:
-                node_type = cmds.nodeType(node)
-                if node_type == "transform":
-                    long = cmds.ls(node, long=True)
-                    found.add(long[0] if long else node)
-                else:
-                    parents = (
-                        cmds.listRelatives(
-                            node, parent=True, type="transform", fullPath=True
-                        )
-                        or []
-                    )
-                    if parents:
-                        found.add(parents[0])
-        objects = sorted(found)
-
-    if not objects:
-        return []
-
-    # Validate existence — use long names to avoid ambiguity
-    valid = cmds.ls(objects, long=True) or []
-    if not valid:
-        return []
-
-    segments = SegmentKeys.collect_segments(
-        valid,
-        split_static=True,
-        ignore=ignore,
-        ignore_holds=True,
-        ignore_visibility_holds=True,
-        motion_only=True,
-        motion_rate=motion_rate,
-    )
-    if not segments:
-        return []
-
-    segments.sort(key=lambda s: s["start"])
-
-    # Cluster segments by gap_threshold
-    clusters: List[List[Dict[str, Any]]] = []
-    current: List[Dict[str, Any]] = [segments[0]]
-    current_end = segments[0]["end"]
-
-    for seg in segments[1:]:
-        if seg["start"] - current_end > gap_threshold:
-            clusters.append(current)
-            current = [seg]
-            current_end = seg["end"]
-        else:
-            current.append(seg)
-            current_end = max(current_end, seg["end"])
-    clusters.append(current)
-
-    candidates: List[Dict[str, Any]] = []
-    for cluster in clusters:
-        start = min(s["start"] for s in cluster)
-        end = max(s["end"] for s in cluster)
-        if (end - start) < min_duration:
-            continue
-        objs = sorted({str(s["obj"]) for s in cluster})
-        candidates.append(
-            {
-                "name": f"Shot {len(candidates) + 1}",
-                "start": start,
-                "end": end,
-                "objects": objs,
-            }
-        )
-    return candidates
-
-
-def _filter_flat_objects(
-    candidates: List[Dict[str, Any]], value_tolerance: float = 1e-4
-) -> List[Dict[str, Any]]:
-    """Remove objects whose animation is flat or only on custom trigger attributes.
-
-    An object is considered genuine animated content if it has at least
-    one animation curve that drives a standard transform or visibility
-    attribute **and** that curve has changing values within the shot's
-    range.  Objects animated only on custom attributes (e.g.
-    ``audio_trigger``) are treated as boundary markers and excluded.
-
-    Candidates with no remaining objects are kept (the shot boundary
-    is still valid); only the ``"objects"`` list is pruned.
-    """
-    try:
-        import maya.cmds as cmds
-    except ImportError:
-        return candidates
-
-    if not candidates:
-        return candidates
-
-    try:
-        transform_curves = _map_standard_curves_to_transforms()
-    except (AttributeError, RuntimeError):
-        return candidates
-    if not transform_curves:
-        return candidates
-
-    for cand in candidates:
-        start, end = cand["start"], cand["end"]
-        filtered = []
-        for obj in cand["objects"]:
-            crvs = transform_curves.get(obj)
-            if not crvs:
-                continue
-            for crv in crvs:
-                vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
-                if vals and (max(vals) - min(vals)) > value_tolerance:
-                    filtered.append(obj)
-                    break
-        cand["objects"] = filtered
-    return candidates
-
-
-def regions_from_selected_keys(
-    gap_threshold: float = 5.0,
-    key_filter: str = "all",
-) -> List[Dict[str, Any]]:
-    """Build shot regions from currently selected keyframes.
-
-    Each unique selected key time is treated as an explicit shot
-    boundary.  Keys closer than *gap_threshold* are merged into a
-    single boundary.  This is designed for stepped / marker keys
-    (e.g. audio triggers) where each key marks the start of a shot
-    rather than representing continuous animation.
-
-    Objects with flat/constant animation within a shot's range are
-    automatically excluded from that shot's ``"objects"`` list.
-
-    Parameters:
-        gap_threshold: Keys within this many frames are merged
-            into one boundary.
-        key_filter: How to interpret key values:
-
-            ``"all"``
-                Every key is a boundary (contiguous shots).
-            ``"skip_zero"``
-                Keys with value 0 are ignored; only non-zero keys
-                become boundaries.
-            ``"zero_as_end"``
-                Non-zero keys start shots; zero-value keys end the
-                preceding shot (allows gaps between shots).
-
-    Returns:
-        List of dicts with ``"name"``, ``"start"``, ``"end"``, and
-        ``"objects"`` keys, sorted by start time.
-    """
-    try:
-        import maya.cmds as cmds
-    except ImportError:
-        return []
-
-    sel_curves = cmds.keyframe(query=True, selected=True, name=True) or []
-    if not sel_curves:
-        return []
-
-    # Collect (time, value, object) triples from selected keys
-    entries: List[Tuple[float, float, str]] = []
-    for crv in set(sel_curves):
-        times = cmds.keyframe(crv, query=True, selected=True, timeChange=True) or []
-        values = cmds.keyframe(crv, query=True, selected=True, valueChange=True) or []
-        conns = cmds.listConnections(crv, d=True, s=False) or []
-        obj_name = crv  # fallback
-        for node in conns:
-            node_type = cmds.nodeType(node)
-            if node_type == "transform":
-                long = cmds.ls(node, long=True)
-                obj_name = long[0] if long else node
-                break
-            parents = (
-                cmds.listRelatives(node, parent=True, type="transform", fullPath=True)
-                or []
-            )
-            if parents:
-                obj_name = parents[0]
-                break
-        for t, v in zip(times, values):
-            if v is None:
-                continue
-            entries.append((t, v, obj_name))
-
-    if not entries:
-        return []
-
-    def _is_zero(v) -> bool:
-        """Treat None and near-zero floats as 'zero'."""
-        return v is None or abs(v) < 1e-9
-
-    # Stable sort: same-time entries have zeros first so that in
-    # ``zero_as_end`` mode a closing zero is processed before the
-    # opening non-zero trigger at the same frame.
-    entries.sort(key=lambda e: (e[0], 0 if _is_zero(e[1]) else 1))
-
-    # ---- "zero_as_end" mode: pair non-zero starts with zero ends ---------
-    if key_filter == "zero_as_end":
-        candidates: List[Dict[str, Any]] = []
-        current_start: Optional[float] = None
-        current_objs: set = set()
-        for t, v, obj in entries:
-            if not _is_zero(v):
-                if current_start is None:
-                    current_start = t
-                    current_objs = {obj}
-                else:
-                    current_objs.add(obj)
-            else:
-                # Zero-value key ends the current shot
-                if current_start is not None:
-                    candidates.append(
-                        {
-                            "name": f"Shot {len(candidates) + 1}",
-                            "start": current_start,
-                            "end": t,
-                            "objects": sorted(str(o) for o in current_objs),
-                        }
-                    )
-                    current_start = None
-                    current_objs = set()
-        # Trailing shot with no closing zero key
-        if current_start is not None:
-            candidates.append(
-                {
-                    "name": f"Shot {len(candidates) + 1}",
-                    "start": current_start,
-                    "end": current_start + 1.0,
-                    "objects": sorted(str(o) for o in current_objs),
-                }
-            )
-        return _filter_flat_objects(candidates)
-
-    # ---- "skip_zero" mode: filter zeros, then use boundary logic below -----
-    if key_filter == "skip_zero":
-        entries = [(t, v, obj) for t, v, obj in entries if not _is_zero(v)]
-        if not entries:
-            return []
-        # Fall through to "all" mode boundary logic.
-
-    # ---- "all" mode: merge keys within gap_threshold into boundary points
-    boundaries: List[Tuple[float, set]] = []  # (time, {objects})
-    first_time = entries[0][0]
-    cur_time = entries[0][0]
-    cur_objs: set = {entries[0][2]}
-
-    for t, _v, obj in entries[1:]:
-        if t - cur_time <= gap_threshold:
-            cur_objs.add(obj)
-            cur_time = t
-        else:
-            boundaries.append((first_time, cur_objs))
-            first_time = t
-            cur_time = t
-            cur_objs = {obj}
-    boundaries.append((first_time, cur_objs))
-
-    if not boundaries:
-        return []
-
-    # Build contiguous regions: each boundary starts a shot that ends
-    # at the next boundary.  The last shot gets a nominal 1-frame end
-    # (the manifest's range resolver will compute the real end).
-    candidates = []
-    for i, (start, objs) in enumerate(boundaries):
-        if i + 1 < len(boundaries):
-            end = boundaries[i + 1][0]
-        else:
-            end = start + 1.0
-        candidates.append(
-            {
-                "name": f"Shot {len(candidates) + 1}",
-                "start": start,
-                "end": end,
-                "objects": sorted(str(o) for o in objs),
-            }
-        )
-    return _filter_flat_objects(candidates)

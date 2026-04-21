@@ -381,7 +381,7 @@ class TestMayaConnectionMocked(unittest.TestCase):
 
         conn.shutdown()
 
-        mock_close.assert_called_once_with(port=7005)
+        mock_close.assert_called_once_with(port=7005, force=False)
         self.assertFalse(conn.is_connected)
         self.assertIsNone(conn.mode)
 

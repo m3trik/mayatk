@@ -14,6 +14,7 @@ except ImportError:
 import logging
 
 import mayatk as mtk
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 
 
 class RenderOpacitySlots:
@@ -37,19 +38,15 @@ class RenderOpacitySlots:
         self.ui.b003.clicked.connect(self._remove_opacity)
 
         # Selection-changed job to enable/disable fade controls
-        self._sel_job_id = None
         self._is_updating = False  # Reentrancy guard
-        try:
-            cmds.evalDeferred(self._create_selection_job)
-        except Exception:
-            pass
-
-        # Ensure the scriptJob is killed when the UI closes to prevent
-        # callbacks firing against a dead widget.
-        try:
-            self.ui.destroyed.connect(self._kill_selection_job)
-        except Exception:
-            pass
+        mgr = ScriptJobManager.instance()
+        self._sel_token = mgr.subscribe(
+            "SelectionChanged",
+            self._update_fade_enabled,
+            owner=self,
+            ephemeral=True,
+        )
+        mgr.connect_cleanup(self.ui, owner=self)
 
     # ------------------------------------------------------------------
     # Header
@@ -222,20 +219,7 @@ class RenderOpacitySlots:
             )
             return
 
-        # Auto-create opacity on objects that lack it, if the option is on.
         auto_create = widget.option_box.menu.chk_auto_create.isChecked()
-        if auto_create:
-            missing = [o for o in objects if not o.hasAttr("opacity")]
-            if missing:
-                mode = self.ui.cmb_mode.currentText().lower()
-                delete_vis = self.ui.header.menu.chk_delete_vis_keys.isChecked()
-                try:
-                    mtk.RenderOpacity.create(
-                        missing, mode=mode, delete_visibility_keys=delete_vis
-                    )
-                except Exception as e:
-                    self.sb.message_box(f"Error: {e}")
-                    return
 
         current = pm.currentTime(query=True)
 
@@ -246,43 +230,24 @@ class RenderOpacitySlots:
 
         # Suppress the SelectionChanged callback while we modify the DG
         # to prevent reentrant evaluation (which can crash Maya).
-        self._kill_selection_job()
+        mgr = ScriptJobManager.instance()
+        mgr.suppress(self._sel_token)
         try:
-            keyed = []
-            for obj in objects:
-                if not obj.hasAttr("opacity"):
-                    continue
-
-                # Resolve fade direction per object
-                if direction_mode == "auto":
-                    fade_in = self._resolve_auto_fade(obj, current)
-                else:
-                    fade_in = direction_mode == "in"
-
-                start_val, end_val = (0, 1) if fade_in else (1, 0)
-
-                pm.setKeyframe(
-                    obj,
-                    attribute="opacity",
-                    time=start,
-                    value=start_val,
-                    inTangentType="linear",
-                    outTangentType="linear",
-                )
-                pm.setKeyframe(
-                    obj,
-                    attribute="opacity",
-                    time=end,
-                    value=end_val,
-                    inTangentType="linear",
-                    outTangentType="linear",
-                )
-                keyed.append((obj.name(), fade_in))
+            keyed = mtk.RenderOpacity.key_fade(
+                objects,
+                start=start,
+                end=end,
+                direction=direction_mode,
+                auto_create=auto_create,
+            )
+        except Exception as e:
+            self.sb.message_box(f"Error: {e}")
+            return
         finally:
-            self._create_selection_job()
+            mgr.resume(self._sel_token)
 
         if keyed:
-            dirs = {"Fade In" if fi else "Fade Out" for _, fi in keyed}
+            dirs = {"Fade In" if d == "in" else "Fade Out" for _, d in keyed}
             direction = " / ".join(sorted(dirs))
             self.ui.footer.setText(
                 f"{direction}: {len(keyed)} object(s), frames {int(start)}\u2013{int(end)}"
@@ -292,42 +257,6 @@ class RenderOpacitySlots:
                 "Warning: Selected objects have no <hl>opacity</hl> attribute.<br>"
                 "Use <b>Create</b> first."
             )
-
-    @staticmethod
-    def _resolve_auto_fade(obj, current_time):
-        """Return True for fade-in, False for fade-out based on previous key.
-
-        Looks at the most recent opacity keyframe at or before
-        ``current_time``.  If its value is >= 0.5 (opaque), the object
-        needs a fade-out; otherwise a fade-in.  Defaults to fade-in
-        when no previous key exists.
-        """
-        key_times = (
-            pm.keyframe(obj, attribute="opacity", query=True, timeChange=True) or []
-        )
-
-        # Find the latest key at or before current_time
-        prev_time = None
-        for t in sorted(key_times):
-            if t <= current_time:
-                prev_time = t
-            else:
-                break
-
-        if prev_time is None:
-            return True  # No previous key \u2014 fade in
-
-        vals = pm.keyframe(
-            obj,
-            attribute="opacity",
-            query=True,
-            time=(prev_time, prev_time),
-            valueChange=True,
-        )
-        if vals:
-            return vals[0] < 0.5  # Opaque \u2192 fade out; transparent \u2192 fade in
-
-        return True  # Fallback \u2014 fade in
 
     # ------------------------------------------------------------------
     # Manage
@@ -365,24 +294,6 @@ class RenderOpacitySlots:
     # ------------------------------------------------------------------
     # Selection job — enable/disable fade controls
     # ------------------------------------------------------------------
-
-    def _create_selection_job(self):
-        """Create a scriptJob to track selection changes."""
-        if self._sel_job_id is not None:
-            return
-        self._sel_job_id = cmds.scriptJob(
-            event=["SelectionChanged", self._update_fade_enabled],
-            killWithScene=True,
-        )
-
-    def _kill_selection_job(self):
-        """Kill the SelectionChanged scriptJob when the UI is destroyed."""
-        if self._sel_job_id is not None:
-            try:
-                cmds.scriptJob(kill=self._sel_job_id, force=True)
-            except Exception:
-                pass
-            self._sel_job_id = None
 
     def _update_fade_enabled(self):
         """Enable/disable fade widgets based on whether selection has opacity.

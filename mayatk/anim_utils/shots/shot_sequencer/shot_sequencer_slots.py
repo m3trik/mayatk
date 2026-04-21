@@ -32,19 +32,18 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
     ShotBlock,
 )
-from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import (
-    AudioTrackManager,
-)
-from mayatk.anim_utils.shots.shot_sequencer._gap_manager import GapManagerMixin
-from mayatk.anim_utils.shots.shot_sequencer._clip_motion import ClipMotionMixin
-from mayatk.anim_utils.shots.shot_sequencer._segment_collector import (
+from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+from mayatk.audio_utils.segments import collect_all_segments
+from mayatk.anim_utils.shots.shot_sequencer.gap_manager import GapManagerMixin
+from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
+from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
     collect_segments,
     active_object_set,
     extract_attributes,
     build_curve_preview,
 )
-from mayatk.anim_utils.shots.shot_sequencer._shot_nav import ShotNavMixin
-from mayatk.anim_utils.shots.shot_sequencer._marker_manager import MarkerManagerMixin
+from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
+from mayatk.anim_utils.shots.shot_sequencer.marker_manager import MarkerManagerMixin
 from mayatk.anim_utils.shots._shots import StoreEvent
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -64,7 +63,6 @@ class ShotSequencerController(
         self.sb = slots_instance.sb
         self.ui = slots_instance.ui
         self._sequencer: Optional[ShotSequencer] = None
-        self._audio_mgr = AudioTrackManager()
         self._undo_callback_ids: List[int] = []
         self._time_change_cb: Optional[int] = None
         self._keyframe_cb: Optional[int] = None
@@ -210,7 +208,7 @@ class ShotSequencerController(
 
     def _register_maya_undo_callbacks(self) -> None:
         """Listen for Maya Undo/Redo events to refresh the widget."""
-        if om2 is None:
+        if om2 is None or self._undo_callback_ids:
             return
         for event_name in ("Undo", "Redo"):
             cb_id = om2.MEventMessage.addEventCallback(event_name, self._on_maya_undo)
@@ -222,7 +220,10 @@ class ShotSequencerController(
         if om2 is None:
             return
         for cb_id in self._undo_callback_ids:
-            om2.MMessage.removeCallback(cb_id)
+            try:
+                om2.MMessage.removeCallback(cb_id)
+            except Exception:
+                pass
         self._undo_callback_ids.clear()
         if self._time_change_cb is not None:
             try:
@@ -258,7 +259,7 @@ class ShotSequencerController(
         once per anim-curve change.  A debounce timer coalesces rapid
         bursts (e.g. keying 10 attributes at once) into a single refresh.
         """
-        if oma is None:
+        if oma is None or self._keyframe_cb is not None:
             return
         try:
             self._keyframe_cb = oma.MAnimMessage.addAnimKeyframeEditedCallback(
@@ -344,7 +345,7 @@ class ShotSequencerController(
         # Check each candidate for non-flat animation in the shot range.
         # Query curves connected to the candidate directly rather than
         # scanning all scene curves.
-        from mayatk.anim_utils.shots._shots import STANDARD_TRANSFORM_ATTRS
+        from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
 
         new_objects = []
         for obj in candidates:
@@ -378,7 +379,7 @@ class ShotSequencerController(
         fires on every DG time change including during playback in all
         evaluation modes (DG, Serial, Parallel).
         """
-        if om2 is None:
+        if om2 is None or self._time_change_cb is not None:
             return
         self._time_change_cb = om2.MDGMessage.addTimeChangeCallback(
             self._on_time_changed
@@ -431,9 +432,12 @@ class ShotSequencerController(
             act_select = menu.addAction(f'Select "{clicked_shot.name}"')
             act_edit = menu.addAction(f'Edit "{clicked_shot.name}"\u2026')
             menu.addSeparator()
+            act_trim = menu.addAction("Trim Empty Space")
+            menu.addSeparator()
         else:
             act_select = None
             act_edit = None
+            act_trim = None
 
         act_new = menu.addAction("New Shot")
         menu.addSeparator()
@@ -446,10 +450,23 @@ class ShotSequencerController(
             self.on_shot_block_clicked(clicked_shot.name)
         elif chosen == act_edit and clicked_shot is not None:
             self._edit_shot_dialog(clicked_shot)
+        elif chosen == act_trim and clicked_shot is not None:
+            self._trim_shot(clicked_shot.shot_id)
         elif chosen == act_new:
             self._create_shot_one_click()
         elif chosen == act_refresh:
             self.refresh()
+
+    def _trim_shot(self, shot_id: int) -> None:
+        """Trim empty space from *shot_id*, undoable, then refresh the widget."""
+        if self.sequencer is None or pm is None:
+            return
+        self._save_shot_state()
+        with pm.UndoChunk():
+            self.sequencer.trim_shot_to_content(shot_id)
+        self._segment_cache.clear()
+        self._sub_row_cache.clear()
+        self._sync_to_widget()
 
     def _create_shot_one_click(self) -> None:
         """Append a new shot using the configured gap and default duration."""
@@ -650,6 +667,77 @@ class ShotSequencerController(
             )
             act_unlock_all.triggered.connect(lambda: self._unlock_all(widget))
 
+        # "Move to Shot" submenu — anim/audio clips moved as sequences.
+        if self.sequencer:
+            seqs = self._clips_to_sequences(widget, selected_ids)
+            shots = self.sequencer.sorted_shots()
+            if seqs and len(shots) > 1:
+                menu.addSeparator()
+                move_label = (
+                    f"Move to Shot ({len(seqs)})" if multi else "Move to Shot"
+                )
+                move_menu = menu.addMenu(move_label)
+                # Exclude shots whose id matches every sequence's source.
+                source_ids = {self.sequencer._source_shot_id_for(s) for s in seqs}
+                for sh in shots:
+                    if len(source_ids) == 1 and sh.shot_id in source_ids:
+                        continue  # all sequences already live here
+                    act = move_menu.addAction(
+                        f'{sh.name}  [{sh.start:.0f}\u2013{sh.end:.0f}]'
+                    )
+                    act.triggered.connect(
+                        lambda _checked=False, sid=sh.shot_id: (
+                            self._move_clips_to_shot(seqs, sid)
+                        )
+                    )
+
+    def _clips_to_sequences(self, widget, clip_ids):
+        """Convert widget clip ids to unified sequence dicts.
+
+        Stepped (zero-duration) anim clips are skipped — they are individual
+        keys, not sequences, and can't meaningfully move between shots.
+        Read-only clips (non-active visible shots) are skipped too.
+        """
+        seqs = []
+        seen: set = set()
+        for cid in clip_ids:
+            clip = widget.get_clip(cid)
+            if clip is None or clip.data.get("read_only"):
+                continue
+            if clip.data.get("is_stepped"):
+                continue
+            start = clip.data.get("orig_start")
+            end = clip.data.get("orig_end")
+            if start is None or end is None or end <= start:
+                continue
+            if clip.data.get("is_audio"):
+                obj = clip.data.get("audio_track_id")
+                kind = "audio"
+            else:
+                obj = clip.data.get("obj")
+                kind = "anim"
+            if not obj:
+                continue
+            # Dedupe: the same underlying segment can produce multiple
+            # clips when it spans multiple visible shots (esp. audio).
+            key = (kind, obj, round(start, 6), round(end, 6))
+            if key in seen:
+                continue
+            seen.add(key)
+            seqs.append({"kind": kind, "obj": obj, "start": start, "end": end})
+        return seqs
+
+    def _move_clips_to_shot(self, sequences, dest_shot_id):
+        """Run move_sequences_to_shot, undoable, then refresh."""
+        if self.sequencer is None or pm is None or not sequences:
+            return
+        self._save_shot_state()
+        with pm.UndoChunk():
+            self.sequencer.move_sequences_to_shot(sequences, dest_shot_id)
+        self._segment_cache.clear()
+        self._sub_row_cache.clear()
+        self._sync_to_widget()
+
     # -- lock helpers -------------------------------------------------------
 
     def _lock_others(self, widget, keep_obj: str) -> None:
@@ -774,7 +862,6 @@ class ShotSequencerController(
         h_scroll, zoom, expanded_names = self._save_viewport_state(widget)
         widget.clear()
         self._sync_header_settings(widget)
-        self._audio_mgr.invalidate()
 
         if end <= start:
             self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
@@ -818,7 +905,7 @@ class ShotSequencerController(
         )
         self._build_clips(widget, scene_shot, [scene_shot], segments_by_shot, track_ids)
         self._ensure_scene_attr_colors(widget)
-        self._build_audio_tracks(widget, scene_shot)
+        self._build_audio_tracks(widget, scene_shot, [scene_shot])
 
         current_time = cmds.currentTime(q=True)
         widget.set_playhead(current_time)
@@ -890,7 +977,6 @@ class ShotSequencerController(
         try:
             widget.clear(keep_range_highlight=True)
             self._sub_row_cache.clear()
-            self._audio_mgr.invalidate()
             self._sync_header_settings(widget)
 
             # Re-resolve any stale DAG paths (e.g. parent renamed) across
@@ -920,7 +1006,7 @@ class ShotSequencerController(
             )
             self._build_clips(widget, shot, visible_shots, segments_by_shot, track_ids)
             self._ensure_scene_attr_colors(widget)
-            self._build_audio_tracks(widget, shot)
+            self._build_audio_tracks(widget, shot, visible_shots)
         finally:
             self._syncing = False
 
@@ -1237,55 +1323,88 @@ class ShotSequencerController(
                         **clip_extra,
                     )
 
-    def _build_audio_tracks(self, widget, shot) -> None:
-        """Add audio tracks and clips for the active shot."""
-        audio_segs = self._audio_mgr.collect_all_audio_segments(
-            scene_start=shot.start, scene_end=shot.end
+    def _build_audio_tracks(self, widget, shot, visible_shots) -> None:
+        """Add audio tracks and clips for visible shots.
+
+        Iterates segments produced by the unified audio system
+        (``mayatk.audio_utils.segments``).  Each canonical
+        ``track_id`` becomes one widget track; segments are keyed into
+        the sequencer with ``audio_track_id`` for downstream consumers.
+        """
+        scene_start = min(vs.start for vs in visible_shots)
+        scene_end = max(vs.end for vs in visible_shots)
+        segs = collect_all_segments(
+            scene_start=scene_start,
+            scene_end=scene_end,
+            include_waveform=True,
         )
-        audio_by_source: dict = defaultdict(list)
-        for seg in audio_segs:
-            audio_by_source[seg["node"]].append(seg)
 
-        for source_node, segs in audio_by_source.items():
-            if self.sequencer.is_object_hidden(source_node):
+        # Group by canonical track_id.
+        by_track: dict = defaultdict(list)
+        for seg in segs:
+            by_track[seg.track_id].append(seg)
+
+        for track_id, track_segs in by_track.items():
+            if self.sequencer.is_object_hidden(track_id):
                 continue
-            short_name = source_node.rsplit("|", 1)[-1]
-            node_icons_cls = self._try_load_maya_icons()
-            icon = node_icons_cls.get_icon(source_node) if node_icons_cls else None
-            track_id = widget.add_track(short_name, icon=icon)
-            for seg in segs:
-                vis_start = max(seg["start"], shot.start)
-                vis_end = min(seg["end"], shot.end)
-                if vis_end <= vis_start:
-                    continue
 
-                full_waveform = seg.get("waveform", [])
-                full_dur = seg["end"] - seg["start"]
+            # Pre-compute visible clip descriptors; skip the track
+            # entirely if no segment strictly overlaps any visible shot.
+            clip_descs: list = []
+            for seg in track_segs:
+                for vs in visible_shots:
+                    vis_start = max(seg.start, vs.start)
+                    vis_end = min(seg.end, vs.end)
+                    if vis_end <= vis_start:
+                        continue
+                    clip_descs.append((seg, vs, vis_start, vis_end))
+
+            if not clip_descs:
+                continue
+
+            # Track icon: look up DG node if one exists (rendered view).
+            dg_node = audio_utils.find_dg_node_for_track(track_id)
+            node_icons_cls = self._try_load_maya_icons()
+            icon = (
+                node_icons_cls.get_icon(dg_node)
+                if (node_icons_cls and dg_node)
+                else None
+            )
+            widget_track_id = widget.add_track(track_id, icon=icon)
+
+            for seg, vs, vis_start, vis_end in clip_descs:
+                is_active = vs.shot_id == shot.shot_id
+
+                full_waveform = seg.waveform or []
+                full_dur = seg.end - seg.start
                 if full_waveform and full_dur > 0:
                     n = len(full_waveform)
-                    frac_lo = (vis_start - seg["start"]) / full_dur
-                    frac_hi = (vis_end - seg["start"]) / full_dur
+                    frac_lo = (vis_start - seg.start) / full_dur
+                    frac_hi = (vis_end - seg.start) / full_dur
                     i_lo = int(frac_lo * n)
                     i_hi = max(i_lo + 1, int(frac_hi * n))
                     vis_waveform = full_waveform[i_lo:i_hi]
                 else:
                     vis_waveform = full_waveform
 
+                extra: dict = {}
+                if not is_active:
+                    extra = {"locked": True, "read_only": True, "dimmed": True}
+
                 widget.add_clip(
-                    track_id=track_id,
+                    track_id=widget_track_id,
                     start=vis_start,
                     duration=vis_end - vis_start,
-                    label=seg["label"],
+                    label=seg.label or track_id,
                     color="#3A7D44",
                     is_audio=True,
-                    audio_source=seg.get("audio_source", "dg"),
-                    audio_node=seg["node"],
-                    file_path=seg["file_path"],
+                    audio_track_id=seg.track_id,
+                    file_path=seg.file_path,
                     waveform=vis_waveform,
-                    orig_start=seg["start"],
-                    orig_end=seg["end"],
-                    event_key_frame=seg.get("event_key_frame"),
-                    shot_id=shot.shot_id,
+                    orig_start=seg.start,
+                    orig_end=seg.end,
+                    shot_id=vs.shot_id,
+                    **extra,
                 )
 
     def hide_track(self, track_names) -> None:
@@ -1493,7 +1612,7 @@ class ShotSequencerController(
         if widget is None:
             return
 
-        from mayatk.anim_utils.shots.shot_sequencer._clip_motion import (
+        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
             curves_for_attr,
         )
 
@@ -1629,7 +1748,7 @@ class ShotSequencerController(
             # Batch-delete all selected keyframes in a single undo chunk.
             import maya.cmds as cmds
 
-            from mayatk.anim_utils.shots.shot_sequencer._clip_motion import (
+            from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
                 curves_for_attr,
             )
 
@@ -1908,11 +2027,15 @@ class ShotSequencerController(
         """
         if hasattr(self, "_active_sound") and pm.objExists(self._active_sound):
             return
-        clips = self._audio_mgr.find_audio_nodes()
-        if not clips:
+        node = None
+        for track_id in audio_utils.list_tracks():
+            dg = audio_utils.find_dg_node_for_track(track_id)
+            if dg and pm.objExists(dg):
+                node = dg
+                break
+        if not node:
             self._active_sound = ""
             return
-        node = clips[0].node_name
         try:
             slider = pm.mel.eval("$tmp = $gPlayBackSlider")
             pm.timeControl(slider, e=True, sound=node)
@@ -2279,7 +2402,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.controller._set_footer(f"Deleted {shot.name}")
 
     def _detect_next_shot(self) -> None:
-        """Detect and create the next unregistered animation cluster."""
+        """Generate a shot from the next unregistered animation cluster."""
         if self.controller.sequencer is None or pm is None:
             return
         widget = self.controller._get_sequencer_widget()
@@ -2295,7 +2418,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             name=cand["name"],
             start=cand["start"],
             end=cand["end"],
-            title="Detected Shot",
+            title="Generated Shot",
         )
         if result is None:
             return
@@ -2325,7 +2448,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
         menu = QtWidgets.QMenu(cmb)
         menu.addAction("New Shot", self.controller._create_shot_one_click)
-        menu.addAction("Detect Next Shot\u2026", self._detect_next_shot)
+        menu.addAction("Generate Next Shot\u2026", self._detect_next_shot)
         menu.addSeparator()
 
         has_shot = self.controller.active_shot_id is not None
@@ -2425,7 +2548,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             "QPushButton",
             setText="Shots\u2026",
             setObjectName="btn_shot_settings",
-            setToolTip="Open shared shot detection, gap, and editing settings.",
+            setToolTip="Open shared shot generation, gap, and editing settings.",
         )
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
@@ -2449,7 +2572,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 "  \u2022 View Mode (cycles): Current \u2192 Adjacent \u2192 All.\n"
                 "  \u2022 Shots / Markers selector \u2014 Switch dropdown content.\n"
                 "  \u2022 Refresh \u2014 Rebuild from Maya.\n"
-                "  \u2022 Right-click dropdown: New Shot, Detect Next Shot\n"
+                "  \u2022 Right-click dropdown: New Shot, Generate Next Shot\n"
                 "    (finds the next unregistered animation cluster),\n"
                 "    Edit Shot, Delete Shot.\n\n"
                 "Ruler: Click/drag to move playhead, double-click to\n"

@@ -7,6 +7,7 @@ Provides a single source of truth for shot-level settings
 Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
 import pythontk as ptk
+from uitk import Signals
 
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
@@ -41,6 +42,9 @@ class ShotsController(ptk.LoggingMixin):
             "txt_shot_desc",
             "spn_move_to",
             "spn_gap",
+            "spn_initial_length",
+            "cmb_fit_mode",
+            "chk_snap_whole_frames",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -186,6 +190,7 @@ class ShotsController(ptk.LoggingMixin):
     # ---- index ↔ mode mapping ---------------------------------------------
 
     _DETECTION_MODES = ShotStore.DETECTION_MODES
+    _FIT_MODES = ShotStore.FIT_MODES
 
     def _mode_to_index(self, mode: str) -> int:
         try:
@@ -233,6 +238,48 @@ class ShotsController(ptk.LoggingMixin):
         ]
         self._set_footer(sep.join(parts))
 
+    # ---- state management -------------------------------------------------
+
+    def refresh_state(self) -> None:
+        """Central enable/disable refresh for all Shots UI widgets.
+
+        Checks scene state (animation existence, shot existence) and
+        sets the correct enabled state on every widget.  Call this
+        after any operation that might change scene context — assess,
+        build, scene open, etc.
+
+        Dependent tools (manifest, sequencer) should call this instead
+        of managing individual widget states themselves.
+        """
+        store = self._active_store()
+        has_shots = bool(store.shots) if store else False
+        mode = store.detection_mode if store else "auto"
+        det_relevant = store.is_detection_relevant if store else True
+
+        # Detection group — disabled when shots already exist OR
+        # when auto mode finds no animation in the scene.
+        # Only call has_animation() when it can actually affect the
+        # result (auto mode + no shots) to avoid unnecessary Maya API
+        # queries on every store event.
+        needs_anim_check = det_relevant and mode == "auto"
+        has_anim = ShotStore.has_animation() if needs_anim_check else True
+        auto_no_anim = needs_anim_check and not has_anim
+
+        cmb_mode = getattr(self.ui, "cmb_detection_mode", None)
+        spn_det = getattr(self.ui, "spn_detection", None)
+
+        if cmb_mode is not None:
+            cmb_mode.setEnabled(det_relevant)
+        if spn_det is not None:
+            spn_det.setEnabled(
+                det_relevant and mode != "zero_as_end" and not auto_no_anim
+            )
+
+        # Editing group
+        spn_gap = getattr(self.ui, "spn_gap", None)
+        if spn_gap is not None:
+            spn_gap.setEnabled(has_shots)
+
     # ---- sync ------------------------------------------------------------
 
     def _sync_from_store(self) -> None:
@@ -253,14 +300,27 @@ class ShotsController(ptk.LoggingMixin):
             cmb_mode.setCurrentIndex(self._mode_to_index(store.detection_mode))
             cmb_mode.blockSignals(False)
 
-        # Disable detection widgets when shots exist (irrelevant) or
-        # Min Gap spinner in zero_as_end mode (unused there).
-        mode = store.detection_mode
-        det_relevant = store.is_detection_relevant
-        if spn_det is not None:
-            spn_det.setEnabled(det_relevant and mode != "zero_as_end")
-        if cmb_mode is not None:
-            cmb_mode.setEnabled(det_relevant)
+        spn_init = getattr(self.ui, "spn_initial_length", None)
+        if spn_init is not None:
+            spn_init.blockSignals(True)
+            spn_init.setValue(float(store.initial_shot_length))
+            spn_init.blockSignals(False)
+
+        cmb_fit = getattr(self.ui, "cmb_fit_mode", None)
+        if cmb_fit is not None:
+            cmb_fit.blockSignals(True)
+            try:
+                cmb_fit.setCurrentIndex(self._FIT_MODES.index(store.fit_mode))
+            except ValueError:
+                cmb_fit.setCurrentIndex(0)
+            cmb_fit.blockSignals(False)
+
+        chk_snap = getattr(self.ui, "chk_snap_whole_frames", None)
+        if chk_snap is not None:
+            chk_snap.blockSignals(True)
+            chk_snap.setChecked(bool(store.snap_whole_frames))
+            chk_snap.blockSignals(False)
+        self._apply_snap_to_spinboxes(bool(store.snap_whole_frames))
 
         # ---- Editing group ----
         has_shots = bool(store.shots)
@@ -279,10 +339,10 @@ class ShotsController(ptk.LoggingMixin):
             spn_gap.blockSignals(True)
             spn_gap.setValue(int(gap))
             spn_gap.blockSignals(False)
-            spn_gap.setEnabled(has_shots)
 
         self._populate_shot_combobox(store)
         self._sync_footer(store)
+        self.refresh_state()
 
     # ---- shot editor sync ------------------------------------------------
 
@@ -332,6 +392,7 @@ class ShotsController(ptk.LoggingMixin):
             spn_end = getattr(self.ui, "spn_shot_end", None)
             txt_desc = getattr(self.ui, "txt_shot_desc", None)
             btn_del = getattr(self.ui, "b000", None)
+            btn_trim = getattr(self.ui, "btn_trim_empty", None)
             cmb = getattr(self.ui, "cmb_shot_select", None)
             shot = None
             if store is not None and store.active_shot_id is not None:
@@ -348,6 +409,8 @@ class ShotsController(ptk.LoggingMixin):
                     w.setEnabled(has_shot)
             if btn_del is not None:
                 btn_del.setEnabled(has_shot)
+            if btn_trim is not None:
+                btn_trim.setEnabled(has_shot)
             if spn_move is not None:
                 spn_move.setEnabled(has_shot and has_any_shots)
 
@@ -441,6 +504,7 @@ class ShotsController(ptk.LoggingMixin):
         if store is not None:
             store.detection_threshold = float(value)
             store.mark_dirty()
+            store._save_user_prefs()
             store.notify_settings_changed()
 
     def on_detection_mode_changed(self, index: int) -> None:
@@ -449,17 +513,58 @@ class ShotsController(ptk.LoggingMixin):
         if store is not None:
             store.detection_mode = mode
             store.mark_dirty()
+            store._save_user_prefs()
             store.notify_settings_changed()
-        # Disable Min Gap spinner when irrelevant or zero_as_end.
-        det_relevant = store.is_detection_relevant if store is not None else True
-        spn = getattr(self.ui, "spn_detection", None)
-        if spn is not None:
-            spn.setEnabled(det_relevant and mode != "zero_as_end")
-        cmb = getattr(self.ui, "cmb_detection_mode", None)
-        if cmb is not None:
-            cmb.setEnabled(det_relevant)
+        self.refresh_state()
 
-    def on_gap_changed(self, value: int) -> None:
+    def on_initial_length_changed(self, value: float) -> None:
+        store = self._active_store()
+        if store is not None:
+            store.initial_shot_length = float(value)
+            store.mark_dirty()
+            store._save_user_prefs()
+            store.notify_settings_changed()
+
+    def on_snap_whole_frames_changed(self, checked: bool) -> None:
+        store = self._active_store()
+        if store is None:
+            return
+        store.snap_whole_frames = bool(checked)
+        store.mark_dirty()
+        store._save_user_prefs()
+        self._apply_snap_to_spinboxes(bool(checked))
+        # Re-snap existing shot bounds so the scene state reflects the
+        # new policy.  No-op when turning snapping off.
+        if checked:
+            changed = False
+            for shot in store.shots:
+                ns, ne = store.snap(shot.start), store.snap(shot.end)
+                if ns != shot.start or ne != shot.end:
+                    shot.start, shot.end = ns, ne
+                    changed = True
+            if changed:
+                store.mark_dirty()
+        store.notify_settings_changed()
+
+    def _apply_snap_to_spinboxes(self, snap: bool) -> None:
+        """Mirror snap policy on frame spinboxes by toggling decimals."""
+        decimals = 0 if snap else 1
+        for name in ("spn_shot_start", "spn_shot_end", "spn_gap", "spn_initial_length"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                w.setDecimals(decimals)
+
+    def on_fit_mode_changed(self, index: int) -> None:
+        store = self._active_store()
+        if store is None:
+            return
+        if 0 <= index < len(self._FIT_MODES):
+            store.fit_mode = self._FIT_MODES[index]
+            store.mark_dirty()
+            store._save_user_prefs()
+            store.notify_settings_changed()
+
+    def on_gap_changed(self, value) -> None:
         store = self._active_store()
         if store is not None:
             store.gap = float(value)
@@ -468,11 +573,14 @@ class ShotsController(ptk.LoggingMixin):
             from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
                 ShotSequencer,
             )
-            import pymel.core as pm
 
             seq = ShotSequencer(store=store)
-            with pm.UndoChunk():
-                seq.respace(gap=float(value))
+            sorted_s = seq.sorted_shots()
+            if sorted_s:
+                import pymel.core as pm
+
+                with pm.UndoChunk():
+                    seq.respace(gap=store.gap, start_frame=sorted_s[0].start)
             store.notify_settings_changed()
 
     # ---- shot editor actions ---------------------------------------------
@@ -643,6 +751,23 @@ class ShotsController(ptk.LoggingMixin):
         self._populate_shot_combobox(store)
         store.notify_settings_changed()
 
+    def on_trim_empty(self) -> None:
+        """Trim empty space from the active shot's start and end."""
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+        import pymel.core as pm
+
+        seq = ShotSequencer(store=store)
+        with pm.UndoChunk():
+            seq.trim_shot_to_content(store.active_shot_id)
+
+        store.notify_settings_changed()
+
 
 class ShotsSlots(ptk.LoggingMixin):
     """Switchboard slot class — routes UI events to the controller."""
@@ -665,16 +790,16 @@ class ShotsSlots(ptk.LoggingMixin):
             setText="Instructions",
             setObjectName="btn_instructions",
             setToolTip=(
-                "Shots \u2014 Detection settings, shot properties, and gap\n"
+                "Shots \u2014 Generation settings, shot properties, and gap\n"
                 "control for the Shot Manifest and Shot Sequencer.\n\n"
                 "Quick Start:\n"
-                "  1. Choose a Detection Mode and set Min Gap.\n"
-                "  2. Open the Shot Manifest or Shot Sequencer to trigger\n"
-                "     detection (settings here are shared by both tools).\n"
+                "  1. Choose a generation mode and set Min Gap.\n"
+                "  2. Open the Shot Manifest or Shot Sequencer to generate\n"
+                "     shots (settings here are shared by both tools).\n"
                 "  3. Edit individual shot properties in the Shot Editor\n"
                 "     section below, or adjust the Gap spinner to respace\n"
                 "     all shots at once.\n\n"
-                "Detection:\n"
+                "Generate from Animation:\n"
                 "  \u2022 Auto-Detect \u2014 Scans all scene animation and groups\n"
                 "    contiguous segments separated by gaps larger than\n"
                 "    the Min Gap threshold.\n"
@@ -686,6 +811,16 @@ class ShotsSlots(ptk.LoggingMixin):
                 "    zero-value keys end them (Min Gap is disabled).\n\n"
                 "  Min Gap: Minimum frame gap that separates segments into\n"
                 "  distinct shots, or merges nearby keys into one boundary.\n\n"
+                "Build:\n"
+                "  Defaults applied when any tool (Shot Manifest, Sequencer)\n"
+                "  constructs new shots.\n"
+                "  \u2022 Initial Length \u2014 Default frame length for a new shot\n"
+                "    before content-driven resizing.\n"
+                "  \u2022 Fit \u2014 Extend Only grows a shot to fit its behaviors/\n"
+                "    audio but never shrinks below Initial Length. Shrink &\n"
+                "    Extend resizes to fit contents exactly.\n"
+                "  \u2022 Snap to Whole Frames \u2014 Round every frame value\n"
+                "    (start, end, keyframes) to an integer at write time.\n\n"
                 "Gap (Editing):\n"
                 "  Sets the frame gap between consecutive shots. Adjusting\n"
                 "  this spinner immediately respaces all shots and moves\n"
@@ -712,9 +847,24 @@ class ShotsSlots(ptk.LoggingMixin):
         """Detection mode combobox changed."""
         self.controller.on_detection_mode_changed(index)
 
-    def spn_gap(self, value):
-        """Global gap spinner changed."""
-        self.controller.on_gap_changed(value)
+    @Signals("editingFinished")
+    def spn_gap(self):
+        """Global gap spinner committed (Enter or focus-out)."""
+        w = getattr(self.ui, "spn_gap", None)
+        if w is not None:
+            self.controller.on_gap_changed(w.value())
+
+    def spn_initial_length(self, value):
+        """Initial shot length changed."""
+        self.controller.on_initial_length_changed(value)
+
+    def cmb_fit_mode(self, index):
+        """Fit mode combobox changed."""
+        self.controller.on_fit_mode_changed(index)
+
+    def chk_snap_whole_frames(self, checked):
+        """Snap-to-whole-frames checkbox toggled."""
+        self.controller.on_snap_whole_frames_changed(checked)
 
     # ---- shot editor slots -----------------------------------------------
 
@@ -753,3 +903,7 @@ class ShotsSlots(ptk.LoggingMixin):
     def btn_move_shot(self):
         """Move shot to the position in spn_move_to."""
         self.controller.on_move_shot()
+
+    def btn_trim_empty(self):
+        """Trim empty space from the selected shot."""
+        self.controller.on_trim_empty()

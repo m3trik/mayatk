@@ -23,6 +23,7 @@ except ImportError as error:
     print(__file__, error)
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
 
 
 @dataclass
@@ -122,22 +123,12 @@ class SmartBake:
         >>> print(result.time_range)  # Time range used
     """
 
-    # Attributes considered for baking (override in subclass to extend)
-    TRANSFORM_ATTRS: Set[str] = {
-        "translateX",
-        "translateY",
-        "translateZ",
-        "rotateX",
-        "rotateY",
-        "rotateZ",
-        "scaleX",
-        "scaleY",
-        "scaleZ",
-        "translate",
-        "rotate",
-        "scale",
-        "visibility",
-    }
+    # Attributes considered for baking (override in subclass to extend).
+    # Extends the shared per-axis constant with compound names so that
+    # compound plugs like ".translate" are also recognised.
+    TRANSFORM_ATTRS: Set[str] = (
+        set(STANDARD_TRANSFORM_ATTRS) | {"translate", "rotate", "scale"}
+    )
 
     # Intermediate node types to trace through when finding drivers
     # These are utility nodes that pass values through without being true "drivers"

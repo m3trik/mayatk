@@ -1,0 +1,418 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Sync engine, dirty-tracking, and key manipulation for Audio Events.
+
+Provides ``SyncEngineMixin`` — the stateful core that tracks whether the
+composite audio needs rebuilding and performs the sync + fingerprint
+lifecycle.
+
+Key manipulation helpers (start anchors, overlap pruning, end-key
+realignment) are co-located here because they are inherently part of
+the "keep audio in sync with keyframes" concern.
+
+Dependency
+----------
+- No mixin dependencies.  ``AudioEventsSlots`` must provide:
+  ``_audio_files``, ``_sync_fingerprints``, ``_deferred_sync_pending``,
+  ``_require_target()``, ``_refresh_combo_from_target()``,
+  ``_save_file_map()``, ``CATEGORY``, ``self.ui``.
+"""
+import logging
+import math
+import os
+
+try:
+    import pymel.core as pm
+    import maya.cmds as cmds
+except ImportError:
+    pass
+
+from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
+
+
+class SyncEngineMixin:
+    """Sync, dirty-tracking, composite activation, and key manipulation."""
+
+    # ------------------------------------------------------------------
+    # Sync core
+    # ------------------------------------------------------------------
+
+    def _sync_and_refresh_target(self, target):
+        """Sync keyed events to audio nodes and persist UI/cache state.
+
+        **Single source of truth** for the shared post-key/post-sync flow
+        used by ``tb000``, ``tb001``, ``_key_all_events``,
+        ``_import_audio_paths``, ``b005`` (Replace), ``_export_composite``,
+        and ``_run_deferred_sync``.
+
+        After syncing audio nodes it:
+        1. Refreshes the combo UI.
+        2. Persists the file map on the target.
+        3. Stores a fingerprint for dirty-tracking.
+        4. **Activates the target's composite** — the sole place in the
+           codebase where ``_activate_composite_for`` is called after a
+           sync.  ``AudioEvents.sync()`` intentionally does *not* call
+           ``set_active`` so that the UI layer controls which object's
+           composite is heard.
+        """
+        results = AudioEvents.sync(
+            objects=[target],
+            audio_file_map=dict(self._audio_files),
+            category=self.CATEGORY,
+        )
+        total = sum(len(v) for v in results.values())
+        self._refresh_combo_from_target()
+        self._save_file_map(target)
+        # Record fingerprint so _sync_if_dirty can short-circuit next time.
+        self._sync_fingerprints[target.name()] = self._compute_sync_fingerprint(target)
+        # Activate the current target's composite — single source of truth.
+        self._activate_composite_for(target)
+        return total
+
+    # ------------------------------------------------------------------
+    # Dirty tracking
+    # ------------------------------------------------------------------
+
+    def _compute_sync_fingerprint(self, target):
+        """Return a lightweight hash of the keyed-event state for *target*.
+
+        The fingerprint captures:
+
+        1. ``(frame, enum_index)`` pairs on the trigger attribute — a cheap
+           query that reads keyframe times and values without touching disk.
+        2. A sorted snapshot of ``_audio_files`` (stem → path).  This
+           ensures that replacing a track (same stem, different WAV) or
+           adding/removing files invalidates the fingerprint even when the
+           keyframes themselves haven't changed.
+
+        A changed fingerprint means the composite is stale and needs
+        rebuilding.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        attr_path = f"{target.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+
+        if not key_times:
+            key_part = "empty"
+        else:
+            key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+            pairs = [
+                (float(t), int(round(v))) for t, v in sorted(zip(key_times, key_values))
+            ]
+            key_part = str(pairs)
+
+        file_part = str(sorted(self._audio_files.items()))
+        return f"{key_part}|{file_part}"
+
+    def _sync_if_dirty(self, target):
+        """Sync only when the keyed-event state has changed since the last sync.
+
+        Returns:
+            -1 if already up to date (no sync performed),
+            otherwise the number of clips synced (may be 0 if no events keyed).
+        """
+        fp = self._compute_sync_fingerprint(target)
+        if fp == self._sync_fingerprints.get(target.name()):
+            return -1  # Already up to date
+        return self._sync_and_refresh_target(target)
+
+    def _schedule_deferred_sync(self):
+        """Schedule a deferred dirty-check + sync.
+
+        Coalesces rapid-fire calls (e.g. from channel-box scrubbing) into a
+        single deferred evaluation.  Safe to call from inside OpenMaya
+        callbacks.
+        """
+        if self._deferred_sync_pending or self._syncing_combo:
+            return
+        self._deferred_sync_pending = True
+        try:
+            cmds.evalDeferred(self._run_deferred_sync)
+        except Exception:
+            self._deferred_sync_pending = False
+
+    def _run_deferred_sync(self):
+        """Execute the deferred sync.
+
+        Called by ``evalDeferred`` from ``_schedule_deferred_sync``.
+        With numpy-accelerated compositing (~35ms for 71 clips) this
+        always rebuilds unconditionally instead of dirty-checking.
+        """
+        self._deferred_sync_pending = False
+        try:
+            if not self._audio_files:
+                return
+            target = self._require_target()
+            total = self._sync_and_refresh_target(target)
+            if total > 0:
+                self.ui.footer.setText(
+                    f"Auto-synced {total} clip(s) on {target.name()}."
+                )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "_run_deferred_sync error", exc_info=True
+            )
+
+    # ------------------------------------------------------------------
+    # Composite activation
+    # ------------------------------------------------------------------
+
+    def _activate_composite_for(self, target):
+        """Activate the per-object composite audio node for *target*.
+
+        Searches the category's audio set for a node named
+        ``{objName}_composite`` and, if found, sets it as the active
+        timeline sound.  Falls back to the legacy ``{cat}_composite``
+        if no per-object composite exists.
+
+        Safe to call when no composite exists (no-op).
+
+        Parameters:
+            target: PyNode of the trigger object.
+        """
+        if not target or not pm.objExists(target):
+            return
+
+        target_name = target.name()
+        per_obj = f"{target_name}_composite"
+        legacy = f"{self.CATEGORY}_composite"
+
+        fallback = None
+        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+            if node_name == per_obj:
+                AudioEvents.set_active(node_name)
+                return
+            if node_name == legacy and fallback is None:
+                fallback = node_name
+        if fallback:
+            AudioEvents.set_active(fallback)
+
+    def _is_composite_stale(self, target):
+        """Return True if the target has keyed events but no valid composite WAV.
+
+        Checks whether a composite audio node exists for *target* and,
+        if so, whether its backing WAV file is present on disk.  Returns
+        True when events are keyed but the composite is missing or
+        points to a non-existent file (e.g. after moving the project to
+        a different machine or clearing the audio cache).
+
+        Returns False when no events are keyed (no composite needed).
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if not keyed:
+            return False
+
+        target_name = target.name()
+        for candidate in (f"{target_name}_composite", f"{self.CATEGORY}_composite"):
+            for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                if node_name == candidate:
+                    try:
+                        fpath = cmds.getAttr(f"{node_name}.filename") or ""
+                        if fpath and os.path.isfile(fpath):
+                            return False  # Valid composite exists
+                    except Exception:
+                        pass
+        return True  # Has keyed events but no valid composite on disk
+
+    # ------------------------------------------------------------------
+    # Key manipulation helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_start_anchor(self, target, event_frame):
+        """Key a ``None`` anchor at frame 0 when the first event is keyed.
+
+        Without an explicit None key before the first event, Maya's stepped
+        tangent holds the event value backward to the start of the timeline.
+        A "tie keyframe" script that evaluates the attribute at frame 0 would
+        then bind the event value, triggering unwanted audio at the animation
+        clip's start.
+
+        This method checks whether the trigger attribute already has any
+        keyframes.  If not (i.e. this is the very first event being keyed),
+        it inserts a ``None`` key at frame 0 — or one frame before the event
+        if the event itself is at frame 0 or 1.
+
+        Safe to call repeatedly — it is a no-op once keyframes exist.
+
+        Parameters:
+            target: PyNode of the trigger object.
+            event_frame: The frame where the first event is about to be keyed.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        attr_path = f"{target.name()}.{trigger_attr}"
+        existing_keys = cmds.keyframe(attr_path, query=True) or []
+        if existing_keys:
+            return  # Keyframes already exist — not the first event.
+
+        # Place the anchor at frame 0 unless the event is at frame 0,
+        # in which case place it one frame earlier.  Frame -1 is uncommon
+        # but valid in Maya timelines that start before 0.
+        anchor_frame = 0 if event_frame > 0 else event_frame - 1
+
+        EventTriggers.set_key(
+            target,
+            event="None",
+            time=anchor_frame,
+            auto_clear=False,
+            category=self.CATEGORY,
+        )
+        log = logging.getLogger(__name__)
+        log.debug(
+            "_ensure_start_anchor: keyed None at frame %d for %s",
+            anchor_frame,
+            target,
+        )
+
+    def _prune_overlap_none_keys(self, target, start_frame):
+        """Remove stale intermediate ``None`` keys after a new clip starts.
+
+        Finds the next non-None key after ``start_frame``, and removes all
+        ``None`` keys between ``start_frame`` and that next key. This ensures
+        that when a new clip cuts off an older clip, the older clip's
+        now-redundant end-None key is removed, even if it falls after the
+        new clip's end frame.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        none_index = EventTriggers.event_index(
+            target,
+            "None",
+            category=self.CATEGORY,
+        )
+        if none_index < 0:
+            return
+
+        attr_path = f"{target.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+
+        if not key_times:
+            return
+
+        # Bulk query: times and values in one call each
+        key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+        time_value_map = {
+            float(t): int(round(v)) for t, v in zip(key_times, key_values)
+        }
+
+        # Find the next non-None key after start_frame
+        next_non_none_time = None
+        for key_time in sorted(time_value_map):
+            if key_time > start_frame:
+                if time_value_map[key_time] != none_index:
+                    next_non_none_time = key_time
+                    break
+
+        # Remove all None keys from start_frame up to next_non_none_time
+        for key_time in sorted(time_value_map):
+            if key_time >= start_frame and (
+                next_non_none_time is None or key_time < next_non_none_time
+            ):
+                if time_value_map[key_time] == none_index:
+                    EventTriggers.clear_key(
+                        target,
+                        time=key_time,
+                        category=self.CATEGORY,
+                    )
+
+    def _realign_none_end_keys(self, target, event_label):
+        """Move ``None`` end-keys for *event_label* to match the current clip duration.
+
+        After an audio file is swapped (``b005``) or re-added via browse
+        (``_import_audio_paths``), the ``None`` keyframes that mark the
+        end of each occurrence of *event_label* may be stale — they were
+        placed using the old clip's duration.  This method recalculates
+        the correct end frame from the **current** file in
+        ``_audio_files`` and relocates each ``None`` end-key accordingly.
+
+        Rules:
+        - Only existing ``None`` end-keys are moved.  If an occurrence
+          has no ``None`` end-key (Auto End None was off), it is skipped.
+        - The new end frame is clamped so it never overshoots the start
+          of a subsequent non-None event on the timeline.
+        - If the ``None`` key is already at the correct frame, no edit
+          is made.
+
+        Parameters:
+            target: PyNode of the trigger object.
+            event_label: The event label whose end-keys should be fixed
+                (must match the **current** enum label, post-rename).
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        source = self._audio_files.get(event_label.lower())
+        if not source:
+            return
+
+        new_length = self._get_clip_length_frames(source)
+        if new_length <= 0:
+            return
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        event_index = EventTriggers.event_index(
+            target, event_label, category=self.CATEGORY
+        )
+        none_index = EventTriggers.event_index(target, "None", category=self.CATEGORY)
+        if event_index < 0 or none_index < 0:
+            return
+
+        attr_path = f"{target.name()}.{trigger_attr}"
+        key_times = cmds.keyframe(attr_path, query=True) or []
+        if not key_times:
+            return
+
+        # Bulk query: times and values in one call each
+        key_values = cmds.keyframe(attr_path, query=True, valueChange=True) or []
+        timeline = [
+            (float(t), int(round(v))) for t, v in sorted(zip(key_times, key_values))
+        ]
+
+        # Walk the timeline and find each (event_start, none_end) pair.
+        moves = []  # [(old_none_frame, new_none_frame), ...]
+        for i, (frame, idx) in enumerate(timeline):
+            if idx != event_index:
+                continue
+
+            # Look ahead for the first None key that ends this event.
+            none_frame = None
+            next_event_frame = None
+            for j in range(i + 1, len(timeline)):
+                fj, ij = timeline[j]
+                if ij == none_index and none_frame is None:
+                    none_frame = fj
+                elif ij != none_index:
+                    next_event_frame = fj
+                    break
+
+            if none_frame is None:
+                # No None end-key for this occurrence — skip.
+                continue
+
+            new_end = math.ceil(frame + new_length)
+
+            # Clamp so the None key doesn't overshoot the next event.
+            if next_event_frame is not None and new_end > next_event_frame:
+                new_end = int(next_event_frame)
+
+            if int(none_frame) == new_end:
+                continue  # already correct
+
+            moves.append((none_frame, new_end))
+
+        # Apply moves (iterate in reverse so frame removals don't shift
+        # indices of earlier keys we haven't processed yet).
+        for old_frame, new_frame in reversed(moves):
+            EventTriggers.clear_key(target, time=old_frame, category=self.CATEGORY)
+            EventTriggers.set_key(
+                target,
+                event="None",
+                time=new_frame,
+                auto_clear=False,
+                category=self.CATEGORY,
+            )

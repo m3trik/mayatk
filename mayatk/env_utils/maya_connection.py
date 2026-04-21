@@ -516,13 +516,16 @@ class MayaConnection:
         return None
 
     @staticmethod
-    def close_instance(port: Optional[int] = None, pid: Optional[int] = None) -> bool:
+    def close_instance(
+        port: Optional[int] = None, pid: Optional[int] = None, force: bool = False
+    ) -> bool:
         """
         Close a Maya instance identified by Port or PID.
 
         Args:
             port: The command port number.
             pid: The process ID.
+            force: If True, force closes the application without prompting to save.
         """
         from pythontk import AppLauncher
 
@@ -541,8 +544,10 @@ class MayaConnection:
                         break
 
         if pid:
-            print(f"[MayaConnection] Closing Maya instance (PID: {pid})...")
-            return AppLauncher.close_process(pid)
+            print(
+                f"[MayaConnection] Closing Maya instance (PID: {pid}{', Forced' if force else ''})..."
+            )
+            return AppLauncher.close_process(pid, force=force)
 
         return False
 
@@ -1042,15 +1047,18 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 
         Exceptions are not suppressed.
         """
-        self.shutdown()
+        self.shutdown(force=True)
         return False  # do not suppress exceptions
 
-    def shutdown(self) -> None:
+    def shutdown(self, force: bool = False) -> None:
         """Shut down the connected Maya session and reset state.
 
         For *port* mode this kills the Maya process.  For *standalone*
         mode it uninitialises the embedded interpreter.  *Interactive*
         mode only resets the connection flag.
+
+        Args:
+            force: If True, force closes the application without prompting to save.
         """
         if not self.is_connected:
             return
@@ -1059,7 +1067,7 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 
         if mode == "port":
             try:
-                self.close_instance(port=self.port)
+                self.close_instance(port=self.port, force=force)
             except Exception as e:
                 print(f"[MayaConnection] Error closing Maya instance: {e}")
 

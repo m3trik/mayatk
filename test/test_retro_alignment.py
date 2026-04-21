@@ -46,7 +46,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     parse_csv,
     BuilderStep,
     BuilderObject,
-    ShotManifest,
+    ManifestBuilder,
 )
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
@@ -217,7 +217,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
 
     def test_assess_unbuilt(self):
         """With no shots built, every step should be marked 'not built'."""
-        builder = ShotManifest(self.store)
+        builder = ManifestBuilder(self.store)
         results = builder.assess(self.steps)
         for r in results:
             self.assertFalse(r.built, f"Step {r.step_id} unexpectedly built")
@@ -329,7 +329,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
     def test_build_then_assess(self):
         """Build shots from CSV, then assess against scene. Full pipeline."""
         store = ShotStore()
-        builder = ShotManifest(store)
+        builder = ManifestBuilder(store)
 
         # Build all shots
         actions = builder.update(self.steps)

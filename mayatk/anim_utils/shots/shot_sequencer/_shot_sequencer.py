@@ -315,6 +315,328 @@ class ShotSequencer:
             seg["obj"] = str(seg["obj"])
         return segments
 
+    # ---- unified sequence model (anim + audio) ---------------------------
+
+    def _collect_audio_sequences(
+        self, start: float, end: float
+    ) -> List[Dict[str, Any]]:
+        """Return audio events overlapping ``[start, end]`` as sequence dicts.
+
+        Each dict carries ``{"kind": "audio", "obj": <track_id>, "start", "end"}``.
+        Tracks with no defined stop frame fall back to ``end`` so a finite
+        range can be reported.
+        """
+        if pm is None:
+            return []
+        try:
+            from mayatk.audio_utils._audio_utils import AudioUtils
+        except ImportError:
+            return []
+
+        sequences: List[Dict[str, Any]] = []
+        try:
+            tracks = AudioUtils.list_tracks() or []
+        except Exception:
+            return []
+        for tid in tracks:
+            try:
+                events = AudioUtils.read_events(tid)
+            except Exception:
+                continue
+            for ev in events:
+                ev_start = float(ev.start)
+                ev_end = float(ev.stop) if ev.stop is not None else float(end)
+                if ev_end < start or ev_start > end:
+                    continue
+                sequences.append(
+                    {
+                        "kind": "audio",
+                        "obj": tid,
+                        "start": ev_start,
+                        "end": ev_end,
+                    }
+                )
+        return sequences
+
+    def collect_shot_sequences(
+        self,
+        shot_id: int,
+        include_audio: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Return all sequences (anim + audio) inside a shot's range.
+
+        Each item is a dict with ``"kind"`` (``"anim"`` or ``"audio"``),
+        ``"obj"`` (transform name or audio track id), ``"start"``, ``"end"``.
+        Anim segments come from :meth:`collect_object_segments`; audio
+        comes from :meth:`_collect_audio_sequences`.
+        """
+        anim = self.collect_object_segments(shot_id)
+        result: List[Dict[str, Any]] = [
+            {
+                "kind": "anim",
+                "obj": seg["obj"],
+                "start": seg["start"],
+                "end": seg["end"],
+            }
+            for seg in anim
+        ]
+        if include_audio:
+            shot = self.shot_by_id(shot_id)
+            if shot is not None:
+                result.extend(self._collect_audio_sequences(shot.start, shot.end))
+        return result
+
+    def _move_sequence(self, seq: Dict[str, Any], new_start: float) -> None:
+        """Dispatch a sequence move based on ``seq["kind"]``.
+
+        Anim sequences re-use :meth:`move_object_keys`; audio sequences
+        delegate to :func:`AudioUtils.shift_keys_in_range` via
+        :meth:`_shift_audio`.  Caller is responsible for any wrapping
+        ``audio_utils.batch()`` / ``store.batch_update()`` context.
+        """
+        delta = new_start - seq["start"]
+        if abs(delta) < 1e-6:
+            return
+        if seq["kind"] == "anim":
+            self.move_object_keys(seq["obj"], seq["start"], seq["end"], new_start)
+        elif seq["kind"] == "audio":
+            from mayatk.audio_utils._audio_utils import AudioUtils
+
+            with AudioUtils.batch() as b:
+                tids = AudioUtils.shift_keys_in_range(
+                    seq["start"], seq["end"], delta, track_ids=[seq["obj"]]
+                )
+                if tids:
+                    b.mark_dirty(tids)
+
+    def _recompute_shot_objects(self, shot_id: int) -> None:
+        """Rebuild ``shot.objects`` from animation that actually lives in the shot.
+
+        Scans every anim sequence inside the shot's frame range and keeps
+        only the transforms that contribute keys.  Locked / pinned objects
+        are preserved even when they have no remaining keys.  Audio is
+        out of scope — audio tracks are not part of ``shot.objects``.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            return
+        if pm is None:
+            return
+        anim_objs = {
+            seg["obj"] for seg in self.collect_object_segments(shot_id)
+        }
+        keep = self.store.pinned_objects | self.store.locked_objects
+        new_objs = sorted(set(shot.objects) & (anim_objs | keep) | anim_objs)
+        if new_objs != sorted(shot.objects):
+            self.store.update_shot(shot_id, objects=new_objs)
+
+    # ---- move sequences across shots -------------------------------------
+
+    def _source_shot_id_for(self, seq: Dict[str, Any]) -> Optional[int]:
+        """Return the shot_id that currently contains *seq* (by frame range)."""
+        for sh in self.store.shots:
+            if sh.start - 1e-6 <= seq["start"] and seq["end"] <= sh.end + 1e-6:
+                return sh.shot_id
+        return None
+
+    def move_sequences_to_shot(
+        self,
+        sequences: List[Dict[str, Any]],
+        dest_shot_id: int,
+    ) -> None:
+        """Move *sequences* (anim and/or audio) into *dest_shot_id*.
+
+        Sequences are grouped by source shot so each subgroup moves as a
+        unit, preserving internal offsets.  Placement inside the
+        destination depends on whether the destination already contains a
+        sequence on the same object:
+
+            - If yes: the subgroup is placed adjacent — *after* the
+              existing range when the source shot lies upstream of the
+              destination, *before* when downstream.
+            - If no: the subgroup is anchored to the destination start.
+
+        After the move, ``shot.objects`` is recomputed for the destination
+        and every source shot that lost content.
+
+        Parameters:
+            sequences: dicts with ``"kind"``, ``"obj"``, ``"start"``,
+                ``"end"`` (as produced by :meth:`collect_shot_sequences`).
+            dest_shot_id: Target shot's id.
+        """
+        dest = self.shot_by_id(dest_shot_id)
+        if dest is None:
+            raise ValueError(f"No shot with id {dest_shot_id}")
+        if not sequences:
+            return
+
+        dest_seqs_by_obj: Dict[str, List[Dict[str, Any]]] = {}
+        for s in self.collect_shot_sequences(dest_shot_id):
+            dest_seqs_by_obj.setdefault(s["obj"], []).append(s)
+
+        groups: Dict[Optional[int], List[Dict[str, Any]]] = {}
+        for seq in sequences:
+            sid = self._source_shot_id_for(seq)
+            if sid == dest_shot_id:
+                continue  # already in destination — skip
+            groups.setdefault(sid, []).append(seq)
+
+        if not groups:
+            return
+
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+
+        affected_shots: set = {dest_shot_id}
+
+        # Pre-register moved anim objects on dest so that the post-move
+        # _recompute_shot_objects pass actually scans them.  Without this,
+        # collect_object_segments would only see dest's existing objects
+        # and the newly-moved transforms would never make it into
+        # dest.objects.
+        dest_anim_additions = {
+            seq["obj"]
+            for grp in groups.values()
+            for seq in grp
+            if seq["kind"] == "anim"
+        }
+        if dest_anim_additions:
+            merged = sorted(set(dest.objects) | dest_anim_additions)
+            if merged != sorted(dest.objects):
+                self.store.update_shot(dest_shot_id, objects=merged)
+
+        with audio_utils.batch(), self.store.batch_update():
+            for source_id, group in groups.items():
+                src = self.shot_by_id(source_id) if source_id is not None else None
+                direction = "right"
+                if src is not None and src.start > dest.start:
+                    direction = "left"
+
+                base = min(s["start"] for s in group)
+                group_end = max(s["end"] for s in group)
+                group_dur = group_end - base
+
+                existing: List[Dict[str, Any]] = []
+                for seq in group:
+                    existing.extend(dest_seqs_by_obj.get(seq["obj"], []))
+
+                if existing:
+                    if direction == "right":
+                        anchor = max(e["end"] for e in existing)
+                    else:
+                        anchor = min(e["start"] for e in existing) - group_dur
+                else:
+                    anchor = dest.start
+
+                for seq in group:
+                    offset = seq["start"] - base
+                    self._move_sequence(seq, anchor + offset)
+
+                    # Track new dest range for subsequent groups so multiple
+                    # subgroups stack instead of stomping each other.
+                    new_start = anchor + offset
+                    new_end = new_start + (seq["end"] - seq["start"])
+                    dest_seqs_by_obj.setdefault(seq["obj"], []).append(
+                        {
+                            "kind": seq["kind"],
+                            "obj": seq["obj"],
+                            "start": new_start,
+                            "end": new_end,
+                        }
+                    )
+
+                if source_id is not None:
+                    affected_shots.add(source_id)
+
+            for sid in affected_shots:
+                self._recompute_shot_objects(sid)
+
+        # Auto-extend the destination shot if any moved content overruns
+        # its current boundaries.  This ripples upstream/downstream as
+        # needed, preserving spacing — extend-to-fit is implicit, never a
+        # separate user action.
+        self.extend_shot_to_fit(dest_shot_id)
+
+    # ---- shot fit / trim / extend ----------------------------------------
+
+    def fit_shot_to_content(
+        self, shot_id: int, mode: str = "fit"
+    ) -> tuple[float, float]:
+        """Resize a shot's boundaries to its sequence content, rippling neighbors.
+
+        Mode controls direction:
+            ``"fit"`` — boundaries snap exactly to content (both expand and
+                contract as needed).
+            ``"trim"`` — only contract empty space; boundaries move *inward*
+                and never past content.
+            ``"extend"`` — only expand to enclose out-of-range content;
+                boundaries move *outward* and never inward.
+
+        Neighbouring shots ripple by the head/tail deltas so spacing is
+        preserved.  Audio shifts are batched.
+
+        Returns:
+            ``(head_delta, tail_delta)`` — the amount the start/end moved.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+
+        sequences = self.collect_shot_sequences(shot_id)
+        if not sequences:
+            return 0.0, 0.0
+
+        content_start = min(s["start"] for s in sequences)
+        content_end = max(s["end"] for s in sequences)
+
+        if mode == "trim":
+            new_start = max(shot.start, content_start)
+            new_end = min(shot.end, content_end)
+        elif mode == "extend":
+            new_start = min(shot.start, content_start)
+            new_end = max(shot.end, content_end)
+        else:  # "fit"
+            new_start = content_start
+            new_end = content_end
+
+        new_start = self.store.snap(new_start)
+        new_end = self.store.snap(new_end)
+        head_delta = new_start - shot.start
+        tail_delta = new_end - shot.end
+        if abs(head_delta) < 1e-6 and abs(tail_delta) < 1e-6:
+            return 0.0, 0.0
+
+        old_start, old_end = shot.start, shot.end
+
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+
+        shifted_audio: set = set()
+        with audio_utils.batch():
+            shot.start = new_start
+            shot.end = new_end
+            if abs(tail_delta) > 1e-6:
+                self._ripple_downstream(shot_id, old_end, tail_delta, shifted_audio)
+            if abs(head_delta) > 1e-6:
+                self._ripple_upstream(shot_id, old_start, head_delta, shifted_audio)
+
+        self._enforce_gap_holds()
+        return head_delta, tail_delta
+
+    def trim_shot_to_content(self, shot_id: int) -> tuple[float, float]:
+        """Shrink shot boundaries inward so they exactly enclose content.
+
+        Empty leading/trailing space is removed; downstream/upstream shots
+        ripple to preserve their spacing.
+        """
+        return self.fit_shot_to_content(shot_id, mode="trim")
+
+    def extend_shot_to_fit(self, shot_id: int) -> tuple[float, float]:
+        """Expand shot boundaries outward to enclose all of its sequences.
+
+        If sequences extend past the current head or tail, the shot grows
+        to cover them and neighbouring shots ripple outward.
+        """
+        return self.fit_shot_to_content(shot_id, mode="extend")
+
     # ---- automatic shot detection ----------------------------------------
 
     def detect_shots(
@@ -583,59 +905,30 @@ class ShotSequencer:
         delta: float,
         shifted: Optional[set] = None,
     ) -> None:
-        """Shift audio nodes whose timeline position falls within a range.
+        """Shift audio clips whose timeline position falls within a range.
 
-        Handles both DG ``audio`` nodes (offset attribute) and keyed
-        ``audio_trigger`` enum locators used by AudioEvents.
+        Delegates to :func:`mayatk.audio_utils.shift_keys_in_range`
+        which updates the canonical keyed store. Callers are expected
+        to wrap bulk ops in an ``audio_utils.batch()`` so the compositor
+        re-renders derived DG audio nodes in a single sync.
 
         Parameters:
-            cmds: The ``maya.cmds`` module.
+            cmds: Unused (retained for historical signature).
             old_start: Start of the time range to shift.
             old_end: End of the time range to shift.
-            delta: Frames to add to each audio position.
-            shifted: Optional set of node names already shifted in this
-                batch.  Nodes present in the set are skipped, and newly
-                shifted nodes are added.  Prevents double-shifting when
-                multiple shots are processed sequentially (e.g. respace).
+            delta: Frames to add to each audio key.
+            shifted: Unused (per-node dedup was needed for the legacy
+                offset-attr path; the new per-track primitive is
+                intrinsically dedup-safe).
         """
         if abs(delta) < 1e-6:
             return
-        if shifted is None:
-            shifted = set()
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-        eps = 1e-3
-
-        # --- DG audio nodes ---
-        for node in cmds.ls(type="audio") or []:
-            if node in shifted:
-                continue
-            offset = cmds.getAttr(f"{node}.offset") or 0.0
-            if old_start - eps <= offset <= old_end + eps:
-                cmds.setAttr(f"{node}.offset", offset + delta)
-                shifted.add(node)
-
-        # --- Event audio locators (keyed audio_trigger attrs) ---
-        trigger_attr = "audio_trigger"
-        for xform in cmds.ls(type="transform") or []:
-            if xform in shifted:
-                continue
-            if not cmds.attributeQuery(trigger_attr, node=xform, exists=True):
-                continue
-            attr = f"{xform}.{trigger_attr}"
-            keys = cmds.keyframe(attr, q=True, time=(old_start - eps, old_end + eps))
-            if not keys:
-                continue
-            try:
-                cmds.keyframe(
-                    attr,
-                    edit=True,
-                    relative=True,
-                    timeChange=delta,
-                    time=(old_start - eps, old_end + eps),
-                )
-                shifted.add(xform)
-            except RuntimeError:
-                pass
+        with audio_utils.batch() as b:
+            tids = audio_utils.shift_keys_in_range(old_start, old_end, delta)
+            if tids:
+                b.mark_dirty(tids)
 
     def _move_shot_content(
         self,
@@ -656,6 +949,7 @@ class ShotSequencer:
             shifted_audio: Optional set forwarded to :meth:`_shift_audio`
                 to prevent double-shifting nodes across sequential calls.
         """
+        new_start = self.store.snap(new_start)
         old_start = shot.start
         old_end = shot.end
         delta = new_start - old_start
@@ -671,7 +965,7 @@ class ShotSequencer:
             self._shift_audio(cmds, old_start, old_end, delta, shifted_audio)
 
         shot.start = new_start
-        shot.end = new_start + duration
+        shot.end = self.store.snap(new_start + duration)
 
     def move_object_in_shot(
         self,
@@ -698,8 +992,9 @@ class ShotSequencer:
         if shot is None:
             raise ValueError(f"No shot with id {shot_id}")
 
+        new_start = self.store.snap(new_start)
         dur = old_end - old_start
-        new_end = new_start + dur
+        new_end = self.store.snap(new_start + dur)
 
         # Move the object's keys
         self.move_object_keys(obj, old_start, old_end, new_start)
@@ -899,12 +1194,22 @@ class ShotSequencer:
         delta: float,
         shifted_audio: Optional[set] = None,
     ):
-        """Shift all shots starting at or after *after_frame* by *delta*."""
-        for s in self.sorted_shots():
-            if s.shot_id == shot_id:
-                continue
-            if s.start >= after_frame:
-                self._move_shot_content(s, s.start + delta, shifted_audio)
+        """Shift all shots starting at or after *after_frame* by *delta*.
+
+        Routes through :mod:`_shot_plan` and :mod:`_shot_apply` so
+        the whole downstream topology is resolved before any keyframe
+        is touched — preventing envelope collisions between moved and
+        not-yet-moved shots.  The ``shifted_audio`` argument is retained
+        for signature compatibility and is unused (audio dedup is
+        intrinsic to the audio batch primitive).
+        """
+        from mayatk.anim_utils.shots._shot_plan import (
+            plan_ripple_downstream,
+        )
+        from mayatk.anim_utils.shots._shot_apply import apply
+
+        plan = plan_ripple_downstream(self.store, shot_id, after_frame, delta)
+        apply(self.store, plan)
 
     def _ripple_upstream(
         self,
@@ -913,12 +1218,18 @@ class ShotSequencer:
         delta: float,
         shifted_audio: Optional[set] = None,
     ):
-        """Shift all shots ending at or before *before_frame* by *delta*."""
-        for s in reversed(self.sorted_shots()):
-            if s.shot_id == shot_id:
-                continue
-            if s.end <= before_frame + 1e-6:
-                self._move_shot_content(s, s.start + delta, shifted_audio)
+        """Shift all shots ending at or before *before_frame* by *delta*.
+
+        Routes through the plan/executor pair — see
+        :meth:`_ripple_downstream` for the rationale.
+        """
+        from mayatk.anim_utils.shots._shot_plan import (
+            plan_ripple_upstream,
+        )
+        from mayatk.anim_utils.shots._shot_apply import apply
+
+        plan = plan_ripple_upstream(self.store, shot_id, before_frame, delta)
+        apply(self.store, plan)
 
     def _enforce_gap_holds(self):
         """Set stepped out-tangents on the last key before every inter-shot gap.
@@ -1006,7 +1317,7 @@ class ShotSequencer:
             return 0.0
         delta = new_end - shot.end
         old_end = shot.end
-        shot.end = new_end
+        shot.end = self.store.snap(new_end)
         self._ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
         return delta
@@ -1037,6 +1348,9 @@ class ShotSequencer:
         shot = self.shot_by_id(shot_id)
         if shot is None:
             raise ValueError(f"No shot with id {shot_id}")
+
+        new_start = self.store.snap(new_start)
+        new_end = self.store.snap(new_end)
 
         # Scale only this object's keys
         self.scale_object_keys(obj, old_start, old_end, new_start, new_end)
@@ -1071,7 +1385,7 @@ class ShotSequencer:
             return
 
         old_end = shot.end
-        new_end = shot.start + new_duration
+        new_end = self.store.snap(shot.start + new_duration)
 
         # Scale keyframes within this shot
         for obj in shot.objects:
@@ -1108,6 +1422,8 @@ class ShotSequencer:
         if shot is None:
             raise ValueError(f"No shot with id {shot_id}")
 
+        new_start = self.store.snap(new_start)
+        new_end = self.store.snap(new_end)
         old_start, old_end = shot.start, shot.end
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
@@ -1153,14 +1469,14 @@ class ShotSequencer:
 
         old_end = shot.end
 
-        # Move this shot's keys
-        for obj in shot.objects:
-            self.move_object_keys(obj, shot.start, shot.end, new_start)
-        shot.start += delta
-        shot.end += delta
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-        if ripple:
-            self._ripple_downstream(shot_id, old_end, delta)
+        with audio_utils.batch():
+            # Move this shot's content (animation + audio).
+            self._move_shot_content(shot, new_start)
+
+            if ripple:
+                self._ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
 
     def reorder_shots(self, shot_id_a: int, shot_id_b: int) -> None:
@@ -1201,48 +1517,62 @@ class ShotSequencer:
 
         # New positions: second shot goes to old first_start,
         # first shot goes right after it, preserving the original gap.
-        new_second_start = first_start
-        new_first_start = first_start + second_dur + gap
+        new_second_start = self.store.snap(first_start)
+        new_first_start = self.store.snap(first_start + second_dur + gap)
 
         # Use a large temporary offset so keys don't collide during the swap
         _PARK = 500000.0
 
-        # Move keyframes (only when Maya is available)
-        if pm is not None:
-            # 1) Park first shot's keys at temp offset
-            for obj in a.objects:
-                self.move_object_keys(obj, first_start, first_end, _PARK)
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-            # 2) Move second shot to the first shot's original position
-            for obj in b.objects:
-                self.move_object_keys(obj, second_start, second_end, new_second_start)
+        with audio_utils.batch():
+            # Move keyframes (only when Maya is available)
+            if pm is not None:
+                # 1) Park first shot's keys at temp offset
+                for obj in a.objects:
+                    self.move_object_keys(obj, first_start, first_end, _PARK)
+                self._shift_audio(None, first_start, first_end, _PARK - first_start)
 
-            # 3) Move first shot from park to its new position
-            parked_end = _PARK + first_dur
-            for obj in a.objects:
-                self.move_object_keys(obj, _PARK, parked_end, new_first_start)
+                # 2) Move second shot to the first shot's original position
+                for obj in b.objects:
+                    self.move_object_keys(
+                        obj, second_start, second_end, new_second_start
+                    )
+                self._shift_audio(
+                    None,
+                    second_start,
+                    second_end,
+                    new_second_start - second_start,
+                )
 
-        # 4) Update ShotBlock ranges
-        a.start = new_first_start
-        a.end = new_first_start + first_dur
-        b.start = new_second_start
-        b.end = new_second_start + second_dur
+                # 3) Move first shot from park to its new position
+                parked_end = _PARK + first_dur
+                for obj in a.objects:
+                    self.move_object_keys(obj, _PARK, parked_end, new_first_start)
+                self._shift_audio(None, _PARK, parked_end, new_first_start - _PARK)
 
-        # 5) Ripple downstream if durations differ
-        # The swap region now ends at (new_first_start + first_dur)
-        # versus the old end at second_end.  The delta is the difference.
-        new_region_end = a.end
-        delta = new_region_end - second_end
-        if abs(delta) > 1e-6:
-            for s in self.sorted_shots():
-                if s.shot_id in (a.shot_id, b.shot_id):
-                    continue
-                if s.start >= second_end:
-                    if pm is not None:
-                        for obj in s.objects:
-                            self.move_object_keys(obj, s.start, s.end, s.start + delta)
-                    s.start += delta
-                    s.end += delta
+            # 4) Update ShotBlock ranges
+            a.start = new_first_start
+            a.end = self.store.snap(new_first_start + first_dur)
+            b.start = new_second_start
+            b.end = self.store.snap(new_second_start + second_dur)
+
+            # 5) Ripple downstream if durations differ
+            new_region_end = a.end
+            delta = new_region_end - second_end
+            if abs(delta) > 1e-6:
+                for s in self.sorted_shots():
+                    if s.shot_id in (a.shot_id, b.shot_id):
+                        continue
+                    if s.start >= second_end:
+                        if pm is not None:
+                            for obj in s.objects:
+                                self.move_object_keys(
+                                    obj, s.start, s.end, s.start + delta
+                                )
+                            self._shift_audio(None, s.start, s.end, delta)
+                        s.start = self.store.snap(s.start + delta)
+                        s.end = self.store.snap(s.end + delta)
         self._enforce_gap_holds()
 
     def move_shot_to_position(self, shot_id: int, target_pos: int) -> None:
@@ -1297,33 +1627,43 @@ class ShotSequencer:
         new_positions = {}
         for i, s in enumerate(new_order):
             dur = s.duration
-            new_positions[s.shot_id] = (cursor, cursor + dur)
+            ns = self.store.snap(cursor)
+            ne = self.store.snap(cursor + dur)
+            new_positions[s.shot_id] = (ns, ne)
             effective_gap = locked_widths.get(i, gap)
             cursor += dur + effective_gap
 
         # Move keyframes via park technique to avoid collisions
         _PARK_BASE = 500000.0
-        if pm is not None:
-            park_offset = _PARK_BASE
-            parked = {}
+
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+
+        with audio_utils.batch():
+            if pm is not None:
+                park_offset = _PARK_BASE
+                parked = {}
+                for s in new_order:
+                    old_start, old_end = s.start, s.end
+                    new_start = new_positions[s.shot_id][0]
+                    if abs(old_start - new_start) > 1e-6:
+                        for obj in s.objects:
+                            self.move_object_keys(obj, old_start, old_end, park_offset)
+                        self._shift_audio(
+                            None, old_start, old_end, park_offset - old_start
+                        )
+                        parked[s.shot_id] = (park_offset, park_offset + s.duration)
+                        park_offset += s.duration + 1000
+
+                for sid, (park_s, park_e) in parked.items():
+                    shot = self.shot_by_id(sid)
+                    new_start = new_positions[sid][0]
+                    for obj in shot.objects:
+                        self.move_object_keys(obj, park_s, park_e, new_start)
+                    self._shift_audio(None, park_s, park_e, new_start - park_s)
+
+            # Update ShotBlock ranges
             for s in new_order:
-                old_start, old_end = s.start, s.end
-                new_start = new_positions[s.shot_id][0]
-                if abs(old_start - new_start) > 1e-6:
-                    for obj in s.objects:
-                        self.move_object_keys(obj, old_start, old_end, park_offset)
-                    parked[s.shot_id] = (park_offset, park_offset + s.duration)
-                    park_offset += s.duration + 1000
-
-            for sid, (park_s, park_e) in parked.items():
-                shot = self.shot_by_id(sid)
-                new_start = new_positions[sid][0]
-                for obj in shot.objects:
-                    self.move_object_keys(obj, park_s, park_e, new_start)
-
-        # Update ShotBlock ranges
-        for s in new_order:
-            s.start, s.end = new_positions[s.shot_id]
+                s.start, s.end = new_positions[s.shot_id]
 
         self._enforce_gap_holds()
 
@@ -1338,30 +1678,20 @@ class ShotSequencer:
         current width instead of using the uniform *gap* value.
         Keyframes are moved with their shots when Maya is available.
 
+        Delegates to :func:`_shot_plan.plan_respace` and
+        :func:`_shot_apply.apply` so the full topology is resolved
+        in memory before any Maya write, eliminating envelope
+        collisions between moved and not-yet-moved shots.
+
         Parameters:
             gap: Frames of gap between consecutive shots.
             start_frame: Timeline frame for the first shot.
         """
-        shots = self.sorted_shots()
-        if not shots:
-            return
+        from mayatk.anim_utils.shots._shot_plan import plan_respace
+        from mayatk.anim_utils.shots._shot_apply import apply
 
-        # Capture locked gap widths before repositioning.
-        locked_widths: dict = {}
-        for i in range(len(shots) - 1):
-            left, right = shots[i], shots[i + 1]
-            if self.store.is_gap_locked(left.shot_id, right.shot_id):
-                locked_widths[i] = max(0, right.start - left.end)
-
-        cursor = start_frame
-        shifted_audio: set = set()
-        for i, shot in enumerate(shots):
-            new_start = cursor
-            if abs(new_start - shot.start) > 1e-6:
-                self._move_shot_content(shot, new_start, shifted_audio)
-            effective_gap = locked_widths.get(i, gap)
-            cursor = shot.end + effective_gap
-
+        plan = plan_respace(self.store, gap, start_frame)
+        apply(self.store, plan)
         self._enforce_gap_holds()
 
     # ---- serialisation ---------------------------------------------------

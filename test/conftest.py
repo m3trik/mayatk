@@ -21,6 +21,9 @@ mock_pm.playbackOptions.return_value = 0.0
 mock_pm.currentTime.return_value = 1.0
 mock_pm.select = MagicMock()
 mock_pm.displayInfo = MagicMock()
+mock_pm.undoInfo = MagicMock()
+mock_pm.ls.return_value = []
+mock_pm.keyframe.return_value = []
 
 mock_undo_chunk = MagicMock()
 mock_undo_chunk.__enter__ = MagicMock(return_value=None)

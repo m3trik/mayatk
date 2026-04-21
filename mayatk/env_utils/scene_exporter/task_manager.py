@@ -20,7 +20,7 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils.scene_exporter.task_factory import TaskFactory
-from mayatk.env_utils.hierarchy_manager._hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
 
 
 class _TaskDataMixin:
@@ -926,9 +926,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         current_paths = HierarchySidecar.build_full_path_set(self.objects)
 
-        match, missing, extra = HierarchySidecar.compare(
-            export_path, current_paths
-        )
+        match, missing, extra = HierarchySidecar.compare(export_path, current_paths)
 
         if match:
             HierarchySidecar.clean_stale_diff(export_path)
@@ -1023,9 +1021,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     _frame_rate_options: Dict[str, Any] = {
         f"Check Scene FPS: {k}": k if v is not None else None
-        for k, v in ptk.insert_into_dict(
-            ptk.VidUtils.FRAME_RATES, "OFF", None
-        ).items()
+        for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
     }
 
     _scene_unit_options: Dict[str, Any] = {

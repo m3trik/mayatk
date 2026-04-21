@@ -18,6 +18,26 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
+STANDARD_TRANSFORM_ATTRS: frozenset = frozenset(
+    {
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotateX",
+        "rotateY",
+        "rotateZ",
+        "scaleX",
+        "scaleY",
+        "scaleZ",
+        "visibility",
+    }
+)
+"""Per-axis transform + visibility attributes.
+
+Used across the shots system and SmartBake to distinguish genuine
+scene-content animation from custom trigger/marker attributes.
+"""
+
 
 class _AnimUtilsMixin:
     """Helper mixin that contains internal shared logic for AnimUtils"""
@@ -5387,6 +5407,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         objects=None,
         mode: str = "auto",
         resolution_order: Optional[Tuple[str, ...]] = None,
+        tangent_detail: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """Copy attribute values from objects for later pasting as keys.
 
@@ -5408,6 +5429,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             resolution_order: Strategies to try for ``"auto"`` mode.
                 Default: ``("selected", "channel_box", "current_frame")``.
                 See :meth:`_resolve_keys` for available strategies.
+            tangent_detail: When True, multi-key data additionally
+                captures tangent angles and weights per key, plus
+                pre/post infinity types per curve.  This produces
+                lossless snapshots suitable for undo/take management.
+                Only affects ``"selected"`` mode.
 
         Returns:
             Nested dict ``{object_name: {attr: data, ...}, ...}``.
@@ -5419,6 +5445,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
                 [{"time": float, "value": float,
                   "inTangentType": str, "outTangentType": str}, ...]
+
+            When *tangent_detail* is True each key dict also contains
+            ``"inAngle"``, ``"outAngle"``, ``"inWeight"``,
+            ``"outWeight"`` (floats), and the attribute entry gains
+            ``"preInfinity"`` and ``"postInfinity"`` (strings).
 
             Empty dict when nothing could be copied.
         """
@@ -5506,15 +5537,40 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             ott = cmds.keyTangent(
                                 crv, q=True, time=(t, t), outTangentType=True
                             )
-                            key_list.append(
-                                {
-                                    "time": t,
-                                    "value": v,
-                                    "inTangentType": itt[0] if itt else "auto",
-                                    "outTangentType": ott[0] if ott else "auto",
-                                }
-                            )
-                        collected.setdefault(obj_name, {})[attr] = key_list
+                            kd = {
+                                "time": t,
+                                "value": v,
+                                "inTangentType": itt[0] if itt else "auto",
+                                "outTangentType": ott[0] if ott else "auto",
+                            }
+                            if tangent_detail:
+                                ia = cmds.keyTangent(
+                                    crv, q=True, time=(t, t), inAngle=True
+                                )
+                                oa = cmds.keyTangent(
+                                    crv, q=True, time=(t, t), outAngle=True
+                                )
+                                iw = cmds.keyTangent(
+                                    crv, q=True, time=(t, t), inWeight=True
+                                )
+                                ow = cmds.keyTangent(
+                                    crv, q=True, time=(t, t), outWeight=True
+                                )
+                                kd["inAngle"] = ia[0] if ia else 0.0
+                                kd["outAngle"] = oa[0] if oa else 0.0
+                                kd["inWeight"] = iw[0] if iw else 1.0
+                                kd["outWeight"] = ow[0] if ow else 1.0
+                            key_list.append(kd)
+                        attr_entry = key_list
+                        if tangent_detail:
+                            pre = cmds.setInfinity(plug, q=True, preInfinite=True)
+                            post = cmds.setInfinity(plug, q=True, postInfinite=True)
+                            attr_entry = {
+                                "keys": key_list,
+                                "preInfinity": pre[0] if pre else "constant",
+                                "postInfinity": post[0] if post else "constant",
+                            }
+                        collected.setdefault(obj_name, {})[attr] = attr_entry
                 return collected
 
             result = _collect_selected_keys(sel_curves, cb_filter)
@@ -5626,6 +5682,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if obj_attrs:
                 for attr, data in obj_attrs.items():
                     plug = f"{obj}.{attr}"
+                    # Unwrap tangent_detail envelope if present.
+                    infinity = None
+                    if isinstance(data, dict) and "keys" in data:
+                        infinity = (
+                            data.get("preInfinity", "constant"),
+                            data.get("postInfinity", "constant"),
+                        )
+                        data = data["keys"]
                     if isinstance(data, list):
                         # --- Multi-key paste (selected mode) ---
                         if not data:
@@ -5653,13 +5717,65 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             # Belt-and-suspenders: re-apply tangent
                             # types in case setKeyframe overrode them.
                             try:
-                                cmds.keyTangent(
-                                    plug,
+                                tangent_kw: Dict[str, Any] = dict(
                                     edit=True,
                                     time=(t, t),
                                     inTangentType=itt,
                                     outTangentType=ott,
                                 )
+                                # Restore angles/weights when present
+                                # (tangent_detail snapshot).
+                                if "inAngle" in kd:
+                                    if itt not in ("step", "stepnext") or ott not in (
+                                        "step",
+                                        "stepnext",
+                                    ):
+                                        tangent_kw["inAngle"] = kd["inAngle"]
+                                        tangent_kw["outAngle"] = kd["outAngle"]
+                                        tangent_kw["inWeight"] = kd["inWeight"]
+                                        tangent_kw["outWeight"] = kd["outWeight"]
+                                cmds.keyTangent(plug, **tangent_kw)
+                                # Re-apply the tangent type after setting
+                                # angles/weights, because explicit values
+                                # can convert auto types (spline, auto,
+                                # clamped, plateau) to "fixed".
+                                if "inAngle" in kd:
+                                    cmds.keyTangent(
+                                        plug,
+                                        edit=True,
+                                        time=(t, t),
+                                        inTangentType=itt,
+                                        outTangentType=ott,
+                                    )
+                            except Exception:
+                                pass
+                        # Restore infinity types when present.
+                        if infinity:
+                            try:
+                                import maya.api.OpenMaya as om2
+                                import maya.api.OpenMayaAnim as oma2
+
+                                _INF_STR_TO_ENUM = {
+                                    "constant": oma2.MFnAnimCurve.kConstant,
+                                    "linear": oma2.MFnAnimCurve.kLinear,
+                                    "cycle": oma2.MFnAnimCurve.kCycle,
+                                    "cycleRelative": oma2.MFnAnimCurve.kCycleRelative,
+                                    "oscillate": oma2.MFnAnimCurve.kOscillate,
+                                }
+                                sel = om2.MSelectionList()
+                                sel.add(plug)
+                                mplug = sel.getPlug(0)
+                                if mplug.isDestination:
+                                    src = mplug.source()
+                                    fn = oma2.MFnAnimCurve(src.node())
+                                    pre_enum = _INF_STR_TO_ENUM.get(
+                                        infinity[0], oma2.MFnAnimCurve.kConstant
+                                    )
+                                    post_enum = _INF_STR_TO_ENUM.get(
+                                        infinity[1], oma2.MFnAnimCurve.kConstant
+                                    )
+                                    fn.setPreInfinityType(pre_enum)
+                                    fn.setPostInfinityType(post_enum)
                             except Exception:
                                 pass
                     else:
