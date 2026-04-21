@@ -18,6 +18,26 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
+STANDARD_TRANSFORM_ATTRS: frozenset = frozenset(
+    {
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotateX",
+        "rotateY",
+        "rotateZ",
+        "scaleX",
+        "scaleY",
+        "scaleZ",
+        "visibility",
+    }
+)
+"""Per-axis transform + visibility attributes.
+
+Used across the shots system and SmartBake to distinguish genuine
+scene-content animation from custom trigger/marker attributes.
+"""
+
 
 class _AnimUtilsMixin:
     """Helper mixin that contains internal shared logic for AnimUtils"""

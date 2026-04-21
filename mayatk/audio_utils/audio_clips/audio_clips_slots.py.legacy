@@ -1,0 +1,1381 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Switchboard slots for the Audio Events UI.
+
+Provides ``AudioEventsSlots`` — a standalone window for importing,
+syncing, and managing Maya audio nodes from keyed event triggers.
+"""
+import json
+import logging
+import os
+
+try:
+    import pymel.core as pm
+    import maya.cmds as cmds
+except ImportError:
+    pass
+
+import pythontk as ptk
+
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.node_utils._data_nodes import DataNodes
+from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
+from mayatk.node_utils.attributes.audio_events._callbacks import CallbacksMixin
+from mayatk.node_utils.attributes.audio_events._export_ops import ExportMixin
+from mayatk.node_utils.attributes.audio_events._sync_engine import SyncEngineMixin
+
+
+class AudioEventsSlots(ExportMixin, CallbacksMixin, SyncEngineMixin):
+    """Switchboard slots for the Audio Events UI.
+
+    Layout
+    ------
+    - **Header**: Title bar.
+    - **Audio Tracks**: Browse for files, combo shows loaded stems.
+    - **Sync**: One-click import of audio nodes to the timeline.
+    - **Manage**: Single Remove action cleans trigger/audio data.
+    - **Footer**: Status messages.
+    """
+
+    AUDIO_FILTER = (
+        "Audio Files (*.wav *.aif *.aiff *.mp3 *.ogg *.m4a *.flac);;" "All Files (*)"
+    )
+    CATEGORY = "audio"
+    FILE_MAP_ATTR = "audio_file_map"
+
+    def __init__(self, switchboard):
+        self.sb = switchboard
+        self.ui = self.sb.loaded_ui.audio_events
+
+        # Internal state: {lowercase_stem: absolute_path, ...}
+        self._audio_files = {}
+        self._sel_token = None  # ScriptJobManager ephemeral token
+        self._time_token = None  # ScriptJobManager ephemeral token
+        self._scene_subs_installed = False  # Persistent scene subscriptions
+        self._attr_callback_ids = []  # OpenMaya attribute-changed callbacks
+        self._syncing_combo = False  # Echo guard for combo ↔ attr sync
+        self._last_enum_idx = None  # Cached enum index for timeChanged throttle
+        self._sync_fingerprints = {}  # {obj_name: fingerprint} after last sync
+        self._deferred_sync_pending = False  # Coalescing flag for deferred syncs
+        self._trigger_attr_path = None  # Cached "node.attr" for _on_time_changed
+        # b002/b003/b004 are auto-connected by switchboard (name-matching).
+        # No manual .clicked.connect() needed.
+
+        # Deferred so Maya's event loop is ready before scriptJob creation
+        try:
+            cmds.evalDeferred(self._ensure_sync_job)
+        except Exception:
+            pass  # Maya not ready; cmb000_init will retry
+
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+
+    def header_init(self, widget):
+        """Configure header menu with tool description and workflow instructions."""
+        widget.menu.add("Separator", setTitle="Import")
+        widget.menu.add(
+            "QCheckBox",
+            setText="Auto Convert",
+            setObjectName="chk_auto_convert",
+            setToolTip=(
+                "When enabled, non-Maya-playable audio formats\n"
+                "(MP3, OGG, M4A, FLAC, etc.) are automatically\n"
+                "converted to WAV on import via FFmpeg.\n\n"
+                "When disabled, only natively playable formats\n"
+                "(WAV, AIF, AIFF) are accepted — other formats\n"
+                "are silently skipped."
+            ),
+            setChecked=True,
+        )
+
+        widget.menu.add("Separator", setTitle="Export")
+        widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_export_mode",
+            setToolTip=(
+                "Choose what to export:\n"
+                "• Composite — single mixed WAV of all keyed clips.\n"
+                "• Keyed Tracks — individual source clips that are\n"
+                "  keyed on the timeline (unused clips skipped).\n"
+                "• All Tracks — every loaded clip regardless of\n"
+                "  whether it has been keyed."
+            ),
+            addItems=["Composite", "Keyed Tracks", "All Tracks"],
+        )
+        btn_export = widget.menu.add(
+            "QPushButton",
+            setText="Export",
+            setObjectName="btn_export",
+            setToolTip="Export audio using the selected mode above.",
+        )
+        btn_export.clicked.connect(self._export)
+        widget.menu.add(
+            "QCheckBox",
+            setText="Trim Silence",
+            setObjectName="chk_trim_silence",
+            setToolTip=(
+                "When exporting Composite, remove leading and\n"
+                "trailing silence from the exported WAV."
+            ),
+            setChecked=True,
+        )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Suffix Time Range",
+            setObjectName="chk_suffix_time_range",
+            setToolTip=(
+                "When exporting Keyed Tracks, append the keyed\n"
+                "frame range to each filename.\n\n"
+                "Example: Footstep_12-47.wav\n"
+                "(start frame 12, end frame 47)"
+            ),
+            setChecked=False,
+        )
+
+        widget.menu.add("Separator", setTitle="About")
+        widget.menu.add(
+            "QPushButton",
+            setText="Instructions",
+            setObjectName="btn_instructions",
+            setToolTip=(
+                "Audio Events — Keys audio clip triggers on a scene object\n"
+                "and imports matching audio nodes onto the Maya timeline.\n\n"
+                "Workflow:\n"
+                "  1. Click the folder icon on the tracks combo to browse\n"
+                "     for audio files.\n"
+                "     • File stems become event trigger names.\n"
+                "     • Re-adding a file with the same name replaces\n"
+                "       it at the same enum index (keyframes kept).\n"
+                "  2. Select a loaded track in the combo.\n"
+                "  3. Move the timeline cursor to the desired start frame.\n"
+                "  4. Press 'Key Audio Event' to key the trigger.\n"
+                "     • Enable 'Auto End None' (option box ▸) to auto-key\n"
+                "       a None marker at the clip's end frame.\n"
+                "     • Enable 'Next Event' to auto-advance through tracks.\n"
+                "  5. Repeat steps 2–4 for each audio cue.\n"
+                "  6. Click the refresh (↻) button on the Key Audio\n"
+                "     Event option box to sync audio to the timeline\n"
+                "     and rebuild the composite WAV for scrub playback.\n\n"
+                "Note: Adding or replacing tracks when events are already\n"
+                "keyed triggers an automatic sync so the composite WAV\n"
+                "reflects the updated audio immediately."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Audio Tracks
+    # ------------------------------------------------------------------
+
+    def cmb000_init(self, widget):
+        """Init track combo with browse option_box and management menu."""
+        from uitk.widgets.optionBox.options.browse import BrowseOption
+
+        widget.option_box.add_option(
+            BrowseOption(
+                wrapped_widget=widget,
+                file_types=self.AUDIO_FILTER,
+                mode="files",
+                title="Select Audio Tracks",
+                tooltip="Browse for audio files to add or replace tracks.",
+                callback=self._browse_audio_files_cb,
+            )
+        )
+
+        widget.option_box.menu.setTitle("Tracks")
+
+        btn_rename = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Rename Track",
+            setObjectName="btn_rename_track",
+            setToolTip=(
+                "Rename the currently selected track.\n"
+                "Updates the enum label, audio nodes, file map,\n"
+                "and re-syncs if keyed events exist."
+            ),
+        )
+        btn_rename.clicked.connect(self.b006)
+
+        btn_replace = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Replace Track",
+            setObjectName="btn_replace_track",
+            setToolTip=(
+                "Replace the selected track with a different audio file.\n"
+                "Preserves the index and all keyframes."
+            ),
+        )
+        btn_replace.clicked.connect(self.b005)
+
+        btn_cleanup = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Cleanup Unused",
+            setObjectName="btn_cleanup_unused",
+            setToolTip=(
+                "Remove enum entries that have no keyframes\n"
+                "and delete their preview audio nodes."
+            ),
+        )
+        btn_cleanup.clicked.connect(self.b004)
+
+        btn_remove = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Remove Audio",
+            setObjectName="btn_remove_audio",
+            setToolTip="Delete imported audio nodes and composite WAV.",
+        )
+        btn_remove.clicked.connect(self.b002)
+
+        self._ensure_sync_job()
+
+    def _browse_audio_files_cb(self, paths):
+        """BrowseOption callback — import selected audio file paths."""
+        if paths:
+            self._import_audio_paths(paths if isinstance(paths, list) else [paths])
+
+    def _import_audio_paths(self, paths):
+        """Merge *paths* into the track map and update the scene.
+
+        Merge-upsert workflow:
+
+        1. Paths are filtered via ``_prepare_selected_paths`` (format
+           check, optional FFmpeg conversion prompt).
+        2. Filtered paths are merged into ``_audio_files`` keyed by
+           lowercase stem.  Re-adding a file with the same stem
+           **overwrites** the path (same dict key = same enum index).
+        3. ``EventTriggers.ensure()`` adds any new event names to the
+           enum without disturbing existing indices or keyframes.
+        4. ``AudioEvents.load_tracks()`` creates new preview audio
+           nodes or updates existing ones whose file path changed.
+        5. If keyed events already exist, ``_sync_and_refresh_target()``
+           rebuilds synced audio nodes and the composite WAV so the
+           timeline reflects the updated tracks immediately.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        paths = self._prepare_selected_paths(paths)
+        if not paths:
+            self.ui.footer.setText("No audio files selected for import.")
+            return
+
+        target = self._require_target()
+
+        # Merge new files into existing map (upsert, no clear).
+        for p in paths:
+            stem = os.path.splitext(os.path.basename(p))[0].lower()
+            self._audio_files[stem] = p.replace("\\", "/")
+
+        # Repair old capitalize()-corrupted enum labels if the original
+        # file casing differs (e.g.  "A01_welcometothe" → "A01_WelcomeToThe").
+        self._repair_enum_casing(target)
+
+        # Create/update the keyable enum trigger on the target object
+        events = self._event_names_from_files()
+        EventTriggers.ensure(objects=[target], events=events, category=self.CATEGORY)
+
+        # Create/update audio nodes at offset 0 for immediate preview
+        nodes = AudioEvents.load_tracks(
+            list(self._audio_files.values()), category=self.CATEGORY
+        )
+
+        # Persist file map on the target object
+        self._save_file_map(target)
+
+        # If keyed events already exist, realign stale None end-keys
+        # (durations may have changed when a file with the same stem was
+        # re-added) then rebuild synced nodes and the composite WAV.
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if keyed:
+            for ev in events:
+                self._realign_none_end_keys(target, ev)
+            total = self._sync_and_refresh_target(target)
+            self.ui.footer.setText(
+                f"Loaded {len(nodes)} track(s), synced {total} clip(s) "
+                f"→ {target.name()}.{self.CATEGORY}_trigger"
+            )
+        else:
+            self._refresh_combo_from_target()
+            self.ui.footer.setText(
+                f"Loaded {len(nodes)} track(s) → {target.name()}.{self.CATEGORY}_trigger"
+            )
+
+    def _prepare_selected_paths(self, paths):
+        """Filter selected paths and prompt for conversion when needed."""
+        from qtpy.QtWidgets import QMessageBox
+
+        playable = []
+        convertible = []
+        unsupported = []
+
+        for path in paths:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in ptk.AudioUtils.PLAYABLE_EXTENSIONS:
+                playable.append(path)
+            elif ext in ptk.AudioUtils.SOURCE_EXTENSIONS:
+                convertible.append(path)
+            else:
+                unsupported.append(path)
+
+        if unsupported:
+            QMessageBox.warning(
+                self.ui,
+                "Unsupported Audio",
+                "Some files have unsupported formats and will be skipped:\n\n"
+                + "\n".join(os.path.basename(p) for p in unsupported[:8]),
+            )
+
+        if convertible:
+            # Check the global Auto Convert header option.
+            auto_convert = getattr(
+                getattr(getattr(self.ui, "header", None), "menu", None),
+                "chk_auto_convert",
+                None,
+            )
+            allow_convert = (
+                auto_convert.isChecked() if auto_convert is not None else True
+            )
+
+            if not allow_convert:
+                # Auto-convert disabled — silently skip non-playable files.
+                return playable
+
+            # Auto-convert enabled — convert without prompting.
+            if not ptk.AudioUtils.resolve_ffmpeg(required=False):
+                reply = QMessageBox.question(
+                    self.ui,
+                    "FFmpeg Not Found",
+                    "FFmpeg is required to convert selected files to WAV.\n\n"
+                    "Would you like to download and install it now?\n"
+                    "(This may take a moment for the initial download.)",
+                    QMessageBox.Yes,
+                    QMessageBox.No,
+                )
+                if reply == QMessageBox.Yes:
+                    self.ui.footer.setText("Downloading FFmpeg …")
+                    from qtpy.QtWidgets import QApplication
+
+                    QApplication.processEvents()
+                    path = ptk.AudioUtils.resolve_ffmpeg(
+                        required=False, auto_install=True
+                    )
+                    self.ui.footer.setText("")
+                    if not path:
+                        QMessageBox.warning(
+                            self.ui,
+                            "Install Failed",
+                            "FFmpeg could not be installed automatically.\n"
+                            "Please install it manually and ensure it is on "
+                            "your system PATH.",
+                        )
+                        return playable
+                else:
+                    return playable
+
+            return playable + convertible
+
+        return playable
+
+    def _cleanup_unused_events(self):
+        """Remove enum entries that have no keyframes and their preview nodes."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        target = self._require_target()
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        if not cmds.attributeQuery(trigger_attr, node=str(target), exists=True):
+            self.ui.footer.setText(f"{target.name()} has no audio_trigger.")
+            return
+
+        events = EventTriggers.get_events(target, category=self.CATEGORY) or []
+        if not events:
+            return
+
+        # Determine which events are actually keyed
+        keyed_labels = {
+            label.lower()
+            for _, label in EventTriggers.iter_keyed_events(
+                target, category=self.CATEGORY
+            )
+        }
+
+        # Find unused: non-None events with no keyframes
+        unused = [e for e in events if e != "None" and e.lower() not in keyed_labels]
+        if not unused:
+            self.ui.footer.setText("All events are keyed — nothing to clean up.")
+            return
+
+        # Remove enum fields for unused events
+        for label in unused:
+            Attributes.delete_enum_field(str(target), trigger_attr, label)
+
+        # Remove corresponding preview audio nodes from the set
+        audio_set = AudioEvents._find_audio_set(self.CATEGORY)
+        if audio_set:
+            unused_lower = {u.lower() for u in unused}
+            for member in list(audio_set.members()):
+                node_label = self._node_to_event_label(str(member))
+                if node_label and node_label in unused_lower:
+                    cmds.lockNode(str(member), lock=False)
+                    pm.delete(member)
+
+        # Clean up _audio_files dict
+        for label in unused:
+            self._audio_files.pop(label.lower(), None)
+
+        # Re-bake manifest after enum changes
+        EventTriggers.bake_manifest([target], category=self.CATEGORY)
+
+        # Persist updated file map
+        self._save_file_map(target)
+
+        self._refresh_combo_from_target()
+        self.ui.footer.setText(
+            f"Cleaned up {len(unused)} unused event(s) on {target.name()}."
+        )
+
+    def cmb000(self, index, widget):
+        """Track selection — set active clip on time slider and sync attr.
+
+        Mirrors ``AttributeManager._on_enum_combo_activated``: pushes
+        the combo index to the Maya ``audio_trigger`` attribute so the
+        channel box stays in sync.
+        """
+        label = widget.currentText()
+        if not label or label == "None":
+            return
+
+        # Push combo index → Maya attribute (combo→attr direction).
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        target = self._require_target()
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        if cmds.attributeQuery(trigger_attr, node=str(target), exists=True):
+            self._syncing_combo = True
+            try:
+                cmds.setAttr(f"{str(target)}.{trigger_attr}", index)
+            except Exception:
+                pass
+            finally:
+                self._syncing_combo = False
+
+        # Set active audio clip on time slider.
+        node_name = self._resolve_audio_node_for_event(label)
+        if node_name:
+            try:
+                AudioEvents.set_active(node_name)
+                self.ui.footer.setText(f"Active: {node_name}")
+            except Exception:
+                pass
+        else:
+            self.ui.footer.setText(f"No audio node for '{label}' (sync first).")
+
+    # ------------------------------------------------------------------
+    # Sync
+    # ------------------------------------------------------------------
+
+    @CoreUtils.undoable
+    def tb000(self, widget=None):
+        """Sync Audio to Timeline — rebuilds only when state has changed.
+
+        Compares a lightweight fingerprint of the current keyed-event
+        state against the last-synced snapshot.  If they match the
+        composite is already up to date and no work is done.
+        """
+        if not self._audio_files:
+            self.ui.footer.setText("Browse for audio files first.")
+            return
+
+        target = self._require_target()
+
+        original_selection = [obj for obj in pm.selected() if pm.objExists(obj)]
+
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        try:
+            # Ensure trigger attribute with event enum entries from file stems
+            events = self._event_names_from_files()
+            EventTriggers.ensure(
+                objects=[target],
+                events=events,
+                category=self.CATEGORY,
+            )
+            total = self._sync_if_dirty(target)
+
+            if total > 0:
+                self.ui.footer.setText(f"Synced {total} clip(s) on {target.name()}.")
+            elif total == -1:
+                self.ui.footer.setText(
+                    f"Already synced — {target.name()} is up to date."
+                )
+            else:
+                self.ui.footer.setText("No clips imported. Key events first.")
+        finally:
+            if original_selection:
+                pm.select(original_selection, r=True)
+            else:
+                pm.select(clear=True)
+
+    # ------------------------------------------------------------------
+    # Key Audio Event
+    # ------------------------------------------------------------------
+
+    def tb001_init(self, widget):
+        """Init Key Audio Event option-box menu."""
+        widget.option_box.set_action(
+            self._select_data_node,
+            icon="select",
+            tooltip="Select the data node in the viewport.\nShows the audio_trigger attribute in the\nChannel Box for visual confirmation.",
+        )
+        widget.option_box.add_action(
+            self.tb000,
+            icon="refresh",
+            tooltip="Sync audio to timeline.\nRebuilds synced nodes and the composite WAV\nfrom the current track map and keyframes.",
+        )
+        widget.option_box.menu.setTitle("Key Audio Event")
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Auto End None",
+            setObjectName="chk_auto_end_none",
+            setToolTip=(
+                "When enabled, keying an audio trigger will "
+                "auto-key 'None' at the clip end based on clip length."
+            ),
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Next Event",
+            setObjectName="chk_next_event",
+            setToolTip=(
+                "Automatically key the next event in the track list.\n"
+                "The next event is determined by the last keyed audio event:\n"
+                "  • If events have been keyed, the next index after the\n"
+                "    most recent key (by time) is used, wrapping around.\n"
+                "  • If no events have been keyed yet, the first track is used.\n\n"
+                "The combo selection is updated to reflect the chosen event."
+            ),
+        )
+        chk_key_all = widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Key All",
+            setObjectName="chk_key_all",
+            setToolTip=(
+                "Key every loaded track sequentially starting from the\n"
+                "current frame. Each clip is placed end-to-end using\n"
+                "the clip length plus the stagger amount as spacing.\n"
+                "When Auto End None is disabled, the track length is\n"
+                "still used to calculate the stagger interval."
+            ),
+        )
+        spn_stagger = widget.option_box.menu.add(
+            "QSpinBox",
+            setText="Stagger",
+            setObjectName="spn_stagger",
+            setToolTip=(
+                "Extra frames added between each clip when Key All\n"
+                "is enabled.  The interval is: clip_length + stagger."
+            ),
+            setMinimum=0,
+            setMaximum=9999,
+            setValue=0,
+            setPrefix="Stagger: ",
+            setSuffix=" fr",
+        )
+
+        # Wire enable/disable: Key All toggles stagger on and next-event off.
+        def _on_key_all_toggled(checked):
+            spn_stagger.setEnabled(checked)
+            if checked:
+                widget.option_box.menu.chk_next_event.setChecked(False)
+            widget.option_box.menu.chk_next_event.setEnabled(not checked)
+
+        chk_key_all.toggled.connect(_on_key_all_toggled)
+
+        # Sync initial state — the checkbox may already be checked from
+        # a saved/restored UI state, so match the stagger widget to it.
+        spn_stagger.setEnabled(chk_key_all.isChecked())
+
+    @CoreUtils.undoable
+    def tb001(self, widget=None):
+        """Key Audio Event — key the selected event, auto-end-none, and sync.
+
+        Deterministic single-button workflow:
+        1. Read the currently selected event from cmb000.
+        2. Get/create the target via ``_require_target()``.
+        3. Key the event at the current frame.
+        4. If Auto End None is enabled, key "None" at clip end.
+        5. Sync audio nodes to the timeline.
+
+        Key All mode keys every loaded track sequentially from the
+        current frame, spacing each by ``clip_length + stagger``.
+        """
+        if not self._audio_files:
+            self.ui.footer.setText("Browse for audio files first.")
+            return
+
+        target = self._require_target()
+
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        # Ensure trigger attr exists with all events
+        events = self._event_names_from_files()
+        EventTriggers.ensure(
+            objects=[target],
+            events=events,
+            category=self.CATEGORY,
+        )
+
+        key_all = widget.option_box.menu.chk_key_all.isChecked()
+        auto_end = self.ui.tb001.option_box.menu.chk_auto_end_none.isChecked()
+
+        if key_all:
+            self._key_all_events(widget, target, events, auto_end)
+            return
+
+        # --- Single-event path ---
+        # Resolve event label — auto-advance when "Next Event" is enabled.
+        next_event = widget.option_box.menu.chk_next_event.isChecked()
+        if next_event:
+            event_label = self._resolve_next_event(target)
+            if not event_label:
+                self.ui.footer.setText("No audio tracks available.")
+                return
+            # Sync combo to the resolved event so the UI reflects it.
+            idx = self.ui.cmb000.findText(event_label)
+            if idx >= 0:
+                self.ui.cmb000.setCurrentIndex(idx)
+        else:
+            event_label = self.ui.cmb000.currentText()
+            if not event_label or event_label == "None":
+                self.ui.footer.setText("Select an audio track first.")
+                return
+
+        current_frame = pm.currentTime(query=True)
+
+        # Anchor the curve start with a None key at frame 0 when this
+        # is the very first event keyed on the object.  Prevents a
+        # "tie keyframe" script from binding the event value at the
+        # animation clip start.
+        self._ensure_start_anchor(target, current_frame)
+
+        # Clean stale None keys from previous overlapping clips BEFORE
+        # keying the new event.  This avoids the auto_clear "None at
+        # time-1" problem and ensures no leftover None keys interrupt
+        # playback.
+        if auto_end:
+            self._prune_overlap_none_keys(target, current_frame)
+
+        # Key the selected event at the current frame.
+        # auto_clear=False — we handle None keys ourselves via
+        # _prune_overlap_none_keys + explicit end-None keying.
+        keyed = EventTriggers.set_key(
+            target,
+            event=event_label,
+            time=current_frame,
+            auto_clear=False,
+            category=self.CATEGORY,
+        )
+        if not keyed:
+            self.ui.footer.setText(
+                f"Event '{event_label}' not found on {target.name()}."
+            )
+            return
+
+        # Auto-end-none: key "None" at clip end if enabled
+        if auto_end:
+            source = self._audio_files.get(event_label.lower())
+            if source:
+                import math
+
+                length_frames = self._get_clip_length_frames(source)
+                if length_frames > 0:
+                    end_frame = math.ceil(current_frame + length_frames)
+
+                    EventTriggers.set_key(
+                        target,
+                        event="None",
+                        time=end_frame,
+                        auto_clear=False,
+                        category=self.CATEGORY,
+                    )
+
+        # Sync audio nodes to keyed frames
+        original_selection = [obj for obj in pm.selected() if pm.objExists(obj)]
+        try:
+            total = self._sync_and_refresh_target(target)
+            end_info = ""
+            if auto_end:
+                end_info = " + end-None"
+            self.ui.footer.setText(
+                f"Keyed '{event_label}' @ {int(current_frame)}{end_info}"
+                f" — {total} clip(s) synced."
+            )
+        finally:
+            if original_selection:
+                pm.select(original_selection, r=True)
+            else:
+                pm.select(clear=True)
+
+    def _select_data_node(self):
+        """Select the data_internal node in the Maya viewport."""
+        node = self._require_target()
+        pm.select(node, replace=True)
+        self.ui.footer.setText(f"Selected '{node.name()}'.")
+
+    def _key_all_events(self, widget, target, events, auto_end):
+        """Key every loaded track sequentially from the current frame.
+
+        Spacing between clips is ``clip_length + stagger``.
+        When *auto_end* is False the track length is still used to
+        calculate the stagger interval — only the explicit end-None
+        key is skipped.
+
+        Parameters:
+            widget: The tb001 widget (provides option-box access).
+            target: PyNode of the trigger object.
+            events: Ordered list of event labels (non-None).
+            auto_end: Whether to key "None" at each clip's end.
+        """
+        import math
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        stagger = widget.option_box.menu.spn_stagger.value()
+        current_frame = pm.currentTime(query=True)
+        cursor = float(current_frame)
+        keyed_count = 0
+
+        tracks = [e for e in events if e and e != "None"]
+        if not tracks:
+            self.ui.footer.setText("No audio tracks available.")
+            return
+
+        # Anchor the curve start with a None key at frame 0 when this
+        # is the very first event keyed on the object.
+        self._ensure_start_anchor(target, cursor)
+
+        for event_label in tracks:
+            if auto_end:
+                self._prune_overlap_none_keys(target, cursor)
+
+            keyed = EventTriggers.set_key(
+                target,
+                event=event_label,
+                time=cursor,
+                auto_clear=False,
+                category=self.CATEGORY,
+            )
+            if not keyed:
+                continue
+            keyed_count += 1
+
+            # Determine clip length (used for both auto-end-none and spacing).
+            length_frames = 0.0
+            source = self._audio_files.get(event_label.lower())
+            if source:
+                length_frames = self._get_clip_length_frames(source)
+
+            # Key end-None when auto_end is enabled.
+            if auto_end and length_frames > 0:
+                end_frame = math.ceil(cursor + length_frames)
+                EventTriggers.set_key(
+                    target,
+                    event="None",
+                    time=end_frame,
+                    auto_clear=False,
+                    category=self.CATEGORY,
+                )
+
+            # Advance cursor: clip length + stagger (length used even
+            # when auto_end is off to keep clips from overlapping).
+            if length_frames > 0:
+                cursor = math.ceil(cursor + length_frames) + stagger
+            else:
+                # No clip length available — fall back to stagger only.
+                cursor += max(stagger, 1)
+
+        # Sync once after all keys are placed.
+        original_selection = [obj for obj in pm.selected() if pm.objExists(obj)]
+        try:
+            total = self._sync_and_refresh_target(target)
+            end_info = " + end-None" if auto_end else ""
+            stagger_info = f" stagger={stagger}" if stagger else ""
+            self.ui.footer.setText(
+                f"Key All: {keyed_count} track(s){end_info}{stagger_info}"
+                f" — {total} clip(s) synced."
+            )
+        finally:
+            if original_selection:
+                pm.select(original_selection, r=True)
+            else:
+                pm.select(clear=True)
+
+    def _resolve_next_event(self, target):
+        """Return the next event label to key based on the last keyed event.
+
+        Looks at all keyed events on *target* sorted by time, finds the
+        most recent one, then advances to the next index in the track
+        list (wrapping around to the first track after the last).
+
+        If no events have been keyed yet, the first non-None track is
+        returned.
+
+        Returns:
+            str or None — event label, or None if no tracks exist.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        events = EventTriggers.get_events(target, category=self.CATEGORY) or []
+        # Filter to non-None tracks only
+        tracks = [e for e in events if e and e != "None"]
+        if not tracks:
+            return None
+
+        # Find the most recent keyed event (by frame)
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if not keyed:
+            return tracks[0]
+
+        # Last keyed event is the final item (iter_keyed_events is sorted by time)
+        _, last_label = keyed[-1]
+
+        # Find its position in the track list and advance
+        try:
+            last_idx = next(
+                i for i, t in enumerate(tracks) if t.lower() == last_label.lower()
+            )
+            next_idx = (last_idx + 1) % len(tracks)
+        except StopIteration:
+            # Last keyed label not found in current tracks — start from first
+            next_idx = 0
+
+        return tracks[next_idx]
+
+
+    # ------------------------------------------------------------------
+    # Manage
+    # ------------------------------------------------------------------
+
+    def b002(self):
+        """Remove Audio — delete imported audio nodes and composite WAV."""
+        cat = self.CATEGORY
+        count = AudioEvents.remove(category=cat)
+        self.ui.footer.setText(
+            f"Removed {count} audio node(s)." if count else "No audio nodes to remove."
+        )
+
+    def b004(self):
+        """Cleanup Unused — remove unkeyed enum entries and their preview nodes."""
+        self._cleanup_unused_events()
+
+    def b005(self):
+        """Replace Selected Track — swap the selected event's audio file.
+
+        Renames the enum label to the new file's stem (preserving the
+        index and all existing keyframes), updates ``_audio_files``,
+        reconfigures the preview audio node, persists the file map, and
+        re-syncs if keyed events exist.
+        """
+        from qtpy.QtWidgets import QFileDialog
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        # 1. Determine which event is selected in the combo
+        current_label = self.ui.cmb000.currentText()
+        if not current_label or current_label == "None":
+            self.ui.footer.setText("Select a track in the combo first.")
+            return
+
+        target = self._require_target()
+
+        # 2. File dialog — single file only
+        paths, _ = QFileDialog.getOpenFileNames(
+            self.ui, "Replace Track Audio", "", self.AUDIO_FILTER
+        )
+        if not paths:
+            return
+
+        paths = self._prepare_selected_paths(paths)
+        if not paths or len(paths) < 1:
+            return
+
+        new_path = paths[0].replace("\\", "/")
+        new_stem = os.path.splitext(os.path.basename(new_path))[0]
+        old_stem = current_label  # enum labels preserve original casing
+        old_key = old_stem.lower()
+        new_key = new_stem.lower()
+
+        # 3. If the stem actually changed, rename the enum label
+        if old_key != new_key:
+            from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+            trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+            Attributes.rename_enum_field(str(target), trigger_attr, old_stem, new_stem)
+
+            # Update _audio_files dict: remove old, set new
+            self._audio_files.pop(old_key, None)
+            self._audio_files[new_key] = new_path
+
+            # Rename / re-stamp the preview audio node if it exists
+            preview_node = self._find_preview_node(old_key)
+            if preview_node:
+                playable = AudioEvents._resolve_playable_path(new_path)
+                if playable:
+                    AudioEvents._configure_audio_node(preview_node, playable, 0)
+                AudioEvents._stamp_event_attrs(preview_node, new_key, "preview")
+                try:
+                    cmds.rename(preview_node, new_stem)
+                except Exception:
+                    pass
+        else:
+            # Same stem, just updating the file path
+            self._audio_files[new_key] = new_path
+
+            # Update existing preview node
+            preview_node = self._find_preview_node(new_key)
+            if preview_node:
+                playable = AudioEvents._resolve_playable_path(new_path)
+                if playable:
+                    AudioEvents._configure_audio_node(preview_node, playable, 0)
+
+        # 4. Persist, realign stale None end-keys, and re-sync
+        self._save_file_map(target)
+
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        # The file map now points to the new audio file.  Relocate any
+        # None end-keys so they reflect the new clip's duration.
+        self._realign_none_end_keys(target, new_stem)
+
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if keyed:
+            total = self._sync_and_refresh_target(target)
+            self.ui.footer.setText(
+                f"Replaced '{old_stem}' → '{new_stem}', synced {total} clip(s)."
+            )
+        else:
+            self._refresh_combo_from_target()
+            self.ui.footer.setText(f"Replaced '{old_stem}' → '{new_stem}'.")
+
+    def b006(self):
+        """Rename Track — rename the currently selected track's label.
+
+        Renames the enum label (preserving the index and all existing
+        keyframes), updates ``_audio_files``, re-stamps the preview
+        audio node, persists the file map, and re-syncs if keyed events
+        exist.
+        """
+        from mayatk.node_utils.attributes._attributes import Attributes
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        current_label = self.ui.cmb000.currentText()
+        if not current_label or current_label == "None":
+            self.ui.footer.setText("Select a track in the combo first.")
+            return
+
+        target = self._require_target()
+
+        new_name = self.sb.input_dialog(
+            title="Rename Track",
+            label=f"Rename '{current_label}' to:",
+            text=current_label,
+            parent=self.ui,
+            placeholder="e.g. Footstep_Left",
+            validate=lambda t: bool(t.strip()) and t.strip() != current_label,
+            error_text="Name cannot be empty or unchanged.",
+        )
+        if not new_name:
+            return
+
+        old_key = current_label.lower()
+        new_key = new_name.lower()
+
+        # Rename the enum label (preserves index and keyframes)
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        Attributes.rename_enum_field(str(target), trigger_attr, current_label, new_name)
+
+        # Update _audio_files dict
+        old_path = self._audio_files.pop(old_key, None)
+        if old_path:
+            self._audio_files[new_key] = old_path
+
+        # Re-stamp the preview audio node
+        preview_node = self._find_preview_node(old_key)
+        if preview_node:
+            AudioEvents._stamp_event_attrs(preview_node, new_key, "preview")
+            try:
+                cmds.rename(preview_node, new_name)
+            except Exception:
+                pass
+
+        # Persist and re-sync
+        self._save_file_map(target)
+        EventTriggers.bake_manifest([target], category=self.CATEGORY)
+
+        keyed = EventTriggers.iter_keyed_events(target, category=self.CATEGORY)
+        if keyed:
+            total = self._sync_and_refresh_target(target)
+            self.ui.footer.setText(
+                f"Renamed '{current_label}' → '{new_name}', synced {total} clip(s)."
+            )
+        else:
+            self._refresh_combo_from_target()
+            self.ui.footer.setText(f"Renamed '{current_label}' → '{new_name}'.")
+
+    def b003(self):
+        """Remove — clean up trigger attributes and audio nodes from data_internal."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        target = self._require_target()
+        name = target.name()
+
+        # Unlock so deleteAttr can proceed (node is name-locked).
+        try:
+            cmds.lockNode(str(target), lock=False, lockName=False)
+        except Exception:
+            pass
+
+        AudioEvents.remove_by_owner(owner=name, category=self.CATEGORY)
+        EventTriggers.remove(
+            objects=[target], category=self.CATEGORY, clean_audio=False
+        )
+
+        # Re-lock name.
+        try:
+            cmds.lockNode(str(target), lock=False, lockName=True)
+        except Exception:
+            pass
+
+        self._audio_files.clear()
+        self._trigger_attr_path = None
+        self._last_enum_idx = None
+        self._refresh_combo_from_target()
+        self.ui.footer.setText(f"Removed audio data from '{name}'.")
+
+    def _find_preview_node(self, stem_lower):
+        """Return the name of the preview audio node for *stem_lower*, or None.
+
+        Iterates the category's audio set and matches on the stamped
+        ``audio_event_stem`` attribute.
+
+        Parameters:
+            stem_lower: Lowercase event stem to match.
+
+        Returns:
+            str or None — node name if found.
+        """
+        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+            if not cmds.attributeQuery(
+                AudioEvents.NODE_STEM_ATTR, node=node_name, exists=True
+            ):
+                continue
+            stem_val = cmds.getAttr(f"{node_name}.{AudioEvents.NODE_STEM_ATTR}") or ""
+            if stem_val.lower() != stem_lower:
+                continue
+            if cmds.attributeQuery(
+                AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
+            ):
+                ntype = cmds.getAttr(f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}") or ""
+                if ntype == "preview":
+                    return node_name
+        return None
+
+    def _get_clip_length_frames(self, audio_path):
+        """Return clip duration in timeline frames for an audio file path.
+
+        Checks existing preview nodes first to avoid creating a
+        temporary audio node (which pollutes the undo stack).
+        """
+        # Try existing preview node (avoids temp node creation)
+        stem_lower = os.path.splitext(os.path.basename(audio_path))[0].lower()
+        for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+            try:
+                ntype = ""
+                if cmds.attributeQuery(
+                    AudioEvents.NODE_TYPE_ATTR, node=node_name, exists=True
+                ):
+                    ntype = (
+                        cmds.getAttr(f"{node_name}.{AudioEvents.NODE_TYPE_ATTR}") or ""
+                    )
+                is_preview = ntype == "preview" or (
+                    not ntype and not node_name.endswith("_composite")
+                )
+                if is_preview and node_name.lower() == stem_lower:
+                    return float(cmds.sound(node_name, query=True, length=True))
+            except Exception:
+                continue
+
+        # Fallback: create temp node
+        path = AudioEvents._resolve_playable_path(audio_path)
+        if not path:
+            return 0.0
+
+        temp_node = None
+        try:
+            temp_node = cmds.sound(file=path, offset=0)
+            length = float(cmds.sound(temp_node, query=True, length=True))
+            if length <= 0:
+                logging.getLogger(__name__).warning(
+                    "_get_clip_length_frames: zero-length clip '%s'",
+                    audio_path,
+                )
+            return length
+        except Exception:
+            return 0.0
+        finally:
+            if temp_node and pm.objExists(temp_node):
+                try:
+                    pm.delete(temp_node)
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _event_names_from_files(self):
+        """Return event names preserving original file casing.
+
+        The enum field labels on the current target are the authoritative
+        source for casing.  Using them avoids deriving stems from
+        converted/cached audio paths (e.g. ``Footstep_3d7a1f8b.wav``)
+        that ``_sync_from_selection`` may have hydrated into
+        ``_audio_files``.  For events not yet in the enum (new browse),
+        the stem is extracted from the stored path, which at that point
+        is still the original user-selected file.
+        """
+        if not self._audio_files:
+            return []
+
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        # Build lowercase → original-cased label map from the current enum.
+        existing_labels: dict = {}
+        target = self._require_target()
+        for e in EventTriggers.get_events(target, category=self.CATEGORY) or []:
+            if e and e != "None":
+                existing_labels[e.lower()] = e
+
+        result = []
+        for k in sorted(self._audio_files):
+            if k in existing_labels:
+                # Known event — use enum's casing directly.
+                result.append(existing_labels[k])
+            else:
+                # New event not yet in enum — extract from path.
+                # At browse-time this is always the original file path,
+                # so the stem is clean (no cache-path hash suffix).
+                result.append(
+                    os.path.splitext(os.path.basename(self._audio_files[k]))[0]
+                )
+        return result
+
+    def _repair_enum_casing(self, target):
+        """Rename capitalize()-corrupted enum labels to match original filenames.
+
+        Early versions derived enum labels via ``stem.capitalize()`` which
+        mangled PascalCase/mixed-case filenames (``A01_WelcomeToThe`` →
+        ``A01_welcometothe``).  This method compares the current enum
+        labels against the original-cased file stems and renames any
+        that differ only in casing, preserving keyframe indices.
+
+        Only called from ``_import_audio_paths`` where ``_audio_files``
+        values are guaranteed to be **original** (non-cache) file paths.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        if not target or not pm.objExists(target):
+            return
+
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        if not cmds.attributeQuery(trigger_attr, node=str(target), exists=True):
+            return
+
+        events = EventTriggers.get_events(target, category=self.CATEGORY) or []
+        # Build {lowercase: original_cased_stem} from file paths
+        original_stems = {}
+        for key, path in self._audio_files.items():
+            original_stems[key] = os.path.splitext(os.path.basename(path))[0]
+
+        renamed = 0
+        for label in events:
+            if label == "None":
+                continue
+            lower = label.lower()
+            correct = original_stems.get(lower)
+            if correct and correct != label:
+                Attributes.rename_enum_field(str(target), trigger_attr, label, correct)
+                renamed += 1
+
+        if renamed:
+            EventTriggers.bake_manifest([target], category=self.CATEGORY)
+
+    def _require_target(self):
+        """Return the shared data_internal node. Idempotent.
+
+        Returns:
+            PyNode — always succeeds.
+        """
+        return DataNodes.ensure_internal()
+
+    def _resolve_audio_node_for_event(self, event_label):
+        """Find the best audio node name for an event label.
+
+        Priority: plain stem preview node > first synced node > composite.
+        """
+        label_lower = event_label.lower()
+        nodes = AudioEvents.list_nodes(category=self.CATEGORY)
+        # Pass 1: exact stem match (preview node)
+        for n in nodes:
+            if n.lower() == label_lower:
+                return n
+        # Pass 2: synced node "Label_frame"
+        for n in nodes:
+            parts = n.rsplit("_", 1)
+            if (
+                len(parts) == 2
+                and parts[1].isdigit()
+                and parts[0].lower() == label_lower
+            ):
+                return n
+        # Pass 3: composite
+        for n in nodes:
+            if n.endswith("_composite"):
+                return n
+        return None
+
+    def _refresh_combo_from_target(self):
+        """Populate cmb000 with enum event names from the current target."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        cmb = self.ui.cmb000
+        cmb.blockSignals(True)
+        cmb.clear()
+
+        target = self._require_target()
+        events = EventTriggers.get_events(target, category=self.CATEGORY) or []
+        if events:
+            cmb.addItems(events)
+
+        # Sync selection to the current enum value at this frame
+        self._sync_combo_to_enum()
+
+        cmb.blockSignals(False)
+
+    def _sync_combo_to_enum(self):
+        """Set cmb000 selection to match the current enum attr value.
+
+        Reads the ``audio_trigger`` integer index at the current frame
+        and sets the combo index directly (matching the attribute_manager
+        ``_on_attr_value_set`` pattern).  Combo items are added in
+        enum-field order so indices correspond 1:1.
+
+        Skipped when ``_syncing_combo`` is True (the change originated
+        from the combo itself).
+        """
+        if self._syncing_combo:
+            return
+
+        # Guard: skip if UI has been destroyed
+        try:
+            if not self.ui or not self.ui.isVisible():
+                return
+        except RuntimeError:
+            return  # Qt C++ object already deleted
+
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        target = self._require_target()
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        if not cmds.attributeQuery(trigger_attr, node=str(target), exists=True):
+            return
+
+        try:
+            idx = cmds.getAttr(f"{str(target)}.{trigger_attr}")
+        except Exception:
+            return
+
+        self._last_enum_idx = idx
+
+        cmb = self.ui.cmb000
+        cmb.blockSignals(True)
+        if 0 <= idx < cmb.count():
+            cmb.setCurrentIndex(idx)
+        else:
+            cmb.setCurrentIndex(-1)
+        cmb.blockSignals(False)
+        cmb.repaint()
+
+    def _node_to_event_label(self, node_name):
+        """Map audio node names to lowercase event labels.
+
+        Reads the ``audio_event_stem`` attr stamped by
+        ``AudioEvents._stamp_event_attrs`` when available, falling
+        back to legacy name-based parsing for older nodes.
+        """
+        name = str(node_name)
+        # Prefer stamped attrs (new-style)
+        try:
+            if cmds.attributeQuery(AudioEvents.NODE_TYPE_ATTR, node=name, exists=True):
+                ntype = cmds.getAttr(f"{name}.{AudioEvents.NODE_TYPE_ATTR}") or ""
+                if ntype == "composite":
+                    return None
+            if cmds.attributeQuery(AudioEvents.NODE_STEM_ATTR, node=name, exists=True):
+                stem = cmds.getAttr(f"{name}.{AudioEvents.NODE_STEM_ATTR}")
+                if stem:
+                    return stem.lower()
+        except Exception:
+            pass
+        # Fallback: legacy name-based convention
+        if name.endswith("_composite"):
+            return None
+        parts = name.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return parts[0].lower()
+        return name.lower()
+
+    # -- File-map persistence ---------------------------------------------
+
+    def _save_file_map(self, target):
+        """Persist ``_audio_files`` as a JSON string attr on *target*.
+
+        Creates the ``audio_file_map`` attribute if it doesn't exist.
+        """
+        if not target or not pm.objExists(target):
+            return
+
+        data = json.dumps(self._audio_files, sort_keys=True)
+        node = str(target)
+        if not cmds.attributeQuery(self.FILE_MAP_ATTR, node=node, exists=True):
+            cmds.addAttr(node, ln=self.FILE_MAP_ATTR, dt="string")
+        cmds.setAttr(f"{node}.{self.FILE_MAP_ATTR}", data, type="string")
+
+    def _load_file_map(self, target):
+        """Load the persisted audio-file map from *target*.
+
+        Returns:
+            dict  ``{lowercase_stem: absolute_path}`` or empty dict.
+        """
+        if not target or not pm.objExists(target):
+            return {}
+
+        node = str(target)
+        if not cmds.attributeQuery(self.FILE_MAP_ATTR, node=node, exists=True):
+            return {}
+
+        raw = cmds.getAttr(f"{node}.{self.FILE_MAP_ATTR}") or ""
+        if not raw:
+            return {}
+
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+
+# ----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
+
+    ui = MayaUiHandler.instance().get("audio_events", reload=True)
+    ui.show(pos="screen", app_exec=True)

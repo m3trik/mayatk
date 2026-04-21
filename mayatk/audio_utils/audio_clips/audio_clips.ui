@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>audio_events</class>
- <widget class="QMainWindow" name="audio_events">
+ <class>audio_clips</class>
+ <widget class="QMainWindow" name="audio_clips">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>237</width>
-    <height>169</height>
+    <width>277</width>
+    <height>130</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -50,57 +50,6 @@
       <property name="text" stdset="0">
        <string>AUDIO EVENTS</string>
       </property>
-     </widget>
-    </item>
-    <item>
-     <widget class="CollapsableGroup" name="carrier_group">
-      <property name="title">
-       <string>Carrier</string>
-      </property>
-      <layout class="QHBoxLayout" name="carrierLayout">
-       <property name="spacing">
-        <number>1</number>
-       </property>
-       <property name="leftMargin">
-        <number>1</number>
-       </property>
-       <property name="topMargin">
-        <number>1</number>
-       </property>
-       <property name="rightMargin">
-        <number>1</number>
-       </property>
-       <property name="bottomMargin">
-        <number>1</number>
-       </property>
-       <item>
-        <widget class="ComboBox" name="cmb001">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Active audio event carrier.
-Each carrier is a network node that holds
-trigger attributes and keyed audio events.
-
-If no carrier exists when an audio track is
-added, one is created automatically.
-
-Use the option box to create, rename, remove,
-or select carriers in the Maya viewport.</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
      </widget>
     </item>
     <item>

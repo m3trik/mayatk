@@ -13,7 +13,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderObject,
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
-from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     BEHAVIOR_STATUS_COLORS,
     ERROR_COLOR,
     HEADERS,
@@ -37,17 +37,36 @@ class ManifestTableMixin:
 
     Expects the host class to provide:
 
-    - ``self.ui``  – the loaded UI with ``tbl_steps`` tree widget.
-    - ``self._steps``  – current list of :class:`BuilderStep`.
-    - ``self._user_ranges``  – dict of user-entered range overrides.
-    - ``self._last_resolved``  – last resolved range list.
-    - ``self._last_results``  – last assessment result list.
-    - ``self._is_built``  – whether shots have been built.
-    - ``self._resolve_ranges()``  – range resolution entry point.
-    - ``self._update_build_button()``  – button-state refresh.
-    - ``self._set_footer(text, *, color)``  – footer label helper.
-    - ``self._settings``  – :class:`SettingsManager` instance.
+    - ``self.ui``  â€“ the loaded UI with ``tbl_steps`` tree widget.
+    - ``self._steps``  â€“ current list of :class:`BuilderStep`.
+    - ``self._user_ranges``  â€“ dict of user-entered range overrides.
+    - ``self._last_resolved``  â€“ last resolved range list.
+    - ``self._last_results``  â€“ last assessment result list.
+    - ``self._is_built``  â€“ whether shots have been built.
+    - ``self._resolve_ranges()``  â€“ range resolution entry point.
+    - ``self._update_build_button()``  â€“ button-state refresh.
+    - ``self._set_footer(text, *, color)``  â€“ footer label helper.
+    - ``self._settings``  â€“ :class:`SettingsManager` instance.
     """
+
+    @staticmethod
+    def _resolve_object_icon(obj_data, obj_name):
+        """Return a QIcon for a BuilderObject row, or ``None``.
+
+        Audio rows use the known node type directly so the icon resolves
+        even when the DG node hasn't been created yet.  Scene rows go
+        through the standard :class:`NodeIcons` scene-node lookup.
+        """
+        node_icons_cls = try_load_maya_icons()
+        if node_icons_cls is None:
+            return None
+        if isinstance(obj_data, BuilderObject) and obj_data.kind == "audio":
+            # Known type — bypass objExists check
+            from qtpy.QtGui import QIcon
+
+            icon = QIcon(f":/{node_icons_cls.icon_name_for_type('audio')}")
+            return icon if not icon.isNull() else None
+        return node_icons_cls.get_icon(obj_name)
 
     # -- display settings --------------------------------------------------
 
@@ -84,34 +103,95 @@ class ManifestTableMixin:
 
     # -- behavior label widgets --------------------------------------------
 
+    def _color_behavior_label(self, obj, label) -> None:
+        """Set the label HTML and tooltip using the latest assessment data.
+
+        Looks up the object in ``_last_results`` and colours broken
+        behaviors accordingly.  Falls back to plain formatting when no
+        assessment data is available.
+        """
+        broken: list = []
+        status_color = None
+        obj_st = None
+        for r in getattr(self, "_last_results", None) or []:
+            obj_map = {o.name: o for o in r.objects}
+            obj_st = obj_map.get(obj.name)
+            if obj_st is not None:
+                if obj_st.status == "missing_object":
+                    status_color = BEHAVIOR_STATUS_COLORS.get("error")
+                else:
+                    broken = list(obj_st.broken_behaviors or [])
+                break
+        label.setText(
+            format_behavior_html(
+                obj.behaviors, broken=broken, status_color=status_color
+            )
+        )
+        # Build a per-behavior status tooltip
+        if obj_st is not None and obj.behaviors:
+            broken_set = set(obj_st.broken_behaviors or [])
+            lines = []
+            for b in obj.behaviors:
+                display = fmt_behavior(b)
+                if obj_st.status == "missing_object":
+                    lines.append(f"\u2716 {display}  (object missing)")
+                elif b in broken_set:
+                    lines.append(f"\u2716 {display}  (not verified)")
+                else:
+                    lines.append(f"\u2714 {display}")
+            label.setToolTip("\n".join(lines))
+        elif obj.behaviors:
+            label.setToolTip("\n".join(fmt_behavior(b) for b in obj.behaviors))
+        else:
+            label.setToolTip("")
+
     def _make_behavior_label(self, obj, tree, child_item, choices) -> None:
-        """Create a Label with checkable menu for multi-behavior selection."""
+        """Create a clickable label for the Behaviors cell.
+
+        The menu lists all behaviors available for this object's *kind*,
+        plus any behaviours already assigned (so they remain toggle-able
+        even when no YAML declares that kind).
+        """
         from uitk.widgets.label import Label
         from qtpy.QtCore import Qt
 
         label = Label()
-        label.configure_menu(trigger_button="left")
         label.setTextFormat(Qt.RichText)
 
-        checkboxes = []
-        for raw_name in choices:
-            if not raw_name:
-                continue
-            display = fmt_behavior(raw_name)
-            chk = label.menu.add(
-                "QCheckBox",
-                setText=display,
-                setChecked=(raw_name in obj.behaviors),
-            )
-            chk.toggled.connect(
-                lambda checked, o=obj, lbl=label, cbs=checkboxes: (
-                    self._on_behaviors_changed(o, lbl, cbs)
-                )
-            )
-            chk.setProperty("behavior_raw", raw_name)
-            checkboxes.append(chk)
+        # Merge kind-filtered choices with the object's existing behaviors
+        # so assigned behaviors are always present in the menu.
+        merged = list(dict.fromkeys(list(choices) + list(obj.behaviors)))
 
-        label.setText(format_behavior_html(obj.behaviors))
+        if not merged:
+            tree.setItemWidget(child_item, COL_BEHAVIORS, label)
+            return
+
+        def _show_menu():
+            from uitk.widgets.menu import Menu
+
+            menu = Menu(
+                parent=label,
+                position="cursorPos",
+                add_header=False,
+                add_footer=False,
+                hide_on_leave=True,
+                fixed_item_height=20,
+                match_parent_width=False,
+            )
+            cbs = []
+            for raw_name in merged:
+                if not raw_name:
+                    continue
+                display = fmt_behavior(raw_name)
+                chk = menu.add("QCheckBox", setText=display)
+                chk.setChecked(raw_name in obj.behaviors)
+                chk.setProperty("behavior_raw", raw_name)
+                cbs.append(chk)
+            menu.on_hidden.connect(lambda: self._on_behaviors_changed(obj, label, cbs))
+            menu.show()
+
+        self._color_behavior_label(obj, label)
+        label.clicked.connect(_show_menu)
         tree.setItemWidget(child_item, COL_BEHAVIORS, label)
 
     def _on_behaviors_changed(self, obj, label, checkboxes) -> None:
@@ -119,7 +199,7 @@ class ManifestTableMixin:
         obj.behaviors = [
             chk.property("behavior_raw") for chk in checkboxes if chk.isChecked()
         ]
-        label.setText(format_behavior_html(obj.behaviors))
+        self._color_behavior_label(obj, label)
         self._update_build_button()
 
     def _reapply_behavior(self, step_id: str, obj: BuilderObject) -> None:
@@ -138,10 +218,16 @@ class ManifestTableMixin:
                 return
 
             for b in obj.behaviors:
-                apply_behavior(obj.name, b, shot.start, shot.end)
+                apply_behavior(
+                    obj.name,
+                    b,
+                    shot.start,
+                    shot.end,
+                    source_path=obj.source_path,
+                )
 
             # Re-assess so the UI reflects the fixed state.
-            # Skip the selected-keys guard — we just applied known
+            # Skip the selected-keys guard â€” we just applied known
             # behaviors and only need a status refresh.
             self.assess(skip_key_check=True)
         except Exception as exc:
@@ -157,7 +243,7 @@ class ManifestTableMixin:
         tree.setHeaderLabels(HEADERS)
         tree.setColumnCount(len(HEADERS))
 
-        behavior_choices = list(list_behaviors())
+        _kind_cache: dict = {}
 
         for step in self._steps:
             section = (
@@ -173,14 +259,27 @@ class ManifestTableMixin:
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
                 display = short_name(obj.name) if self._use_short_names else obj.name
-                child = tree.create_item(
-                    ["", "", display, "", "", ""],
-                    data=obj,
-                    parent=parent,
-                )
+                if obj.kind == "audio":
+                    child = tree.create_item(
+                        ["", "", display, "", "", ""],
+                        data=obj,
+                        parent=parent,
+                    )
+                    font = child.font(COL_DESC)
+                    font.setItalic(True)
+                    for c in range(tree.columnCount()):
+                        child.setFont(c, font)
+                else:
+                    child = tree.create_item(
+                        ["", "", display, "", "", ""],
+                        data=obj,
+                        parent=parent,
+                    )
                 if display != obj.name:
                     child.setToolTip(COL_DESC, obj.name)
-                self._make_behavior_label(obj, tree, child, behavior_choices)
+                if obj.kind not in _kind_cache:
+                    _kind_cache[obj.kind] = list(list_behaviors(kind=obj.kind))
+                self._make_behavior_label(obj, tree, child, _kind_cache[obj.kind])
 
         # Restrict editability: only Range column on parent rows, pre-build
         from qtpy.QtCore import Qt as _Qt
@@ -207,6 +306,7 @@ class ManifestTableMixin:
 
     def _apply_formatting(self, tree) -> None:
         """Set column/row tints, behavior colors, icons, and column widths."""
+        from qtpy.QtCore import Qt
         from qtpy.QtGui import QColor
 
         content_col = COL_DESC
@@ -214,13 +314,12 @@ class ManifestTableMixin:
         # Row tints via delegate (fillRect bypasses Maya QSS stripping).
         tree._child_row_color = QColor(0, 0, 0, 55)
 
-        # Column tints — darken Step and Behaviors columns
+        # Column tints â€” darken Step and Behaviors columns
         tree.clear_column_tints()
         tree.set_column_tint(COL_STEP, QColor(0, 0, 0, 45))
         tree.set_column_tint(COL_BEHAVIORS, QColor(0, 0, 0, 45))
 
         # Icons: step icon on parents, type-coded icon on child Content column
-        node_icons_cls = try_load_maya_icons()
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
             tree.set_item_icon(parent, "step", color=STEP_ICON_COLOR)
@@ -229,9 +328,8 @@ class ManifestTableMixin:
                 obj_name = child.text(content_col)
                 if not obj_name:
                     continue
-                maya_icon = (
-                    node_icons_cls.get_icon(obj_name) if node_icons_cls else None
-                )
+                obj_data = child.data(0, Qt.UserRole)
+                maya_icon = self._resolve_object_icon(obj_data, obj_name)
                 if maya_icon is not None:
                     child.setIcon(content_col, maya_icon)
                 else:
@@ -336,7 +434,7 @@ class ManifestTableMixin:
         dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
         collisions = 0
 
-        # Build a map of step_id → tree item for quick lookup
+        # Build a map of step_id â†’ tree item for quick lookup
         item_map: dict = {}
         resolved_map: dict = {}
         for i in range(tree.topLevelItemCount()):
@@ -457,12 +555,15 @@ class ManifestTableMixin:
                 names = [o.name for o in step_status.objects if not o.exists]
                 parent.setToolTip(0, f"Missing: {', '.join(names)}")
             elif step_status.status == "missing_behavior":
-                names = [
-                    o.name
-                    for o in step_status.objects
-                    if o.status == "missing_behavior"
-                ]
-                parent.setToolTip(0, f"Missing behavior keys: {', '.join(names)}")
+                lines = []
+                for o in step_status.objects:
+                    if o.status != "missing_behavior":
+                        continue
+                    broken = ", ".join(
+                        fmt_behavior(b) for b in (o.broken_behaviors or o.behaviors)
+                    )
+                    lines.append(f"{o.name}: {broken}")
+                parent.setToolTip(0, "Unverified behaviors:\n" + "\n".join(lines))
 
             if step_status.shrinkable_frames > 0:
                 existing_tip = parent.toolTip(0) or ""
@@ -500,7 +601,7 @@ class ManifestTableMixin:
                 ]
                 parent.setToolTip(beh_col, "\n".join(lines))
 
-            # Color child rows — only problem statuses
+            # Color child rows â€” only problem statuses
             obj_status_map = {o.name: o for o in step_status.objects}
             for j in range(parent.childCount()):
                 child = parent.child(j)
@@ -515,22 +616,17 @@ class ManifestTableMixin:
                 if obj_st.behaviors:
                     beh_widget = tree.itemWidget(child, beh_col)
                     if beh_widget is not None:
-                        if obj_st.status == "missing_object":
-                            beh_widget.setText(
-                                format_behavior_html(
-                                    obj_st.behaviors,
-                                    status_color=BEHAVIOR_STATUS_COLORS.get("error"),
-                                )
-                            )
-                        else:
-                            beh_widget.setText(
-                                format_behavior_html(
-                                    obj_st.behaviors,
-                                    broken=obj_st.broken_behaviors,
-                                )
-                            )
+                        self._color_behavior_label(child_data, beh_widget)
 
                 if obj_st.status == "valid":
+                    # Re-resolve icon: initial formatting may have set a
+                    # fallback X because the DG node didn't exist yet
+                    # (common for audio clips before build).
+                    maya_icon = self._resolve_object_icon(
+                        child_data, child.text(content_col)
+                    )
+                    if maya_icon is not None:
+                        child.setIcon(content_col, maya_icon)
                     continue
 
                 c_fg, c_bg = PASTEL_STATUS.get(obj_st.status, (None, None))
@@ -546,10 +642,22 @@ class ManifestTableMixin:
                 if obj_st.status == "missing_object":
                     child.setToolTip(content_col, "Object not found in Maya")
                 elif obj_st.status == "missing_behavior":
-                    broken = ", ".join(
-                        fmt_behavior(b) for b in obj_st.broken_behaviors
-                    ) or ", ".join(fmt_behavior(b) for b in obj_st.behaviors)
-                    child.setToolTip(content_col, f"Missing keys: [{broken}]")
+                    lines = []
+                    for b in obj_st.broken_behaviors or obj_st.behaviors:
+                        desc = ""
+                        try:
+                            from mayatk.anim_utils.shots.shot_manifest.behaviors import (
+                                load_behavior,
+                            )
+
+                            desc = load_behavior(b).get("description", "")
+                        except Exception:
+                            pass
+                        entry = fmt_behavior(b)
+                        if desc:
+                            entry += f" \u2014 {desc}"
+                        lines.append(entry)
+                    child.setToolTip(content_col, "Unverified:\n" + "\n".join(lines))
                 elif obj_st.status == "user_animated" and obj_st.key_range:
                     child.setToolTip(
                         content_col,

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.10.70"
+__version__ = "0.10.71"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -24,6 +24,7 @@ DEFAULT_INCLUDE = {
     "_env_utils": "*",
     "_mat_utils": "*",
     "_node_utils": "*",
+    "node_utils.data_nodes": "*",
     "_rig_utils": "*",
     "_ui_utils": "*",
     "_uv_utils": "*",
@@ -40,7 +41,9 @@ DEFAULT_INCLUDE = {
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",
-    "node_utils.attributes.audio_events._audio_events": "AudioEvents",
+    "audio_utils.audio_clips._audio_clips": "AudioClips",
+    # Audio utils
+    "audio_utils._audio_utils": "AudioUtils",
     # Environment utils
     "env_utils.devtools": "*",
     # Core utils - specific classes
@@ -48,6 +51,7 @@ DEFAULT_INCLUDE = {
     "core_utils.instancing.auto_instancer": "AutoInstancer",
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
+    "core_utils.script_job_manager": "ScriptJobManager",
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": [
         "SceneAnalyzer",

@@ -14,72 +14,12 @@ from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
 import pymel.core as pm
 
-import mayatk.env_utils.hierarchy_manager._tree_utils as tree_utils
+import mayatk.env_utils.hierarchy_manager.tree_utils as tree_utils
 from mayatk.ui_utils.node_icons import NodeIcons
 
 # Custom data role for storing the original (pre-diff) tooltip so that
 # clear_tree_colors can restore it without accumulating stale diff text.
 _ORIG_TOOLTIP_ROLE = QtCore.Qt.UserRole + 500
-
-
-class _DiffSelectionDelegate(QtWidgets.QStyledItemDelegate):
-    """Wraps the tree's existing delegate, adding a translucent selection
-    overlay for diff-coloured items.
-
-    uitk's ``TreeWidget`` installs a ``_RowTintDelegate`` that composites
-    base / column-tint / row-tint / per-item ``BackgroundRole`` into a
-    single opaque fill, then injects it into ``option.backgroundBrush``
-    so it overrides the QSS ``background: transparent``.  If we replaced
-    that delegate outright the compositing pipeline would be lost and
-    item colours would become invisible.
-
-    Instead this class stores a reference to the *original* delegate and
-    forwards **all** painting to it, only adding a translucent blue
-    overlay for diff-coloured items that are currently selected.
-    """
-
-    _SEL_OVERLAY = QtGui.QColor(90, 140, 190, 70)
-
-    def __init__(self, parent=None, original_delegate=None):
-        super().__init__(parent)
-        self._original = original_delegate
-
-    # -- forwarding helpers --------------------------------------------------
-
-    def _delegate_paint(self, painter, option, index):
-        """Paint using the original delegate if available, else default."""
-        if self._original is not None:
-            self._original.paint(painter, option, index)
-        else:
-            super().paint(painter, option, index)
-
-    def initStyleOption(self, option, index):
-        if self._original is not None:
-            self._original.initStyleOption(option, index)
-        else:
-            super().initStyleOption(option, index)
-
-    def sizeHint(self, option, index):
-        if self._original is not None:
-            return self._original.sizeHint(option, index)
-        return super().sizeHint(option, index)
-
-    # -- selection overlay ----------------------------------------------------
-
-    def paint(self, painter, option, index):
-        bg = index.data(QtCore.Qt.BackgroundRole)
-        has_diff = isinstance(bg, QtGui.QBrush) and bg.style() != QtCore.Qt.NoBrush
-        selected = bool(option.state & QtWidgets.QStyle.State_Selected)
-
-        if has_diff and selected:
-            # Remove Selected so the base painter uses normal diff colours.
-            opt = QtWidgets.QStyleOptionViewItem(option)
-            opt.state &= ~QtWidgets.QStyle.State_Selected
-            self._delegate_paint(painter, opt, index)
-            # Overlay translucent selection tint.
-            painter.fillRect(option.rect, self._SEL_OVERLAY)
-        else:
-            self._delegate_paint(painter, option, index)
 
 
 class HierarchyTreeRenderer(ptk.LoggingMixin):
@@ -346,13 +286,7 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
         try:
             for tree_widget in (tree001, tree000):
                 self.clear_tree_colors(tree_widget)
-                # Wrap the tree's existing delegate so its compositing pipeline
-                # (column tints, row tints, BackgroundRole) is preserved.
-                current = tree_widget.itemDelegate()
-                if not isinstance(current, _DiffSelectionDelegate):
-                    tree_widget.setItemDelegate(
-                        _DiffSelectionDelegate(tree_widget, original_delegate=current)
-                    )
+                tree_widget.selection_style = "tint"
 
             tree_matcher = tree_utils.TreePathMatcher()
             self._ctrl._redirect_logger(tree_matcher.logger)
@@ -397,16 +331,8 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
                     item.setData(0, _ORIG_TOOLTIP_ROLE, None)
                 iterator += 1
 
-            # Restore the original delegate that was wrapped by _DiffSelectionDelegate.
-            delegate = tree_widget.itemDelegate()
-            if isinstance(delegate, _DiffSelectionDelegate):
-                original = delegate._original
-                if original is not None:
-                    tree_widget.setItemDelegate(original)
-                else:
-                    tree_widget.setItemDelegate(
-                        QtWidgets.QStyledItemDelegate(tree_widget)
-                    )
+            # Restore border-based selection style.
+            tree_widget.selection_style = "border"
 
             # Remove leftover transparent-selection stylesheet from earlier runs.
             ss = tree_widget.styleSheet()

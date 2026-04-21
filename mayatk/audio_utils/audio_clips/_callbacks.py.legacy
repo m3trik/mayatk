@@ -1,0 +1,562 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Maya event lifecycle, hydration, and scene scanning for Audio Events.
+
+Provides ``CallbacksMixin`` — manages Maya scriptJobs, OpenMaya
+attribute-changed callbacks, Channel Box signal connections, and the
+selection/scene-change hydration pipeline.
+
+Dependency
+----------
+- Calls ``SyncEngineMixin`` methods through ``self``:
+  ``_sync_and_refresh_target``, ``_schedule_deferred_sync``,
+  ``_activate_composite_for``, ``_is_composite_stale``.
+- Calls ``AudioEventsSlots`` methods/state through ``self``:
+  ``_require_target``, ``_refresh_combo_from_target``,
+  ``_sync_combo_to_enum``, ``_save_file_map``, ``_load_file_map``,
+  ``_node_to_event_label``, ``_audio_files``, ``_syncing_combo``,
+  ``_trigger_attr_path``, ``_last_enum_idx``, ``CATEGORY``, ``self.ui``.
+"""
+import logging
+
+try:
+    import pymel.core as pm
+    import maya.cmds as cmds
+except ImportError:
+    pass
+
+from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
+
+
+class CallbacksMixin:
+    """Maya event lifecycle, hydration, and scene scanning."""
+
+    # ------------------------------------------------------------------
+    # Time-changed callback (per-frame, lightweight)
+    # ------------------------------------------------------------------
+
+    def _on_time_changed(self):
+        """Lightweight per-frame callback for timeChanged scriptJob.
+
+        Only performs a single ``cmds.getAttr`` and compares against the
+        cached index.  The full ``_sync_combo_to_enum`` (with objExists,
+        attributeQuery, Qt repaint) only runs when the value changes.
+        """
+        if self._syncing_combo:
+            return
+
+        # Guard: skip if UI has been destroyed
+        try:
+            if not self.ui or not self.ui.isVisible():
+                return
+        except RuntimeError:
+            return  # Qt C++ object already deleted
+
+        # Build attr path once per target switch (cheap string compare)
+        if not self._trigger_attr_path:
+            return
+
+        try:
+            idx = cmds.getAttr(self._trigger_attr_path)
+        except Exception:
+            return
+
+        if idx == self._last_enum_idx:
+            return  # No change — skip Qt update
+
+        self._last_enum_idx = idx
+        cmb = self.ui.cmb000
+        cmb.blockSignals(True)
+        if 0 <= idx < cmb.count():
+            cmb.setCurrentIndex(idx)
+        else:
+            cmb.setCurrentIndex(-1)
+        cmb.blockSignals(False)
+        cmb.repaint()
+
+    # ------------------------------------------------------------------
+    # ScriptJob lifecycle
+    # ------------------------------------------------------------------
+
+    def _ensure_sync_job(self):
+        """Subscribe to scene and selection events via ScriptJobManager.
+
+        Persistent subscriptions (``SceneOpened`` / ``NewSceneOpened``)
+        re-create ephemeral subscriptions (``SelectionChanged`` /
+        ``timeChanged``) after a scene switch, forming a self-healing
+        lifecycle.
+        """
+        mgr = ScriptJobManager.instance()
+
+        # -- Persistent scene-lifecycle subscriptions ----------------------
+        if not getattr(self, "_scene_subs_installed", False):
+            mgr.subscribe("SceneOpened", self._on_scene_opened, owner=self)
+            mgr.subscribe("NewSceneOpened", self._on_scene_opened, owner=self)
+            mgr.connect_cleanup(self.ui, owner=self)
+            self._scene_subs_installed = True
+
+        # -- Ephemeral subscriptions (auto-pruned on scene change) ---------
+        if not getattr(self, "_sel_token", None):
+            self._sel_token = mgr.subscribe(
+                "SelectionChanged",
+                self._deferred_sync_from_selection,
+                owner=self,
+                ephemeral=True,
+            )
+        if not getattr(self, "_time_token", None):
+            self._time_token = mgr.subscribe(
+                "timeChanged",
+                self._on_time_changed,
+                owner=self,
+                ephemeral=True,
+            )
+
+        # Connect Channel Box Qt signal — fires when user edits a value in
+        # the channel box (same mechanism as attribute_manager).
+        self._connect_cb_signal()
+
+        # Run initial sync now
+        cmds.evalDeferred(self._sync_from_selection)
+
+    def _on_scene_opened(self):
+        """Reset stale state and re-create volatile scriptJobs after scene change."""
+        log = logging.getLogger(__name__)
+        log.debug("_on_scene_opened: resetting state for new scene")
+
+        # Invalidate all scene-specific state
+        self._trigger_attr_path = None
+        self._last_enum_idx = None
+        self._audio_files.clear()
+
+        # Ephemeral tokens are now invalid (auto-pruned by manager)
+        self._sel_token = None
+        self._time_token = None
+
+        # Clear sync fingerprints — old keyframe state is invalid
+        self._sync_fingerprints.clear()
+        self._deferred_sync_pending = False
+
+        # OpenMaya callbacks are also invalidated by scene change
+        self._attr_callback_ids = []
+
+        # Re-create volatile jobs and run initial sync
+        self._ensure_sync_job()
+
+    # ------------------------------------------------------------------
+    # Channel Box signal
+    # ------------------------------------------------------------------
+
+    def _connect_cb_signal(self):
+        """Connect to the Channel Box's QItemSelectionModel signal.
+
+        Mirrors ``AttributeManager._connect_cb_signal``.  Safe to call
+        repeatedly — disconnects any prior connection first (the C++ pointer
+        can go stale after scene changes).
+        """
+        self._disconnect_cb_signal()
+
+        try:
+            from mayatk.ui_utils.channel_box import ChannelBox
+
+            ChannelBox.connect_selection_changed(self._on_cb_changed)
+        except Exception:
+            pass
+
+    def _disconnect_cb_signal(self):
+        """Disconnect Audio Events from Channel Box selection signal."""
+        try:
+            from mayatk.ui_utils.channel_box import ChannelBox
+
+            ChannelBox.disconnect_selection_changed(self._on_cb_changed)
+        except Exception:
+            pass
+
+    def _on_cb_changed(self, selected, deselected):
+        """Slot for Channel Box ``selectionModel().selectionChanged``.
+
+        Fires whenever the user interacts with the channel box (including
+        after setting an enum value).  Re-reads the trigger attr and syncs
+        the combo — same pattern as AttributeManager._on_cb_selection_changed.
+        """
+        try:
+            if self._syncing_combo:
+                return
+            if not self.ui or not self.ui.isVisible():
+                return
+        except RuntimeError:
+            return  # Qt C++ object already deleted
+        self._sync_combo_to_enum()
+
+    # ------------------------------------------------------------------
+    # Selection sync → hydration pipeline
+    # ------------------------------------------------------------------
+
+    def _deferred_sync_from_selection(self):
+        """Deferred wrapper — ensures Maya selection state is committed."""
+        try:
+            if not self.ui or not self.ui.isVisible():
+                return
+        except RuntimeError:
+            return  # Qt C++ object already deleted
+        cmds.evalDeferred(self._sync_from_selection)
+
+    def _sync_from_selection(self):
+        """Sync combo/footer from the shared data_internal node.
+
+        Always hydrates from ``data_internal`` — selection changes do
+        not switch the target node.
+        """
+        # Guard: skip if UI has been destroyed
+        try:
+            if not self.ui or not self.ui.isVisible():
+                return
+        except RuntimeError:
+            return  # Qt C++ object already deleted
+
+        log = logging.getLogger(__name__)
+
+        try:
+            obj = self._require_target()
+            self._hydrate_from_target(obj)
+        except Exception:
+            log.warning("_sync_from_selection error", exc_info=True)
+            try:
+                self.ui.footer.setText("Error syncing selection — see Script Editor.")
+            except Exception:
+                pass
+
+    def _hydrate_from_target(self, obj):
+        """Populate the combo and audio-file map from *obj*'s trigger attribute."""
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        # Cache the full attr path for the lightweight _on_time_changed callback.
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+        self._trigger_attr_path = f"{str(obj)}.{trigger_attr}"
+        self._last_enum_idx = None
+
+        events = EventTriggers.get_events(obj, category=self.CATEGORY) or []
+        track_names = [e for e in events if e and e != "None"]
+
+        if not track_names:
+            self.ui.footer.setText(f"{obj.name()} (no events)")
+            self._refresh_combo_from_target()
+            return
+
+        # Show feedback immediately so the user always sees target status,
+        # even if subsequent steps (combo refresh, hydration) error.
+        self.ui.footer.setText(f"{obj.name()} ({len(track_names)} track(s))")
+
+        # Populate combo with enum event names
+        self._refresh_combo_from_target()
+
+        # Hydrate _audio_files: persisted attr is primary source,
+        # then fill gaps from existing audio-node .filename attrs.
+        _CACHE_SEGMENTS = {"_maya_audio_cache", "_audio_cache"}
+        target_name = obj.name()
+        try:
+            persisted = self._load_file_map(obj)
+            if persisted:
+                self._audio_files.update(persisted)
+            else:
+                event_labels = {e.lower() for e in track_names}
+                for node_name in AudioEvents.list_nodes(category=self.CATEGORY):
+                    try:
+                        if cmds.attributeQuery(
+                            AudioEvents.NODE_OWNER_ATTR,
+                            node=node_name,
+                            exists=True,
+                        ):
+                            owner = (
+                                cmds.getAttr(
+                                    f"{node_name}.{AudioEvents.NODE_OWNER_ATTR}"
+                                )
+                                or ""
+                            )
+                            if owner and owner != target_name:
+                                continue
+                    except Exception:
+                        pass
+
+                    node_event = self._node_to_event_label(node_name)
+                    if node_event and node_event in event_labels:
+                        if node_event not in self._audio_files:
+                            try:
+                                filename = cmds.getAttr(f"{node_name}.filename")
+                                if filename:
+                                    norm = filename.replace("\\", "/")
+                                    parts = set(norm.split("/"))
+                                    if parts & _CACHE_SEGMENTS:
+                                        continue
+                                    self._audio_files[node_event] = norm
+                            except Exception:
+                                pass
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "_hydrate_from_target: file-map hydration error", exc_info=True
+            )
+
+        # Register OpenMaya attribute-changed callback and reconnect Channel Box
+        try:
+            self._register_attr_change_callback(obj)
+            self._connect_cb_signal()
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "_hydrate_from_target: callback registration error", exc_info=True
+            )
+
+        # Auto-switch to this object's composite audio node so the
+        # correct waveform/playback activates on selection change.
+        if self._audio_files and self._is_composite_stale(obj):
+            self._sync_and_refresh_target(obj)
+        else:
+            self._activate_composite_for(obj)
+
+    # ------------------------------------------------------------------
+    # OpenMaya attribute-changed callback
+    # ------------------------------------------------------------------
+
+    def _register_attr_change_callback(self, target):
+        """Register an ``MNodeMessage.addAttributeChangedCallback`` on *target*.
+
+        Fires ``_on_attr_value_set`` whenever *any* attribute changes on
+        the node — we filter for the trigger attr inside the callback.
+        Re-called after every selection change to track the new target.
+        """
+        self._cleanup_attr_callbacks()
+
+        if not target or not pm.objExists(target):
+            return
+
+        try:
+            import maya.api.OpenMaya as om2
+
+            sel = om2.MSelectionList()
+            sel.add(str(target))
+            mobj = sel.getDependNode(0)
+
+            # Message flags we care about:
+            #   kAttributeSet      — value changed (channel box, setKey,
+            #                        or re-evaluation after key deletion)
+            #   kConnectionBroken  — last keyframe deleted, animCurve
+            #                        disconnected from the attribute
+            #
+            # Note: kAttributeRemoved / kAttributeArrayRemoved do NOT fire
+            # for keyframe operations — those are for deleteAttr / multi-
+            # attribute element removal respectively.  Keyframes live on
+            # animCurve DG nodes, not as array elements on the transform.
+            _RELEVANT = (
+                om2.MNodeMessage.kAttributeSet | om2.MNodeMessage.kConnectionBroken
+            )
+
+            def _on_attr_changed(msg, plug, other_plug, *args):
+                try:
+                    if self._syncing_combo:
+                        return
+                    if not (msg & _RELEVANT):
+                        return
+                    # Guard: skip if UI has been destroyed
+                    if not self.ui or not self.ui.isVisible():
+                        return
+
+                    # kConnectionBroken fires when the last keyframe is
+                    # deleted and the animCurve is disconnected.  The plug
+                    # may be the connection plug rather than the trigger
+                    # attr, so we just schedule a dirty-check without
+                    # trying to match the plug name.
+                    if msg & om2.MNodeMessage.kConnectionBroken:
+                        self._schedule_deferred_sync()
+                        return
+
+                    # kAttributeSet — only react to the trigger attr
+                    from mayatk.node_utils.attributes.event_triggers import (
+                        EventTriggers,
+                    )
+
+                    trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+                    if plug.partialName(useLongNames=True) == trigger_attr:
+                        cmds.evalDeferred(self._sync_combo_to_enum)
+                        self._schedule_deferred_sync()
+                except RuntimeError:
+                    pass  # Deleted C++ object — swallow to prevent Maya crash
+                except Exception:
+                    logging.getLogger(__name__).debug(
+                        "_on_attr_changed callback error", exc_info=True
+                    )
+
+            cb_id = om2.MNodeMessage.addAttributeChangedCallback(mobj, _on_attr_changed)
+            self._attr_callback_ids.append(cb_id)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "_register_attr_change_callback failed", exc_info=True
+            )
+
+    def remove_callbacks(self):
+        """Remove all subscriptions and OpenMaya callbacks owned by this instance.
+
+        Call on teardown (e.g. when the UI is destroyed) to prevent
+        leaked persistent subscriptions and orphaned OM callbacks.
+        """
+        self._cleanup_attr_callbacks()
+        ScriptJobManager.instance().unsubscribe_all(self)
+        self._scene_subs_installed = False
+        self._sel_token = None
+        self._time_token = None
+
+    def _cleanup_attr_callbacks(self):
+        """Remove OpenMaya attribute-changed callbacks."""
+
+        ids = self._attr_callback_ids
+        if not ids:
+            return
+        try:
+            import maya.api.OpenMaya as om2
+
+            for cb_id in ids:
+                try:
+                    om2.MMessage.removeCallback(cb_id)
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        self._attr_callback_ids = []
+
+    # ------------------------------------------------------------------
+    # Scene scanning utilities
+    # ------------------------------------------------------------------
+
+    def _get_selected_trigger_object(self):
+        """Return first selected object containing this category trigger attr.
+
+        Uses ``pm.hasAttr`` as the primary check, with a ``cmds.attributeQuery``
+        fallback in case the PyMEL wrapper returns stale results.
+        Also walks DAG ancestors so clicking a shape in the viewport
+        picks up its parent transform.
+        """
+        from mayatk.node_utils.attributes.event_triggers import EventTriggers
+
+        log = logging.getLogger(__name__)
+        trigger_attr, _ = EventTriggers.attr_names(self.CATEGORY)
+
+        for obj in pm.selected():
+            # -- Check the selected object itself --------------------
+            try:
+                if obj.hasAttr(trigger_attr):
+                    return obj
+            except Exception:
+                pass
+
+            # cmds fallback — catches cases where a stale PyNode
+            # wrapper doesn't reflect the attribute correctly.
+            try:
+                node_str = str(obj)
+                if cmds.attributeQuery(trigger_attr, node=node_str, exists=True):
+                    log.debug(
+                        "_get_selected_trigger_object: cmds fallback "
+                        "found trigger on %s",
+                        node_str,
+                    )
+                    return obj
+            except Exception:
+                pass
+
+            # -- Walk up the DAG (shape → transform, nested groups) --
+            if isinstance(obj, pm.nt.DagNode):
+                try:
+                    for parent in obj.getAllParents():
+                        try:
+                            if parent.hasAttr(trigger_attr):
+                                return parent
+                        except Exception:
+                            pass
+                        try:
+                            parent_str = str(parent)
+                            if cmds.attributeQuery(
+                                trigger_attr, node=parent_str, exists=True
+                            ):
+                                log.debug(
+                                    "_get_selected_trigger_object: cmds "
+                                    "parent fallback found trigger on %s",
+                                    parent_str,
+                                )
+                                return parent
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+
+        return None
+
+    def _find_trigger_in_scene(self, trigger_attr):
+        """Scan the scene for a node with *trigger_attr* using multiple strategies.
+
+        Called as a last-resort fallback when nothing is selected.
+        Uses three strategies in order:
+
+        1. ``cmds.ls("*.attr")`` — fast but unreliable for user-defined
+           enum attrs in some Maya builds.
+        2. ``audio_file_map`` marker — any node carrying the
+           persisted file-map attr is almost certainly a trigger object.
+        3. Brute-force ``attributeQuery`` over transforms.
+
+        Returns:
+            PyNode or None.
+        """
+        log = logging.getLogger(__name__)
+
+        # Strategy 1: attribute wildcard (fastest)
+        try:
+            candidates = cmds.ls(f"*.{trigger_attr}", objectsOnly=True, long=True) or []
+            if candidates:
+                log.debug("_find_trigger_in_scene: ls wildcard found %s", candidates[0])
+                return pm.PyNode(candidates[0])
+        except Exception:
+            pass
+
+        # Strategy 2: look for the persisted file_map attr marker
+        try:
+            candidates = (
+                cmds.ls(f"*.{self.FILE_MAP_ATTR}", objectsOnly=True, long=True) or []
+            )
+            if candidates:
+                log.debug(
+                    "_find_trigger_in_scene: file_map marker found %s", candidates[0]
+                )
+                return pm.PyNode(candidates[0])
+        except Exception:
+            pass
+
+        # Strategy 3: brute-force check on transforms
+        try:
+            for node in cmds.ls(type="transform", long=True):
+                try:
+                    if cmds.attributeQuery(trigger_attr, node=node, exists=True):
+                        log.debug("_find_trigger_in_scene: brute-force found %s", node)
+                        return pm.PyNode(node)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Strategy 4: check the audio set — if audio nodes exist, trace
+        # back through transforms with the file_map attr.
+        try:
+            audio_set = AudioEvents._find_audio_set(self.CATEGORY)
+            if audio_set and audio_set.members():
+                for node in cmds.ls(type="transform", long=True):
+                    try:
+                        if cmds.attributeQuery(
+                            self.FILE_MAP_ATTR, node=node, exists=True
+                        ):
+                            log.debug(
+                                "_find_trigger_in_scene: audio-set trace found %s",
+                                node,
+                            )
+                            return pm.PyNode(node)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        log.debug("_find_trigger_in_scene: no trigger object found in scene")
+        return None

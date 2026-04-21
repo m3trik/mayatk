@@ -4,12 +4,12 @@
 
 Converts user-entered ranges + gap-detected boundaries into a fully
 resolved ``(step_id, start, end, is_user)`` list for every build step.
-This module is pure logic — no Qt or Maya imports.
+This module is pure logic â€” no Qt or Maya imports.
 """
 from typing import Dict, List, Optional, Tuple
 
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import BuilderStep
-from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     prune_to_top_boundaries,
 )
 
@@ -23,6 +23,7 @@ def resolve_ranges(
     use_selected_keys: bool,
     last_resolved: List[Tuple[str, float, Optional[float], bool]],
     from_step_idx: int = 0,
+    default_duration: float = 0,
 ) -> List[Tuple[str, float, Optional[float], bool]]:
     """Compute a resolved ``(start, end)`` for every step.
 
@@ -33,11 +34,11 @@ def resolve_ranges(
     steps
         Ordered list of build steps from CSV or detection.
     user_ranges
-        Map of ``step_id → (start, end_or_None)`` for user-entered values.
+        Map of ``step_id â†’ (start, end_or_None)`` for user-entered values.
     gap_starts
         Detected animation-region start frames (pre-sorted).
     gap_end_map
-        Map of ``region_start → region_end`` for detected regions that
+        Map of ``region_start â†’ region_end`` for detected regions that
         have an explicit end (e.g. from ``zero_as_end`` mode).
     gap
         Inter-shot gap in frames (from ShotStore settings).
@@ -45,10 +46,14 @@ def resolve_ranges(
         When ``True``, steps without a matching detected region are
         skipped rather than placed sequentially.
     last_resolved
-        Previously resolved list — entries before *from_step_idx* are
+        Previously resolved list â€” entries before *from_step_idx* are
         reused as a frozen prefix.
     from_step_idx
         Only re-resolve from this index onward.
+    default_duration
+        When positive and no animation regions are detected, each step
+        is assigned this uniform duration instead of behavior-derived
+        durations.  Set to ``0`` to use the old behavior.
 
     Returns
     -------
@@ -73,7 +78,11 @@ def resolve_ranges(
     # Build the resolved list
     resolved: List[Tuple[str, float, Optional[float], bool]] = []
     gap_idx = 0
-    cursor = 1.0  # default start when no animation or no gaps
+    # When no animation is detected and a default_duration is set, use
+    # uniform placement so steps get sensible ranges (e.g. 200f each).
+    use_default = default_duration > 0 and not gap_starts and not use_selected_keys
+
+    cursor = 0.0 if use_default else 1.0  # start at 0 for default ranges
     cursor_forced = False  # True once a user range advances cursor
 
     # Frozen prefix: reuse last-resolved values for steps before from_step_idx
@@ -131,10 +140,18 @@ def resolve_ranges(
             # steps that have no corresponding detected region.
             if use_selected_keys:
                 continue
-            # Sequential placement from cursor
+            # Sequential placement from cursor.
+            # In use_default mode, still consult compute_duration so audio
+            # (from_source) and behavior-derived durations drive per-step
+            # sizing; default_duration is only the fallback for steps with
+            # no resolvable behavior duration.
             start = cursor
+            if use_default:
+                dur = compute_duration(step.objects, fallback=default_duration)
+            else:
+                dur = compute_duration(step.objects)
             resolved.append((step.step_id, start, None, False))
-            cursor = start + compute_duration(step.objects) + gap
+            cursor = start + dur + gap
 
     # Second pass: resolve None ends as next_start - gap (or last key)
     step_by_id = {s.step_id: s for s in steps}
@@ -146,7 +163,12 @@ def resolve_ranges(
             else:
                 step_obj = step_by_id.get(step_id)
                 objs = step_obj.objects if step_obj else []
-                end = start + compute_duration(objs)
+                if use_default:
+                    end = start + compute_duration(
+                        objs, fallback=default_duration
+                    )
+                else:
+                    end = start + compute_duration(objs)
         resolved[i] = (step_id, start, end, is_user)
 
     return resolved

@@ -9,6 +9,7 @@ except ImportError as error:
 from uitk.widgets.footer import FooterStatusController
 
 # From this package:
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -23,7 +24,6 @@ class TexturePathEditorSlots:
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.texture_path_editor
-        self._scene_change_job_id = None  # Store the scriptJob ID for cleanup
         self._refresh_pending = False  # Flag to debounce refresh calls
         self._footer_controller = self._create_footer_controller()
 
@@ -327,54 +327,26 @@ class TexturePathEditorSlots:
             _bind_menu_action("row_show_in_hypershade", self.row_show_in_hypershade)
             _bind_menu_action("delete_file_node", self.delete_file_node)
 
-            # Set up Maya scriptJob to refresh on scene changes
+            # Set up centralized scene-change callbacks
             self._setup_scene_change_callback(widget)
-
-            # Ensure cleanup when widget is destroyed
-            try:
-                widget.destroyed.connect(self.cleanup_scene_callbacks)
-            except Exception:
-                pass
 
         self._refresh_table_content(widget)
 
     def _setup_scene_change_callback(self, widget):
-        """Set up Maya scriptJob to refresh the table when scene changes."""
-        try:
-            # Clean up any existing scriptJob first
-            self.cleanup_scene_callbacks()
-
-            # Create new scriptJob for multiple scene change events
-            # We'll use a list to handle multiple events with the same callback
-            events_to_watch = [
-                "SceneOpened",  # When a scene is opened
-                "NewSceneOpened",  # When a new scene is created
-                "SceneImported",  # When a scene is imported (though this might not always trigger)
-                "workspaceChanged",  # When the workspace is changed
-            ]
-
-            # Create scriptJob with multiple events (Maya will create separate jobs for each)
-            job_ids = []
-            for event in events_to_watch:
-                try:
-                    job_id = pm.scriptJob(
-                        event=[event, lambda: self._on_scene_change(widget)],
-                        protected=False,
-                    )
-                    job_ids.append(job_id)
-                except Exception as e:
-                    print(
-                        f"TexturePathEditor: Failed to create scriptJob for event '{event}': {e}"
-                    )
-
-            # Store the job IDs (we'll store them as a list)
-            self._scene_change_job_id = job_ids
-            print(
-                f"TexturePathEditor: Created scene change scriptJobs (IDs: {job_ids})"
+        """Subscribe to scene-change events via ScriptJobManager."""
+        mgr = ScriptJobManager.instance()
+        for event in (
+            "SceneOpened",
+            "NewSceneOpened",
+            "SceneImported",
+            "workspaceChanged",
+        ):
+            mgr.subscribe(
+                event,
+                lambda w=widget: self._on_scene_change(w),
+                owner=self,
             )
-
-        except Exception as e:
-            print(f"TexturePathEditor: Failed to create scene change scriptJob: {e}")
+        mgr.connect_cleanup(widget, owner=self)
 
     def _on_scene_change(self, widget):
         """Callback function that gets called when the scene changes."""
@@ -463,40 +435,8 @@ class TexturePathEditorSlots:
             self._footer_controller.update()
 
     def cleanup_scene_callbacks(self):
-        """Clean up any active Maya scriptJobs when the widget is destroyed."""
-        try:
-            if self._scene_change_job_id is not None:
-                # Handle both single job ID (int) and multiple job IDs (list)
-                job_ids = (
-                    self._scene_change_job_id
-                    if isinstance(self._scene_change_job_id, list)
-                    else [self._scene_change_job_id]
-                )
-
-                def kill_jobs(ids):
-                    for job_id in ids:
-                        try:
-                            if pm.scriptJob(exists=job_id):
-                                pm.scriptJob(kill=job_id, force=True)
-                                print(
-                                    f"TexturePathEditor: Cleaned up scene change scriptJob (ID: {job_id})"
-                                )
-                        except Exception as e:
-                            print(
-                                f"TexturePathEditor: Error cleaning up scriptJob {job_id}: {e}"
-                            )
-
-                # Use evalDeferred to avoid "cannot kill running scriptJob" error
-                # We pass the list of IDs to the deferred function
-                pm.evalDeferred(lambda: kill_jobs(job_ids))
-
-                self._scene_change_job_id = None
-        except Exception as e:
-            print(f"TexturePathEditor: Error cleaning up scene change scriptJobs: {e}")
-
-    def __del__(self):
-        """Ensure cleanup when the object is destroyed."""
-        self.cleanup_scene_callbacks()
+        """Clean up scene-change subscriptions via ScriptJobManager."""
+        ScriptJobManager.instance().unsubscribe_all(self)
 
     def setup_formatting(self, widget):
         source_root = EnvUtils.get_env_info("workspace")

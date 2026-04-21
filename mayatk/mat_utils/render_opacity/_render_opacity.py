@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
 
 try:
@@ -23,9 +23,9 @@ class RenderOpacity(ptk.LoggingMixin):
     Adds a keyable ``opacity`` attribute to object transforms and optionally
     prepares the material graph for viewport feedback.
 
-    .. note:: This class does not handle animation/keyframing directly.
-              It sets up the *mechanism* (Attribute or Shader Graph) for you
-              to animate manually or via valid pipeline export paths.
+    .. note:: Use :meth:`key_fade` to animate opacity fades with
+              automatic visibility mirroring.  :meth:`create` sets up
+              the mechanism (Attribute or Shader Graph) without keying.
 
     Two modes of operation:
 
@@ -49,9 +49,8 @@ class RenderOpacity(ptk.LoggingMixin):
         result = []
         for obj in objects:
             try:
-                keys = pm.keyframe(
-                    obj, attribute="visibility", query=True, timeChange=True
-                )
+                vis_plug = f"{obj.longName()}.visibility"
+                keys = pm.keyframe(vis_plug, query=True, timeChange=True)
                 if keys:
                     result.append(obj)
             except Exception:
@@ -100,7 +99,8 @@ class RenderOpacity(ptk.LoggingMixin):
             names = [o.name() for o in vis_keyed]
             if delete_visibility_keys:
                 for obj in vis_keyed:
-                    pm.cutKey(obj, attribute="visibility", clear=True)
+                    vis_plug = f"{obj.longName()}.visibility"
+                    pm.cutKey(vis_plug, clear=True)
                     # Reset visibility to on after removing keys
                     obj.visibility.set(True)
                 cls.logger.info("Deleted visibility keys on: %s", ", ".join(names))
@@ -165,6 +165,50 @@ class RenderOpacity(ptk.LoggingMixin):
         if not objects:
             return
         OpacityAttributeMode.sync_visibility_from_opacity(objects)
+
+    @classmethod
+    def key_fade(
+        cls,
+        objects=None,
+        start: float = 0,
+        end: float = 15,
+        direction: str = "in",
+        auto_create: bool = True,
+        tangent: str = "linear",
+    ) -> List[Tuple[str, str]]:
+        """Key an opacity fade and mirror to visibility.
+
+        Convenience wrapper around
+        :meth:`OpacityAttributeMode.key_fade`.  Creates ``opacity``
+        keyframes (smooth linear channel) and matching ``visibility``
+        keyframes (stepped binary) so FBX export produces native tracks
+        for both channels.
+
+        Parameters:
+            objects: Maya nodes. If *None*, uses the current selection.
+            start: First frame of the fade.
+            end: Last frame of the fade.
+            direction: ``"in"`` (0→1), ``"out"`` (1→0), or ``"auto"``.
+            auto_create: Create the ``opacity`` attribute on objects
+                that lack it before keying.
+            tangent: Tangent type for opacity keys (default ``"linear"``).
+
+        Returns:
+            List of ``(object_name, "in"|"out")`` per keyed object.
+        """
+        if objects is None:
+            objects = pm.selected()
+        if not objects:
+            cls.logger.warning("No objects selected.")
+            return []
+        return OpacityAttributeMode.key_fade(
+            objects,
+            start=start,
+            end=end,
+            direction=direction,
+            auto_create=auto_create,
+            tangent=tangent,
+        )
 
     @classmethod
     def remove(

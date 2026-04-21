@@ -44,6 +44,8 @@ except ImportError:
     pass
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk import audio_utils as _audio_utils
+from mayatk.audio_utils._dg import _CACHE_DIR_NAME
 
 
 class AudioEvents(ptk.LoggingMixin):
@@ -212,6 +214,8 @@ class AudioEvents(ptk.LoggingMixin):
                             os.remove(fpath)
                         except OSError:
                             pass
+
+                cmds.lockNode(str(member), lock=False)
                 pm.delete(member)
 
         # Re-fetch handle — Maya may have auto-deleted the set if it
@@ -371,8 +375,15 @@ class AudioEvents(ptk.LoggingMixin):
             member_names = {str(m) for m in members}
             cls._clear_active_if_member(member_names)
 
-        # pm.delete(set) cascades: deletes members and the set itself.
-        pm.delete(audio_set)
+        # Unlock and delete members explicitly.
+        for m in members:
+            if pm.objExists(m):
+                cmds.lockNode(str(m), lock=False)
+                pm.delete(m)
+
+        if pm.objExists(audio_set):
+            pm.delete(audio_set)
+
         cls.logger.info(f"Deleted {count} audio node(s) from '{set_name}'")
         return count
 
@@ -431,6 +442,8 @@ class AudioEvents(ptk.LoggingMixin):
         member_names = {str(m) for m in to_delete}
         cls._clear_active_if_member(member_names)
 
+        for m in to_delete:
+            cmds.lockNode(str(m), lock=False)
         pm.delete(to_delete)
         count = len(to_delete)
         cls.logger.info(
@@ -628,13 +641,10 @@ class AudioEvents(ptk.LoggingMixin):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    _CACHE_DIR_NAME = "_maya_audio_cache"
-    """Sub-directory name used for converted audio caches."""
-
     @classmethod
     def _cache_dir_for(cls, source_path: str) -> str:
         """Return the cache directory path for a given source audio file."""
-        return os.path.join(os.path.dirname(source_path), cls._CACHE_DIR_NAME).replace(
+        return os.path.join(os.path.dirname(source_path), _CACHE_DIR_NAME).replace(
             "\\", "/"
         )
 
@@ -675,11 +685,13 @@ class AudioEvents(ptk.LoggingMixin):
 
     @classmethod
     def _resolve_playable_path(cls, audio_path: str) -> Optional[str]:
-        """Return a Maya-playable path, converting to WAV when required."""
-        return ptk.AudioUtils.resolve_playable_path(
+        """Return a Maya-playable path, converting to WAV when required.
+
+        Delegates to :func:`mayatk.audio_utils.resolve_playable_path`.
+        """
+        return _audio_utils.resolve_playable_path(
             audio_path,
             cache_dir=cls._cache_dir_for(audio_path),
-            logger=cls.logger,
         )
 
     @classmethod
@@ -706,36 +718,21 @@ class AudioEvents(ptk.LoggingMixin):
                 cmds.addAttr(node_name, ln=attr_name, dt="string")
             cmds.setAttr(f"{node_name}.{attr_name}", value, type="string")
 
+        # Hide from outliner and lock to prevent accidental cleanup
+        # This treats them as managed playback helper nodes
+        if cmds.attributeQuery("hiddenInOutliner", node=node_name, exists=True):
+            cmds.setAttr(f"{node_name}.hiddenInOutliner", True)
+        cmds.lockNode(node_name, lock=True)
+
     @classmethod
     def _configure_audio_node(
         cls, node_name: str, audio_path: str, offset: float
     ) -> None:
         """Configure an audio node for reliable Maya playback.
 
-        Using ``setAttr(filename)`` alone can leave some Maya builds with
-        visible waveforms but silent playback. Running the ``sound`` command
-        in edit mode forces Maya to initialize internal audio data.
+        Delegates to :func:`mayatk.audio_utils.configure_dg`.
         """
-        path = audio_path.replace("\\", "/")
-
-        # Basic attrs first
-        cmds.setAttr(f"{node_name}.filename", path, type="string")
-        cmds.setAttr(f"{node_name}.offset", offset)
-
-        # Force Maya audio initialization via sound command.
-        try:
-            cmds.sound(node_name, e=True, file=path, offset=offset)
-        except Exception as exc:
-            cls.logger.warning(
-                f"sound edit failed for '{node_name}': {exc}; using setAttr fallback"
-            )
-
-        # Ensure not muted if attr exists.
-        try:
-            if cmds.attributeQuery("mute", node=node_name, exists=True):
-                cmds.setAttr(f"{node_name}.mute", 0)
-        except Exception:
-            pass
+        _audio_utils.configure_dg(node_name, audio_path, offset)
 
     @classmethod
     def _get_or_create_set(cls, category: str, clear: bool = False) -> "pm.PyNode":
@@ -760,15 +757,7 @@ class AudioEvents(ptk.LoggingMixin):
 
         if audio_set:
             if clear:
-                # Maya auto-deletes an objectSet when its last member
-                # is removed, and pm.delete(set) takes members with it.
-                # Safest approach: clear display refs, delete the whole
-                # set (members included), then recreate empty.
-                members = audio_set.members()
-                if members:
-                    member_names = {str(m) for m in members}
-                    cls._clear_active_if_member(member_names)
-                pm.delete(audio_set)
+                cls.remove(category=category)
                 return pm.sets(name=set_name, empty=True)
             return audio_set
 

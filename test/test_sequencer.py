@@ -28,16 +28,9 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     compute_duration,
     apply_to_shots,
 )
-from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import (
-    AudioClipInfo,
-    compute_waveform_envelope,
-)
+from mayatk.audio_utils._audio_utils import AudioUtils
 
-# Try importing AudioTrackManager (requires Maya modules at import time)
-try:
-    from mayatk.anim_utils.shots.shot_sequencer._audio_tracks import AudioTrackManager
-except Exception:
-    AudioTrackManager = None
+compute_waveform_envelope = AudioUtils.compute_waveform_envelope
 
 # ---------------------------------------------------------------------------
 # Maya standalone bootstrap
@@ -148,7 +141,7 @@ class TestSequencer(unittest.TestCase):
     # ---- reorder ---------------------------------------------------------
 
     def test_reorder_equal_duration(self):
-        """Swap two shots of equal duration â€” positions swap, gap preserved."""
+        """Swap two shots of equal duration Ã¢â‚¬â€ positions swap, gap preserved."""
         seq = ShotSequencer(
             [
                 ShotBlock(0, "A", 0, 40, ["a"]),
@@ -170,7 +163,7 @@ class TestSequencer(unittest.TestCase):
         self.assertEqual(c.end, 140)
 
     def test_reorder_different_duration_ripples(self):
-        """Swap shots of different durations â€” downstream shots ripple."""
+        """Swap shots of different durations Ã¢â‚¬â€ downstream shots ripple."""
         seq = ShotSequencer(
             [
                 ShotBlock(0, "Short", 0, 20, ["s"]),  # 20 frames
@@ -186,7 +179,7 @@ class TestSequencer(unittest.TestCase):
         self.assertEqual(long_shot.end, 50)
         self.assertEqual(short_shot.start, 60)
         self.assertEqual(short_shot.end, 80)
-        # Old region ended at 80, new region ends at 80 â€” no ripple
+        # Old region ended at 80, new region ends at 80 Ã¢â‚¬â€ no ripple
         tail = seq.shot_by_id(2)
         self.assertEqual(tail.start, 90)
 
@@ -643,6 +636,256 @@ class TestSequencerMaya(unittest.TestCase):
         self.assertEqual(
             ott[0], "step", "Gap hold should be enforced after set_shot_duration"
         )
+
+    # -- unified sequence model (Part 1) -----------------------------------
+
+    def test_collect_shot_sequences_anim_only(self):
+        """collect_shot_sequences returns anim segments tagged with kind='anim'."""
+        c1 = self._create_animated_cube("seq_a", {0: 0, 30: 5})
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 30, [str(c1)])])
+        sequences = seq.collect_shot_sequences(0, include_audio=False)
+        self.assertTrue(any(s["kind"] == "anim" and s["obj"] == str(c1) for s in sequences))
+        for s in sequences:
+            self.assertIn("start", s)
+            self.assertIn("end", s)
+
+    def test_collect_shot_sequences_unknown_shot(self):
+        """Unknown shot id returns an empty list, no exception."""
+        seq = ShotSequencer()
+        self.assertEqual(seq.collect_shot_sequences(99), [])
+
+    def test_move_sequence_anim_dispatch(self):
+        """_move_sequence with kind='anim' shifts the object's keys."""
+        c1 = self._create_animated_cube("mvs_a", {10: 0, 20: 5})
+        seq = ShotSequencer()
+        seq._move_sequence(
+            {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 30
+        )
+        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        self.assertAlmostEqual(keys[0], 30.0, places=1)
+        self.assertAlmostEqual(keys[-1], 40.0, places=1)
+
+    def test_move_sequence_noop_when_delta_zero(self):
+        """_move_sequence is a no-op when new_start matches old start."""
+        c1 = self._create_animated_cube("mvs_b", {10: 0, 20: 5})
+        seq = ShotSequencer()
+        seq._move_sequence(
+            {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 10
+        )
+        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        self.assertAlmostEqual(keys[0], 10.0, places=1)
+        self.assertAlmostEqual(keys[-1], 20.0, places=1)
+
+    def test_recompute_shot_objects_drops_orphans(self):
+        """_recompute_shot_objects drops objects with no keys in the shot range."""
+        c1 = self._create_animated_cube("rc_a", {0: 0, 20: 5})
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 0, 20, [str(c1), "ghost_node"])]
+        )
+        seq._recompute_shot_objects(0)
+        objs = seq.shot_by_id(0).objects
+        self.assertIn(str(c1), objs)
+        self.assertNotIn("ghost_node", objs)
+
+    def test_recompute_shot_objects_preserves_pinned(self):
+        """_recompute_shot_objects keeps pinned objects even when keyless."""
+        c1 = self._create_animated_cube("rc_b", {0: 0, 20: 5})
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 0, 20, [str(c1), "pinned_ghost"])]
+        )
+        seq.store.pinned_objects.add("pinned_ghost")
+        seq._recompute_shot_objects(0)
+        self.assertIn("pinned_ghost", seq.shot_by_id(0).objects)
+
+    # -- trim / extend (Part 2) --------------------------------------------
+
+    def test_trim_shot_to_content_shrinks_inward(self):
+        """trim_shot_to_content moves boundaries inward to hug content."""
+        c1 = self._create_animated_cube("trim_a", {20: 0, 40: 5})
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 100, [str(c1)])])
+        head, tail = seq.trim_shot_to_content(0)
+        s0 = seq.shot_by_id(0)
+        self.assertAlmostEqual(s0.start, 20.0, places=1)
+        self.assertAlmostEqual(s0.end, 40.0, places=1)
+        self.assertAlmostEqual(head, 20.0, places=1)
+        self.assertAlmostEqual(tail, -60.0, places=1)
+
+    def test_trim_shot_ripples_downstream(self):
+        """Trimming a shot's tail ripples downstream shots inward."""
+        c1 = self._create_animated_cube("trd_a", {0: 0, 30: 5})
+        c2 = self._create_animated_cube("trd_b", {200: 0, 250: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 100, [str(c1)]),
+                ShotBlock(1, "S1", 200, 250, [str(c2)]),
+            ]
+        )
+        seq.trim_shot_to_content(0)
+        # S0 tail moved from 100 -> 30 (delta -70); S1 should shift by -70
+        self.assertAlmostEqual(seq.shot_by_id(1).start, 130.0, places=1)
+        self.assertAlmostEqual(seq.shot_by_id(1).end, 180.0, places=1)
+
+    def test_trim_shot_ripples_upstream(self):
+        """Trimming a shot's head ripples upstream shots outward (toward content)."""
+        c1 = self._create_animated_cube("tru_a", {0: 0, 30: 5})
+        c2 = self._create_animated_cube("tru_b", {120: 0, 180: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 50, [str(c1)]),
+                ShotBlock(1, "S1", 100, 200, [str(c2)]),
+            ]
+        )
+        seq.trim_shot_to_content(1)
+        # S1 head moved from 100 -> 120 (delta +20); S0 should shift by +20
+        self.assertAlmostEqual(seq.shot_by_id(0).start, 20.0, places=1)
+        self.assertAlmostEqual(seq.shot_by_id(0).end, 70.0, places=1)
+
+    def test_extend_shot_to_fit_grows_outward(self):
+        """extend_shot_to_fit expands the shot to enclose out-of-range content."""
+        c1 = self._create_animated_cube("ext_a", {0: 0, 80: 5})
+        seq = ShotSequencer([ShotBlock(0, "S0", 10, 50, [str(c1)])])
+        head, tail = seq.extend_shot_to_fit(0)
+        s0 = seq.shot_by_id(0)
+        self.assertAlmostEqual(s0.start, 0.0, places=1)
+        self.assertAlmostEqual(s0.end, 80.0, places=1)
+        self.assertAlmostEqual(head, -10.0, places=1)
+        self.assertAlmostEqual(tail, 30.0, places=1)
+
+    def test_extend_shot_ripples_both_directions(self):
+        """Extending a middle shot ripples both upstream and downstream."""
+        c0 = self._create_animated_cube("ext_pre", {0: 0, 20: 5})
+        c1 = self._create_animated_cube("ext_mid", {-10: 0, 110: 5})
+        c2 = self._create_animated_cube("ext_post", {200: 0, 250: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 30, [str(c0)]),
+                ShotBlock(1, "S1", 50, 100, [str(c1)]),
+                ShotBlock(2, "S2", 200, 250, [str(c2)]),
+            ]
+        )
+        seq.extend_shot_to_fit(1)
+        # S1 head: 50 -> -10 (delta -60); tail: 100 -> 110 (delta +10)
+        s0_start = seq.shot_by_id(0).start
+        s2_start = seq.shot_by_id(2).start
+        self.assertAlmostEqual(s0_start, -60.0, places=1)
+        self.assertAlmostEqual(s2_start, 210.0, places=1)
+
+    def test_trim_noop_when_already_tight(self):
+        """trim_shot_to_content returns zeros when boundaries already fit."""
+        c1 = self._create_animated_cube("noop_a", {0: 0, 50: 5})
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [str(c1)])])
+        head, tail = seq.trim_shot_to_content(0)
+        self.assertEqual((head, tail), (0.0, 0.0))
+
+    def test_fit_shot_invalid_id(self):
+        """fit_shot_to_content raises ValueError for unknown shot_id."""
+        seq = ShotSequencer()
+        with self.assertRaises(ValueError):
+            seq.fit_shot_to_content(99)
+
+    # -- move sequences across shots (Part 3) ------------------------------
+
+    def test_move_sequences_to_empty_shot_anchors_at_start(self):
+        """Moving an anim sequence to an empty dest places it at dest.start."""
+        c1 = self._create_animated_cube("mvs_dest_a", {10: 0, 20: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 50, [str(c1)]),
+                ShotBlock(1, "S1", 100, 200, []),
+            ]
+        )
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": str(c1), "start": 10, "end": 20}],
+            dest_shot_id=1,
+        )
+        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        # Moved to dest.start (100); duration preserved.
+        self.assertAlmostEqual(keys[0], 100.0, places=1)
+        self.assertAlmostEqual(keys[-1], 110.0, places=1)
+        # Object should now belong to dest shot.
+        self.assertIn(str(c1), seq.shot_by_id(1).objects)
+        self.assertNotIn(str(c1), seq.shot_by_id(0).objects)
+
+    def test_move_sequences_places_after_when_from_upstream(self):
+        """When dest already has the obj and source is upstream, place AFTER."""
+        c1 = self._create_animated_cube("mvs_after_a", {10: 0, 20: 5})
+        c2 = self._create_animated_cube("mvs_after_b", {110: 0, 130: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 50, [str(c1)]),
+                ShotBlock(1, "S1", 100, 200, [str(c2)]),
+            ]
+        )
+        # Move c1's seq from S0 (upstream) into S1 — c2 already lives there.
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": str(c1), "start": 10, "end": 20}],
+            dest_shot_id=1,
+        )
+        c1_keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        # Anchor = end of c2 (130); c1 moves to start at 130.
+        self.assertAlmostEqual(c1_keys[0], 130.0, places=1)
+        self.assertAlmostEqual(c1_keys[-1], 140.0, places=1)
+
+    def test_move_sequences_places_before_when_from_downstream(self):
+        """When dest already has the obj and source is downstream, place BEFORE."""
+        c1 = self._create_animated_cube("mvs_before_a", {110: 0, 130: 5})
+        c2 = self._create_animated_cube("mvs_before_b", {210: 0, 220: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 100, 200, [str(c1)]),
+                ShotBlock(1, "S1", 200, 300, [str(c2)]),
+            ]
+        )
+        # Move c2 (downstream of S0) into S0 — c1 already lives there.
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": str(c2), "start": 210, "end": 220}],
+            dest_shot_id=0,
+        )
+        c2_keys = sorted(pm.keyframe(c2, q=True, attribute="translateX"))
+        # Anchor = start of c1 (110) - group_dur (10) = 100. c2 moves to [100,110].
+        self.assertAlmostEqual(c2_keys[0], 100.0, places=1)
+        self.assertAlmostEqual(c2_keys[-1], 110.0, places=1)
+
+    def test_move_sequences_preserves_group_offsets(self):
+        """Multiple sequences from the same source shot keep their offsets."""
+        c1 = self._create_animated_cube("mvs_grp_a", {10: 0, 20: 5})
+        c2 = self._create_animated_cube("mvs_grp_b", {30: 0, 40: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 50, [str(c1), str(c2)]),
+                ShotBlock(1, "S1", 100, 200, []),
+            ]
+        )
+        seq.move_sequences_to_shot(
+            [
+                {"kind": "anim", "obj": str(c1), "start": 10, "end": 20},
+                {"kind": "anim", "obj": str(c2), "start": 30, "end": 40},
+            ],
+            dest_shot_id=1,
+        )
+        c1_keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        c2_keys = sorted(pm.keyframe(c2, q=True, attribute="translateX"))
+        # Group base = 10. anchor = 100. c1 -> [100,110], c2 -> [120,130]
+        self.assertAlmostEqual(c1_keys[0], 100.0, places=1)
+        self.assertAlmostEqual(c2_keys[0], 120.0, places=1)
+        self.assertAlmostEqual(c2_keys[-1], 130.0, places=1)
+
+    def test_move_sequences_invalid_dest(self):
+        """Invalid destination raises ValueError."""
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [])])
+        with self.assertRaises(ValueError):
+            seq.move_sequences_to_shot([], dest_shot_id=99)
+
+    def test_move_sequences_empty_list_noop(self):
+        """Empty sequences list is a safe no-op."""
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [])])
+        seq.move_sequences_to_shot([], dest_shot_id=0)  # should not raise
+
+    def test_fit_shot_empty_sequences_noop(self):
+        """No sequences -> no boundary change."""
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [])])
+        head, tail = seq.fit_shot_to_content(0)
+        self.assertEqual((head, tail), (0.0, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -1329,7 +1572,7 @@ class TestSelectiveRebuild(unittest.TestCase):
             has_keys_fn=lambda *_: True,
         )
 
-        # Behavior should NOT have been applied (existing keys â†’ skip)
+        # Behavior should NOT have been applied (existing keys Ã¢â€ â€™ skip)
         mock_apply.assert_not_called()
         self.assertTrue(len(result["skipped"]) > 0)
 
@@ -1449,6 +1692,67 @@ class TestShotBlockMetadata(unittest.TestCase):
         self.assertTrue(shot.locked)
 
 
+class TestClassifyObjects(unittest.TestCase):
+    """Test ShotBlock.classify_objects with various csv_objects formats.
+
+    Bug: csv_objects stored as list of dicts ({"name": ..., "kind": ...})
+    caused TypeError: unhashable type: 'dict' when building the lookup set.
+    Fixed: 2026-04-16
+    """
+
+    def test_dict_format_csv_objects(self):
+        """csv_objects as list of dicts must not raise."""
+        b = ShotBlock(
+            0,
+            "S0",
+            0,
+            50,
+            ["ObjA", "ObjB"],
+            metadata={
+                "csv_objects": [
+                    {"name": "ObjA", "kind": "mesh"},
+                ],
+            },
+        )
+        result = b.classify_objects()
+        self.assertEqual(result["ObjA"], "valid")
+        self.assertEqual(result["ObjB"], "scene_discovered")
+
+    def test_string_format_csv_objects(self):
+        """Legacy string format still works."""
+        b = ShotBlock(
+            0,
+            "S0",
+            0,
+            50,
+            ["ObjA", "ObjB"],
+            metadata={"csv_objects": ["ObjA"]},
+        )
+        result = b.classify_objects()
+        self.assertEqual(result["ObjA"], "valid")
+        self.assertEqual(result["ObjB"], "scene_discovered")
+
+    def test_object_status_takes_precedence(self):
+        """object_status overrides csv_objects membership."""
+        b = ShotBlock(
+            0,
+            "S0",
+            0,
+            50,
+            ["ObjA"],
+            metadata={
+                "object_status": {"ObjA": "missing_behavior"},
+                "csv_objects": [{"name": "ObjA", "kind": "mesh"}],
+            },
+        )
+        self.assertEqual(b.classify_objects()["ObjA"], "missing_behavior")
+
+    def test_no_csv_objects_defaults_valid(self):
+        """Without csv_objects metadata, all objects are 'valid'."""
+        b = ShotBlock(0, "S0", 0, 50, ["ObjA"])
+        self.assertEqual(b.classify_objects()["ObjA"], "valid")
+
+
 class TestShotStore(unittest.TestCase):
     """Tests for ShotStore CRUD and serialisation."""
 
@@ -1541,7 +1845,7 @@ class TestShotStore(unittest.TestCase):
     # ---- compute_gap -----------------------------------------------------
 
     def test_compute_gap_uniform(self):
-        """Uniform gaps → compute_gap returns the common gap value."""
+        """Uniform gaps â†’ compute_gap returns the common gap value."""
         from mayatk.anim_utils.shots._shots import ShotStore
 
         store = ShotStore()
@@ -1551,7 +1855,7 @@ class TestShotStore(unittest.TestCase):
         self.assertAlmostEqual(store.compute_gap(), 10.0)
 
     def test_compute_gap_zero(self):
-        """Abutting shots → compute_gap returns 0."""
+        """Abutting shots â†’ compute_gap returns 0."""
         from mayatk.anim_utils.shots._shots import ShotStore
 
         store = ShotStore()
@@ -1569,7 +1873,7 @@ class TestShotStore(unittest.TestCase):
         self.assertAlmostEqual(store.compute_gap(), 5.0)
 
     def test_compute_gap_mixed_returns_median(self):
-        """Mixed gap sizes → returns the median."""
+        """Mixed gap sizes â†’ returns the median."""
         from mayatk.anim_utils.shots._shots import ShotStore
 
         store = ShotStore()
@@ -1577,7 +1881,7 @@ class TestShotStore(unittest.TestCase):
         store.define_shot(name="B", start=55, end=100)  # gap=5
         store.define_shot(name="C", start=110, end=150)  # gap=10
         store.define_shot(name="D", start=160, end=200)  # gap=10
-        # Sorted gaps: [5, 10, 10] → median = 10
+        # Sorted gaps: [5, 10, 10] â†’ median = 10
         self.assertAlmostEqual(store.compute_gap(), 10.0)
 
     def test_compute_gap_overlapping_clamps_to_zero(self):
@@ -1590,11 +1894,11 @@ class TestShotStore(unittest.TestCase):
 
         store = ShotStore()
         store.define_shot(name="A", start=0, end=60)
-        store.define_shot(name="B", start=50, end=110)  # overlap → raw gap -10
+        store.define_shot(name="B", start=50, end=110)  # overlap â†’ raw gap -10
         self.assertAlmostEqual(store.compute_gap(), 0.0)
 
     def test_compute_gap_even_count_rounds_to_int(self):
-        """Even number of gaps → median is rounded to nearest integer.
+        """Even number of gaps â†’ median is rounded to nearest integer.
 
         Bug: even-count median could return a fractional .5 value.
         Fixed: 2026-03-25
@@ -1605,7 +1909,7 @@ class TestShotStore(unittest.TestCase):
         store.define_shot(name="A", start=0, end=50)
         store.define_shot(name="B", start=55, end=100)  # gap=5
         store.define_shot(name="C", start=110, end=150)  # gap=10
-        # Sorted gaps: [5, 10] → raw mean = 7.5 → rounded = 8
+        # Sorted gaps: [5, 10] â†’ raw mean = 7.5 â†’ rounded = 8
         result = store.compute_gap()
         self.assertEqual(result, result // 1)  # is a whole number
 
@@ -1873,9 +2177,48 @@ class TestRespace(unittest.TestCase):
         self.assertAlmostEqual(seq.shot_by_id(0).start, 1)
         self.assertAlmostEqual(seq.shot_by_id(0).end, 51)
 
+    def test_respace_preserves_first_shot_position(self):
+        """Respace with first shot's own start preserves it.
+
+        Bug: on_gap_changed called respace(start_frame=1), resetting
+        the first shot's position regardless of where it actually was.
+        Fixed: 2026-04-16
+        """
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 200, []),
+                ShotBlock(1, "S1", 200, 400, []),
+                ShotBlock(2, "S2", 400, 600, []),
+            ]
+        )
+        first_start = seq.sorted_shots()[0].start
+        seq.respace(gap=10, start_frame=first_start)
+        # First shot stays at frame 0, not shifted to 1
+        self.assertAlmostEqual(seq.shot_by_id(0).start, 0)
+        self.assertAlmostEqual(seq.shot_by_id(0).end, 200)
+        # Interior gaps of 10
+        self.assertAlmostEqual(seq.shot_by_id(1).start, 210)
+        self.assertAlmostEqual(seq.shot_by_id(1).end, 410)
+        self.assertAlmostEqual(seq.shot_by_id(2).start, 420)
+        self.assertAlmostEqual(seq.shot_by_id(2).end, 620)
+
+    def test_respace_no_gap_after_last_shot(self):
+        """Gap must only appear between shots, not after the last one."""
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 100, []),
+                ShotBlock(1, "S1", 100, 200, []),
+            ]
+        )
+        seq.respace(gap=10, start_frame=0)
+        # Last shot ends at its duration, no trailing gap
+        self.assertAlmostEqual(seq.shot_by_id(1).end, 210)
+        # No extra space â€” end is exactly start + duration
+        self.assertAlmostEqual(seq.shot_by_id(1).end - seq.shot_by_id(1).start, 100)
+
 
 class TestApplyBehaviors(unittest.TestCase):
-    """Test apply_to_shots() from behaviors module â€” pure Python with mocks."""
+    """Test apply_to_shots() from behaviors module Ã¢â‚¬â€ pure Python with mocks."""
 
     def test_apply_behaviors_calls_engine(self):
         """apply_to_shots should call apply_fn for declared behaviors."""
@@ -2189,25 +2532,6 @@ class TestShotManifestUIFile(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestAudioClipInfo(unittest.TestCase):
-    """Test AudioClipInfo dataclass."""
-
-    def test_end_frame(self):
-        clip = AudioClipInfo(
-            node_name="audio1",
-            file_path="/tmp/test.wav",
-            offset=10.0,
-            duration_frames=50.0,
-        )
-        self.assertAlmostEqual(clip.end_frame, 60.0)
-
-    def test_defaults(self):
-        clip = AudioClipInfo(node_name="a", file_path="", offset=0, duration_frames=0)
-        self.assertEqual(clip.sample_rate, 44100)
-        self.assertEqual(clip.num_channels, 1)
-        self.assertEqual(clip.num_frames, 0)
-
-
 class TestWaveformEnvelope(unittest.TestCase):
     """Test compute_waveform_envelope on a synthetic WAV file."""
 
@@ -2264,263 +2588,6 @@ class TestWaveformEnvelope(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Maya-dependent audio tests
 # ---------------------------------------------------------------------------
-
-
-@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
-class TestAudioTrackManagerMaya(unittest.TestCase):
-    """Tests for AudioTrackManager requiring Maya."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Create a temp WAV for audio node tests."""
-        import struct
-        import wave
-        import tempfile
-
-        cls._tmp_dir = tempfile.mkdtemp()
-        cls._wav_path = str(Path(cls._tmp_dir) / "test_clip.wav")
-
-        n_samples = 44100  # 1 second at 44100 Hz
-        samples = [int(16000 * ((i % 100) / 50.0 - 1.0)) for i in range(n_samples)]
-        raw = struct.pack(f"<{n_samples}h", *samples)
-
-        with wave.open(cls._wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(44100)
-            wf.writeframes(raw)
-
-    @classmethod
-    def tearDownClass(cls):
-        import shutil
-
-        shutil.rmtree(cls._tmp_dir, ignore_errors=True)
-
-    def setUp(self):
-        pm.mel.file(new=True, force=True)
-        self.mgr = AudioTrackManager()
-
-    def _create_audio_node(self, name, wav_path, offset=0.0):
-        """Create a Maya audio node with a file and offset."""
-        from maya import cmds
-
-        node = cmds.createNode("audio", name=name)
-        cmds.setAttr(f"{node}.filename", wav_path, type="string")
-        cmds.setAttr(f"{node}.offset", offset)
-        return node
-
-    def test_find_audio_nodes_empty_scene(self):
-        """No audio nodes yields empty list."""
-        clips = self.mgr.find_audio_nodes()
-        self.assertEqual(clips, [])
-
-    def test_find_audio_nodes_discovers(self):
-        """Audio nodes are discovered with correct metadata."""
-        self._create_audio_node("clip_a", self._wav_path, offset=10)
-        clips = self.mgr.find_audio_nodes()
-        self.assertEqual(len(clips), 1)
-        self.assertEqual(clips[0].node_name, "clip_a")
-        self.assertAlmostEqual(clips[0].offset, 10.0)
-        self.assertGreater(clips[0].duration_frames, 0)
-
-    def test_find_audio_nodes_range_filter(self):
-        """Range filtering excludes out-of-range clips."""
-        self._create_audio_node("early", self._wav_path, offset=0)
-        self._create_audio_node("late", self._wav_path, offset=1000)
-        clips = self.mgr.find_audio_nodes(start=0, end=100)
-        names = [c.node_name for c in clips]
-        self.assertIn("early", names)
-        self.assertNotIn("late", names)
-
-    def test_collect_audio_segments_includes_waveform(self):
-        """collect_audio_segments returns segment dicts with waveform data."""
-        self._create_audio_node("seg_test", self._wav_path, offset=5)
-        segs = self.mgr.collect_audio_segments(include_waveform=True)
-        self.assertEqual(len(segs), 1)
-        self.assertTrue(segs[0]["is_audio"])
-        self.assertGreater(len(segs[0]["waveform"]), 0)
-        self.assertEqual(segs[0]["label"], "test_clip")
-
-    def test_set_audio_offset(self):
-        """set_audio_offset updates the Maya node."""
-        from maya import cmds
-
-        node = self._create_audio_node("move_me", self._wav_path, offset=0)
-        AudioTrackManager.set_audio_offset(node, 42.0)
-        self.assertAlmostEqual(cmds.getAttr(f"{node}.offset"), 42.0)
-
-    def test_collect_without_waveform(self):
-        """collect_audio_segments with include_waveform=False returns empty waveform."""
-        self._create_audio_node("no_wave", self._wav_path, offset=0)
-        segs = self.mgr.collect_audio_segments(include_waveform=False)
-        self.assertEqual(segs[0]["waveform"], [])
-
-    def test_waveform_cache_reuses(self):
-        """Repeated calls with same WAV reuse the cached envelope."""
-        self._create_audio_node("cache_test", self._wav_path, offset=0)
-        segs1 = self.mgr.collect_audio_segments(include_waveform=True)
-        segs2 = self.mgr.collect_audio_segments(include_waveform=True)
-        self.assertIs(segs1[0]["waveform"], segs2[0]["waveform"])
-
-    def test_segment_cache_invalidate(self):
-        """collect_all uses cache; invalidate() forces re-read."""
-        self._create_audio_node("c1", self._wav_path, offset=0)
-        segs1 = self.mgr.collect_all_audio_segments()
-        self.assertEqual(len(segs1), 1)
-        # Same range returns cached list
-        segs2 = self.mgr.collect_all_audio_segments()
-        self.assertIs(segs1, segs2)
-        # After invalidate, re-reads
-        self.mgr.invalidate()
-        segs3 = self.mgr.collect_all_audio_segments()
-        self.assertIsNot(segs1, segs3)
-
-    def test_audio_source_tag(self):
-        """DG audio segments include audio_source='dg'."""
-        self._create_audio_node("tag_test", self._wav_path, offset=0)
-        segs = self.mgr.collect_audio_segments()
-        self.assertEqual(segs[0]["audio_source"], "dg")
-
-
-@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
-class TestEventAudioTrackManager(unittest.TestCase):
-    """Tests for AudioEvents (keyed enum locator) discovery path."""
-
-    @classmethod
-    def setUpClass(cls):
-        import struct
-        import wave
-        import tempfile
-
-        cls._tmp_dir = tempfile.mkdtemp()
-        cls._wav_path = str(Path(cls._tmp_dir) / "event_clip.wav")
-
-        n_samples = 22050  # 0.5 seconds at 44100 Hz
-        samples = [int(8000 * ((i % 50) / 25.0 - 1.0)) for i in range(n_samples)]
-        raw = struct.pack(f"<{n_samples}h", *samples)
-
-        with wave.open(cls._wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(44100)
-            wf.writeframes(raw)
-
-    @classmethod
-    def tearDownClass(cls):
-        import shutil
-
-        shutil.rmtree(cls._tmp_dir, ignore_errors=True)
-
-    def setUp(self):
-        pm.mel.file(new=True, force=True)
-        self.mgr = AudioTrackManager()
-
-    def _create_event_locator(self, name, labels, file_map, keys):
-        """Create a locator with audio_trigger enum + audio_file_map + keys.
-
-        Parameters:
-            name: Locator name.
-            labels: List of enum label strings (first should be 'None').
-            file_map: Dict mapping lowercase label -> file path.
-            keys: List of (frame, enum_index) pairs.
-        """
-        from maya import cmds
-        import json
-
-        loc = cmds.spaceLocator(name=name)[0]
-        enum_str = ":".join(labels)
-        cmds.addAttr(loc, ln="audio_trigger", at="enum", en=enum_str, k=True)
-        cmds.addAttr(loc, ln="audio_file_map", dt="string")
-        cmds.setAttr(f"{loc}.audio_file_map", json.dumps(file_map), type="string")
-
-        for frame, idx in keys:
-            cmds.setKeyframe(f"{loc}.audio_trigger", time=frame, value=idx)
-
-        return loc
-
-    def test_find_event_carriers(self):
-        """Carriers (transforms and network nodes) with audio_trigger are found."""
-        self._create_event_locator(
-            "ev_loc",
-            ["None", "clip_a"],
-            {"clip_a": self._wav_path},
-            [(10, 1)],
-        )
-        locs = AudioTrackManager.find_event_carriers()
-        self.assertEqual(locs, ["ev_loc"])
-
-    def test_find_event_carriers_network_node(self):
-        """Network-node carriers with audio_trigger are also discovered."""
-        from maya import cmds
-
-        net = cmds.createNode("network", name="ev_net")
-        labels = "None:clip_a"
-        cmds.addAttr(net, ln="audio_trigger", at="enum", en=labels, keyable=True)
-        found = AudioTrackManager.find_event_carriers()
-        self.assertIn("ev_net", found)
-
-    def test_collect_event_segments(self):
-        """Event segments are discovered with correct frame and duration."""
-        self._create_event_locator(
-            "ev_loc2",
-            ["None", "clip_a", "clip_b"],
-            {"clip_a": self._wav_path, "clip_b": self._wav_path},
-            [(0, 0), (10, 1), (50, 2)],
-        )
-        segs = self.mgr.collect_event_audio_segments()
-        # Key at frame 0 is 'None' -> skipped.  Keys 10 and 50 produce segments.
-        self.assertEqual(len(segs), 2)
-        self.assertEqual(segs[0]["label"], "clip_a")
-        self.assertAlmostEqual(segs[0]["start"], 10.0)
-        self.assertGreater(segs[0]["duration"], 0)
-        self.assertEqual(segs[0]["audio_source"], "event")
-        self.assertAlmostEqual(segs[0]["event_key_frame"], 10.0)
-
-    def test_event_range_filter(self):
-        """Event segments outside range are excluded."""
-        self._create_event_locator(
-            "ev_range",
-            ["None", "clip_a"],
-            {"clip_a": self._wav_path},
-            [(5, 1), (9999, 1)],
-        )
-        segs = self.mgr.collect_event_audio_segments(scene_start=0, scene_end=100)
-        self.assertEqual(len(segs), 1)
-        self.assertAlmostEqual(segs[0]["start"], 5.0)
-
-    def test_move_event_key(self):
-        """move_event_key shifts the keyframe on the trigger attribute."""
-        from maya import cmds
-
-        loc = self._create_event_locator(
-            "ev_move",
-            ["None", "clip_a"],
-            {"clip_a": self._wav_path},
-            [(20, 1)],
-        )
-        AudioTrackManager.move_event_key(loc, 20.0, 35.0)
-        keys = cmds.keyframe(f"{loc}.audio_trigger", q=True)
-        self.assertAlmostEqual(keys[0], 35.0)
-
-    def test_collect_all_combines_both(self):
-        """collect_all_audio_segments returns DG + event segments together."""
-        from maya import cmds
-
-        # DG audio node
-        dg = cmds.createNode("audio", name="dg_clip")
-        cmds.setAttr(f"{dg}.filename", self._wav_path, type="string")
-        cmds.setAttr(f"{dg}.offset", 0.0)
-        # Event locator
-        self._create_event_locator(
-            "ev_both",
-            ["None", "clip_a"],
-            {"clip_a": self._wav_path},
-            [(100, 1)],
-        )
-        segs = self.mgr.collect_all_audio_segments()
-        sources = {s["audio_source"] for s in segs}
-        self.assertIn("dg", sources)
-        self.assertIn("event", sources)
 
 
 class TestRenderedRowColors(unittest.TestCase):
@@ -2626,7 +2693,7 @@ class TestRenderedRowColors(unittest.TestCase):
         tree._child_row_color = QColor(0, 0, 0, 55)
         tree._parent_row_color = QColor(255, 255, 255, 12)
 
-        # Column tints â€” darken Step and Behaviors columns
+        # Column tints Ã¢â‚¬â€ darken Step and Behaviors columns
         tree.set_column_tint(COL_STEP, QColor(0, 0, 0, 45))
         tree.set_column_tint(COL_BEHAVIORS, QColor(0, 0, 0, 45))
 
@@ -2939,7 +3006,7 @@ class TestMarkerPersistence(unittest.TestCase):
 
 
 class TestDetectShots(unittest.TestCase):
-    """detect_shots() logic â€” pure clustering tests without Maya."""
+    """detect_shots() logic Ã¢â‚¬â€ pure clustering tests without Maya."""
 
     def test_detect_shots_exists(self):
         """ShotSequencer should have a detect_shots method."""
@@ -3005,7 +3072,7 @@ class TestBoundaryFloatPrecision(unittest.TestCase):
         shot_end = 4374.0 + (4518.4 - 4341.6)  # 4550.799999...
         key_pos = 4548.0 + (shot_end - 4548.0)  # may round to 4550.8
         # Confirm the float mismatch exists (key_pos >= shot_end)
-        # — if Python's float resolves them identically, the test still
+        # â€” if Python's float resolves them identically, the test still
         #   validates the tolerance path harmlessly.
         result = self._filter_segments(
             [(key_pos, key_pos)], range_start=4341.6, range_end=shot_end
@@ -3279,7 +3346,7 @@ class TestShotStoreListeners(unittest.TestCase):
         old_end = store.shot_by_name("A09").end  # 2520
         stale_value = 0
         delta = stale_value - old_end  # -2520
-        # This MUST NOT happen — the fix prevents the signal from
+        # This MUST NOT happen â€” the fix prevents the signal from
         # ever reaching on_shot_end_changed.  But verify that upstream
         # shots would not survive such a call.
         with store.batch_update():
@@ -3308,7 +3375,7 @@ class TestShotStoreListeners(unittest.TestCase):
             store.ripple_shift(old_end2, delta2, exclude_id=store.active_shot_id)
 
         # Upstream A01/A02 get shifted because after_frame=0 matches
-        # everything — this is the OBSERVED BUG.  The fix must prevent
+        # everything â€” this is the OBSERVED BUG.  The fix must prevent
         # the stale value=0 from ever reaching on_shot_end_changed.
         a01 = store.shot_by_name("A01")
         a02 = store.shot_by_name("A02")
@@ -3326,7 +3393,7 @@ class TestColumnMap(unittest.TestCase):
     """Test ColumnMap serialisation round-trip and custom-alias parsing."""
 
     def test_to_dict_round_trip(self):
-        """to_dict → from_dict produces an identical ColumnMap."""
+        """to_dict â†’ from_dict produces an identical ColumnMap."""
         original = ColumnMap()
         restored = ColumnMap.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -3374,13 +3441,12 @@ class TestColumnMap(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_voice_column_populates_description(self):
-        """When Voice Support column exists, description shows voice text.
+    def test_voice_column_populates_audio_field(self):
+        """When Voice Support column exists, audio field stores voice text.
 
-        Bug: Description showed Step Contents instead of Voice Support,
-        causing voice-only steps (Contents=N/A) to display N/A and
-        silent-action steps (Voice=N/A) to show action text.
-        Fixed: 2026-03-24
+        display_text returns description (Step Contents), not audio.
+        Audio text flows into metadata as voice_text.
+        Refactored: 2026-04-14 â€” display_text flipped to return description.
         """
         import tempfile, shutil, csv as csv_mod
 
@@ -3397,26 +3463,28 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(
                     ["A01.)", "Welcome to training.", "Arrow fades in.", "ARROW_01", ""]
                 )
-                # A02: voice-only (Contents=N/A) — should show voice
+                # A02: voice-only (Contents=N/A) â€” should show N/A description
                 w.writerow(["A02.)", "The clamps are removed.", "N/A", "N/A", ""])
-                # A03: silent action (Voice=N/A) — should show N/A
+                # A03: silent action (Voice=N/A) â€” should show action description
                 w.writerow(["A03.)", "N/A", "Poker chips push in.", "CHIPS_01", ""])
             steps = parse_csv(csv_path)
             self.assertEqual(len(steps), 3)
 
-            # A01: display_text = audio text
-            self.assertEqual(steps[0].display_text, "Welcome to training.")
+            # A01: display_text = description (Step Contents)
+            self.assertEqual(steps[0].display_text, "Arrow fades in.")
             self.assertEqual(steps[0].audio, "Welcome to training.")
             self.assertEqual(steps[0].description, "Arrow fades in.")
             # Behavior detection still from description
             self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
 
-            # A02: display_text = audio (not N/A)
-            self.assertEqual(steps[1].display_text, "The clamps are removed.")
+            # A02: display_text = description ("N/A")
+            self.assertEqual(steps[1].display_text, "N/A")
+            self.assertEqual(steps[1].audio, "The clamps are removed.")
             self.assertEqual(steps[1].description, "N/A")
 
-            # A03: display_text = N/A (from audio)
-            self.assertEqual(steps[2].display_text, "N/A")
+            # A03: display_text = description (action text)
+            self.assertEqual(steps[2].display_text, "Poker chips push in.")
+            self.assertEqual(steps[2].audio, "N/A")
             self.assertEqual(steps[2].description, "Poker chips push in.")
             # Behavior still detected from description, not audio
             self.assertEqual(len(steps[2].objects), 1)
@@ -3503,6 +3571,474 @@ class TestColumnMap(unittest.TestCase):
         cm = ColumnMap(exclude_steps=("SETUP", "INTRO"))
         restored = ColumnMap.from_dict(cm.to_dict())
         self.assertEqual(restored.exclude_steps, ("SETUP", "INTRO"))
+
+    def test_exclude_values_default_filters_na_assets(self):
+        """Default exclude_values filters N/A from asset column."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "ev.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["A01.)", "Intro.", "N/A", ""])
+                w.writerow(["A02.)", "Box appears.", "BOX_01", ""])
+            steps = parse_csv(csv_path)
+            self.assertEqual(steps[0].objects, [])  # N/A filtered
+            self.assertEqual(len(steps[1].objects), 1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_exclude_values_case_insensitive(self):
+        """exclude_values comparison is case-insensitive."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "ci.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["A01.)", "Intro.", "n/a", ""])
+            steps = parse_csv(csv_path)
+            self.assertEqual(steps[0].objects, [])
+
+            # Custom exclude value
+            cm = ColumnMap(exclude_values={"assets": ("NONE",)})
+            csv_path2 = os.path.join(tmp, "ci2.csv")
+            with open(csv_path2, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
+                w.writerow(["A01.)", "Intro.", "none", ""])
+                w.writerow(["A02.)", "Next.", "N/A", ""])
+            steps2 = parse_csv(csv_path2, columns=cm)
+            self.assertEqual(steps2[0].objects, [])  # "none" excluded
+            self.assertEqual(len(steps2[1].objects), 1)  # "N/A" kept
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_exclude_values_round_trip(self):
+        """exclude_values dict survives to_dict/from_dict."""
+        cm = ColumnMap(exclude_values={"assets": ("N/A", "NONE"), "audio": ("--",)})
+        restored = ColumnMap.from_dict(cm.to_dict())
+        self.assertEqual(restored.exclude_values["assets"], ("N/A", "NONE"))
+        self.assertEqual(restored.exclude_values["audio"], ("--",))
+
+    def test_metadata_pass_columns_collected(self):
+        """metadata_pass columns are resolved and stored on step._pass_through."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "meta.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", "Priority", ""])
+                w.writerow(["A01.)", "Intro.", "OBJ_01", "High", ""])
+                w.writerow(["A02.)", "Next.", "OBJ_02", "", ""])
+            cm = ColumnMap(metadata_pass={"priority": ("Priority",)})
+            steps = parse_csv(csv_path, columns=cm)
+            self.assertEqual(steps[0]._pass_through, {"priority": "High"})
+            self.assertEqual(steps[1]._pass_through, {})  # Empty value not stored
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_metadata_pass_round_trip(self):
+        """metadata_pass dict survives to_dict/from_dict."""
+        cm = ColumnMap(
+            metadata_pass={"priority": ("Priority", "Pri"), "notes": ("Notes",)}
+        )
+        restored = ColumnMap.from_dict(cm.to_dict())
+        self.assertEqual(restored.metadata_pass["priority"], ("Priority", "Pri"))
+        self.assertEqual(restored.metadata_pass["notes"], ("Notes",))
+
+    def test_post_process_appends_audio_object(self):
+        """post_process callable can append audio BuilderObject."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "pp.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["Step", "Step Contents", "Asset Names", ""])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", ""])
+
+            def _derive(step):
+                step.objects.append(
+                    BuilderObject(name=f"clip_{step.step_id}", kind="audio")
+                )
+
+            steps = parse_csv(csv_path, post_process=_derive)
+            ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            self.assertIsNotNone(ao)
+            self.assertEqual(ao.name, "clip_A01")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_builder_object_kind_defaults_to_scene(self):
+        """BuilderObject.kind defaults to 'scene'."""
+        step = BuilderStep(
+            step_id="X01",
+            section="X",
+            section_title="TEST",
+            description="test",
+        )
+        step.objects.append(BuilderObject(name="obj"))
+        self.assertEqual(step.objects[0].kind, "scene")
+
+    def test_display_text_returns_description(self):
+        """display_text returns description (not audio).
+        Refactored: 2026-04-14 â€” display_text flipped to return description.
+        """
+        step = BuilderStep(
+            step_id="X01",
+            section="X",
+            section_title="TEST",
+            description="desc",
+            audio="voice",
+        )
+        self.assertEqual(step.display_text, "desc")
+
+
+# ---------------------------------------------------------------------------
+# Mapping resolver tests (JSON mapping files)
+# ---------------------------------------------------------------------------
+
+from mayatk.anim_utils.shots.shot_manifest.mapping import (
+    discover,
+    load_mapping,
+    resolve,
+    DEFAULT_DIR,
+)
+
+
+class TestMappingResolver(unittest.TestCase):
+    """Test the JSON mapping resolver and discovery."""
+
+    def _make_csv(self, tmp, name="test.csv"):
+        """Create a minimal CSV file and return its path."""
+        import csv as csv_mod
+
+        csv_path = os.path.join(tmp, name)
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv_mod.writer(f)
+            w.writerow(["SECTION A: TEST", "", "", ""])
+            w.writerow(["Step", "Step Contents", "Asset Names", ""])
+            w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", ""])
+            w.writerow(["A02.)", "Box moves left.", "BOX_01", ""])
+        return csv_path
+
+    def _write_json(self, tmp, name, data):
+        """Write a JSON mapping file and return its path."""
+        import json
+
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
+
+    # ---- discovery ----
+
+    def test_discover_lists_json_files(self):
+        """discover() finds .json mapping files in a directory."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            self._write_json(tmp, "project_a.json", {"columns": {}})
+            self._write_json(tmp, "project_b.json", {"columns": {}})
+            self._write_json(tmp, "_private.json", {"columns": {}})
+            names = discover(tmp)
+            self.assertEqual(names, ["project_a", "project_b"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_discover_empty_dir(self):
+        """discover() returns empty list for nonexistent directory."""
+        self.assertEqual(discover("/nonexistent"), [])
+
+    def test_discover_default_dir_has_default(self):
+        """The default mapping directory contains 'default'."""
+        names = discover()
+        self.assertIn("default", names)
+
+    # ---- load_mapping ----
+
+    def test_load_mapping_reads_json(self):
+        """load_mapping() reads and parses a JSON file."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            data = {"columns": {"step_id": ["ID"]}}
+            self._write_json(tmp, "test.json", data)
+            result = load_mapping("test", tmp)
+            self.assertEqual(result["columns"]["step_id"], ["ID"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_load_mapping_missing_raises(self):
+        """load_mapping() raises FileNotFoundError for missing file."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            with self.assertRaises(FileNotFoundError):
+                load_mapping("nonexistent", tmp)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_load_mapping_accepts_full_path(self):
+        """load_mapping() accepts a full .json path as name."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            data = {"columns": {"step_id": ["ID"]}}
+            path = self._write_json(tmp, "full.json", data)
+            result = load_mapping(path)
+            self.assertEqual(result["columns"]["step_id"], ["ID"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- resolve (end-to-end) ----
+
+    def test_resolve_with_empty_mapping(self):
+        """resolve() with empty mapping uses default ColumnMap."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            steps = resolve(csv_path, mapping={})
+            self.assertEqual(len(steps), 2)
+            self.assertEqual(steps[0].step_id, "A01")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_resolve_with_column_remap(self):
+        """resolve() applies column aliases from the mapping."""
+        import tempfile, shutil, csv as csv_mod
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = os.path.join(tmp, "custom.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv_mod.writer(f)
+                w.writerow(["SECTION A: TEST", "", "", ""])
+                w.writerow(["ID", "Body", "Objects", ""])
+                w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", ""])
+            mapping = {
+                "columns": {
+                    "step_id": ["ID"],
+                    "description": ["Body"],
+                    "assets": ["Objects"],
+                }
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            self.assertEqual(len(steps), 1)
+            self.assertEqual(steps[0].description, "Arrow fades in.")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_resolve_by_name(self):
+        """resolve() loads a mapping by name from a directory."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            self._write_json(tmp, "my_map.json", {"columns": {}})
+            steps = resolve(csv_path, name="my_map", directory=tmp)
+            self.assertEqual(len(steps), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_resolve_default_mapping(self):
+        """The built-in default.json produces correct steps."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            steps = resolve(csv_path, name="default")
+            self.assertEqual(len(steps), 2)
+            self.assertEqual(steps[0].step_id, "A01")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- audio_resolve: prefix ----
+
+    def test_audio_prefix_resolves_clip(self):
+        """audio_resolve with method=prefix adds audio BuilderObject."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            audio_dir = os.path.join(tmp, "audio")
+            os.makedirs(audio_dir)
+            open(os.path.join(audio_dir, "A01_intro.wav"), "w").close()
+            open(os.path.join(audio_dir, "A02_demo.mp3"), "w").close()
+
+            mapping = {
+                "columns": {},
+                "audio_resolve": {
+                    "method": "prefix",
+                    "directory": audio_dir,
+                },
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
+            self.assertIsNotNone(ao0)
+            self.assertEqual(ao0.name, "A01_intro")
+            self.assertIsNotNone(ao1)
+            self.assertEqual(ao1.name, "A02_demo")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_audio_prefix_no_match(self):
+        """audio_resolve prefix leaves no audio object when no match."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            audio_dir = os.path.join(tmp, "audio")
+            os.makedirs(audio_dir)
+
+            mapping = {
+                "columns": {},
+                "audio_resolve": {"method": "prefix", "directory": audio_dir},
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            self.assertIsNone(ao)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_audio_prefix_nonexistent_dir(self):
+        """audio_resolve prefix is a no-op when directory missing."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            mapping = {
+                "columns": {},
+                "audio_resolve": {
+                    "method": "prefix",
+                    "directory": "/nonexistent/path",
+                },
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            self.assertIsNone(ao)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- audio_resolve: regex ----
+
+    def test_audio_regex_resolves_clip(self):
+        """audio_resolve with method=regex adds audio BuilderObject."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            audio_dir = os.path.join(tmp, "audio")
+            os.makedirs(audio_dir)
+            open(os.path.join(audio_dir, "A01-001.wav"), "w").close()
+
+            mapping = {
+                "columns": {},
+                "audio_resolve": {
+                    "method": "regex",
+                    "directory": audio_dir,
+                    "pattern": r"{step_id}-\d+",
+                },
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            self.assertIsNotNone(ao)
+            self.assertEqual(ao.name, "A01-001")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- audio_resolve: map ----
+
+    def test_audio_map_resolves_clip(self):
+        """audio_resolve with method=map adds audio BuilderObjects."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            mapping = {
+                "columns": {},
+                "audio_resolve": {
+                    "method": "map",
+                    "clips": {"A01": "intro_clip", "A02": "demo_clip"},
+                },
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
+            self.assertIsNotNone(ao0)
+            self.assertEqual(ao0.name, "intro_clip")
+            self.assertIsNotNone(ao1)
+            self.assertEqual(ao1.name, "demo_clip")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_audio_map_missing_key(self):
+        """audio_resolve map adds no audio object for unmapped steps."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            mapping = {
+                "columns": {},
+                "audio_resolve": {
+                    "method": "map",
+                    "clips": {"A01": "only_a01"},
+                },
+            }
+            steps = resolve(csv_path, mapping=mapping)
+            ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
+            ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
+            self.assertIsNotNone(ao0)
+            self.assertEqual(ao0.name, "only_a01")
+            self.assertIsNone(ao1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- bad config ----
+
+    def test_unknown_audio_method_raises(self):
+        """Unknown audio_resolve method raises ValueError."""
+        import tempfile, shutil
+
+        tmp = tempfile.mkdtemp()
+        try:
+            csv_path = self._make_csv(tmp)
+            mapping = {
+                "columns": {},
+                "audio_resolve": {"method": "unknown"},
+            }
+            with self.assertRaises(ValueError):
+                resolve(csv_path, mapping=mapping)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

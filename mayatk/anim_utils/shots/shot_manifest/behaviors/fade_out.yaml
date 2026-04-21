@@ -1,4 +1,5 @@
 description: "Fade objects out at shot end via visibility."
+kind: [scene]
 verify:
   mode: values_in_range
 attributes:

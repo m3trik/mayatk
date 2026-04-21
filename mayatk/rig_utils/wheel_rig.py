@@ -9,6 +9,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -308,10 +309,13 @@ class WheelRigSlots:
                 getattr(self.ui, widget_name).deleteLater()
 
         # 1) update placeholder right away
-        self._selection_job = pm.scriptJob(
-            event=["SelectionChanged", self._on_selection_changed],
-            protected=True,
+        mgr = ScriptJobManager.instance()
+        mgr.subscribe(
+            "SelectionChanged",
+            self._on_selection_changed,
+            owner=self,
         )
+        mgr.connect_cleanup(self.ui, owner=self)
         self.update_rig_name_placeholder()
 
         # 2) cleanup on actual window close
@@ -509,9 +513,8 @@ class WheelRigSlots:
         self.ui.txt000.setPlaceholderText(default_name)
 
     def cleanup(self):
-        """Kill the scriptJob if it exists."""
-        if hasattr(self, "_selection_job") and pm.scriptJob(exists=self._selection_job):
-            pm.scriptJob(kill=self._selection_job, force=True)
+        """Unsubscribe from the centralized ScriptJobManager."""
+        ScriptJobManager.instance().unsubscribe_all(self)
 
     @property
     def wheel_rig(self) -> Optional[WheelRig]:

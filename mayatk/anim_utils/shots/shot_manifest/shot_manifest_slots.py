@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pythontk as ptk
 
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
@@ -24,7 +25,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     detect_shot_regions,
     regions_from_selected_keys,
 )
-from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     ERROR_COLOR,
     SETTINGS_NS,
     COL_STEP,
@@ -33,14 +34,14 @@ from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
     COL_END,
     fmt_behavior,
 )
-from mayatk.anim_utils.shots.shot_manifest._range_resolver import resolve_ranges
+from mayatk.anim_utils.shots.shot_manifest.range_resolver import resolve_ranges
 from mayatk.anim_utils.shots._shots import (
     BatchComplete,
     SettingsChanged,
     ShotRemoved,
     StoreEvent,
 )
-from mayatk.anim_utils.shots.shot_manifest._table_presenter import ManifestTableMixin
+from mayatk.anim_utils.shots.shot_manifest.table_presenter import ManifestTableMixin
 
 
 class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
@@ -61,6 +62,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         from uitk.widgets.mixins.settings_manager import SettingsManager
 
         self._settings = SettingsManager(namespace=SETTINGS_NS)
+        # One-shot migration: fit_mode and initial_shot_length now live on
+        # ShotStore.  Purge the old manifest-namespaced keys so they don't
+        # linger indefinitely in QSettings.
+        _qs = self._settings.settings
+        for _legacy in (
+            f"{SETTINGS_NS}/fit_mode",
+            f"{SETTINGS_NS}/initial_shot_length",
+        ):
+            if _qs.contains(_legacy):
+                _qs.remove(_legacy)
 
         self._user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
@@ -84,15 +95,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
-        self._scene_opened_job: Optional[int] = None
-        self._new_scene_job: Optional[int] = None
         self._bind_store_listener()
         self._install_scene_jobs()
         self._column_map = ColumnMap()
+        self._active_mapping = None  # loaded JSON dict from mapping/
+        self._mapping_dir = None  # custom directory override
         self._setup_recent_csv()
         self._setup_csv_toggle()
         self._setup_header_menu()
-        self._setup_csv_layout_presets()
+        self._setup_mapping_combo()
         self._restore_color_overrides()
         self.ui.on_first_show.connect(self._on_first_show)
 
@@ -176,7 +187,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         appropriate user feedback (message box, footer, etc.).
 
         The store's detection_mode is always respected regardless of
-        whether a CSV is loaded — CSV defines steps, detection_mode
+        whether a CSV is loaded â€” CSV defines steps, detection_mode
         controls how timing boundaries are discovered.
         """
         store = self._active_store()
@@ -316,7 +327,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         start_raw = item.text(COL_START).strip()
         end_raw = item.text(COL_END).strip()
 
-        # Both empty — clear user range
+        # Both empty â€” clear user range
         if not start_raw and not end_raw:
             self._user_ranges.pop(step_data.step_id, None)
             self._refresh_ranges()
@@ -364,7 +375,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     self._revert_range_cell(item, step_data.step_id)
                     return
 
-        # Valid — store, clear downstream, and refresh.
+        # Valid â€” store, clear downstream, and refresh.
         self._user_ranges[step_data.step_id] = (start, end)
         self._cascade_from(step_idx)
         self._refresh_ranges(from_step_idx=step_idx)
@@ -433,6 +444,14 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if use_sel and not gap_starts:
             return []
 
+        # When no animation regions are detected (regardless of mode),
+        # use uniform default durations so steps get sensible placeholder
+        # ranges instead of behavior-derived micro-durations.  This also
+        # covers the case where the scene has animation but the chosen
+        # detection mode found no boundaries (e.g. skip_zero with no
+        # zero-valued keys).
+        default_dur = 200.0 if (not gap_starts and not use_sel) else 0
+
         resolved = resolve_ranges(
             steps=self._steps,
             user_ranges=self._user_ranges,
@@ -442,6 +461,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             use_selected_keys=use_sel,
             last_resolved=self._last_resolved,
             from_step_idx=from_step_idx,
+            default_duration=default_dur,
         )
         self._last_resolved = resolved
         return resolved
@@ -476,60 +496,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._store_listener_bound = False
 
     def remove_callbacks(self) -> None:
-        """Remove ShotStore listener and Maya scriptJobs (call on teardown)."""
+        """Remove ShotStore listener and ScriptJobManager subscriptions."""
         self._unbind_store_listener()
-        self._remove_scene_jobs()
+        ScriptJobManager.instance().unsubscribe_all(self)
 
     # ---- Maya scene-change scriptJobs ------------------------------------
 
     def _install_scene_jobs(self) -> None:
-        """Register persistent scriptJobs for SceneOpened / NewSceneOpened.
-
-        These survive scene changes (no ``killWithScene``) so the
-        manifest refreshes automatically when the user opens or creates
-        a new scene.
-        """
-        try:
-            import maya.cmds as cmds
-        except ImportError:
-            return
-
-        for attr, event in (
-            ("_scene_opened_job", "SceneOpened"),
-            ("_new_scene_job", "NewSceneOpened"),
-        ):
-            job_id = getattr(self, attr, None)
-            try:
-                if job_id is not None and cmds.scriptJob(exists=job_id):
-                    continue
-            except Exception:
-                pass
-            try:
-                setattr(
-                    self,
-                    attr,
-                    cmds.scriptJob(event=[event, self._on_scene_changed]),
-                )
-            except Exception:
-                pass
-
-    def _remove_scene_jobs(self) -> None:
-        """Kill any scene-change scriptJobs we own."""
-        try:
-            import maya.cmds as cmds
-        except ImportError:
-            return
-
-        for attr in ("_scene_opened_job", "_new_scene_job"):
-            job_id = getattr(self, attr, None)
-            if job_id is None:
-                continue
-            try:
-                if cmds.scriptJob(exists=job_id):
-                    cmds.scriptJob(kill=job_id, force=True)
-            except Exception:
-                pass
-            setattr(self, attr, None)
+        """Subscribe to SceneOpened / NewSceneOpened via ScriptJobManager."""
+        mgr = ScriptJobManager.instance()
+        mgr.subscribe("SceneOpened", self._on_scene_changed, owner=self)
+        mgr.subscribe("NewSceneOpened", self._on_scene_changed, owner=self)
+        mgr.connect_cleanup(self.ui, owner=self)
 
     def _on_scene_changed(self) -> None:
         """Handle a Maya scene open / new-scene event.
@@ -562,19 +540,19 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.detect()
 
     def _on_store_event(self, event: StoreEvent) -> None:
-        """React to ShotStore mutations — refresh tree timing if steps are loaded."""
+        """React to ShotStore mutations â€” refresh tree timing if steps are loaded."""
 
         if self._building:
             return
         if isinstance(event, SettingsChanged):
-            # Detection settings changed — invalidate cache and re-detect.
+            # Detection settings changed â€” invalidate cache and re-detect.
             # Guard on _first_shown to avoid triggering detection (and
             # message boxes) before the widget is visible.
             self._cached_gaps = None
             self._cached_gap_ends = None
             if self._first_shown:
                 if self._csv_path:
-                    # CSV defines steps — don't replace them with detected
+                    # CSV defines steps â€” don't replace them with detected
                     # steps.  Just refresh auto-filled ranges so the new
                     # detection mode takes effect.
                     if self._steps:
@@ -643,7 +621,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         tree = self.ui.tbl_steps
         item = tree.itemAt(pos)
 
-        # Right-click on empty space — show excluded steps menu
+        # Right-click on empty space â€” show excluded steps menu
         if item is None:
             excluded = self._column_map.exclude_steps
             if excluded:
@@ -723,6 +701,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         # Object-level actions (child rows only)
         act_outliner = None
+        act_copy = None
         act_reapply = None
         if is_child:
             obj_data = item.data(0, Qt.UserRole)
@@ -734,6 +713,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             if obj_name:
                 menu.addSeparator()
                 act_outliner = menu.addAction(f"Show '{obj_name}' in Outliner")
+                act_copy = menu.addAction(f"Copy '{obj_name}' to Clipboard")
                 if self._is_built and obj_data.behaviors:
                     names = ", ".join(fmt_behavior(b) for b in obj_data.behaviors)
                     act_reapply = menu.addAction(f"Apply [{names}]")
@@ -747,6 +727,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._exclude_steps(selected_step_ids)
         elif chosen is not None and chosen is act_outliner:
             self._show_in_outliner(obj_name)
+        elif chosen is not None and chosen is act_copy:
+            from qtpy.QtWidgets import QApplication
+
+            QApplication.clipboard().setText(obj_name)
         elif chosen is act_reapply and act_reapply is not None:
             self._reapply_behavior(step_data.step_id, obj_data)
         elif chosen is act_set_frame and act_set_frame is not None:
@@ -827,7 +811,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """Open the Shot Sequencer UI and navigate to the shot matching *step_id*.
 
         The sequencer controller lazily wraps ``ShotStore.active()`` via
-        its ``sequencer`` property — no manual wiring needed here.
+        its ``sequencer`` property â€” no manual wiring needed here.
         """
         from mayatk.anim_utils.shots._shots import ShotStore
 
@@ -838,7 +822,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         self.sb.handlers.marking_menu.show("shot_sequencer")
 
-        seq_slots = self.sb.slot_instances.get("shot_sequencer")
+        seq_slots = self.sb.get_slots_instance("shot_sequencer")
         if seq_slots is None:
             return
 
@@ -883,7 +867,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.sb.handlers.marking_menu.show("shots")
 
         # set_active_shot fires ActiveShotChanged which the ShotsController
-        # listener handles — it syncs the combobox and editor fields.
+        # listener handles â€” it syncs the combobox and editor fields.
         store.set_active_shot(shot.shot_id)
 
     # ---- CSV loading -----------------------------------------------------
@@ -953,6 +937,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         ).released.connect(self._open_color_editor)
         menu.add(
             "QPushButton",
+            setText="Audio Clips\u2026",
+            setObjectName="btn_audio_clips",
+            setToolTip="Open the Audio Clips editor to load, key, and\nmanage audio tracks used by this manifest.",
+        ).released.connect(self._open_audio_clips)
+        menu.add(
+            "QPushButton",
             setText="Shots\u2026",
             setObjectName="btn_settings",
             setToolTip="Open shared shot generation, gap, and editing settings.",
@@ -1008,6 +998,26 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             ),
         )
 
+    @property
+    def _initial_shot_length(self) -> float:
+        """Read the shot-construction default from the active store."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore.active()
+        if store is not None:
+            return float(store.initial_shot_length)
+        return ShotStore.DEFAULT_INITIAL_SHOT_LENGTH
+
+    @property
+    def _fit_mode(self) -> str:
+        """Read the fit-mode policy from the active store."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore.active()
+        if store is not None:
+            return store.fit_mode
+        return ShotStore.DEFAULT_FIT_MODE
+
     def _on_long_names_toggled(self, checked: bool) -> None:
         """Persist and apply the long-names display preference."""
         self._settings.setValue("long_names", checked)
@@ -1017,16 +1027,20 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._apply_assessment(self._last_results)
         self._restore_tree_state(state)
 
+    def _open_audio_clips(self) -> None:
+        """Open the Audio Clips editor."""
+        self.sb.handlers.marking_menu.show("audio_clips")
+
     def _open_color_editor(self) -> None:
         """Launch the status-color editor dialog."""
         from uitk.widgets.editors.color_mapping_editor import ColorMappingDialog
         from uitk.widgets.mixins.settings_manager import SettingsManager
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
         )
 
-        # Keys with actual (fg, bg) colours — skip 'valid'/'csv_object' (None, None)
+        # Keys with actual (fg, bg) colours â€” skip 'valid'/'csv_object' (None, None)
         editable_keys = [
             k for k, v in PASTEL_STATUS.items() if v[0] is not None or v[1] is not None
         ]
@@ -1069,7 +1083,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _restore_color_overrides(self) -> None:
         """Apply any persisted color overrides to the live palette."""
         from uitk.widgets.mixins.settings_manager import SettingsManager
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
         )
@@ -1090,35 +1104,57 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             BEHAVIOR_STATUS_COLORS["missing"] = PASTEL_STATUS["missing_behavior"][0]
             BEHAVIOR_STATUS_COLORS["error"] = PASTEL_STATUS["missing_object"][0]
 
-    def _setup_csv_layout_presets(self) -> None:
-        """Wire a PresetManager for CSV layout presets."""
-        from uitk.widgets.mixins.preset_manager import PresetManager
+    def _setup_mapping_combo(self) -> None:
+        """Add a mapping-file selector combo to the header menu."""
+        from mayatk.anim_utils.shots.shot_manifest.mapping import discover
         from uitk.widgets.widgetComboBox import WidgetComboBox
-
-        self._csv_layout_presets = PresetManager(
-            preset_dir="mayatk/shot_manifest/csv_layouts",
-            widgets=[],  # metadata-only: no widgets, just ColumnMap in _meta
-        )
-        self._csv_layout_presets.metadata_provider = lambda: {
-            "column_map": self._column_map.to_dict()
-        }
-        self._csv_layout_presets.on_metadata_loaded = self._on_csv_layout_loaded
 
         menu = self.ui.header.menu
         cmb = menu.add(
             WidgetComboBox,
-            setObjectName="cmb_csv_layout",
-            setToolTip="Select a CSV layout preset for parsing.",
+            setObjectName="cmb_csv_mapping",
+            setToolTip="Select a JSON mapping file for CSV parsing.",
         )
-        self._csv_layout_presets.wire_combo(cmb, on_loaded=self._on_csv_layout_applied)
+        self._cmb_mapping = cmb
+        self._refresh_mapping_list()
+        cmb.currentTextChanged.connect(self._on_mapping_changed)
 
-    def _on_csv_layout_loaded(self, meta: dict) -> None:
-        """Restore ColumnMap from preset metadata."""
-        cm_data = meta.get("column_map")
-        self._column_map = ColumnMap.from_dict(cm_data) if cm_data else ColumnMap()
+    def _refresh_mapping_list(self) -> None:
+        """Refresh the mapping combo box items."""
+        from mayatk.anim_utils.shots.shot_manifest.mapping import discover
 
-    def _on_csv_layout_applied(self) -> None:
-        """Re-parse the current CSV after a layout preset is applied."""
+        cmb = self._cmb_mapping
+        cmb.blockSignals(True)
+        cmb.clear()
+        cmb.addItem("(none)")
+        search_dir = self._mapping_dir or None
+        names = list(discover(search_dir))
+        for name in names:
+            cmb.addItem(name)
+        # Auto-select "default" mapping when available
+        if "default" in names:
+            cmb.setCurrentIndex(names.index("default") + 1)  # +1 for "(none)"
+        cmb.blockSignals(False)
+        # Sync _active_mapping with final combo text
+        self._on_mapping_changed(cmb.currentText())
+
+    def _on_mapping_changed(self, name: str) -> None:
+        """Handle mapping combo selection."""
+        from mayatk.anim_utils.shots.shot_manifest.mapping import load_mapping
+
+        if not name or name == "(none)":
+            self._active_mapping = None
+        else:
+            try:
+                search_dir = self._mapping_dir or None
+                self._active_mapping = load_mapping(name, search_dir)
+            except Exception as exc:
+                self.logger.error("Failed to load mapping '%s': %s", name, exc)
+                self._set_footer(f"Mapping error: {exc}", color=ERROR_COLOR)
+                self._active_mapping = None
+                return
+
+        # Re-parse the current CSV with the new mapping
         path = self._csv_path or self.ui.txt_csv_path.text().strip()
         if path:
             self._load_csv(path)
@@ -1205,7 +1241,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._load_csv(path)
 
     def _load_csv(self, path: str) -> None:
-        """Parse the CSV and load it via :meth:`_load_data`."""
+        """Parse the CSV and load it via :meth:`_load_data`.
+
+        When an active mapping is selected, delegates to the
+        :mod:`mapping` resolver.  Otherwise falls back to
+        :func:`parse_csv` with the current :attr:`_column_map`.
+        """
         import os
 
         if not os.path.isfile(path):
@@ -1214,7 +1255,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
 
         try:
-            steps = parse_csv(path, columns=self._column_map)
+            if self._active_mapping is not None:
+                from mayatk.anim_utils.shots.shot_manifest.mapping import resolve
+
+                steps = resolve(path, mapping=self._active_mapping)
+            else:
+                steps = parse_csv(path, columns=self._column_map)
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
             self.ui.txt_csv_path.set_action_color("invalid")
@@ -1328,7 +1374,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             builder = ShotManifest(store)
 
             # When selected-keys mode is active, verify keys exist
-            # before proceeding — even if user ranges are complete.
+            # before proceeding â€” even if user ranges are complete.
             use_sel = self._use_selected_keys
             if use_sel:
                 self._cached_gaps = None
@@ -1346,7 +1392,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     )
                     return
 
-            # Resolve ranges — short-circuit when all ranges are
+            # Resolve ranges â€” short-circuit when all ranges are
             # already complete (detection mode provides full ranges).
             # Incremental mode: when shots already exist and we're not
             # in selected-keys mode, use the resolver's last-cascaded
@@ -1354,17 +1400,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # back to store positions when there is no resolved data.
             incremental = self._is_built and not use_sel
             if incremental:
-                # Start from store positions, then layer resolved
-                # cascade on top (so edits ripple), then user ranges.
+                # Grow-only invariant: existing shots keep their store
+                # positions (which may already have been grown to fit
+                # audio/animation members via the sequencer). Only new
+                # steps get resolver-derived positions, and user ranges
+                # always win.
                 range_map = {s.name: (s.start, s.end) for s in store.sorted_shots()}
                 if self._last_resolved:
-                    range_map.update(
-                        {
-                            sid: (s, e)
-                            for sid, s, e, _ in self._last_resolved
-                            if e is not None
-                        }
-                    )
+                    existing_ids = set(range_map)
+                    for sid, s, e, _ in self._last_resolved:
+                        if sid in existing_ids or e is None:
+                            continue
+                        range_map[sid] = (s, e)
                 range_map.update(self._user_ranges)
                 # Place new steps at their CSV-order predecessor's end
                 # so they appear between neighbors instead of at the
@@ -1376,7 +1423,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         if i > 0:
                             prev_end = range_map[self._steps[i - 1].step_id][1]
                         else:
-                            # New step at the very start of the CSV —
+                            # New step at the very start of the CSV â€”
                             # find the first existing neighbor's start.
                             prev_end = next(
                                 (
@@ -1426,7 +1473,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         ranges=range_map,
                         remove_missing=remove,
                         zero_duration_fallback=incremental,
+                        fit_mode=self._fit_mode,
+                        initial_shot_length=self._initial_shot_length,
                     )
+                    # Record the source CSV for provenance on reopen.
+                    csv_path = self._csv_path or self.ui.txt_csv_path.text().strip()
+                    if csv_path:
+                        store.source_csv = csv_path
             finally:
                 self._building = False
                 pm.undoInfo(closeChunk=True)
@@ -1479,13 +1532,21 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         state = self._save_tree_state()
         self._populate_table()
         self._refresh_timing(store)
+        self._last_results = results
         self._apply_assessment(results)
         self._restore_tree_state(state)
-        self._last_results = results
         self._sync_detection_widgets()
 
     def _sync_detection_widgets(self) -> None:
-        """Disable detection widgets in the parent shots UI when irrelevant."""
+        """Refresh the Shots UI widget states via its centralized method."""
+        instances = getattr(self.sb, "slot_instances", None) or {}
+        shots_slots = instances.get("shots") if isinstance(instances, dict) else None
+        if shots_slots is not None:
+            ctrl = getattr(shots_slots, "controller", None)
+            if ctrl is not None and hasattr(ctrl, "refresh_state"):
+                ctrl.refresh_state()
+                return
+        # Fallback: direct widget manipulation if controller not available
         try:
             shots_ui = self.sb.loaded_ui.shots
         except Exception:
@@ -1522,7 +1583,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         builder = ShotManifest(store)
         use_sel = self._use_selected_keys
 
-        # In selected-keys mode, verify keys exist before proceeding —
+        # In selected-keys mode, verify keys exist before proceeding â€”
         # but only when shots haven't been built yet (key selection is for
         # initial range discovery, not for re-assessment of existing shots).
         if use_sel and not skip_key_check and not self._is_built:
@@ -1563,9 +1624,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if not self._is_built:
             self._refresh_ranges()
         self._refresh_timing(store)
+        self._last_results = results
         self._apply_assessment(results)
         self._restore_tree_state(state)
-        self._last_results = results
 
         # Summary counts
         n_built = sum(1 for r in results if r.built)
@@ -1595,7 +1656,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
 
 class ShotManifestSlots(ptk.LoggingMixin):
-    """Switchboard slot class — routes UI events to the controller."""
+    """Switchboard slot class â€” routes UI events to the controller."""
 
     def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()

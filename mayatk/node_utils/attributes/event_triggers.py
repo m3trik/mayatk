@@ -24,7 +24,7 @@ Pipeline
 --------
 1. **Maya authoring**: Enum attribute with named events -- artists key
    directly from the channel box dropdown.
-1b. **Audio preview** *(optional)*: ``AudioEvents.sync()`` places
+1b. **Audio preview** *(optional)*: ``AudioClips.sync()`` places
    matching audio clips on the timeline for playback during animation.
 2. **Pre-export bake**: ``bake_manifest()`` reads enum keyframes and
    writes a ``{cat}_manifest`` string: ``"frame:event,frame:event,..."``
@@ -405,7 +405,7 @@ class EventTriggers(ptk.LoggingMixin):
         """Return ``(frame, label)`` for every non-None keyed event.
 
         Shared primitive consumed by ``bake_manifest`` and
-        ``AudioEvents.sync`` to avoid duplicating the key-reading /
+        ``AudioClips.sync`` to avoid duplicating the key-reading /
         enum-resolving loop.
 
         Parameters:
@@ -561,20 +561,23 @@ class EventTriggers(ptk.LoggingMixin):
             if obj.hasAttr(manifest_attr):
                 obj.deleteAttr(manifest_attr)
 
-            # Clean up persisted file map from AudioEventsSlots
+            # Clean up persisted file map from AudioClipsSlots
             file_map_attr = f"{cat}_file_map" if cat != "audio" else "audio_file_map"
             if obj.hasAttr(file_map_attr):
                 obj.deleteAttr(file_map_attr)
 
             cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
 
-        # Also clean up any imported audio nodes for this category.
+        # Also clean up audio set + preview/synced nodes for this category,
+        # then reconcile compositor DG nodes against the (now-empty) store.
         if clean_audio:
-            from mayatk.node_utils.attributes.audio_events._audio_events import (
-                AudioEvents,
+            from mayatk.audio_utils.audio_clips._audio_clips import (
+                AudioClips,
             )
+            from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-            AudioEvents.remove(category=category)
+            AudioClips.remove()
+            audio_utils.sync()
 
     @classmethod
     def _remove_all_categories(cls, objects) -> None:
@@ -602,12 +605,15 @@ class EventTriggers(ptk.LoggingMixin):
                 if obj.hasAttr(file_map_attr):
                     obj.deleteAttr(file_map_attr)
 
-                # Clean up audio set for this category.
-                from mayatk.node_utils.attributes.audio_events._audio_events import (
-                    AudioEvents,
+                # Reconcile: remove audio set + preview/synced nodes,
+                # then sync compositor DG nodes.
+                from mayatk.audio_utils.audio_clips._audio_clips import (
+                    AudioClips,
                 )
+                from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-                AudioEvents.remove(category=cat)
+                AudioClips.remove()
+                audio_utils.sync()
 
                 cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
 

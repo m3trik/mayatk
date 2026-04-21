@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>265</width>
-    <height>297</height>
+    <height>370</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -157,9 +157,128 @@ Unused in Zero = Shot End mode.</string>
      </widget>
     </item>
     <item>
+     <widget class="CollapsableGroup" name="build">
+      <property name="title">
+       <string>Build</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_build">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>1</number>
+       </property>
+       <property name="topMargin">
+        <number>1</number>
+       </property>
+       <property name="rightMargin">
+        <number>1</number>
+       </property>
+       <property name="bottomMargin">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="SpinBox" name="spn_initial_length">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Default frames allocated to a new shot before
+content-driven resizing is applied.</string>
+         </property>
+         <property name="prefix">
+          <string>Initial Length:	</string>
+         </property>
+         <property name="decimals">
+          <number>0</number>
+         </property>
+         <property name="minimum">
+          <double>1.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>10.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>200.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="chk_snap_whole_frames">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Round all shot frame values (start, end, keyframes)
+to whole numbers.  Applied at every mutation site so
+the stored model is always integer-aligned.</string>
+         </property>
+         <property name="text">
+          <string>Snap to Whole Frames</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="ComboBox" name="cmb_fit_mode">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Extend Only: grow shot to fit behaviors/audio, never shrink below the initial length.
+Shrink &amp; Extend: resize to fit contents exactly.</string>
+         </property>
+         <item>
+          <property name="text">
+           <string>Extend Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Shrink &amp; Extend to Fit</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
      <widget class="CollapsableGroup" name="editing">
       <property name="title">
-       <string>Editing</string>
+       <string>Edit</string>
       </property>
       <layout class="QVBoxLayout" name="verticalLayout_3">
        <property name="spacing">
@@ -384,6 +503,31 @@ all shots on the timeline.</string>
          </property>
          <property name="maximum">
           <double>1.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="PushButton" name="btn_trim_empty">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Trim empty space from the selected shot's start and end.</string>
+         </property>
+         <property name="text">
+          <string>Trim Empty</string>
          </property>
         </widget>
        </item>

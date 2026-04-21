@@ -6,9 +6,9 @@ Covers:
 - EventTriggers  — attr naming, create/ensure/remove, keying, manifest baking,
                    protect-empty-transforms locator stamping
 - AudioEvents    — set management, load_tracks, node stamping, remove
-- AudioEventsSlots — _require_target (locator not group), _is_tool_created_carrier,
+- AudioEventsSlots — _require_target (DataNodes.ensure_internal),
                      _get_selected_trigger_object (long-path fix + DAG walk),
-                     _hydrate_from_target, _sync_from_selection (no recursion),
+                     _hydrate_from_target, _sync_from_selection,
                      _import_audio_paths (shared pipeline)
 
 Run inside Maya (e.g. via mayatk/run_tests.py or a test runner that
@@ -66,28 +66,9 @@ def _make_slots_instance():
     cmb000.clear = MagicMock()
     cmb000.addItems = MagicMock()
 
-    cmb001 = MagicMock()
-    cmb001.count.return_value = 0
-    cmb001.blockSignals = MagicMock()
-    cmb001.setCurrentIndex = MagicMock()
-    cmb001.findText = MagicMock(return_value=-1)
-    cmb001.clear = MagicMock()
-    cmb001.addItems = MagicMock()
-    cmb001.setEditable = MagicMock()
-    cmb001.currentText = MagicMock(return_value="")
-    cmb001.on_editing_finished = MagicMock()
-    cmb001.on_editing_finished.disconnect = MagicMock()
-    cmb001.on_editing_finished.connect = MagicMock()
-    _line_edit = MagicMock()
-    _line_edit.editingFinished = MagicMock()
-    _line_edit.editingFinished.disconnect = MagicMock()
-    _line_edit.editingFinished.connect = MagicMock()
-    cmb001.lineEdit = MagicMock(return_value=_line_edit)
-
     ui = MagicMock()
     ui.footer = footer
     ui.cmb000 = cmb000
-    ui.cmb001 = cmb001
     ui.b002 = MagicMock()
     ui.b003 = MagicMock()
     ui.b004 = MagicMock()
@@ -104,11 +85,9 @@ def _make_slots_instance():
         slots.sb = sb
         slots.ui = ui
         slots._audio_files = {}
-        slots._current_target = None
-        slots._selection_sync_job_id = None
-        slots._time_changed_job_id = None
-        slots._scene_opened_job_id = None
-        slots._new_scene_job_id = None
+        slots._sel_token = None
+        slots._time_token = None
+        slots._scene_subs_installed = False
         slots._attr_callback_ids = []
         slots._syncing_combo = False
         slots._last_enum_idx = None
@@ -117,36 +96,6 @@ def _make_slots_instance():
         slots._deferred_sync_pending = False
 
     return slots
-
-
-def _make_carrier_transform(name, enum_name="None"):
-    """Create a hidden transform carrier matching _create_audio_carrier() output.
-
-    Returns the Maya node name (str).
-    """
-    grp = cmds.group(empty=True, name=name)
-    EventTriggers._protect_empty_transforms([pm.PyNode(grp)])
-    for attr in (
-        "translateX",
-        "translateY",
-        "translateZ",
-        "rotateX",
-        "rotateY",
-        "rotateZ",
-        "scaleX",
-        "scaleY",
-        "scaleZ",
-    ):
-        cmds.setAttr(f"{grp}.{attr}", lock=True, keyable=False, channelBox=False)
-    cmds.addAttr(
-        grp,
-        longName="audio_trigger",
-        attributeType="enum",
-        enumName=enum_name,
-        keyable=True,
-    )
-    cmds.lockNode(grp, lock=False, lockName=True)
-    return grp
 
 
 # ===========================================================================
@@ -438,117 +387,26 @@ class TestAudioEventsLoadTracks(MayaTkTestCase):
 
 
 class TestRequireTarget(MayaTkTestCase):
-    """_require_target() returns/creates the correct carrier object."""
+    """_require_target() always returns the shared data_internal node."""
 
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
 
-    # -- 1. Selected object with trigger already set -----------------------
-
-    def test_selection_with_trigger_returns_it(self):
-        loc_name = cmds.spaceLocator(name="carrier")[0]
-        loc = pm.PyNode(loc_name)
-        EventTriggers.create([loc], events=["A"], category="audio")
-        pm.select(loc, replace=True)
+    def test_returns_data_internal_node(self):
         result = self.slots._require_target()
-        self.assertEqual(str(result), str(loc))
+        self.assertEqual(str(result), "data_internal")
+        self.assertEqual(cmds.nodeType(str(result)), "network")
 
-    # -- 2. Selected object without trigger --------------------------------
+    def test_idempotent(self):
+        first = self.slots._require_target()
+        second = self.slots._require_target()
+        self.assertEqual(str(first), str(second))
 
-    def test_selection_without_trigger_returns_selected(self):
-        cube_name = cmds.polyCube(name="myCube")[0]
-        cube = pm.PyNode(cube_name)
-        pm.select(cube, replace=True)
-        result = self.slots._require_target()
-        self.assertEqual(str(result), str(cube))
-
-    # -- 3. Nothing selected — uses cache ---------------------------------
-
-    def test_no_selection_returns_cached_target(self):
-        loc_name = cmds.spaceLocator(name="cached")[0]
-        self.slots._current_target = pm.PyNode(loc_name)
-        pm.select(clear=True)
-        result = self.slots._require_target()
-        self.assertEqual(str(result), loc_name)
-
-    # -- 4. Nothing selected, no cache — creates transform carrier --------
-
-    def test_no_selection_no_cache_creates_transform(self):
-        """Auto-created carrier is a hidden transform with stamped locator.
-
-        Bug history: originally used pm.group(empty=True); then switched
-        to cmds.spaceLocator(); then network nodes; now back to a hidden
-        transform with locator protection so FBX export works natively.
-        """
-        pm.select(clear=True)
-        result = self.slots._require_target()
-        self.assertIsNotNone(result)
-        self.assertEqual(
-            cmds.nodeType(str(result)),
-            "transform",
-            "Auto-created carrier must be a transform",
-        )
-
-    def test_auto_created_carrier_is_name_locked(self):
-        """Auto-created transform carrier must be name-locked."""
-        pm.select(clear=True)
+    def test_node_is_name_locked(self):
         result = self.slots._require_target()
         locked = cmds.lockNode(str(result), query=True, lockName=True)
         self.assertTrue(locked and locked[0])
-
-    def test_auto_created_carrier_is_named_audio_events(self):
-        pm.select(clear=True)
-        result = self.slots._require_target()
-        self.assertIn("audio_events", str(result))
-
-
-class TestIsToolCreatedCarrier(MayaTkTestCase):
-    """_is_tool_created_carrier() correctly classifies objects."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_stamped_transform_with_trigger_attr_is_tool_created(self):
-        """A hidden transform with stamped locator shape is tool-created."""
-        grp = _make_carrier_transform("toolCarrier")
-        self.assertTrue(self.slots._is_tool_created_carrier(pm.PyNode(grp)))
-
-    def test_stamped_transform_with_file_map_attr_is_tool_created(self):
-        """A hidden transform with stamped locator + file_map is tool-created."""
-        grp = _make_carrier_transform("fmapCarrier")
-        cmds.addAttr(grp, longName="audio_file_map", dataType="string")
-        self.assertTrue(self.slots._is_tool_created_carrier(pm.PyNode(grp)))
-
-    def test_bare_network_node_is_not_tool_created(self):
-        """A network node is NOT a tool-created carrier (not a transform)."""
-        nn = pm.createNode("network", name="foreignNetwork")
-        self.assertFalse(self.slots._is_tool_created_carrier(nn))
-
-    def test_stamped_locator_is_tool_created(self):
-        """Legacy locators stamped by _protect_empty_transforms are tool-created."""
-        grp_name = cmds.group(empty=True, name="toolGrp")
-        grp = pm.PyNode(grp_name)
-        EventTriggers._protect_empty_transforms([grp])
-        self.assertTrue(self.slots._is_tool_created_carrier(grp))
-
-    def test_mesh_object_is_not_tool_created(self):
-        cube_name = cmds.polyCube(name="meshCube")[0]
-        cube = pm.PyNode(cube_name)
-        self.assertFalse(self.slots._is_tool_created_carrier(cube))
-
-    def test_locator_from_spacelocator_cmd_is_not_tool_created(self):
-        """A regular spaceLocator has no stamp attr — not tool-created."""
-        loc_name = cmds.spaceLocator(name="userLoc")[0]
-        loc = pm.PyNode(loc_name)
-        self.assertFalse(self.slots._is_tool_created_carrier(loc))
-
-    def test_shapeless_object_is_not_tool_created(self):
-        """After EventTriggers.remove() the locator shape may be gone."""
-        grp_name = cmds.group(empty=True, name="bare")
-        grp = pm.PyNode(grp_name)
-        self.assertFalse(self.slots._is_tool_created_carrier(grp))
 
 
 class TestGetSelectedTriggerObject(MayaTkTestCase):
@@ -631,183 +489,52 @@ class TestHydrateFromTarget(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
-        loc_name = cmds.spaceLocator(name="carrier")[0]
-        self.loc = pm.PyNode(loc_name)
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        self.node = DataNodes.ensure_internal()
 
     def test_no_events_sets_no_events_footer(self):
-        EventTriggers.create([self.loc], events=[], category="audio")
-        self.slots._hydrate_from_target(self.loc)
+        EventTriggers.create([self.node], events=[], category="audio")
+        self.slots._hydrate_from_target(self.node)
         call_args = self.slots.ui.footer.setText.call_args[0][0]
         self.assertIn("no events", call_args)
 
     def test_with_events_sets_track_count_in_footer(self):
-        EventTriggers.create([self.loc], events=["A", "B"], category="audio")
-        self.slots._hydrate_from_target(self.loc)
+        EventTriggers.create([self.node], events=["A", "B"], category="audio")
+        self.slots._hydrate_from_target(self.node)
         call_args = self.slots.ui.footer.setText.call_args[0][0]
         self.assertIn("2 track(s)", call_args)
 
-    def test_switching_targets_clears_audio_files(self):
-        """
-        When _hydrate_from_target is called with a new obj != old_target,
-        _audio_files must be cleared to avoid stale stems from the prior carrier.
-        """
-        old_name = cmds.spaceLocator(name="old_carrier")[0]
-        old = pm.PyNode(old_name)
-        self.slots._current_target = old
-        self.slots._audio_files = {"stem": "/old/path.wav"}
-        EventTriggers.create([self.loc], events=["A"], category="audio")
-        self.slots._hydrate_from_target(self.loc, old_target=old)
-        self.assertEqual(self.slots._audio_files, {})
-
-    def test_same_target_preserves_audio_files(self):
-        """Re-hydrating the same target must not wipe the existing file map."""
-        EventTriggers.create([self.loc], events=["A"], category="audio")
-        self.slots._current_target = self.loc
+    def test_hydrate_preserves_audio_files(self):
+        """Re-hydrating preserves the existing file map."""
+        EventTriggers.create([self.node], events=["A"], category="audio")
         self.slots._audio_files = {"a": "/path/a.wav"}
-        self.slots._hydrate_from_target(self.loc, old_target=self.loc)
+        self.slots._hydrate_from_target(self.node)
         self.assertIn("a", self.slots._audio_files)
-
-    def test_switching_targets_refreshes_carrier_combo(self):
-        """Carrier combo must update when hydrating a different target.
-
-        Bug: Selecting a different carrier in the viewport updated the
-        footer but not the carrier combobox index (cmb001).
-        Fixed: 2026-04-13
-        """
-        old_name = cmds.spaceLocator(name="old_carrier")[0]
-        old = pm.PyNode(old_name)
-        EventTriggers.create([old], events=["X"], category="audio")
-        EventTriggers.create([self.loc], events=["A"], category="audio")
-        self.slots._current_target = old
-
-        with patch.object(self.slots, "_refresh_carrier_combo") as mock_refresh:
-            self.slots._hydrate_from_target(self.loc, old_target=old)
-            mock_refresh.assert_called()
-
-    def test_no_events_still_refreshes_carrier_combo(self):
-        """Even a carrier with no tracks must update the carrier combo.
-
-        Bug: The early return for empty carriers skipped
-        _refresh_carrier_combo(), leaving the combo on the old index.
-        Fixed: 2026-04-13
-        """
-        EventTriggers.create([self.loc], events=[], category="audio")
-        old_name = cmds.spaceLocator(name="old_carrier")[0]
-        old = pm.PyNode(old_name)
-        self.slots._current_target = old
-
-        with patch.object(self.slots, "_refresh_carrier_combo") as mock_refresh:
-            self.slots._hydrate_from_target(self.loc, old_target=old)
-            mock_refresh.assert_called()
 
 
 class TestSyncFromSelection(MayaTkTestCase):
-    """_sync_from_selection() routes to _hydrate_from_target without recursion."""
+    """_sync_from_selection() always hydrates from data_internal."""
 
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
 
-    def test_carrier_selected_calls_hydrate(self):
-        loc_name = cmds.spaceLocator(name="carrier")[0]
-        loc = pm.PyNode(loc_name)
-        EventTriggers.create([loc], events=["A"], category="audio")
-        pm.select(loc, replace=True)
+    def test_calls_hydrate_with_data_internal(self):
         with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
             self.slots._sync_from_selection()
             mock_hydrate.assert_called_once()
             called_obj = mock_hydrate.call_args[0][0]
-            self.assertEqual(str(called_obj), str(loc))
+            self.assertEqual(str(called_obj), "data_internal")
 
-    def test_non_carrier_selected_with_valid_cache_keeps_footer(self):
-        """
-        Bug: Selecting an unrelated object cleared the combo and broke
-        session reconnection.
-        Fixed: keeps cached target when selection has no trigger.
-        """
-        carrier_name = cmds.spaceLocator(name="carrier")[0]
-        carrier = pm.PyNode(carrier_name)
-        EventTriggers.create([carrier], events=["A"], category="audio")
-        self.slots._current_target = carrier
+    def test_sync_ignores_selection(self):
+        """Selection changes do not affect the target node."""
         cube_name = cmds.polyCube(name="cube")[0]
-        cube = pm.PyNode(cube_name)
-        pm.select(cube, replace=True)
-        self.slots._sync_from_selection()
-        # Footer should mention "keeping" the old target, not clear it
-        footer_text = self.slots.ui.footer.setText.call_args[0][0]
-        self.assertIn("keeping", footer_text)
-
-    def test_nothing_selected_uses_cached_target(self):
-        carrier_name = cmds.spaceLocator(name="carrier")[0]
-        carrier = pm.PyNode(carrier_name)
-        EventTriggers.create([carrier], events=["A"], category="audio")
-        self.slots._current_target = carrier
-        pm.select(clear=True)
-        self.slots._sync_from_selection()
-        # Cached target should still be active after sync
-        self.assertIsNotNone(self.slots._current_target)
-        self.assertEqual(str(self.slots._current_target), carrier_name)
-
-    def test_nothing_selected_scans_scene_for_carrier(self):
-        """
-        Bug: After scene reload with no selection, the tool showed 'no trigger'.
-        Fixed: scans scene with cmds.ls('*.audio_trigger') when nothing selected.
-        """
-        carrier_name = cmds.spaceLocator(name="scanCarrier")[0]
-        carrier = pm.PyNode(carrier_name)
-        EventTriggers.create([carrier], events=["A"], category="audio")
-        self.slots._current_target = None
-        pm.select(clear=True)
-        self.slots._sync_from_selection()
-        # Scene scan should have found the carrier and hydrated it
-        self.assertIsNotNone(self.slots._current_target)
-        self.assertEqual(str(self.slots._current_target), carrier_name)
-
-    def test_no_selection_no_carrier_clears_state(self):
-        pm.select(clear=True)
-        self.slots._current_target = None
-        self.slots._audio_files = {"old": "/path"}
-        self.slots._sync_from_selection()
-        self.assertEqual(self.slots._current_target, None)
-        self.assertEqual(self.slots._audio_files, {})
-
-    def test_sync_from_selection_never_recurses(self):
-        """
-        Bug: The 'nothing selected, scene scan found carrier' branch called
-        self._sync_from_selection() recursively — risk of infinite loop.
-        Fixed: calls _hydrate_from_target() directly instead.
-        """
-        carrier_name = cmds.spaceLocator(name="carrier")[0]
-        carrier = pm.PyNode(carrier_name)
-        EventTriggers.create([carrier], events=["A"], category="audio")
-        pm.select(clear=True)
-        self.slots._current_target = None
-
-        call_count = [0]
-        original = self.slots._sync_from_selection.__func__
-
-        def counting_sync(self_inner):
-            call_count[0] += 1
-            if call_count[0] > 3:
-                raise RecursionError("_sync_from_selection called recursively!")
-            original(self_inner)
-
-        with patch.object(
-            self.slots,
-            "_sync_from_selection",
-            lambda: counting_sync(self.slots),
-        ):
-            with patch.object(self.slots, "_hydrate_from_target"):
-                # Direct invocation bypasses our patch — call the real one
-                pass
-
-        # Simpler check: call the real method and assert it completes
-        # without calling itself again (no RecursionError)
-        with patch.object(self.slots, "_hydrate_from_target"):
-            try:
-                self.slots._sync_from_selection()
-            except RecursionError:
-                self.fail("_sync_from_selection recursed into itself")
+        pm.select(cube_name, replace=True)
+        with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
+            self.slots._sync_from_selection()
+            called_obj = mock_hydrate.call_args[0][0]
+            self.assertEqual(str(called_obj), "data_internal")
 
 
 # ===========================================================================
@@ -890,110 +617,130 @@ class TestSceneReopenDetection(MayaTkTestCase):
         self.assertEqual(str(found), loc)
 
     def test_sync_from_selection_detects_trigger_with_nothing_selected(self):
-        """_sync_from_selection finds trigger when nothing is selected (scene scan).
-
-        This is the exact scenario that fails after scene reopen: the user
-        hasn't selected anything yet, but a trigger object exists in the scene.
-        """
-        loc = cmds.spaceLocator(name="audio_events")[0]
-        EventTriggers.ensure(
-            objects=[pm.PyNode(loc)],
-            events=["Footstep"],
-            category="audio",
-        )
+        """_sync_from_selection always uses data_internal, regardless of selection."""
         pm.select(clear=True)
 
-        self.slots._sync_from_selection()
-
-        self.assertIsNotNone(
-            self.slots._current_target,
-            "Should auto-detect trigger object via scene scan",
-        )
-        # Footer should NOT show the "no trigger" message
-        footer_text = self.slots.ui.footer.setText.call_args[0][0]
-        self.assertNotIn(
-            "No audio trigger object in scene",
-            footer_text,
-            "Should not report 'no trigger' when one exists",
-        )
+        with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
+            self.slots._sync_from_selection()
+            mock_hydrate.assert_called_once()
+            called_obj = mock_hydrate.call_args[0][0]
+            self.assertEqual(str(called_obj), "data_internal")
 
     def test_on_scene_opened_resets_stale_state(self):
         """_on_scene_opened clears cached state so stale PyNodes don't persist.
 
-        After File > Open, the old _current_target PyNode is invalid.
+        After File > Open, cached state is invalid.
         _on_scene_opened must clear it before _ensure_sync_job runs.
         """
-        # Simulate pre-scene-open state with cached target
-        loc = cmds.spaceLocator(name="old_target")[0]
-        self.slots._current_target = pm.PyNode(loc)
+        # Simulate pre-scene-open state
         self.slots._audio_files = {"test": "test.wav"}
-        self.slots._trigger_attr_path = f"{loc}.audio_trigger"
+        self.slots._trigger_attr_path = "data_internal.audio_trigger"
         self.slots._last_enum_idx = 2
-        self.slots._selection_sync_job_id = 99999  # Fake stale ID
+        self.slots._sel_token = 99999  # Fake stale token
+        self.slots._time_token = 88888
 
         # Patch _ensure_sync_job to prevent actual scriptJob creation
         with patch.object(self.slots, "_ensure_sync_job"):
             self.slots._on_scene_opened()
 
-        self.assertIsNone(self.slots._current_target)
         self.assertIsNone(self.slots._trigger_attr_path)
         self.assertIsNone(self.slots._last_enum_idx)
         self.assertEqual(self.slots._audio_files, {})
-        self.assertIsNone(self.slots._selection_sync_job_id)
-        self.assertIsNone(self.slots._time_changed_job_id)
+        self.assertIsNone(self.slots._sel_token)
+        self.assertIsNone(self.slots._time_token)
 
-    def test_ensure_sync_job_creates_scene_opened_jobs(self):
-        """_ensure_sync_job registers persistent SceneOpened/NewSceneOpened jobs.
+    def test_ensure_sync_job_subscribes_via_manager(self):
+        """_ensure_sync_job delegates to ScriptJobManager.subscribe.
 
-        Bug: In standalone mayapy, cmds.scriptJob(event=["SceneOpened", ...])
-        silently fails (no GUI event loop), so the IDs stayed None and the
-        test failed.  Fixed by mocking cmds.scriptJob so the test verifies
-        the method's branching logic rather than Maya's event availability.
-        Fixed: 2026-03-03
+        Persistent subs: SceneOpened, NewSceneOpened.
+        Ephemeral subs: SelectionChanged, timeChanged.
+        Also calls connect_cleanup and _connect_cb_signal.
         """
-        self.slots._scene_opened_job_id = None
-        self.slots._new_scene_job_id = None
-        self.slots._selection_sync_job_id = None
-        self.slots._time_changed_job_id = None
+        self.slots._scene_subs_installed = False
+        self.slots._sel_token = None
+        self.slots._time_token = None
 
-        _counter = [1000]
+        mock_mgr = MagicMock()
+        _counter = [0]
 
-        def _fake_script_job(**kwargs):
-            if "exists" in kwargs:
-                return False
-            if "kill" in kwargs:
-                return None
+        def _fake_subscribe(event, callback, owner=None, ephemeral=False):
             _counter[0] += 1
             return _counter[0]
 
+        mock_mgr.subscribe.side_effect = _fake_subscribe
+
         with (
-            patch("maya.cmds.scriptJob", side_effect=_fake_script_job),
+            patch(
+                "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+                return_value=mock_mgr,
+            ),
             patch("maya.cmds.evalDeferred"),
             patch.object(self.slots, "_connect_cb_signal"),
         ):
             self.slots._ensure_sync_job()
 
-        # The persistent jobs should have been created (non-None IDs)
-        self.assertIsNotNone(
-            self.slots._scene_opened_job_id,
-            "SceneOpened scriptJob should be created",
+        # Persistent scene subscriptions
+        self.assertTrue(
+            self.slots._scene_subs_installed,
+            "_scene_subs_installed should be True after first call",
         )
-        self.assertIsNotNone(
-            self.slots._new_scene_job_id,
-            "NewSceneOpened scriptJob should be created",
-        )
-        # Volatile jobs too
-        self.assertIsNotNone(self.slots._selection_sync_job_id)
-        self.assertIsNotNone(self.slots._time_changed_job_id)
+        mock_mgr.connect_cleanup.assert_called_once()
 
-        # All four IDs should be distinct
-        ids = [
-            self.slots._scene_opened_job_id,
-            self.slots._new_scene_job_id,
-            self.slots._selection_sync_job_id,
-            self.slots._time_changed_job_id,
+        # Ephemeral tokens should be set
+        self.assertIsNotNone(self.slots._sel_token)
+        self.assertIsNotNone(self.slots._time_token)
+
+        # Verify the 4 expected subscribe calls
+        events_subscribed = [
+            call.kwargs.get("event") or call.args[0]
+            for call in mock_mgr.subscribe.call_args_list
         ]
-        self.assertEqual(len(set(ids)), 4, "Each scriptJob should get a unique ID")
+        self.assertIn("SceneOpened", events_subscribed)
+        self.assertIn("NewSceneOpened", events_subscribed)
+        self.assertIn("SelectionChanged", events_subscribed)
+        self.assertIn("timeChanged", events_subscribed)
+
+    def test_ensure_sync_job_idempotent(self):
+        """Calling _ensure_sync_job twice must not duplicate persistent subs.
+
+        The _scene_subs_installed guard prevents re-subscribing SceneOpened
+        and NewSceneOpened, so the second call should only refresh ephemeral
+        tokens if they were cleared (they aren't here, so zero new calls).
+        """
+        self.slots._scene_subs_installed = False
+        self.slots._sel_token = None
+        self.slots._time_token = None
+
+        mock_mgr = MagicMock()
+        _counter = [0]
+
+        def _fake_subscribe(event, callback, owner=None, ephemeral=False):
+            _counter[0] += 1
+            return _counter[0]
+
+        mock_mgr.subscribe.side_effect = _fake_subscribe
+
+        with (
+            patch(
+                "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+                return_value=mock_mgr,
+            ),
+            patch("maya.cmds.evalDeferred"),
+            patch.object(self.slots, "_connect_cb_signal"),
+        ):
+            self.slots._ensure_sync_job()
+            first_call_count = mock_mgr.subscribe.call_count
+
+            # Second call — persistent subs should be skipped, ephemeral
+            # tokens are already set, so no new subscribes.
+            self.slots._ensure_sync_job()
+            second_call_count = mock_mgr.subscribe.call_count
+
+        self.assertEqual(
+            second_call_count,
+            first_call_count,
+            "Second _ensure_sync_job must not create additional subscriptions",
+        )
 
 
 # ===========================================================================
@@ -1022,7 +769,6 @@ class TestAddTrackOverwritesBehavior(MayaTkTestCase):
         self.slots = _make_slots_instance()
         loc_name = cmds.spaceLocator(name="carrier")[0]
         self.loc = pm.PyNode(loc_name)
-        self.slots._current_target = self.loc
 
     # -- 1. Dict-level overwrite ------------------------------------------
 
@@ -1316,9 +1062,9 @@ class TestBrowseTriggersCompositeRebuild(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
-        loc_name = cmds.spaceLocator(name="carrier")[0]
-        self.loc = pm.PyNode(loc_name)
-        self.slots._current_target = self.loc
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        self.loc = DataNodes.ensure_internal()
 
     def test_browse_calls_sync_when_keyed_events_exist(self):
         """After adding tracks, if events are already keyed, sync is triggered."""
@@ -1341,7 +1087,7 @@ class TestBrowseTriggersCompositeRebuild(MayaTkTestCase):
                     ) as mock_sync:
                         with patch.object(self.slots, "_repair_enum_casing"):
                             self.slots._import_audio_paths(["/audio/Footstep.wav"])
-                            mock_sync.assert_called_once_with(self.loc)
+                            mock_sync.assert_called_once()
 
     def test_browse_skips_sync_when_no_keyed_events(self):
         """Without keyed events, import only calls load_tracks, not sync."""
@@ -1365,102 +1111,6 @@ class TestBrowseTriggersCompositeRebuild(MayaTkTestCase):
                             with patch.object(self.slots, "_refresh_combo_from_target"):
                                 self.slots._import_audio_paths(["/audio/Footstep.wav"])
                                 mock_sync.assert_not_called()
-
-
-# ===========================================================================
-# Carrier Combo (cmb001)
-# ===========================================================================
-
-
-class TestCarrierCombo(MayaTkTestCase):
-    """Carrier combo lists carriers and switches active target on selection."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_refresh_lists_carriers_in_scene(self):
-        """_refresh_carrier_combo populates cmb001 with find_event_carriers results."""
-        _make_carrier_transform("carrier_A")
-        _make_carrier_transform("carrier_B")
-
-        self.slots._refresh_carrier_combo()
-
-        self.slots.ui.cmb001.addItems.assert_called_once()
-        items = self.slots.ui.cmb001.addItems.call_args[0][0]
-        self.assertIn("carrier_A", items)
-        self.assertIn("carrier_B", items)
-
-    def test_refresh_selects_current_target(self):
-        """_refresh_carrier_combo selects the entry matching _current_target."""
-        node = _make_carrier_transform("my_carrier")
-
-        self.slots._current_target = pm.PyNode(node)
-        self.slots.ui.cmb001.findText = MagicMock(return_value=0)
-
-        self.slots._refresh_carrier_combo()
-
-        self.slots.ui.cmb001.findText.assert_called_with("my_carrier")
-        self.slots.ui.cmb001.setCurrentIndex.assert_called_with(0)
-
-    def test_refresh_empty_scene(self):
-        """_refresh_carrier_combo handles scenes with no carriers."""
-        self.slots._refresh_carrier_combo()
-        self.slots.ui.cmb001.clear.assert_called()
-
-    def test_cmb001_switches_target(self):
-        """Selecting a carrier in cmb001 hydrates from that target."""
-        _make_carrier_transform("switch_target")
-
-        widget = MagicMock()
-        widget.currentText.return_value = "switch_target"
-
-        with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
-            self.slots.cmb001(0, widget)
-            mock_hydrate.assert_called_once()
-            called_obj = mock_hydrate.call_args[0][0]
-            self.assertEqual(str(called_obj), "switch_target")
-
-    def test_cmb001_skips_same_target(self):
-        """Selecting the already-active carrier does not re-hydrate."""
-        node = _make_carrier_transform("same_carrier")
-        self.slots._current_target = pm.PyNode(node)
-
-        widget = MagicMock()
-        widget.currentText.return_value = "same_carrier"
-
-        with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
-            self.slots.cmb001(0, widget)
-            mock_hydrate.assert_not_called()
-
-    def test_cmb001_negative_index_ignored(self):
-        """Index -1 (no selection) is ignored."""
-        widget = MagicMock()
-        with patch.object(self.slots, "_hydrate_from_target") as mock_hydrate:
-            self.slots.cmb001(-1, widget)
-            mock_hydrate.assert_not_called()
-
-    def test_switching_carrier_refreshes_tracks_combo(self):
-        """Selecting a different carrier in cmb001 repopulates cmb000 with that carrier's tracks."""
-        # Create carrier A with tracks "sfx_a"
-        node_a = _make_carrier_transform("carrier_A", enum_name="None:sfx_a")
-        # Create carrier B with tracks "sfx_b1", "sfx_b2"
-        node_b = _make_carrier_transform("carrier_B", enum_name="None:sfx_b1:sfx_b2")
-
-        # Start on carrier A
-        self.slots._current_target = pm.PyNode(node_a)
-
-        # Switch to carrier B via cmb001
-        widget = MagicMock()
-        widget.currentText.return_value = "carrier_B"
-        self.slots.cmb001(1, widget)
-
-        # cmb000 should have been repopulated (addItems called during _refresh_combo_from_target)
-        cmb000 = self.slots.ui.cmb000
-        cmb000.addItems.assert_called()
-        items = cmb000.addItems.call_args[0][0]
-        self.assertIn("sfx_b1", items)
-        self.assertIn("sfx_b2", items)
 
 
 class TestEventTriggersRemoveCleanAudio(MayaTkTestCase):
@@ -1503,242 +1153,6 @@ class TestEventTriggersRemoveCleanAudio(MayaTkTestCase):
         self.assertFalse(cmds.objExists("doomed_audio"))
 
 
-class TestCarrierCreate(MayaTkTestCase):
-    """Creating carriers via the option-box menu (inline edit mode)."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_create_carrier_sets_current_target(self):
-        """_create_carrier_from_menu creates a hidden transform and sets it active."""
-        self.slots._create_carrier_from_menu()
-
-        self.assertIsNotNone(self.slots._current_target)
-        self.assertTrue(cmds.objExists(str(self.slots._current_target)))
-        self.assertEqual(cmds.nodeType(str(self.slots._current_target)), "transform")
-
-    def test_create_carrier_has_audio_trigger_attr(self):
-        """New carrier has audio_trigger attr so find_event_carriers discovers it."""
-        self.slots._create_carrier_from_menu()
-        node = str(self.slots._current_target)
-        self.assertTrue(cmds.attributeQuery("audio_trigger", node=node, exists=True))
-
-    def test_create_carrier_audio_trigger_is_keyable(self):
-        """audio_trigger must be keyable and visible in the channel box."""
-        self.slots._create_carrier_from_menu()
-        node = str(self.slots._current_target)
-        self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=node, keyable=True),
-            "audio_trigger must be keyable for timeline animation",
-        )
-
-    def test_create_carrier_enters_edit_mode(self):
-        """After creating, the combo enters editable mode for optional rename."""
-        self.slots._create_carrier_from_menu()
-        self.slots.ui.cmb001.setEditable.assert_called_with(True)
-
-    def test_create_carrier_increments_name(self):
-        """Second carrier gets a numeric suffix to avoid name collisions."""
-        self.slots._create_carrier_from_menu()
-        first = str(self.slots._current_target)
-        self.slots._create_carrier_from_menu()
-        second = str(self.slots._current_target)
-        self.assertNotEqual(first, second)
-        self.assertTrue(cmds.objExists(first))
-        self.assertTrue(cmds.objExists(second))
-
-
-class TestCarrierRename(MayaTkTestCase):
-    """Renaming carriers via inline edit mode."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-        node = _make_carrier_transform("old_name")
-        self.slots._current_target = pm.PyNode(node)
-
-    def test_rename_enters_edit_mode(self):
-        """_rename_carrier_from_menu puts the combo into editable mode."""
-        self.slots._rename_carrier_from_menu()
-        self.slots.ui.cmb001.setEditable.assert_called_with(True)
-
-    def test_rename_connects_on_editing_finished(self):
-        """_begin_carrier_edit wires uitk's on_editing_finished signal.
-
-        Bug: Originally used the raw Qt editingFinished signal on the
-        lineEdit, which races with uitk's focusOutEvent destroying the
-        lineEdit before the signal fires.
-        Fixed: 2026-04-13
-        """
-        self.slots._rename_carrier_from_menu()
-        self.slots.ui.cmb001.on_editing_finished.connect.assert_called_with(
-            self.slots._commit_carrier_rename
-        )
-
-    def test_commit_rename_applies_new_name(self):
-        """_commit_carrier_rename renames the Maya node."""
-        self.slots._commit_carrier_rename("new_name")
-
-        self.assertTrue(cmds.objExists("new_name"))
-        self.assertFalse(cmds.objExists("old_name"))
-        self.assertEqual(str(self.slots._current_target), "new_name")
-
-    def test_commit_rename_no_change_skips(self):
-        """If the name hasn't changed, no rename occurs."""
-        self.slots._commit_carrier_rename("old_name")
-        self.assertTrue(cmds.objExists("old_name"))
-
-    def test_commit_rename_replaces_spaces(self):
-        """Spaces in the edited name are replaced with underscores."""
-        self.slots._commit_carrier_rename("my carrier name")
-        self.assertTrue(cmds.objExists("my_carrier_name"))
-
-    def test_commit_rename_renames_locator_shape(self):
-        """Renaming carrier also renames the stamped locator shape.
-
-        Bug: _commit_carrier_rename only renamed the parent transform;
-        the child locator shape kept its old name (e.g. 'old_nameShape').
-        Fixed: 2026-04-13
-        """
-        self.slots._commit_carrier_rename("new_name")
-
-        shapes = cmds.listRelatives("new_name", shapes=True, fullPath=True) or []
-        self.assertTrue(shapes, "Carrier should still have a locator shape")
-        short_name = shapes[0].rsplit("|", 1)[-1]
-        self.assertEqual(short_name, "new_nameShape")
-
-    def test_rename_no_target_shows_message(self):
-        """Renaming with no active carrier shows a message."""
-        self.slots._current_target = None
-        self.slots._rename_carrier_from_menu()
-        self.slots.ui.footer.setText.assert_called()
-
-
-class TestCarrierRemove(MayaTkTestCase):
-    """Removing carriers via the option-box menu."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_remove_carrier_deletes_tool_created_node(self):
-        """Removing a tool-created carrier deletes the hidden transform."""
-        node_name = _make_carrier_transform("doomed_carrier")
-        self.slots._current_target = pm.PyNode(node_name)
-
-        self.slots.sb.message_box = MagicMock(return_value="Yes")
-        self.slots._remove_carrier_from_menu()
-
-        self.assertFalse(cmds.objExists("doomed_carrier"))
-        self.assertIsNone(self.slots._current_target)
-
-    def test_remove_carrier_cancelled(self):
-        """Declining the confirmation keeps the carrier."""
-        node_name = _make_carrier_transform("safe_carrier")
-        self.slots._current_target = pm.PyNode(node_name)
-
-        self.slots.sb.message_box = MagicMock(return_value="No")
-        self.slots._remove_carrier_from_menu()
-
-        self.assertTrue(cmds.objExists("safe_carrier"))
-
-    def test_remove_carrier_only_deletes_owned_audio_nodes(self):
-        """Removing carrier A must not delete audio nodes owned by carrier B.
-
-        Bug: b003() called AudioEvents.remove(category) which nuked the
-        entire audio set, destroying other carriers' audio nodes.
-        Fixed: b003() now uses remove_by_owner() for scoped cleanup.
-        """
-        from mayatk.node_utils.attributes.audio_events._audio_events import AudioEvents
-
-        # Create two carriers
-        carrier_a = _make_carrier_transform("carrier_a")
-        carrier_b = _make_carrier_transform("carrier_b")
-
-        # Create shared audio set with nodes owned by each carrier
-        audio_set = pm.sets(name="audio_audio_set", empty=True)
-
-        node_a = cmds.createNode("audio", name="track_a", skipSelect=True)
-        AudioEvents._stamp_event_attrs(node_a, "sfx", "synced", owner="carrier_a")
-        cmds.sets(node_a, addElement=str(audio_set))
-
-        node_b = cmds.createNode("audio", name="track_b", skipSelect=True)
-        AudioEvents._stamp_event_attrs(node_b, "sfx", "synced", owner="carrier_b")
-        cmds.sets(node_b, addElement=str(audio_set))
-
-        # Remove carrier_a
-        self.slots._current_target = pm.PyNode(carrier_a)
-        self.slots.sb.message_box = MagicMock(return_value="Yes")
-        self.slots._remove_carrier_from_menu()
-
-        # carrier_a's node is gone
-        self.assertFalse(cmds.objExists("track_a"))
-        # carrier_b's node survives
-        self.assertTrue(cmds.objExists("track_b"))
-
-
-class TestCarrierAutoCreate(MayaTkTestCase):
-    """Auto-creation of carrier when importing tracks with no carrier."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_require_target_creates_carrier_when_none_exists(self):
-        """_require_target auto-creates a hidden transform when no carrier exists."""
-        pm.select(clear=True)
-        self.slots._current_target = None
-
-        target = self.slots._require_target()
-
-        self.assertIsNotNone(target)
-        self.assertTrue(cmds.objExists(str(target)))
-        self.assertEqual(cmds.nodeType(str(target)), "transform")
-
-    def test_auto_created_carrier_appears_in_cmb001(self):
-        """After auto-create, the carrier combo includes the node."""
-        pm.select(clear=True)
-        self.slots._current_target = None
-
-        target = self.slots._require_target()
-
-        self.slots.ui.cmb001.findText = MagicMock(return_value=0)
-        self.slots.ui.cmb001.addItems.reset_mock()
-        self.slots._refresh_carrier_combo()
-
-        self.slots.ui.cmb001.addItems.assert_called_once()
-        items = self.slots.ui.cmb001.addItems.call_args[0][0]
-        self.assertIn(str(target), items)
-
-
-class TestCarrierSelectInViewport(MayaTkTestCase):
-    """Select action button selects the carrier in Maya viewport."""
-
-    def setUp(self):
-        super().setUp()
-        self.slots = _make_slots_instance()
-
-    def test_select_carrier_selects_in_maya(self):
-        """_select_carrier_in_viewport selects the current target."""
-        node = _make_carrier_transform("sel_carrier")
-        self.slots._current_target = pm.PyNode(node)
-
-        self.slots._select_carrier_in_viewport()
-
-        sel = pm.selected()
-        self.assertEqual(len(sel), 1)
-        self.assertEqual(str(sel[0]), "sel_carrier")
-
-    def test_select_no_carrier_shows_message(self):
-        """No active carrier shows a footer message."""
-        self.slots._current_target = None
-
-        self.slots._select_carrier_in_viewport()
-
-        self.slots.ui.footer.setText.assert_called_with("No active carrier to select.")
-
-
 # ===========================================================================
 # Import Audio Paths (shared pipeline)
 # ===========================================================================
@@ -1754,9 +1168,9 @@ class TestImportAudioPaths(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
-        loc_name = cmds.spaceLocator(name="importCarrier")[0]
-        self.loc = pm.PyNode(loc_name)
-        self.slots._current_target = self.loc
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        self.loc = DataNodes.ensure_internal()
 
     def test_merges_paths_into_audio_files_dict(self):
         """Paths are merged into _audio_files keyed by lowercase stem."""
@@ -1800,19 +1214,6 @@ class TestImportAudioPaths(MayaTkTestCase):
         self.slots.ui.footer.setText.assert_called_with(
             "No audio files selected for import."
         )
-
-    def test_no_target_aborts_gracefully(self):
-        """If _require_target returns None, import aborts without error."""
-        self.slots._current_target = None
-        with patch.object(
-            self.slots,
-            "_prepare_selected_paths",
-            side_effect=lambda p: p,
-        ):
-            with patch.object(self.slots, "_require_target", return_value=None):
-                with patch.object(AudioEvents, "load_tracks") as mock_load:
-                    self.slots._import_audio_paths(["/audio/Footstep.wav"])
-                    mock_load.assert_not_called()
 
     def test_backslashes_normalized_to_forward_slashes(self):
         """Paths stored in _audio_files should use forward slashes."""
@@ -2012,7 +1413,6 @@ class TestPerObjectComposite(MayaTkTestCase):
         audio_set = AudioEvents._get_or_create_set("audio")
         cmds.sets(comp_node, addElement=audio_set.name())
 
-        self.slots._current_target = self.locA
         with patch.object(AudioEvents, "set_active") as mock_active:
             self.slots._activate_composite_for(self.locA)
             mock_active.assert_called_once_with("carrierA_composite")
@@ -2031,16 +1431,13 @@ class TestPerObjectComposite(MayaTkTestCase):
             mock_active.assert_called_once_with("carrierB_composite")
 
     def test_export_auto_syncs_before_finding_composite(self):
-        """_export_composite should call _sync_and_refresh_target before exporting."""
-        self.slots._current_target = self.locA
+        """_export_composite should call _sync_if_dirty before exporting."""
         self.slots._audio_files = {"footstepa": "/audio/FootstepA.wav"}
 
-        with patch.object(
-            self.slots, "_sync_and_refresh_target", return_value=1
-        ) as mock_sync:
+        with patch.object(self.slots, "_sync_if_dirty", return_value=-1) as mock_dirty:
             with patch.object(AudioEvents, "list_nodes", return_value=[]):
                 self.slots._export_composite()
-                mock_sync.assert_called_once_with(self.locA)
+                mock_dirty.assert_called_once()
 
 
 # ===========================================================================
@@ -2082,7 +1479,6 @@ class TestHydrateCrossTargetIsolation(MayaTkTestCase):
         cmds.sets(wrong_node, addElement=audio_set.name())
 
         # Persist a correct file map on the target
-        self.slots._current_target = None
         self.slots._audio_files = {"kick": "/correct/kick.wav"}
         self.slots._save_file_map(target)
         self.slots._audio_files.clear()
@@ -2114,7 +1510,6 @@ class TestHydrateCrossTargetIsolation(MayaTkTestCase):
         AudioEvents._stamp_event_attrs(cache_node, "snare", "preview")
         cmds.sets(cache_node, addElement=audio_set.name())
 
-        self.slots._current_target = None
         self.slots._audio_files.clear()
         self.slots._hydrate_from_target(target)
         self.assertNotIn(
@@ -2141,7 +1536,6 @@ class TestHydrateCrossTargetIsolation(MayaTkTestCase):
         AudioEvents._stamp_event_attrs(src_node, "hihat", "preview")
         cmds.sets(src_node, addElement=audio_set.name())
 
-        self.slots._current_target = None
         self.slots._audio_files.clear()
         self.slots._hydrate_from_target(target)
         self.assertEqual(
@@ -2164,7 +1558,6 @@ class TestHydrateCrossTargetIsolation(MayaTkTestCase):
         EventTriggers.create([targetB], events=["Boom"], category="audio")
 
         # Persist different file maps
-        self.slots._current_target = None
         self.slots._audio_files = {"boom": "/dirA/boom.wav"}
         self.slots._save_file_map(targetA)
         self.slots._audio_files = {"boom": "/dirB/boom.wav"}
@@ -2179,7 +1572,7 @@ class TestHydrateCrossTargetIsolation(MayaTkTestCase):
 
         # Hydrate target B — must get B's path, not A's
         self.slots._audio_files.clear()
-        self.slots._hydrate_from_target(targetB, old_target=targetA)
+        self.slots._hydrate_from_target(targetB)
         self.assertEqual(
             self.slots._audio_files.get("boom"),
             "/dirB/boom.wav",
@@ -2300,10 +1693,10 @@ class TestReplaceSelectedTrack(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
-        loc_name = cmds.spaceLocator(name="replaceCarrier")[0]
-        self.loc = pm.PyNode(loc_name)
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        self.loc = DataNodes.ensure_internal()
         EventTriggers.create([self.loc], events=["OldClip", "Other"], category="audio")
-        self.slots._current_target = self.loc
         self.slots._audio_files = {
             "oldclip": "/audio/OldClip.wav",
             "other": "/audio/Other.wav",
@@ -2496,7 +1889,6 @@ class TestEnsureStartAnchor(MayaTkTestCase):
         loc_name = cmds.spaceLocator(name="anchorCarrier")[0]
         self.loc = pm.PyNode(loc_name)
         EventTriggers.create([self.loc], events=["Footstep", "Jump"], category="audio")
-        self.slots._current_target = self.loc
         self.slots._audio_files = {
             "footstep": "/audio/Footstep.wav",
             "jump": "/audio/Jump.wav",
@@ -2604,7 +1996,6 @@ class TestRealignNoneEndKeys(MayaTkTestCase):
         loc_name = cmds.spaceLocator(name="realignCarrier")[0]
         self.loc = pm.PyNode(loc_name)
         EventTriggers.create([self.loc], events=["ClipA", "ClipB"], category="audio")
-        self.slots._current_target = self.loc
         self.slots._audio_files = {
             "clipa": "/audio/ClipA.wav",
             "clipb": "/audio/ClipB.wav",
@@ -2772,7 +2163,6 @@ class TestKeyAllEvents(MayaTkTestCase):
 
         events = ["ClipA", "ClipB", "ClipC"]
         EventTriggers.create([self.loc], events=events, category="audio")
-        self.slots._current_target = self.loc
 
         # Fake audio files — use dummy paths (never actually read)
         self.slots._audio_files = {
@@ -2933,7 +2323,6 @@ class TestDirtyTracking(MayaTkTestCase):
         self.slots = _make_slots_instance()
         self.loc = pm.PyNode(cmds.spaceLocator(name="fpLoc")[0])
         EventTriggers.create([self.loc], events=["Walk", "Run"], category="audio")
-        self.slots._current_target = self.loc
         self.slots._audio_files = {
             "walk": "/audio/Walk.wav",
             "run": "/audio/Run.wav",
@@ -3065,10 +2454,13 @@ class TestDirtyTracking(MayaTkTestCase):
             self.slots._compute_sync_fingerprint(self.loc)
         )
 
-        with patch.object(
-            self.slots,
-            "_event_names_from_files",
-            return_value=["Walk", "Run"],
+        with (
+            patch.object(self.slots, "_require_target", return_value=self.loc),
+            patch.object(
+                self.slots,
+                "_event_names_from_files",
+                return_value=["Walk", "Run"],
+            ),
         ):
             self.slots.tb000()
 
@@ -3082,6 +2474,7 @@ class TestDirtyTracking(MayaTkTestCase):
         )
         # No stored fingerprint → dirty
         with (
+            patch.object(self.slots, "_require_target", return_value=self.loc),
             patch.object(
                 self.slots,
                 "_event_names_from_files",
@@ -3184,7 +2577,6 @@ class TestDirtyTracking(MayaTkTestCase):
 
     def test_export_uses_sync_if_dirty(self):
         """_export_composite should use _sync_if_dirty, not unconditional sync."""
-        self.slots._current_target = self.loc
         self.slots._audio_files = {"walk": "/audio/Walk.wav"}
 
         with (
@@ -3192,7 +2584,7 @@ class TestDirtyTracking(MayaTkTestCase):
             patch.object(AudioEvents, "list_nodes", return_value=[]),
         ):
             self.slots._export_composite()
-            mock_dirty.assert_called_once_with(self.loc)
+            mock_dirty.assert_called_once()
 
     # -- _schedule_deferred_sync skips during combo writeback ----------------
 
@@ -3241,7 +2633,6 @@ class TestDirtyTracking(MayaTkTestCase):
         """_activate_composite_for should prefer {objName}_composite over legacy."""
         slots = _make_slots_instance()
         loc = pm.PyNode(cmds.spaceLocator(name="compTestObj")[0])
-        slots._current_target = loc
 
         audio_set = AudioEvents._get_or_create_set("audio", clear=True)
         legacy = cmds.createNode("audio", name="audio_composite", skipSelect=True)
@@ -3259,7 +2650,6 @@ class TestDirtyTracking(MayaTkTestCase):
         """_activate_composite_for should fall back to {cat}_composite."""
         slots = _make_slots_instance()
         loc = pm.PyNode(cmds.spaceLocator(name="fallbackObj")[0])
-        slots._current_target = loc
 
         audio_set = AudioEvents._get_or_create_set("audio", clear=True)
         legacy = cmds.createNode("audio", name="audio_composite", skipSelect=True)
@@ -3276,13 +2666,14 @@ class TestDirtyTracking(MayaTkTestCase):
         import tempfile
 
         slots = _make_slots_instance()
-        loc = pm.PyNode(cmds.spaceLocator(name="trimTestObj")[0])
-        slots._current_target = loc
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        DataNodes.ensure_internal()
         slots._audio_files = {"walk": "/audio/Walk.wav"}
 
         # Create a composite node so the export path is found
         audio_set = AudioEvents._get_or_create_set("audio", clear=True)
-        comp = cmds.createNode("audio", name="trimTestObj_composite", skipSelect=True)
+        comp = cmds.createNode("audio", name="data_internal_composite", skipSelect=True)
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp.write(b"\x00" * 100)
         tmp.close()
@@ -3325,9 +2716,10 @@ class TestExportClips(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
-        self.loc = pm.PyNode(cmds.spaceLocator(name="clipExportObj")[0])
+        from mayatk.node_utils._data_nodes import DataNodes
+
+        self.loc = DataNodes.ensure_internal()
         EventTriggers.create([self.loc], events=["Walk", "Jump"], category="audio")
-        self.slots._current_target = self.loc
 
     # -- _export dispatcher ---------------------------------------------------
 
@@ -3359,14 +2751,6 @@ class TestExportClips(MayaTkTestCase):
             mock_clips.assert_called_once_with(keyed_only=False)
 
     # -- _export_clips edge cases --------------------------------------------
-
-    def test_export_clips_no_target(self):
-        """_export_clips should show message when no target is set."""
-        self.slots._current_target = None
-        self.slots._audio_files = {"walk": "/audio/Walk.wav"}
-        self.slots._export_clips()
-        footer = self.slots.ui.footer.setText.call_args[0][0]
-        self.assertIn("Select an audio-trigger object", footer)
 
     def test_export_clips_no_files(self):
         """_export_clips should show message when no audio files are loaded."""
@@ -3870,7 +3254,6 @@ class TestHydrateFallbackOwnerFilter(MayaTkTestCase):
         AudioEvents._stamp_event_attrs(node, "clap", "preview", owner="filterA")
         cmds.sets(node, addElement=audio_set.name())
 
-        self.slots._current_target = None
         self.slots._audio_files.clear()
         self.slots._hydrate_from_target(targetB)
         self.assertNotIn(
@@ -3894,7 +3277,6 @@ class TestHydrateFallbackOwnerFilter(MayaTkTestCase):
         AudioEvents._stamp_event_attrs(node, "tap", "preview")  # No owner
         cmds.sets(node, addElement=audio_set.name())
 
-        self.slots._current_target = None
         self.slots._audio_files.clear()
         self.slots._hydrate_from_target(target)
         self.assertEqual(
@@ -3918,7 +3300,6 @@ class TestHydrateFallbackOwnerFilter(MayaTkTestCase):
         AudioEvents._stamp_event_attrs(node, "pop", "preview", owner="filterD")
         cmds.sets(node, addElement=audio_set.name())
 
-        self.slots._current_target = None
         self.slots._audio_files.clear()
         self.slots._hydrate_from_target(target)
         self.assertEqual(
@@ -3934,39 +3315,50 @@ class TestHydrateFallbackOwnerFilter(MayaTkTestCase):
 
 
 class TestRemoveCallbacks(MayaTkTestCase):
-    """Verify AudioEventsSlots.remove_callbacks kills all owned jobs.
+    """Verify AudioEventsSlots.remove_callbacks cleans up all owned resources.
 
-    Bug: No remove_callbacks method existed — persistent scriptJobs
-    (_scene_opened_job_id, _new_scene_job_id) were never explicitly
-    killed when the UI was destroyed.
-    Fixed: 2026-04-13
+    remove_callbacks delegates scriptJob cleanup to
+    ScriptJobManager.unsubscribe_all(self) and directly removes
+    OpenMaya attribute-changed callbacks.
     """
 
     def setUp(self):
         super().setUp()
         self.slots = _make_slots_instance()
 
-    def test_remove_callbacks_kills_all_script_jobs(self):
-        """All four scriptJob IDs should be killed and reset to None."""
-        self.slots._scene_opened_job_id = 101
-        self.slots._new_scene_job_id = 102
-        self.slots._selection_sync_job_id = 103
-        self.slots._time_changed_job_id = 104
+    def test_remove_callbacks_delegates_to_sjm(self):
+        """remove_callbacks must call ScriptJobManager.unsubscribe_all(self)."""
         self.slots._attr_callback_ids = []
+        self.slots._sel_token = 10
+        self.slots._time_token = 20
+        self.slots._scene_subs_installed = True
 
-        mock_sj = MagicMock(side_effect=lambda **kw: True)
-        with patch.object(cmds, "scriptJob", mock_sj):
+        mock_mgr = MagicMock()
+        with patch(
+            "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+            return_value=mock_mgr,
+        ):
             self.slots.remove_callbacks()
 
-        self.assertIsNone(self.slots._scene_opened_job_id)
-        self.assertIsNone(self.slots._new_scene_job_id)
-        self.assertIsNone(self.slots._selection_sync_job_id)
-        self.assertIsNone(self.slots._time_changed_job_id)
+        mock_mgr.unsubscribe_all.assert_called_once_with(self.slots)
 
-        # Verify kill was actually requested for each job ID
-        kill_calls = [c for c in mock_sj.call_args_list if "kill" in c.kwargs]
-        killed_ids = {c.kwargs["kill"] for c in kill_calls}
-        self.assertEqual(killed_ids, {101, 102, 103, 104})
+    def test_remove_callbacks_resets_token_state(self):
+        """Tokens and scene-subs flag must be cleared after remove_callbacks."""
+        self.slots._sel_token = 10
+        self.slots._time_token = 20
+        self.slots._scene_subs_installed = True
+        self.slots._attr_callback_ids = []
+
+        mock_mgr = MagicMock()
+        with patch(
+            "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+            return_value=mock_mgr,
+        ):
+            self.slots.remove_callbacks()
+
+        self.assertIsNone(self.slots._sel_token)
+        self.assertIsNone(self.slots._time_token)
+        self.assertFalse(self.slots._scene_subs_installed)
 
     def test_remove_callbacks_clears_attr_callback_ids(self):
         """Attr callback ID list should be empty after remove_callbacks.
@@ -3977,42 +3369,28 @@ class TestRemoveCallbacks(MayaTkTestCase):
         """
         self.slots._attr_callback_ids = [201, 202]
 
-        with patch.object(cmds, "scriptJob", side_effect=lambda **kw: True):
+        mock_mgr = MagicMock()
+        with patch(
+            "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+            return_value=mock_mgr,
+        ):
             self.slots.remove_callbacks()
 
         self.assertEqual(self.slots._attr_callback_ids, [])
 
-    def test_remove_callbacks_safe_when_no_jobs(self):
-        """Calling remove_callbacks with no jobs should not raise."""
-        self.slots._scene_opened_job_id = None
-        self.slots._new_scene_job_id = None
-        self.slots._selection_sync_job_id = None
-        self.slots._time_changed_job_id = None
+    def test_remove_callbacks_safe_when_clean(self):
+        """Calling remove_callbacks from a clean state should not raise."""
+        self.slots._sel_token = None
+        self.slots._time_token = None
+        self.slots._scene_subs_installed = False
         self.slots._attr_callback_ids = []
 
-        self.slots.remove_callbacks()  # should not raise
-
-    def test_remove_callbacks_resilient_to_partial_failure(self):
-        """If one scriptJob kill throws, the remaining jobs must still be cleaned."""
-        self.slots._scene_opened_job_id = 101
-        self.slots._new_scene_job_id = 102
-        self.slots._selection_sync_job_id = 103
-        self.slots._time_changed_job_id = 104
-        self.slots._attr_callback_ids = []
-
-        def _flaky_scriptJob(**kw):
-            if "kill" in kw and kw["kill"] == 102:
-                raise RuntimeError("job already dead")
-            return True
-
-        with patch.object(cmds, "scriptJob", side_effect=_flaky_scriptJob):
-            self.slots.remove_callbacks()  # must not raise
-
-        # All four attrs reset regardless of the RuntimeError on 102
-        self.assertIsNone(self.slots._scene_opened_job_id)
-        self.assertIsNone(self.slots._new_scene_job_id)
-        self.assertIsNone(self.slots._selection_sync_job_id)
-        self.assertIsNone(self.slots._time_changed_job_id)
+        mock_mgr = MagicMock()
+        with patch(
+            "mayatk.node_utils.attributes.audio_events._callbacks.ScriptJobManager.instance",
+            return_value=mock_mgr,
+        ):
+            self.slots.remove_callbacks()  # should not raise
 
 
 if __name__ == "__main__":

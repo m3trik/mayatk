@@ -93,10 +93,51 @@ class MayaTestRunner:
             confirm_existing=not self.reuse_instance,
         ):
             print(f"[OK] Connected to Maya in {self.connection.mode} mode")
+            if not self.verify_connection():
+                print("[ERROR] Connection verification failed — Maya not responding")
+                return False
             return True
         else:
             print("[ERROR] Failed to connect to Maya")
             return False
+
+    def verify_connection(self):
+        """Verify Maya connection with a round-trip data check.
+
+        Sends a trivial expression to Maya and checks it returns the
+        expected result.  This catches cases where ``connect()`` reports
+        success but the command port is not actually functional.
+
+        Returns:
+            True if Maya responded correctly.
+        """
+        if not self.connection or not self.connection.is_connected:
+            return False
+
+        if self.connection.mode == "port":
+            try:
+                result = self.connection.execute(
+                    "str(1+1)", wait_for_response=True, timeout=10
+                )
+                if result and result.strip() == "2":
+                    print(
+                        "[VERIFIED] Maya connection confirmed (round-trip data check)"
+                    )
+                    return True
+                print(f"[WARNING] Unexpected verification response: {result!r}")
+                return False
+            except Exception as e:
+                print(f"[WARNING] Connection verification failed: {e}")
+                return False
+        else:
+            # Standalone/interactive — just check we can execute
+            try:
+                self.connection.execute("pass")
+                print("[VERIFIED] Maya connection confirmed")
+                return True
+            except Exception as e:
+                print(f"[WARNING] Connection verification failed: {e}")
+                return False
 
     def send_code(self, code):
         """Send Python code to Maya."""
@@ -419,6 +460,16 @@ except Exception as e:
             # Final status
             if total_failures == 0 and total_errors == 0:
                 print("\\n[PASS] ALL TESTS PASSED!")
+
+            # Expose summary to __main__ for socket-based polling
+            import __main__ as _mayatk_main
+            _mayatk_main._mayatk_test_summary = (
+                f"Total: {{total_tests}} tests, {{total_failures}} failures, "
+                f"{{total_errors}} errors, {{total_skipped}} skipped"
+            )
+            _mayatk_main._mayatk_test_passed = (
+                total_failures == 0 and total_errors == 0
+            )
             """
         )
 
@@ -460,6 +511,8 @@ for mod in mods_to_clear:
 print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
 
 # Force reload/execution of the temp runner
+import __main__ as _mayatk_main
+_mayatk_main._mayatk_test_complete = False
 try:
     import _temp_test_runner
     import importlib
@@ -468,6 +521,8 @@ except Exception as e:
     print(f"Error executing test runner: {{e}}")
     import traceback
     traceback.print_exc()
+finally:
+    _mayatk_main._mayatk_test_complete = True
 """
 
         # Clear stale results before sending
@@ -489,27 +544,57 @@ except Exception as e:
             return False
 
     def wait_for_results(self, timeout: int = 600, poll_interval: float = 2.0) -> bool:
-        """Poll results file until tests complete or timeout.
+        """Poll Maya for test completion, with file-based fallback.
 
-        Watches for the summary marker line that the test code writes after
-        all modules finish.  Returns True if results were found.
+        Primary: asks Maya directly via socket whether the
+        ``_mayatk_test_complete`` sentinel (set by the test code) is True.
+        Fallback: watches the results file for the ``SUMMARY`` marker.
 
         Parameters:
             timeout: Maximum seconds to wait (default 10 minutes).
-            poll_interval: Seconds between file checks.
+            poll_interval: Seconds between checks.
 
         Returns:
             True if results were found before timeout, False otherwise.
         """
         import time as _time
 
-        marker = "SUMMARY"
         start = _time.monotonic()
         last_size = 0
+        use_socket = (
+            self.connection
+            and self.connection.is_connected
+            and self.connection.mode == "port"
+        )
 
         print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
 
         while (_time.monotonic() - start) < timeout:
+            elapsed = int(_time.monotonic() - start)
+
+            # ---- primary: socket-based sentinel check ----
+            if use_socket:
+                try:
+                    done = self.connection.execute(
+                        "getattr(__import__('__main__'), '_mayatk_test_complete', False)",
+                        wait_for_response=True,
+                        timeout=5,
+                    )
+                    if done and str(done).strip().lower() == "true":
+                        print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
+                        # Retrieve summary directly from Maya
+                        summary = self.connection.execute(
+                            "getattr(__import__('__main__'), '_mayatk_test_summary', '')",
+                            wait_for_response=True,
+                            timeout=5,
+                        )
+                        if summary and summary.strip():
+                            print(f"  Maya reports: {summary.strip()}")
+                        return True
+                except Exception:
+                    pass  # fall through to file check
+
+            # ---- fallback: file-based polling ----
             if self.results_file.exists():
                 try:
                     content = self.results_file.read_text(encoding="utf-8")
@@ -519,9 +604,6 @@ except Exception as e:
 
                 cur_size = len(content)
                 if cur_size != last_size:
-                    # File grew — show progress indicator
-                    elapsed = int(_time.monotonic() - start)
-                    # Count how many modules have reported so far
                     module_count = (
                         content.count(": PASS")
                         + content.count(": FAIL")
@@ -534,8 +616,7 @@ except Exception as e:
                     )
                     last_size = cur_size
 
-                if marker in content:
-                    elapsed = int(_time.monotonic() - start)
+                if "SUMMARY" in content:
                     print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
                     return True
 
@@ -741,7 +822,7 @@ def main():
         if not keep_maya and runner.connection and runner.connection.is_connected:
             print("\nClosing Maya instance ...")
             try:
-                runner.connection.shutdown()
+                runner.connection.shutdown(force=True)
                 print("[OK] Maya closed.")
             except Exception as e:
                 print(f"[WARNING] Failed to close Maya gracefully: {e}")
@@ -749,7 +830,7 @@ def main():
                 try:
                     port = getattr(runner.connection, "port", None)
                     if port:
-                        runner.connection.close_instance(port=port)
+                        runner.connection.close_instance(port=port, force=True)
                 except Exception:
                     pass
 
