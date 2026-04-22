@@ -73,6 +73,10 @@ class ShotSequencerController(
         self._shot_display_mode: str = "current"  # "current" | "adjacent" | "all"
         self._segment_cache: dict = {}  # shot_id → segments list
         self._sub_row_cache: dict = {}  # (shot_id, track_name) → sub-row data
+        self._color_map_cache: Optional[dict] = None  # persisted attribute color map
+        self._audio_segments_cache: Optional[tuple] = None  # (range_key, segments)
+        self._last_visible_key: Optional[tuple] = None  # fast-path gating key
+        self._reconcile_needed: bool = True  # gated by DAG/store events
         self._shot_undo_stack: list = []  # shot-state snapshots for undo
         self._shifted_out_keys: dict = {}  # obj_name → {time, …} shift-moved out
         self._prev_action = None  # OptionBox action for prev shot
@@ -195,6 +199,9 @@ class ShotSequencerController(
             return
         self._segment_cache.clear()
         self._sub_row_cache.clear()
+        self._audio_segments_cache = None
+        self._last_visible_key = None
+        self._reconcile_needed = True
         # Refresh combobox and widget when shots change externally
         self._sync_combobox()
         self._sync_to_widget()
@@ -307,6 +314,12 @@ class ShotSequencerController(
         # Only invalidate the active shot — collect_segments always
         # re-queries it, and non-active shots don't need re-collection.
         active_id = self.active_shot_id
+        # Audio keys can be edited (e.g. dragging an audio clip) — the
+        # cached segments must drop so the next rebuild re-discovers.
+        # A keyframe edit can also reveal newly-keyed objects, requiring
+        # DAG-path reconciliation on the next rebuild.
+        self._audio_segments_cache = None
+        self._reconcile_needed = True
         if active_id is not None:
             self._segment_cache.pop(active_id, None)
             self._sub_row_cache = {
@@ -780,15 +793,25 @@ class ShotSequencerController(
         Override or extend in subclasses for custom gap menu items.
         """
 
-    @staticmethod
-    def _try_load_maya_icons():
-        """Return the :class:`NodeIcons` class if Maya is available, else ``None``."""
+    _node_icons_cls_cache = ...  # sentinel — not yet resolved
+
+    @classmethod
+    def _try_load_maya_icons(cls):
+        """Return the :class:`NodeIcons` class if Maya is available, else ``None``.
+
+        Resolved once per process; the result (including the ``None``
+        no-Maya case) is memoised on the class so every rebuild pays a
+        single attribute read instead of an import + try/except.
+        """
+        if cls._node_icons_cls_cache is not ...:
+            return cls._node_icons_cls_cache
         try:
             from mayatk.ui_utils.node_icons import NodeIcons
-            import maya.cmds as cmds  # noqa: F401 — availability check
+            import maya.cmds  # noqa: F401 — availability check
+            cls._node_icons_cls_cache = NodeIcons
         except ImportError:
-            return None
-        return NodeIcons
+            cls._node_icons_cls_cache = None
+        return cls._node_icons_cls_cache
 
     def _visible_shots(self, active_shot):
         """Return the shots to render based on ``_shot_display_mode``."""
@@ -936,6 +959,9 @@ class ShotSequencerController(
         """Clear cached segments and rebuild the sequencer widget."""
         self._segment_cache.clear()
         self._sub_row_cache.clear()
+        self._audio_segments_cache = None
+        self._last_visible_key = None
+        self._reconcile_needed = True
         self._sync_to_widget()
 
     # ---- _sync_to_widget helpers -----------------------------------------
@@ -981,9 +1007,13 @@ class ShotSequencerController(
 
             # Re-resolve any stale DAG paths (e.g. parent renamed) across
             # ALL shots before collecting segments so that global track sets
-            # and segment caches never mix old and new paths.
-            if self.sequencer.reconcile_all_shots():
-                self._segment_cache.clear()
+            # and segment caches never mix old and new paths.  Gated by a
+            # dirty flag so pure shot-switches (which can't rename nodes)
+            # don't pay the cmds.ls cost on every rebuild.
+            if self._reconcile_needed:
+                if self.sequencer.reconcile_all_shots():
+                    self._segment_cache.clear()
+                self._reconcile_needed = False
 
             segments_by_shot, all_objects = collect_segments(
                 self.sequencer,
@@ -1101,15 +1131,20 @@ class ShotSequencerController(
             spn_gap.setValue(int(stored_gap))
             spn_gap.blockSignals(False)
 
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        # QSettings.allKeys() is a disk-backed scan (~4ms each) — cache
+        # the resolved color map and only rebuild when the color dialog
+        # publishes a new one via btn_colors.
+        if self._color_map_cache is None:
+            from uitk.widgets.mixins.settings_manager import SettingsManager
 
-        color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
-        color_map = dict(_DEFAULT_ATTRIBUTE_COLORS)
-        for key in color_settings.keys():
-            val = color_settings.value(key)
-            if val:
-                color_map[key] = val
-        widget.attribute_colors = color_map
+            color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
+            color_map = dict(_DEFAULT_ATTRIBUTE_COLORS)
+            for key in color_settings.keys():
+                val = color_settings.value(key)
+                if val:
+                    color_map[key] = val
+            self._color_map_cache = color_map
+        widget.attribute_colors = self._color_map_cache
 
     # Palette for auto-assigning colors to scene-specific attributes
     # not present in the user's color map (e.g. custom/plugin attrs).
@@ -1175,10 +1210,16 @@ class ShotSequencerController(
             sorted_active = sorted(o for o in all_objects if o in active_objects)
             sorted_inactive = sorted(o for o in all_objects if o not in active_objects)
             ordered = sorted_active + sorted_inactive
+
+        # Batch existence check: one `cmds.ls` round-trip instead of N
+        # `cmds.objExists` calls.  Scenes with many tracks hit this on
+        # every rebuild.
+        existing_set = set(cmds.ls(ordered, long=True) or []) if ordered else set()
+
         for obj_name in ordered:
             if self.sequencer.is_object_hidden(obj_name):
                 continue
-            exists = cmds.objExists(obj_name)
+            exists = obj_name in existing_set
             # Skip missing objects unless they are pinned
             if not exists and not self.sequencer.store.is_object_pinned(obj_name):
                 continue
@@ -1333,16 +1374,27 @@ class ShotSequencerController(
         """
         scene_start = min(vs.start for vs in visible_shots)
         scene_end = max(vs.end for vs in visible_shots)
-        segs = collect_all_segments(
-            scene_start=scene_start,
-            scene_end=scene_end,
-            include_waveform=True,
-        )
+        # Audio discovery hammers maya.cmds.keyframe / attributeQuery
+        # (~28ms per rebuild on a busy carrier).  Segments only change
+        # on audio edits, not on shot-switches — cache by range.
+        cache_key = (scene_start, scene_end)
+        cached = self._audio_segments_cache
+        if cached is not None and cached[0] == cache_key:
+            segs = cached[1]
+        else:
+            segs = collect_all_segments(
+                scene_start=scene_start,
+                scene_end=scene_end,
+                include_waveform=True,
+            )
+            self._audio_segments_cache = (cache_key, segs)
 
         # Group by canonical track_id.
         by_track: dict = defaultdict(list)
         for seg in segs:
             by_track[seg.track_id].append(seg)
+
+        node_icons_cls = self._try_load_maya_icons()
 
         for track_id, track_segs in by_track.items():
             if self.sequencer.is_object_hidden(track_id):
@@ -1364,7 +1416,6 @@ class ShotSequencerController(
 
             # Track icon: look up DG node if one exists (rendered view).
             dg_node = audio_utils.find_dg_node_for_track(track_id)
-            node_icons_cls = self._try_load_maya_icons()
             icon = (
                 node_icons_cls.get_icon(dg_node)
                 if (node_icons_cls and dg_node)
@@ -2011,7 +2062,12 @@ class ShotSequencerController(
         pass
 
     def on_playhead_moved(self, frame: float) -> None:
-        """Sync the Maya playhead to the widget playhead with audio scrub."""
+        """Sync the Maya playhead to the widget playhead.
+
+        Audio scrub is handled by the widget's own :class:`ScrubPlayer`
+        (bound via :meth:`_ensure_sound_on_timeline`); this method only
+        needs to mirror the Maya time value.
+        """
         self._syncing_playhead = True
         try:
             self._ensure_sound_on_timeline()
@@ -2020,28 +2076,196 @@ class ShotSequencerController(
             self._syncing_playhead = False
 
     def _ensure_sound_on_timeline(self) -> None:
-        """Bind the first available audio node to Maya's time slider.
+        """Bind the composite audio to both Maya's time slider and the
+        sequencer widget's :class:`ScrubPlayer`.
 
-        This only runs once (per session) — subsequent calls are no-ops
-        unless the cached node no longer exists.
+        Maya's Time Slider handles playback/loop audio; the widget's
+        scrub player handles drag-scrub (since ``pm.currentTime(
+        update=True)`` does not emit audio).  Both are refreshed together
+        so they stay in lockstep.
         """
-        if hasattr(self, "_active_sound") and pm.objExists(self._active_sound):
+        cached = getattr(self, "_active_sound", None)
+        if cached and pm.objExists(cached):
+            node = cached
+        else:
+            node = self._resolve_preferred_audio_node()
+            if not node:
+                self._active_sound = ""
+                return
+            try:
+                slider = pm.mel.eval("$tmp = $gPlayBackSlider")
+                pm.timeControl(slider, e=True, sound=node, displaySound=True)
+            except Exception:
+                pass
+            self._active_sound = node
+
+        # Push the bound node's WAV into the widget's ScrubPlayer.  Works
+        # for both the composite node *and* a per-track DG node —
+        # whichever the Time Slider ended up bound to.
+        if getattr(self, "_bound_audio_node", None) == node:
+            return  # path already in sync with current node
+        wav_path = self._get_bound_audio_wav(node)
+        if not wav_path:
             return
-        node = None
+        widget = self._get_sequencer_widget()
+        set_audio = getattr(widget, "set_audio_source", None)
+        if set_audio is None:
+            return
+        if set_audio(wav_path, audio_utils.get_fps()):
+            self._bound_audio_node = node
+            self._bound_audio_path = wav_path
+
+    @staticmethod
+    def _resolve_preferred_audio_node() -> str:
+        """Return the composite DG audio node name, else the first per-track
+        DG node, else empty string."""
+        try:
+            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+            comp = AudioClips._find_composite_node()
+            if comp and pm.objExists(comp):
+                return comp
+        except Exception:
+            pass
         for track_id in audio_utils.list_tracks():
             dg = audio_utils.find_dg_node_for_track(track_id)
             if dg and pm.objExists(dg):
-                node = dg
-                break
-        if not node:
-            self._active_sound = ""
-            return
+                return dg
+        return ""
+
+    @staticmethod
+    def _get_composite_wav_path() -> str:
+        """Return the composite WAV file path, or empty string."""
         try:
-            slider = pm.mel.eval("$tmp = $gPlayBackSlider")
-            pm.timeControl(slider, e=True, sound=node)
+            import maya.cmds as cmds
+            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+            node = AudioClips._find_composite_node()
+            if not node:
+                return ""
+            path = cmds.getAttr(f"{node}.filename") or ""
+            return path.replace("\\", "/")
+        except Exception:
+            return ""
+
+    # ---- Transport controls (footer) -------------------------------------
+
+    def _setup_transport_controls(self) -> None:
+        """Install the reusable :class:`TransportControls` row on the
+        right side of the footer, wired to a Maya :class:`PlayController`.
+
+        Frame/key/go-to actions interrupt playback by default (see
+        :attr:`TransportControls.interrupt_mode`).  Playhead navigation
+        goes through the :class:`SequencerWidget` so scrub audio fires
+        via ``playhead_moved``.
+        """
+        footer = getattr(self.ui, "footer", None)
+        if footer is None:
+            return
+        if getattr(self, "_transport_controls", None) is not None:
+            return  # already built
+
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+
+        from uitk.widgets.sequencer import TransportControls
+
+        pc = _MayaPlayController(self)
+        h = max(footer.height(), 20)
+        transport = TransportControls(
+            sequencer=widget,
+            play_controller=pc,
+            parent=footer,
+            button_height=h,
+            interrupt_mode=TransportControls.INTERRUPT_STOP,
+            range_fn=self._playback_range,
+            button_names=(
+                "go_to_start", "prev_key",
+                "play_back", "play_forward",
+                "next_key", "go_to_end",
+            ),
+        )
+        transport.attach_to_footer(footer, side="right")
+        self._transport_controls = transport
+
+        # Prime the audio binding now so the first scrub produces
+        # sound — the widget's built-in audio slot runs before the
+        # controller's ``on_playhead_moved``, so without this the first
+        # drag fires into an unsourced player.
+        try:
+            self._ensure_sound_on_timeline()
         except Exception:
             pass
-        self._active_sound = node
+
+    @staticmethod
+    def _playback_range() -> tuple:
+        try:
+            lo = float(pm.playbackOptions(q=True, min=True))
+            hi = float(pm.playbackOptions(q=True, max=True))
+        except Exception:
+            lo, hi = 1.0, 120.0
+        return lo, hi
+
+    @staticmethod
+    def _get_bound_audio_wav(node: str) -> str:
+        """Return the WAV path stored on *node* (composite or per-track).
+
+        Both the composite DG audio node and Maya's per-track audio nodes
+        expose a ``.filename`` attr pointing at an on-disk WAV, so the
+        same accessor works for either — letting the widget's scrub
+        player fall back to a per-track preview when no composite yet
+        exists.
+        """
+        if not node:
+            return ""
+        try:
+            import maya.cmds as cmds
+            path = cmds.getAttr(f"{node}.filename") or ""
+            return path.replace("\\", "/")
+        except Exception:
+            return ""
+
+
+# ---------------------------------------------------------------------------
+# Play controller (Maya)
+# ---------------------------------------------------------------------------
+
+
+class _MayaPlayController:
+    """:class:`PlayController` adapter driving Maya's timeline via ``pm.play``.
+
+    Ensures audio is bound to the Time Slider before starting playback.
+    Tracks direction so ``TransportControls`` can resume the right way.
+    """
+
+    def __init__(self, controller: "ShotSequencerController"):
+        self._ctl = controller
+        self._forward = True
+
+    def is_playing(self) -> bool:
+        try:
+            return bool(pm.play(q=True, state=True))
+        except Exception:
+            return False
+
+    def play(self, forward: bool) -> None:
+        self._forward = bool(forward)
+        try:
+            self._ctl._ensure_sound_on_timeline()
+        except Exception:
+            pass
+        try:
+            if self.is_playing():
+                pm.play(state=False)
+            pm.play(forward=bool(forward))
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        try:
+            if self.is_playing():
+                pm.play(state=False)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -2207,6 +2431,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                     _del_ctx,
                 )
         self._setup_shot_nav()
+        self.controller._setup_transport_controls()
 
         # Initial population so gaps and clips are visible immediately.
         self.controller._sync_combobox()
@@ -2632,6 +2857,8 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         def _apply(cmap):
             if widget:
                 widget.attribute_colors = cmap
+            # Invalidate cached map so the next rebuild reloads it.
+            self.controller._color_map_cache = None
 
         dlg.colors_changed.connect(_apply)
         dlg.exec_()

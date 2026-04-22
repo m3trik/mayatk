@@ -76,6 +76,7 @@ class ShotsController(ptk.LoggingMixin):
         self._bind_store_listener()
         self._setup_delete_menu()
         self._setup_move_menu()
+        self._setup_trim_menu()
 
         # Subscribe to class-level invalidation so the UI refreshes when
         # the persistence layer detects a scene change — no duplicate
@@ -683,6 +684,19 @@ class ShotsController(ptk.LoggingMixin):
             setToolTip="Move the selected shot to the specified position.",
         )
 
+    def _setup_trim_menu(self) -> None:
+        """Attach an option box menu to the trim-empty button."""
+        btn = getattr(self.ui, "btn_trim_empty", None)
+        if btn is None:
+            return
+        menu = btn.option_box.menu
+        menu.add(
+            "QPushButton",
+            setText="Trim All Shots",
+            setObjectName="btn_trim_all_shots",
+            setToolTip="Trim empty space from every shot.",
+        )
+
     def on_delete_shot(self) -> None:
         """Delete the active shot after confirmation."""
         from qtpy import QtWidgets
@@ -765,6 +779,24 @@ class ShotsController(ptk.LoggingMixin):
         seq = ShotSequencer(store=store)
         with pm.UndoChunk():
             seq.trim_shot_to_content(store.active_shot_id)
+
+        store.notify_settings_changed()
+
+    def on_trim_all_shots(self) -> None:
+        """Trim empty space from every shot."""
+        store = self._active_store()
+        if store is None or not store.shots:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+        import pymel.core as pm
+
+        seq = ShotSequencer(store=store)
+        with pm.UndoChunk():
+            for shot in list(store.shots):
+                seq.trim_shot_to_content(shot.shot_id)
 
         store.notify_settings_changed()
 
@@ -907,3 +939,7 @@ class ShotsSlots(ptk.LoggingMixin):
     def btn_trim_empty(self):
         """Trim empty space from the selected shot."""
         self.controller.on_trim_empty()
+
+    def btn_trim_all_shots(self):
+        """Trim empty space from every shot."""
+        self.controller.on_trim_all_shots()

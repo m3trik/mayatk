@@ -77,6 +77,9 @@ _TRACK_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _DEFAULT_FPS: float = 24.0
 _WAVEFORM_CACHE: Dict[str, List[Tuple[float, float]]] = {}
 
+_SNAP_FRAMES: bool = True
+"""Global default for whole-frame snapping on audio key writes."""
+
 
 class AudioUtils(ptk.HelpMixin):
     """Unified audio system API for Maya scenes.
@@ -95,6 +98,26 @@ class AudioUtils(ptk.HelpMixin):
     FILE_MAP_ATTR = FILE_MAP_ATTR
     MARKER_ATTR = MARKER_ATTR
     RESERVED_TRACK_IDS = RESERVED_TRACK_IDS
+
+    # ------------------------------------------------------------------
+    # Global settings
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_snap_frames() -> bool:
+        """Return the global whole-frame snap default for key writes."""
+        return _SNAP_FRAMES
+
+    @staticmethod
+    def set_snap_frames(value: bool) -> None:
+        """Set the global whole-frame snap default for key writes."""
+        global _SNAP_FRAMES
+        _SNAP_FRAMES = bool(value)
+
+    snap_frames = property(
+        lambda self: _SNAP_FRAMES,
+        lambda self, v: AudioUtils.set_snap_frames(v),
+    )
 
     # ------------------------------------------------------------------
     # Schema / Identity
@@ -455,10 +478,16 @@ class AudioUtils(ptk.HelpMixin):
         frame: float,
         value: int = 1,
         carrier: Optional[str] = None,
+        snap: Optional[bool] = None,
     ) -> None:
         """Set a key at *frame* with *value* (0=off, 1=on) on the track attr.
 
         Creates the attr if missing.
+
+        Parameters:
+            snap: Whether to snap ``frame`` to the nearest whole frame.
+                ``None`` (default) uses the global :func:`get_snap_frames`
+                setting.
         """
         cls.validate_track_id(track_id)
         if cmds is None:
@@ -466,6 +495,10 @@ class AudioUtils(ptk.HelpMixin):
         cls.ensure_track_attr(track_id, carrier)
         carrier = carrier or CARRIER_NODE
         attr = f"{carrier}.{cls.attr_for(track_id)}"
+        if snap is None:
+            snap = _SNAP_FRAMES
+        if snap:
+            frame = round(float(frame))
         cmds.setKeyframe(attr, time=frame, value=int(bool(value)))
 
     @classmethod
@@ -532,6 +565,11 @@ class AudioUtils(ptk.HelpMixin):
         Uses a set-then-cut pattern to work around Maya's broken
         ``cmds.keyframe(edit=True, timeChange=delta)`` for enum attrs.
 
+        When *track_ids* is supplied, the caller asserts every tid has
+        a live attr on *carrier*; the per-tid existence check is
+        skipped for performance. When ``None`` the attrs are discovered
+        and validated once.
+
         Returns list of track_ids that had at least one key shifted.
         """
         if cmds is None or abs(delta) < 1e-6:
@@ -540,17 +578,25 @@ class AudioUtils(ptk.HelpMixin):
         if not cmds.objExists(carrier):
             return []
 
+        # When track_ids is supplied, every tid is assumed to be
+        # carrier-resident (the caller derived it from list_tracks) — the
+        # existence snapshot is redundant.  Only pay for it when we had to
+        # discover the tracks ourselves.
         if track_ids is None:
             track_ids = cls.list_tracks(carrier)
+            existing_attrs = set(cls.list_track_attrs(carrier))
+        else:
+            existing_attrs = None
 
         eps = 1e-3
         tr = (old_start - eps, old_end + eps)
         shifted: List[str] = []
 
         for tid in track_ids:
-            if not cls.has_track(tid, carrier):
+            attr_name = cls.attr_for(tid)
+            if existing_attrs is not None and attr_name not in existing_attrs:
                 continue
-            attr = f"{carrier}.{cls.attr_for(tid)}"
+            attr = f"{carrier}.{attr_name}"
             keys = cmds.keyframe(attr, q=True, time=tr) or []
             if not keys:
                 continue
