@@ -4,6 +4,7 @@
 Shots are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one shot's duration or position ripples downstream shots.
 """
+from contextlib import contextmanager
 from typing import List, Dict, Optional, Any
 
 try:
@@ -39,6 +40,9 @@ class ShotSequencer:
             self.store = store
         else:
             self.store = ShotStore(shots)
+        # Populated only inside :meth:`audio_prefetch` to amortise
+        # Maya reads across many ``collect_shot_sequences`` calls.
+        self._audio_events_cache: Optional[Dict[str, List[tuple]]] = None
 
     # ---- delegated properties -------------------------------------------
 
@@ -325,27 +329,20 @@ class ShotSequencer:
         Each dict carries ``{"kind": "audio", "obj": <track_id>, "start", "end"}``.
         Tracks with no defined stop frame fall back to ``end`` so a finite
         range can be reported.
+
+        Inside an :meth:`audio_prefetch` block the full-track events are
+        read once and reused across calls; outside, every call reads
+        fresh (safe default — no staleness risk from external writers).
         """
         if pm is None:
             return []
-        try:
-            from mayatk.audio_utils._audio_utils import AudioUtils
-        except ImportError:
-            return []
-
+        all_events = self._audio_events_cache
+        if all_events is None:
+            all_events = self._read_all_audio_events()
         sequences: List[Dict[str, Any]] = []
-        try:
-            tracks = AudioUtils.list_tracks() or []
-        except Exception:
-            return []
-        for tid in tracks:
-            try:
-                events = AudioUtils.read_events(tid)
-            except Exception:
-                continue
-            for ev in events:
-                ev_start = float(ev.start)
-                ev_end = float(ev.stop) if ev.stop is not None else float(end)
+        for tid, events in all_events.items():
+            for ev_start, ev_stop in events:
+                ev_end = ev_stop if ev_stop is not None else float(end)
                 if ev_end < start or ev_start > end:
                     continue
                 sequences.append(
@@ -357,6 +354,65 @@ class ShotSequencer:
                     }
                 )
         return sequences
+
+    @contextmanager
+    def audio_prefetch(self):
+        """Cache per-track audio events for the duration of the block.
+
+        Intended for UI-refresh loops that call
+        :meth:`collect_shot_sequences` once per visible shot — inside the
+        block, Maya is read one time total; outside, every call reads
+        fresh so external audio edits are never masked.  Not nestable
+        safely across mutations: do not write audio inside the block.
+        """
+        self._audio_events_cache = self._read_all_audio_events()
+        try:
+            yield
+        finally:
+            self._audio_events_cache = None
+
+    @staticmethod
+    def _read_all_audio_events() -> Dict[str, List[tuple]]:
+        """Return ``{track_id: [(start, stop), ...]}`` for every audio track.
+
+        Bypasses :meth:`AudioUtils.read_events` per-track
+        ``has_track``/``attributeQuery`` round trip by trusting the
+        attrs returned from :meth:`list_track_attrs`.
+        """
+        try:
+            import maya.cmds as cmds
+            from mayatk.audio_utils._audio_utils import AudioUtils
+        except ImportError:
+            return {}
+        carriers = AudioUtils.find_carriers()
+        if not carriers:
+            return {}
+        carrier = carriers[0]
+        out: Dict[str, List[tuple]] = {}
+        for attr_name in AudioUtils.list_track_attrs(carrier):
+            plug = f"{carrier}.{attr_name}"
+            frames = cmds.keyframe(plug, q=True) or []
+            if not frames:
+                continue
+            vals = cmds.keyframe(plug, q=True, valueChange=True) or []
+            pairs = sorted(zip(frames, vals), key=lambda p: p[0])
+            events: List[tuple] = []
+            pending_start: Optional[float] = None
+            for frame, val in pairs:
+                is_on = int(round(val)) >= 1
+                if is_on:
+                    if pending_start is not None:
+                        events.append((pending_start, None))
+                    pending_start = float(frame)
+                else:
+                    if pending_start is not None:
+                        events.append((pending_start, float(frame)))
+                        pending_start = None
+            if pending_start is not None:
+                events.append((pending_start, None))
+            if events:
+                out[AudioUtils.track_id_from_attr(attr_name)] = events
+        return out
 
     def collect_shot_sequences(
         self,

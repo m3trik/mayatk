@@ -77,7 +77,12 @@ def _batch_move_keys(
             pass
 
 
-def _shift_audio_range(env_start: float, env_end: float, delta: float):
+def _shift_audio_range(
+    env_start: float,
+    env_end: float,
+    delta: float,
+    track_ids=None,
+):
     """Shift audio keys whose timeline position falls within the envelope.
 
     Note: ``env_end`` extends to the next shot's current start (not just
@@ -100,7 +105,9 @@ def _shift_audio_range(env_start: float, env_end: float, delta: float):
     hi -= _AUDIO_UPPER_MARGIN
     if hi <= env_start:
         return []
-    tids = audio_utils.shift_keys_in_range(env_start, hi, delta)
+    tids = audio_utils.shift_keys_in_range(
+        env_start, hi, delta, track_ids=track_ids
+    )
     return tids or []
 
 
@@ -122,6 +129,22 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch() as b:
+            # Hoist the carrier's track list to once-per-apply, then drop
+            # fully-empty tracks.  The per-shot range queries inside
+            # shift_keys_in_range can't hit a key on a track that has none,
+            # so filtering once here saves O(empty_tracks × shots) wasted
+            # keyframe queries on plans with many shots.
+            carriers = audio_utils.find_carriers()
+            carrier = carriers[0] if carriers else None
+            track_ids = audio_utils.list_tracks(carrier) if carrier else []
+            if carrier and track_ids:
+                track_ids = [
+                    tid for tid in track_ids
+                    if cmds.keyframe(
+                        f"{carrier}.{audio_utils.attr_for(tid)}",
+                        q=True, keyframeCount=True,
+                    )
+                ]
             dirty: set = set()
             for shot_id in plan.sequence:
                 move = plan.moves[shot_id]
@@ -131,7 +154,9 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
                 _batch_move_keys(
                     cmds, shot.objects, move.env_start, move.env_end, move.delta
                 )
-                tids = _shift_audio_range(move.env_start, move.env_end, move.delta)
+                tids = _shift_audio_range(
+                    move.env_start, move.env_end, move.delta, track_ids=track_ids
+                )
                 if tids:
                     dirty.update(tids)
                 shot.start = move.new_start

@@ -105,7 +105,28 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._setup_header_menu()
         self._setup_mapping_combo()
         self._restore_color_overrides()
+        self._move_action_buttons_to_footer()
         self.ui.on_first_show.connect(self._on_first_show)
+
+    # ---- footer-hosted action buttons ------------------------------------
+
+    def _move_action_buttons_to_footer(self) -> None:
+        """Reparent the Assess/Build buttons into the footer's right side.
+
+        The UI file still lays them out in ``action_layout`` above the
+        footer so Designer remains usable; at runtime we relocate them
+        onto the footer itself to consolidate the action row.  Sizes
+        declared in the .ui file are preserved.
+        """
+        footer = getattr(self.ui, "footer", None)
+        add_widget = getattr(footer, "add_widget", None) if footer else None
+        if not callable(add_widget):
+            return
+        for name in ("b002", "b003"):
+            btn = getattr(self.ui, name, None)
+            if btn is None:
+                continue
+            add_widget(btn, side="right")
 
     # ---- first-show auto-populate ----------------------------------------
 

@@ -760,6 +760,7 @@ class ShotManifest:
 
     def __init__(self, store: ShotStore):
         self.store = store
+        self._fps_cache: Optional[float] = None
 
     @staticmethod
     def _step_metadata(
@@ -900,6 +901,7 @@ class ShotManifest:
             (``"created"`` | ``"patched"`` | ``"skipped"``
             | ``"locked"`` | ``"removed"``).
         """
+        self._fps_cache = None
         plan = self._compute_plan(
             steps,
             ranges=ranges,
@@ -1164,53 +1166,39 @@ class ShotManifest:
         """
         actions: Dict[str, str] = {}
 
-        # Phase 1: removals
-        for ps in plan:
-            if ps.action == "removed" and ps.existing_shot_id is not None:
-                self.store.remove_shot(ps.existing_shot_id)
-                actions[ps.step.step_id] = "removed"
+        # Coalesce per-shot mutations into a single flush/save and a
+        # single BatchComplete event for UI listeners.
+        with self.store.batch_update():
+            # Phase 1: removals
+            for ps in plan:
+                if ps.action == "removed" and ps.existing_shot_id is not None:
+                    self.store.remove_shot(ps.existing_shot_id)
+                    actions[ps.step.step_id] = "removed"
 
-        # Phase 2: creates / patches / skips / locks (order matters)
-        for ps in plan:
-            if ps.action == "removed":
-                continue
+            # Phase 2: creates / patches / skips / locks (order matters)
+            for ps in plan:
+                if ps.action == "removed":
+                    continue
 
-            if ps.action == "created":
-                self.store.define_shot(
-                    name=ps.step.step_id,
-                    start=ps.start,
-                    end=ps.end,
-                    objects=ps.objects,
-                    metadata=ps.metadata,
-                    description=ps.description,
-                )
-                for n in ps.objects:
-                    self.store.set_object_pinned(n)
-                actions[ps.step.step_id] = "created"
+                if ps.action == "created":
+                    self.store.define_shot(
+                        name=ps.step.step_id,
+                        start=ps.start,
+                        end=ps.end,
+                        objects=ps.objects,
+                        metadata=ps.metadata,
+                        description=ps.description,
+                    )
+                    for n in ps.objects:
+                        self.store.set_object_pinned(n)
+                    actions[ps.step.step_id] = "created"
 
-            elif ps.action == "locked":
-                # Locked shots are content-protected, but still need
-                # repositioning if an upstream ripple displaced them.
-                if ps.existing_shot_id is not None:
-                    existing = self._find_shot(ps.existing_shot_id)
-                    if existing and (
-                        abs(existing.start - ps.start) > 1e-6
-                        or abs(existing.end - ps.end) > 1e-6
-                    ):
-                        self.store.update_shot(
-                            existing.shot_id,
-                            start=ps.start,
-                            end=ps.end,
-                        )
-                actions[ps.step.step_id] = "locked"
-
-            elif ps.action == "skipped":
-                # Still update metadata/description from CSV, and
-                # reposition if an upstream ripple displaced this shot.
-                if ps.existing_shot_id is not None:
-                    existing = self._find_shot(ps.existing_shot_id)
-                    if existing:
-                        if (
+                elif ps.action == "locked":
+                    # Locked shots are content-protected, but still need
+                    # repositioning if an upstream ripple displaced them.
+                    if ps.existing_shot_id is not None:
+                        existing = self._find_shot(ps.existing_shot_id)
+                        if existing and (
                             abs(existing.start - ps.start) > 1e-6
                             or abs(existing.end - ps.end) > 1e-6
                         ):
@@ -1219,53 +1207,70 @@ class ShotManifest:
                                 start=ps.start,
                                 end=ps.end,
                             )
-                        existing.metadata = ps.metadata
-                        existing.description = ps.description
-                actions[ps.step.step_id] = "skipped"
+                    actions[ps.step.step_id] = "locked"
 
-            elif ps.action == "patched":
-                if ps.existing_shot_id is not None:
-                    existing = self._find_shot(ps.existing_shot_id)
-                    if existing:
-                        # Apply absolute position from plan — no
-                        # ripple_shift needed because the plan already
-                        # computed final positions for every shot.
-                        if (
-                            abs(existing.start - ps.start) > 1e-6
-                            or abs(existing.end - ps.end) > 1e-6
-                        ):
-                            self.store.update_shot(
-                                existing.shot_id,
-                                start=ps.start,
-                                end=ps.end,
-                            )
-                        # Update metadata, description, objects
-                        existing.metadata = ps.metadata
-                        existing.description = ps.description
-
-                        # Resolve long names and filter scene-discovered
-                        from mayatk.anim_utils.shots._shots import (
-                            _resolve_long_names,
-                        )
-
-                        csv_objs = {
-                            o.name for o in ps.step.objects if o.kind != "audio"
-                        }
-                        scene_objs = set(ps.objects) - csv_objs
-                        if scene_objs:
-                            scene_objs = set(
-                                self._filter_to_animated(
-                                    sorted(scene_objs), ps.start, ps.end
+                elif ps.action == "skipped":
+                    # Still update metadata/description from CSV, and
+                    # reposition if an upstream ripple displaced this shot.
+                    if ps.existing_shot_id is not None:
+                        existing = self._find_shot(ps.existing_shot_id)
+                        if existing:
+                            if (
+                                abs(existing.start - ps.start) > 1e-6
+                                or abs(existing.end - ps.end) > 1e-6
+                            ):
+                                self.store.update_shot(
+                                    existing.shot_id,
+                                    start=ps.start,
+                                    end=ps.end,
                                 )
+                            existing.metadata = ps.metadata
+                            existing.description = ps.description
+                    actions[ps.step.step_id] = "skipped"
+
+                elif ps.action == "patched":
+                    if ps.existing_shot_id is not None:
+                        existing = self._find_shot(ps.existing_shot_id)
+                        if existing:
+                            # Apply absolute position from plan — no
+                            # ripple_shift needed because the plan already
+                            # computed final positions for every shot.
+                            if (
+                                abs(existing.start - ps.start) > 1e-6
+                                or abs(existing.end - ps.end) > 1e-6
+                            ):
+                                self.store.update_shot(
+                                    existing.shot_id,
+                                    start=ps.start,
+                                    end=ps.end,
+                                )
+                            # Update metadata, description, objects
+                            existing.metadata = ps.metadata
+                            existing.description = ps.description
+
+                            # Resolve long names and filter scene-discovered
+                            from mayatk.anim_utils.shots._shots import (
+                                _resolve_long_names,
                             )
-                        merged = sorted(csv_objs | scene_objs)
-                        resolved = _resolve_long_names(merged)
-                        existing.objects = resolved if resolved else merged
 
-                        for n in csv_objs:
-                            self.store.set_object_pinned(n)
+                            csv_objs = {
+                                o.name for o in ps.step.objects if o.kind != "audio"
+                            }
+                            scene_objs = set(ps.objects) - csv_objs
+                            if scene_objs:
+                                scene_objs = set(
+                                    self._filter_to_animated(
+                                        sorted(scene_objs), ps.start, ps.end
+                                    )
+                                )
+                            merged = sorted(csv_objs | scene_objs)
+                            resolved = _resolve_long_names(merged)
+                            existing.objects = resolved if resolved else merged
 
-                actions[ps.step.step_id] = "patched"
+                            for n in csv_objs:
+                                self.store.set_object_pinned(n)
+
+                    actions[ps.step.step_id] = "patched"
 
         return actions
 
@@ -1276,15 +1281,22 @@ class ShotManifest:
                 return s
         return None
 
-    @staticmethod
-    def _resolve_fps() -> float:
-        """Return scene FPS, or 24 when Maya is unavailable."""
+    def _resolve_fps(self) -> float:
+        """Return scene FPS, or 24 when Maya is unavailable.
+
+        Cached per instance; cleared at the top of ``update`` so a
+        single build call queries ``cmds.currentUnit`` once instead of
+        twice per shot.
+        """
+        if self._fps_cache is not None:
+            return self._fps_cache
         try:
             from mayatk.audio_utils._audio_utils import AudioUtils as _AU
 
-            return float(_AU.get_fps())
+            self._fps_cache = float(_AU.get_fps())
         except Exception:
-            return 24.0
+            self._fps_cache = 24.0
+        return self._fps_cache
 
     def build_plan(
         self,
@@ -1301,6 +1313,7 @@ class ShotManifest:
         the test harness.  Calling :meth:`update` or :meth:`sync`
         afterwards recomputes an equivalent plan internally.
         """
+        self._fps_cache = None
         shots = self._compute_plan(
             steps,
             ranges=ranges,

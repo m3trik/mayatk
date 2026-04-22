@@ -469,6 +469,20 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
                 "sequencer to know clip boundaries."
             ),
         )
+        chk_snap = widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Snap To Frame",
+            setObjectName="chk_snap_frames",
+            setChecked=_audio_utils.get_snap_frames(),
+            setToolTip=(
+                "Round audio key times to the nearest whole frame.\n"
+                "Applies globally to all audio key writes.  Disable\n"
+                "only if you need sub-frame precision."
+            ),
+        )
+        chk_snap.toggled.connect(
+            lambda checked: _audio_utils.set_snap_frames(checked)
+        )
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Next Event",

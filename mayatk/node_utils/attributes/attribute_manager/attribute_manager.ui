@@ -13,19 +13,19 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>1</number>
+     <number>0</number>
     </property>
     <property name="leftMargin">
-     <number>6</number>
+     <number>1</number>
     </property>
     <property name="topMargin">
-     <number>6</number>
+     <number>1</number>
     </property>
     <property name="rightMargin">
-     <number>6</number>
+     <number>1</number>
     </property>
     <property name="bottomMargin">
-     <number>6</number>
+     <number>1</number>
     </property>
     <item>
      <widget class="Header" name="header" native="true">
@@ -55,19 +55,19 @@
     <item>
      <layout class="QHBoxLayout" name="filterLayout">
       <property name="spacing">
-       <number>1</number>
+       <number>0</number>
       </property>
       <property name="leftMargin">
        <number>1</number>
       </property>
       <property name="topMargin">
-       <number>1</number>
+       <number>0</number>
       </property>
       <property name="rightMargin">
        <number>1</number>
       </property>
       <property name="bottomMargin">
-       <number>1</number>
+       <number>0</number>
       </property>
       <item>
        <widget class="QComboBox" name="cmb000">
@@ -148,6 +148,22 @@ Exact name (no wildcards) matches that attribute only.</string>
      </layout>
     </item>
     <item>
+     <widget class="LineEdit" name="txt001">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>20</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>20</height>
+       </size>
+      </property>
+     </widget>
+    </item>
+    <item>
      <widget class="TableWidget" name="tbl000">
       <property name="selectionMode">
        <enum>QAbstractItemView::ExtendedSelection</enum>
@@ -155,6 +171,9 @@ Exact name (no wildcards) matches that attribute only.</string>
       <property name="selectionBehavior">
        <enum>QAbstractItemView::SelectRows</enum>
       </property>
+      <attribute name="horizontalHeaderVisible">
+       <bool>false</bool>
+      </attribute>
       <column>
        <property name="text">
         <string>Name</string>
