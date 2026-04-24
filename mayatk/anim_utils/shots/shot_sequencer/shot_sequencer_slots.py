@@ -214,36 +214,39 @@ class ShotSequencerController(
     # ---- Maya undo/redo event callbacks ----------------------------------
 
     def _register_maya_undo_callbacks(self) -> None:
-        """Listen for Maya Undo/Redo events to refresh the widget."""
+        """Listen for Maya Undo/Redo events to refresh the widget.
+
+        Registered through ``ScriptJobManager`` so all callbacks tear down
+        through a single ``unsubscribe_all(owner=self)`` path.
+        """
         if om2 is None or self._undo_callback_ids:
             return
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        mgr = ScriptJobManager.instance()
         for event_name in ("Undo", "Redo"):
-            cb_id = om2.MEventMessage.addEventCallback(event_name, self._on_maya_undo)
-            self._undo_callback_ids.append(cb_id)
+            token = mgr.add_om_callback(
+                om2.MEventMessage.addEventCallback,
+                event_name,
+                self._on_maya_undo,
+                owner=self,
+            )
+            if token is not None:
+                self._undo_callback_ids.append(token)
 
     def remove_callbacks(self) -> None:
-        """Remove Maya event callbacks and ShotStore listener (call on teardown)."""
+        """Remove Maya event callbacks and ShotStore listener (call on teardown).
+
+        All OpenMaya callbacks registered by this controller live under the
+        SJM owner ``self``, so a single ``unsubscribe_all`` removes them.
+        """
         self._unbind_store_listener()
-        if om2 is None:
-            return
-        for cb_id in self._undo_callback_ids:
-            try:
-                om2.MMessage.removeCallback(cb_id)
-            except Exception:
-                pass
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.instance().unsubscribe_all(self)
         self._undo_callback_ids.clear()
-        if self._time_change_cb is not None:
-            try:
-                om2.MMessage.removeCallback(self._time_change_cb)
-            except Exception:
-                pass
-            self._time_change_cb = None
-        if self._keyframe_cb is not None:
-            try:
-                om2.MMessage.removeCallback(self._keyframe_cb)
-            except Exception:
-                pass
-            self._keyframe_cb = None
+        self._time_change_cb = None
+        self._keyframe_cb = None
         if self._keyframe_debounce is not None:
             self._keyframe_debounce.stop()
             self._keyframe_debounce = None
@@ -268,12 +271,13 @@ class ShotSequencerController(
         """
         if oma is None or self._keyframe_cb is not None:
             return
-        try:
-            self._keyframe_cb = oma.MAnimMessage.addAnimKeyframeEditedCallback(
-                self._on_keyframe_edited
-            )
-        except Exception:
-            pass
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        self._keyframe_cb = ScriptJobManager.instance().add_om_callback(
+            oma.MAnimMessage.addAnimKeyframeEditedCallback,
+            self._on_keyframe_edited,
+            owner=self,
+        )
 
     def _on_keyframe_edited(self, *_args) -> None:
         """Schedule a debounced refresh when keyframes change.
@@ -394,8 +398,12 @@ class ShotSequencerController(
         """
         if om2 is None or self._time_change_cb is not None:
             return
-        self._time_change_cb = om2.MDGMessage.addTimeChangeCallback(
-            self._on_time_changed
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        self._time_change_cb = ScriptJobManager.instance().add_om_callback(
+            om2.MDGMessage.addTimeChangeCallback,
+            self._on_time_changed,
+            owner=self,
         )
 
     def _on_time_changed(self, time_msg, _client_data=None) -> None:

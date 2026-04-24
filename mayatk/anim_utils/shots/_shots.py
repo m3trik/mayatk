@@ -167,27 +167,22 @@ class MayaScenePersistence:
             import maya.api.OpenMaya as om
 
             if self._before_save_cb_id is None:
-                self._before_save_cb_id = om.MSceneMessage.addCallback(
-                    om.MSceneMessage.kBeforeSave, self._on_before_save
+                self._before_save_cb_id = mgr.add_om_callback(
+                    om.MSceneMessage.addCallback,
+                    om.MSceneMessage.kBeforeSave,
+                    self._on_before_save,
+                    owner=self,
                 )
         except Exception:
             pass
 
     def remove_callbacks(self) -> None:
-        """Remove all ScriptJobManager subscriptions and OM callbacks."""
+        """Tear down every SJM subscription owned by this store."""
         from mayatk.core_utils.script_job_manager import ScriptJobManager
 
         ScriptJobManager.instance().unsubscribe_all(self)
         self._scene_subs_installed = False
-
-        if self._before_save_cb_id is not None:
-            try:
-                import maya.api.OpenMaya as om
-
-                om.MMessage.removeCallback(self._before_save_cb_id)
-            except Exception:
-                pass
-            self._before_save_cb_id = None
+        self._before_save_cb_id = None
 
     def _on_scene_changed(self) -> None:
         """Invalidate the cached store when a different scene is loaded."""

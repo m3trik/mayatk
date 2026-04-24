@@ -70,43 +70,21 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="QComboBox" name="cmb000">
+       <widget class="ComboBox" name="cmb000">
         <property name="minimumSize">
          <size>
-          <width>0</width>
+          <width>70</width>
           <height>20</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
-          <width>16777215</width>
+          <width>70</width>
           <height>20</height>
          </size>
         </property>
         <property name="toolTip">
          <string>Filter Attributes</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chk000">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>20</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>55</width>
-          <height>20</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>Invert the active filter to show the opposite set of attributes</string>
-        </property>
-        <property name="text">
-         <string>Invert</string>
         </property>
        </widget>
       </item>
@@ -172,7 +150,7 @@ Exact name (no wildcards) matches that attribute only.</string>
        <enum>QAbstractItemView::SelectRows</enum>
       </property>
       <attribute name="horizontalHeaderVisible">
-       <bool>false</bool>
+       <bool>true</bool>
       </attribute>
       <column>
        <property name="text">
@@ -234,6 +212,11 @@ Exact name (no wildcards) matches that attribute only.</string>
    <class>TableWidget</class>
    <extends>QTableWidget</extends>
    <header>uitk.widgets.table_widget</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>
