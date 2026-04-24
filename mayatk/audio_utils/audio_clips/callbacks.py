@@ -216,7 +216,9 @@ class CallbacksMixin:
         """Install a single ``MNodeMessage`` on the canonical carrier.
 
         Fires ``_on_carrier_attr_changed`` when any ``audio_clip_*``
-        attr is edited.  Re-called after scene change.
+        attr is edited.  Re-called after scene change.  Registered
+        through ``ScriptJobManager`` so teardown is unified with the
+        scene/time subscriptions.
         """
         self._cleanup_attr_callbacks()
 
@@ -226,68 +228,76 @@ class CallbacksMixin:
 
         try:
             import maya.api.OpenMaya as om2
+        except ImportError:
+            return
 
+        try:
             sel = om2.MSelectionList()
             sel.add(carrier)
             mobj = sel.getDependNode(0)
-
-            _RELEVANT = (
-                om2.MNodeMessage.kAttributeSet
-                | om2.MNodeMessage.kConnectionBroken
-                | om2.MNodeMessage.kAttributeAdded
-                | om2.MNodeMessage.kAttributeRemoved
-            )
-            _ATTR_PREFIX = _audio_utils.ATTR_PREFIX
-
-            def _on_attr_changed(msg, plug, other_plug, *args):
-                try:
-                    if self._syncing_combo:
-                        return
-                    if not (msg & _RELEVANT):
-                        return
-                    if not self.ui or not self.ui.isVisible():
-                        return
-
-                    attr_name = plug.partialName(useLongNames=True)
-                    if not attr_name.startswith(_ATTR_PREFIX):
-                        return
-
-                    self._schedule_deferred_sync()
-                except RuntimeError:
-                    pass
-                except Exception:
-                    logging.getLogger(__name__).debug(
-                        "_on_attr_changed error", exc_info=True
-                    )
-
-            cb_id = om2.MNodeMessage.addAttributeChangedCallback(mobj, _on_attr_changed)
-            self._attr_callback_ids.append(cb_id)
         except Exception:
             logging.getLogger(__name__).debug(
-                "_register_carrier_callback failed", exc_info=True
+                "_register_carrier_callback: carrier resolve failed", exc_info=True
             )
+            return
+
+        _RELEVANT = (
+            om2.MNodeMessage.kAttributeSet
+            | om2.MNodeMessage.kConnectionBroken
+            | om2.MNodeMessage.kAttributeAdded
+            | om2.MNodeMessage.kAttributeRemoved
+        )
+        _ATTR_PREFIX = _audio_utils.ATTR_PREFIX
+
+        def _on_attr_changed(msg, plug, other_plug, *args):
+            try:
+                if self._syncing_combo:
+                    return
+                if not (msg & _RELEVANT):
+                    return
+                if not self.ui or not self.ui.isVisible():
+                    return
+
+                attr_name = plug.partialName(useLongNames=True)
+                if not attr_name.startswith(_ATTR_PREFIX):
+                    return
+
+                self._schedule_deferred_sync()
+            except RuntimeError:
+                pass
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "_on_attr_changed error", exc_info=True
+                )
+
+        token = ScriptJobManager.instance().add_om_callback(
+            om2.MNodeMessage.addAttributeChangedCallback,
+            mobj,
+            _on_attr_changed,
+            owner=self,
+        )
+        if token is not None:
+            self._attr_callback_ids.append(token)
 
     def remove_callbacks(self):
-        """Remove all subscriptions and OpenMaya callbacks owned by this instance."""
-        self._cleanup_attr_callbacks()
+        """Tear down every SJM subscription owned by this instance.
+
+        SJM unifies both scriptJob events and OpenMaya callbacks under
+        ``owner=self``, so a single ``unsubscribe_all`` removes them all.
+        """
         ScriptJobManager.instance().unsubscribe_all(self)
+        self._attr_callback_ids = []
         self._scene_subs_installed = False
         self._time_token = None
 
     def _cleanup_attr_callbacks(self):
-        ids = self._attr_callback_ids
-        if not ids:
+        """Remove just the carrier MNodeMessage callbacks (SJM-managed)."""
+        tokens = self._attr_callback_ids
+        if not tokens:
             return
-        try:
-            import maya.api.OpenMaya as om2
-
-            for cb_id in ids:
-                try:
-                    om2.MMessage.removeCallback(cb_id)
-                except Exception:
-                    pass
-        except ImportError:
-            pass
+        mgr = ScriptJobManager.instance()
+        for token in tokens:
+            mgr.unsubscribe(token)
         self._attr_callback_ids = []
 
     # ------------------------------------------------------------------

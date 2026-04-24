@@ -37,10 +37,19 @@ class AttributeManager:
 
     def __init__(self):
         self._pinned_targets = None
+        self._single_object_mode = False
 
     @property
     def is_pinned(self):
         return self._pinned_targets is not None
+
+    @property
+    def single_object_mode(self):
+        return self._single_object_mode
+
+    @single_object_mode.setter
+    def single_object_mode(self, value):
+        self._single_object_mode = bool(value)
 
     def pin_targets(self, nodes):
         """Pin the manager to a fixed node list; ``None`` clears the pin.
@@ -62,10 +71,16 @@ class AttributeManager:
 
         When pinned, returns the cached list filtered to nodes that still
         exist in the scene.  Otherwise returns the current Maya selection.
+        When ``single_object_mode`` is enabled, only the most recently
+        selected node is returned.
         """
         if self._pinned_targets is not None:
-            return [n for n in self._pinned_targets if cmds.objExists(n)]
-        return cmds.ls(sl=True, long=True) or []
+            nodes = [n for n in self._pinned_targets if cmds.objExists(n)]
+        else:
+            nodes = cmds.ls(sl=True, long=True) or []
+        if self._single_object_mode and len(nodes) > 1:
+            return [nodes[-1]]
+        return nodes
 
     @staticmethod
     def get_channel_box_selection():
@@ -216,6 +231,41 @@ class AttributeManager:
         remaining.sort()
         return ordered + remaining
 
+    @classmethod
+    def collect_value_strings(cls, nodes, attr_names):
+        """Return ``{attr_name: (value_str, conn_type)}`` for the given attrs.
+
+        Lightweight version of :meth:`build_table_data` used by the
+        live-update path: skips type/lock detection and simply re-evaluates
+        values + connection state for the rows already in the table.
+        """
+        if not nodes:
+            return {}
+        primary = nodes[0]
+        multi = len(nodes) > 1
+        result = {}
+        for attr_name in attr_names:
+            attr_type = cls.get_attr_type(primary, attr_name)
+            if attr_type == "enum":
+                val = cls.get_enum_label(primary, attr_name)
+                if multi:
+                    for other in nodes[1:]:
+                        if cls.get_enum_label(other, attr_name) != val:
+                            val = "*"
+                            break
+                val_str = val if val is not None else ""
+            else:
+                val = cls.get_attr_value(primary, attr_name)
+                if multi:
+                    for other in nodes[1:]:
+                        if cls.get_attr_value(other, attr_name) != val:
+                            val = "*"
+                            break
+                val_str = cls.format_value(val)
+            conn_type = cls.classify_connection(primary, attr_name)
+            result[attr_name] = (val_str, conn_type)
+        return result
+
     @staticmethod
     def get_attr_value(node, attr_name):
         """Safely get an attribute value, returning ``None`` on failure."""
@@ -226,7 +276,20 @@ class AttributeManager:
 
     @staticmethod
     def get_attr_type(node, attr_name):
-        """Return the Maya attribute type string."""
+        """Return the Maya attribute type string.
+
+        Prefers ``cmds.getAttr(plug, type=True)`` because it returns the
+        actual storage type (e.g. ``"string"`` instead of ``"typed"``),
+        falling back to ``attributeQuery`` for compounds where ``getAttr``
+        rejects the query.
+        """
+        plug = f"{node}.{attr_name}"
+        try:
+            t = cmds.getAttr(plug, type=True)
+            if t:
+                return t
+        except Exception:
+            pass
         try:
             return cmds.attributeQuery(attr_name, node=node, attributeType=True)
         except Exception:
@@ -287,7 +350,8 @@ class AttributeManager:
         Returns one of:
         - ``"none"`` — no incoming connection
         - ``"muted"`` — channel is muted (mute node)
-        - ``"keyframe"`` — driven by an animCurve
+        - ``"keyframe"`` — driven by an animCurve (no key on current frame)
+        - ``"keyframe_active"`` — driven by an animCurve with a key set on the current frame
         - ``"expression"`` — driven by an expression
         - ``"driven_key"`` — driven by a set-driven-key curve
         - ``"constraint"`` — driven by a constraint
@@ -307,9 +371,23 @@ class AttributeManager:
             result = cls._trace_source(plug)
             if result is None:
                 return "none"
-            return result
         except Exception:
             return "none"
+
+        # Promote "keyframe" to "keyframe_active" when a key exists at current time.
+        if result == "keyframe" and cls.has_key_at_current_time(plug):
+            return "keyframe_active"
+        return result
+
+    @staticmethod
+    def has_key_at_current_time(plug):
+        """Return ``True`` if *plug* has a keyframe set exactly at the current time."""
+        try:
+            t = cmds.currentTime(q=True)
+            keys = cmds.keyframe(plug, q=True, time=(t, t))
+            return bool(keys)
+        except Exception:
+            return False
 
     @classmethod
     def _trace_source(cls, plug, visited=None):
@@ -437,6 +515,19 @@ class AttributeManager:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _fmt_float(val, decimals=3):
+        """Format a float with up to *decimals* places, stripping trailing zeros.
+
+        ``0.000`` → ``"0"``, ``1.250`` → ``"1.25"``, ``-0.0`` → ``"0"``.
+        """
+        if val == 0:
+            return "0"
+        s = f"{val:.{decimals}f}"
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s or "0"
+
+    @staticmethod
     def format_value(val):
         """Convert a Maya attribute value to a display string."""
         if val == "*":
@@ -444,10 +535,11 @@ class AttributeManager:
         if val is None:
             return ""
         if isinstance(val, float):
-            return f"{val:.4f}"
+            return AttributeManager._fmt_float(val)
         if isinstance(val, (list, tuple)):
             inner = ", ".join(
-                f"{v:.4f}" if isinstance(v, float) else str(v) for v in val
+                AttributeManager._fmt_float(v) if isinstance(v, float) else str(v)
+                for v in val
             )
             return f"({inner})"
         return str(val)
@@ -461,7 +553,7 @@ class AttributeManager:
             return int(float(text))
         if attr_type == "bool":
             return text.lower() in ("1", "true", "yes", "on")
-        if attr_type in ("string",):
+        if attr_type in ("string", "typed"):
             return text
         if attr_type == "enum":
             try:
@@ -627,9 +719,7 @@ class AttributeManager:
                 if not cmds.attributeQuery(attr_name, node=node, exists=True):
                     continue
                 try:
-                    attr_type = cmds.attributeQuery(
-                        attr_name, node=node, attributeType=True
-                    )
+                    attr_type = cls.get_attr_type(node, attr_name)
                     value = cls.parse_value(text, attr_type)
                     if value is None:
                         continue
@@ -784,6 +874,27 @@ class AttributeManager:
         return True
 
     @staticmethod
+    def rename_node(old_name, new_name):
+        """Rename a Maya node and return its new full path.
+
+        Returns the original *old_name* unchanged on failure or no-op.
+        """
+        if not new_name or not old_name:
+            return old_name
+        short = old_name.rsplit("|", 1)[-1]
+        if new_name == short:
+            return old_name
+        cmds.undoInfo(openChunk=True, chunkName="Rename Node")
+        try:
+            new_short = cmds.rename(old_name, new_name)
+            return cmds.ls(new_short, long=True)[0] if new_short else old_name
+        except Exception as e:
+            cmds.warning(f"Failed to rename '{old_name}' → '{new_name}': {e}")
+            return old_name
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    @staticmethod
     def get_shape_nodes(nodes):
         """Return the shape node name(s) for *nodes*."""
         result = []
@@ -810,6 +921,47 @@ class AttributeManager:
                 hist = [h for h in hist if h != node]
                 if hist:
                     result.append(hist[0])
+        return result
+
+    @staticmethod
+    def toggle_key_at_current_time(nodes, attr_name):
+        """Set or remove a keyframe on *attr_name* for *nodes* at the current time.
+
+        - If a key already exists at the current time, removes it.
+        - Otherwise sets a key at the current time.
+
+        Returns ``"set"`` or ``"removed"`` indicating the resulting action,
+        or ``None`` if nothing happened.
+        """
+        if not nodes:
+            return None
+        t = cmds.currentTime(q=True)
+        result = None
+        cmds.undoInfo(openChunk=True, chunkName=f"Toggle Key: {attr_name}")
+        try:
+            # Decide the action based on the *primary* node's state so the
+            # operation is consistent across a multi-selection batch.
+            primary_plug = f"{nodes[0]}.{attr_name}"
+            try:
+                primary_keys = cmds.keyframe(
+                    primary_plug, q=True, time=(t, t)
+                )
+            except Exception:
+                primary_keys = None
+            removing = bool(primary_keys)
+
+            for node in nodes:
+                plug = f"{node}.{attr_name}"
+                try:
+                    if removing:
+                        cmds.cutKey(plug, time=(t, t), clear=True)
+                    else:
+                        cmds.setKeyframe(plug)
+                except Exception:
+                    pass
+            result = "removed" if removing else "set"
+        finally:
+            cmds.undoInfo(closeChunk=True)
         return result
 
     @staticmethod

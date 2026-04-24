@@ -46,15 +46,20 @@ class AttributeManagerSlots:
     }
 
     # Single source of truth for all icon/state colours.
-    # Desaturated Maya channel-box colour scheme.
+    # Desaturated Maya channel-box colour scheme:
+    # - Pink for any plain incoming connection.
+    # - Lighter desaturated red for an animCurve driver (no key on current frame).
+    # - Deeper desaturated red for a key set on the current frame.
     ACTION_COLOR_MAP = {
         "off": "#555555",  # dim grey — inactive / default
+        "active": "#6898b8",  # desat blue — toolbar toggle active state
         "locked": "#8a9bb0",  # bluish grey — lock icon
-        "keyframe": "#c86464",  # desaturated red — keyed
-        "connected": "#c8b448",  # desaturated yellow — generic connection
-        "expression": "#b478c8",  # desaturated purple — expression-driven
-        "driven_key": "#6898b8",  # desaturated light-blue — set-driven key
-        "constraint": "#5878b8",  # desaturated blue — constraint
+        "connected": "#c89c9c",  # desat pink — generic connection
+        "keyframe": "#c86464",  # desat red — keyed (no key at current time)
+        "keyframe_active": "#a83838",  # deeper desat red — key set at current time
+        "expression": "#b478c8",  # desat purple — expression-driven
+        "driven_key": "#6898b8",  # desat light-blue — set-driven key
+        "constraint": "#5878b8",  # desat blue — constraint
         "muted": "#888850",  # olive — muted channel
     }
 
@@ -63,16 +68,46 @@ class AttributeManagerSlots:
         self.ui = self.sb.loaded_ui.attribute_manager
         self.controller = AttributeManager()
         self._refresh_pending = False
+        self._compact_view = False
+        self._base_row_height = None  # snapshotted on first _apply_row_height
+        self._footer_warning = ""
+        self._current_target = None
+        self._filter_invert = False  # replaces the deleted chk000 checkbox
         self._footer_controller = self._create_footer_controller()
 
-        # Force-connect table selection signal (in case tbl000_init guard skipped it)
-        try:
-            self.ui.tbl000.itemSelectionChanged.disconnect(
-                self._on_table_selection_changed
-            )
-        except Exception:
-            pass
-        self.ui.tbl000.itemSelectionChanged.connect(self._on_table_selection_changed)
+        # Coalescing state for MNodeMessage callbacks.  Bursts of
+        # attribute-changed events (value drags, batch setAttr, playback)
+        # would otherwise schedule one ``evalDeferred`` per event — the
+        # idle queue saturates and Maya becomes unstable.  Instead we
+        # accumulate touched attribute names into sets and flush them
+        # with a single deferred pass.
+        self._pending_value_attrs: set = set()
+        self._pending_lock_attrs: set = set()
+        self._attr_flush_pending = False
+        self._destroyed = False
+
+        # Re-entry guards for ``_refresh_table``.  Filter-combobox
+        # spamming (or any code path that pumps the event loop during
+        # a rebuild) can otherwise start a second ``_refresh_table``
+        # while the first is still tearing down / rebuilding cell
+        # widgets — a known crash vector with QTableWidget + persistent
+        # cell widgets (our enum comboboxes).
+        self._refreshing = False
+        self._refresh_queued = False
+
+        # Force-rewire the table signals we own.  ``tbl000_init`` gates
+        # its wiring on ``widget.is_initialized``, which can persist on
+        # the underlying QWidget across slots-instance rebuilds.  That
+        # left stale bindings pointing at a previous ``self`` whose
+        # methods silently no-op — this was the root cause of "edits
+        # don't set the attribute".
+        #
+        # ``signal.disconnect()`` with no arguments clears every handler
+        # (including stale ones from dead slots instances); we then
+        # connect every handler this instance needs.  Kept in sync with
+        # ``tbl000_init`` (which no longer connects these — see note
+        # there) so each signal has exactly the handlers listed here.
+        self._wire_table_signals(self.ui.tbl000)
 
         # Channel Box → Table sync via Qt signal (instant, replaces polling)
         self._last_cb_selection = set()
@@ -91,6 +126,72 @@ class AttributeManagerSlots:
         self._filter_timer.timeout.connect(lambda: self._refresh_table(self.ui.tbl000))
         self.ui.txt000.textChanged.connect(lambda _: self._filter_timer.start())
         self.ui.txt000.option_box.clear_option = True
+
+        # Filter on/off toggle as an action button on the option_box.
+        # The action cycles two states (enabled / disabled).  Each state's
+        # callback fires *before* the cycle advances, so it must set the
+        # value for the NEXT state.  The "active" colour is a muted
+        # blue (not red/pink) to avoid conflict with the red that the
+        # table uses to signal keyed attributes.
+        clr = self.ACTION_COLOR_MAP
+        self._filter_enabled = True
+        self.ui.txt000.option_box.add_action(
+            icon="filter",
+            tooltip="Toggle name filter",
+            states=[
+                {
+                    "icon": "filter",
+                    "tooltip": "Filter ON — click to disable",
+                    "color": clr["active"],
+                    "callback": lambda: self._set_filter_enabled(False),
+                },
+                {
+                    "icon": "filter",
+                    "tooltip": "Filter OFF — click to enable",
+                    "color": clr["off"],
+                    "callback": lambda: self._set_filter_enabled(True),
+                },
+            ],
+            # No settings_key — the action's persisted icon state could
+            # otherwise drift from ``_filter_enabled`` across sessions.
+            settings_key=False,
+        )
+
+        # txt001 — current target display + inline rename for single selection.
+        txt1 = self.ui.txt001
+        txt1.setPlaceholderText("No selection")
+        txt1.setToolTip(
+            "Currently editing — type a new name and press Enter to rename."
+        )
+        txt1.editingFinished.connect(self._on_target_renamed)
+        # "target" icon (not "pin") — avoids visual conflict with the
+        # existing PinValuesOption plugin, and reads naturally as
+        # "restrict to one target object".
+        txt1.option_box.add_action(
+            icon="target",
+            tooltip="Single-object mode",
+            states=[
+                {
+                    "icon": "target",
+                    "tooltip": (
+                        "Multi-object mode — click to switch to single-object.\n"
+                        "All edits are broadcast to every selected node."
+                    ),
+                    "color": clr["off"],
+                    "callback": lambda: self._on_toggle_single_object(True),
+                },
+                {
+                    "icon": "target",
+                    "tooltip": (
+                        "Single-object mode — click to switch to multi-object.\n"
+                        "Only the most recently selected object is edited."
+                    ),
+                    "color": clr["active"],
+                    "callback": lambda: self._on_toggle_single_object(False),
+                },
+            ],
+            settings_key=False,
+        )
 
         # Stop timer when the UI is destroyed to avoid dangling callbacks.
         self.ui.destroyed.connect(self._filter_timer.stop)
@@ -131,7 +232,7 @@ class AttributeManagerSlots:
         # --- Create Attribute ---
         widget.menu.add("Separator", setTitle="Create")
         widget.menu.add(
-            self.sb.registered_widgets.Label,
+            "QPushButton",
             setText="Create Attribute …",
             setToolTip="Add a new custom attribute to the selected objects.",
             setObjectName="show_create_menu",
@@ -147,6 +248,14 @@ class AttributeManagerSlots:
             setObjectName="chk_show_type",
         )
         self._chk_show_type.toggled.connect(self._on_toggle_type_column)
+        self._chk_compact = widget.menu.add(
+            "QCheckBox",
+            setText="Compact View",
+            setChecked=False,
+            setToolTip="Reduce row height and hide the Type column.",
+            setObjectName="chk_compact_view",
+        )
+        self._chk_compact.toggled.connect(self._on_toggle_compact_view)
 
         # --- Selection ---
         widget.menu.add("Separator", setTitle="Selection")
@@ -235,6 +344,10 @@ class AttributeManagerSlots:
             fixed_item_height=20,
         )
         menu.setTitle("Create Attribute")
+        # Swap the default pin button in the header for a hide button —
+        # this popup is a one-shot form, not a pinnable tool panel.
+        if menu.header:
+            menu.header.config_buttons("hide")
 
         # -- Identity -------------------------------------------------------
         menu.add("QLabel", setText="Name:", row=0, col=0)
@@ -370,33 +483,159 @@ class AttributeManagerSlots:
         menu.show()
 
     def _on_toggle_type_column(self, visible):
-        """Show or hide the Type column in the attribute table."""
+        """Show or hide the Type column."""
         self.ui.tbl000.setColumnHidden(self.COL_TYPE, not visible)
+
+    def _on_toggle_compact_view(self, enabled):
+        """Toggle compact view: ~20% shorter rows and hide the table's header."""
+        self._compact_view = bool(enabled)
+        # The *table's* horizontal header (the column label strip), NOT
+        # the window's top-banner Header widget.  The window header stays
+        # visible so the title / menu button remain accessible.
+        self.ui.tbl000.horizontalHeader().setVisible(not self._compact_view)
+        self._apply_row_height(self.ui.tbl000)
+
+    def _on_toggle_single_object(self, enabled):
+        """Toggle single-object mode."""
+        self.controller.single_object_mode = bool(enabled)
+        self._refresh_table(self.ui.tbl000)
+
+    def _set_filter_enabled(self, enabled):
+        """Toggle whether the name filter (txt000) is applied."""
+        self._filter_enabled = bool(enabled)
+        self._refresh_table(self.ui.tbl000)
+
+    def _apply_row_height(self, widget):
+        """Apply the active row height.
+
+        Normal mode uses the table's natural default; compact mode uses
+        80% of that (rounded down, minimum 12 px).  The natural default
+        is snapshotted per-instance on the first call and reused so
+        toggling on/off always returns to the exact original height.
+        ``Fixed`` resize mode is required so rows actually shrink below
+        the content's natural preferred height and so that
+        ``setDefaultSectionSize`` governs every row.
+        """
+        vh = widget.verticalHeader()
+        QHV = self.sb.QtWidgets.QHeaderView
+        vh.setSectionResizeMode(QHV.Fixed)
+
+        if self._base_row_height is None:
+            self._base_row_height = max(vh.defaultSectionSize(), 18)
+
+        base = self._base_row_height
+        height = max(int(base * 0.8), 12) if self._compact_view else base
+        # Qt's style-dependent minimumSectionSize (~20 px on most styles)
+        # silently clamps setDefaultSectionSize, so lower the floor first.
+        vh.setMinimumSectionSize(min(height, vh.minimumSectionSize()))
+        vh.setDefaultSectionSize(height)
+        # Force-apply to existing rows — Qt doesn't retro-fit default
+        # size changes onto already-laid-out sections.
+        for row in range(widget.rowCount()):
+            widget.setRowHeight(row, height)
+
+    # ------------------------------------------------------------------
+    # Target display (txt001) and footer warnings
+    # ------------------------------------------------------------------
+
+    def _update_target_display(self, nodes):
+        """Refresh ``txt001`` to show the current target(s)."""
+        txt = self.ui.txt001
+        was_blocked = txt.signalsBlocked()
+        txt.blockSignals(True)
+        try:
+            if not nodes:
+                self._current_target = None
+                txt.setText("")
+                txt.setReadOnly(True)
+                txt.setToolTip("No selection")
+            elif len(nodes) == 1:
+                self._current_target = nodes[0]
+                short = nodes[0].rsplit("|", 1)[-1]
+                txt.setText(short)
+                txt.setReadOnly(False)
+                txt.setToolTip(
+                    f"{nodes[0]}\n\n(Type a new name and press Enter to rename.)"
+                )
+            else:
+                self._current_target = None
+                txt.setText(f"Multi-selection ({len(nodes)})")
+                txt.setReadOnly(True)
+                names = "\n".join(f"  • {n.rsplit('|', 1)[-1]}" for n in nodes)
+                txt.setToolTip(f"Selected objects:\n{names}")
+        finally:
+            txt.blockSignals(was_blocked)
+
+    def _on_target_renamed(self):
+        """Handle inline rename of the single target via ``txt001``."""
+        txt = self.ui.txt001
+        if txt.isReadOnly():
+            return
+        old_full = self._current_target
+        new_name = txt.text().strip()
+        if not old_full or not new_name:
+            return
+        old_short = old_full.rsplit("|", 1)[-1]
+        if new_name == old_short:
+            return
+        new_full = self.controller.rename_node(old_full, new_name)
+        if new_full and new_full != old_full:
+            # Update the cached target *before* refresh so a duplicate
+            # editingFinished (focus loss + Enter) becomes a no-op.
+            self._current_target = new_full
+            if self.controller.is_pinned:
+                self.controller.pin_targets([new_full])
+        self._refresh_table(self.ui.tbl000)
+
+    def _set_footer_warning(self, message):
+        """Push a warning/info message to the footer (empty clears it)."""
+        self._footer_warning = message or ""
+        if self._footer_controller:
+            self._footer_controller.update()
 
     # ------------------------------------------------------------------
     # Filter ComboBox
     # ------------------------------------------------------------------
 
     def cmb000_init(self, widget):
-        """Populate filter combobox."""
+        """Populate filter combobox and wire its option_box invert action.
+
+        The old ``chk000`` Invert checkbox has been replaced by an action
+        button on the ComboBox's built-in option_box — same two-state
+        cycle as the name-filter / single-object toggles.
+        """
         widget.addItems(
-            [
-                k
-                for k in AttributeManager.FILTER_MAP.keys()
-                if not k.startswith("_")
-            ]
+            [k for k in AttributeManager.FILTER_MAP.keys() if not k.startswith("_")]
+        )
+
+        clr = self.ACTION_COLOR_MAP
+        widget.option_box.add_action(
+            icon="ban",
+            tooltip="Invert filter",
+            states=[
+                {
+                    "icon": "ban",
+                    "tooltip": "Invert OFF — click to show the complement of the filter",
+                    "color": clr["off"],
+                    "callback": lambda: self._set_filter_invert(True),
+                },
+                {
+                    "icon": "ban",
+                    "tooltip": "Invert ON — click to show the normal filter set",
+                    "color": clr["active"],
+                    "callback": lambda: self._set_filter_invert(False),
+                },
+            ],
+            settings_key=False,
         )
 
     def cmb000(self, index):
         """Filter changed — refresh table."""
         self._refresh_table(self.ui.tbl000)
 
-    # ------------------------------------------------------------------
-    # Invert Checkbox
-    # ------------------------------------------------------------------
-
-    def chk000(self, state):
-        """Invert checkbox toggled — refresh table."""
+    def _set_filter_invert(self, enabled):
+        """Toggle filter inversion (replaces the deleted chk000 checkbox)."""
+        self._filter_invert = bool(enabled)
         self._refresh_table(self.ui.tbl000)
 
     # ------------------------------------------------------------------
@@ -404,25 +643,63 @@ class AttributeManagerSlots:
     # ------------------------------------------------------------------
 
     def tbl000_init(self, widget):
-        """One-time table setup: signals, context menu, scriptJobs."""
+        """One-time table setup: action columns, context menu, scriptJobs.
+
+        ``cellChanged`` / ``itemSelectionChanged`` are re-wired on every
+        call via :meth:`_wire_table_signals` (which disconnects before
+        connecting, so it's idempotent).  This is necessary because the
+        widget passed to ``tbl000_init`` may not be the same QWidget
+        instance that ``self.ui.tbl000`` resolved to at ``__init__``
+        time (e.g. after a UI reload), leaving the ``__init__`` wiring
+        pointing at a dead widget.
+        """
+        # Always re-wire on this widget — idempotent, safe to call
+        # repeatedly.  This is the authoritative wiring; the call in
+        # ``__init__`` is only a best-effort first pass.
+        self._wire_table_signals(widget)
+
         if not widget.is_initialized:
             widget.refresh_on_show = True
-            widget.cellChanged.connect(self._handle_cell_edit)
 
             self._setup_action_columns(widget)
             self._setup_context_menu(widget)
             self._setup_scene_change_callbacks(widget)
-
-            if self._footer_controller:
-                widget.itemSelectionChanged.connect(self._footer_controller.update)
-            widget.itemSelectionChanged.connect(self._on_table_selection_changed)
 
             try:
                 widget.destroyed.connect(self.cleanup_scene_callbacks)
             except Exception:
                 pass
 
+        # Table header visibility is driven by compact mode (the .ui file
+        # defaults it to hidden — we override here so normal mode shows
+        # the column labels).
+        widget.horizontalHeader().setVisible(not self._compact_view)
+
         self._refresh_table(widget)
+
+    def _wire_table_signals(self, widget):
+        """Clear stale signal bindings and wire this instance's handlers.
+
+        Must be called exactly once per slots-instance lifetime (from
+        ``__init__``).  Every handler for ``cellChanged`` /
+        ``itemSelectionChanged`` that this class depends on is listed
+        here so the full signal contract is visible in one place.
+        """
+        # cellChanged → attribute-value / rename dispatch.
+        try:
+            widget.cellChanged.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        widget.cellChanged.connect(self._handle_cell_edit)
+
+        # itemSelectionChanged → CB sync + (optional) footer update.
+        try:
+            widget.itemSelectionChanged.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        widget.itemSelectionChanged.connect(self._on_table_selection_changed)
+        if self._footer_controller:
+            widget.itemSelectionChanged.connect(self._footer_controller.update)
 
     def _setup_action_columns(self, widget):
         """Register Lock and Connect as icon-toggle action columns."""
@@ -446,26 +723,46 @@ class AttributeManagerSlots:
             },
         )
 
+        # Connection / keyed action column.
+        # Plain click → set/remove a keyframe at the current time
+        #               (when the attr is unconnected or keyed).
+        # Ctrl+click  → break the incoming connection (any state).
         conn_states = {
             "none": {
                 "icon": "disconnect",
                 "color": clr["off"],
-                "tooltip": "Not connected",
+                "tooltip": (
+                    "Not connected — click to set a keyframe at the current time.\n"
+                    "Ctrl+click: no-op (nothing to break)."
+                ),
+                "action": self._on_icon_cell_clicked,
+            },
+            "keyframe": {
+                "icon": "connect",
+                "color": clr["keyframe"],
+                "tooltip": (
+                    "Animated — click to set a keyframe at the current time.\n"
+                    "Ctrl+click: break the connection."
+                ),
+                "action": self._on_icon_cell_clicked,
+            },
+            "keyframe_active": {
+                "icon": "connect",
+                "color": clr["keyframe_active"],
+                "tooltip": (
+                    "Key set at current time — click to remove it.\n"
+                    "Ctrl+click: break the connection."
+                ),
                 "action": self._on_icon_cell_clicked,
             },
         }
-        for key in (
-            "connected",
-            "keyframe",
-            "expression",
-            "driven_key",
-            "constraint",
-            "muted",
-        ):
+        for key in ("connected", "expression", "driven_key", "constraint", "muted"):
             conn_states[key] = {
                 "icon": "connect",
                 "color": clr.get(key, clr["connected"]),
-                "tooltip": f"{key.replace('_', ' ').title()} — click to break",
+                "tooltip": (
+                    f"{key.replace('_', ' ').title()} — Ctrl+click to break the connection."
+                ),
                 "action": self._on_icon_cell_clicked,
             }
         widget.actions.add(self.COL_CONN, states=conn_states)
@@ -547,37 +844,79 @@ class AttributeManagerSlots:
         """Return the ``cmds.listAttr`` kwargs for the active filter."""
         cmb = getattr(self.ui, "cmb000", None)
         key = cmb.currentText() if cmb else "Custom"
-
-        chk = getattr(self.ui, "chk000", None)
-        invert = bool(chk and chk.isChecked())
-
-        return self.controller.get_filter_kwargs(key, invert)
+        return self.controller.get_filter_kwargs(key, self._filter_invert)
 
     def _refresh_table(self, widget):
-        """Rebuild the table from the current selection and filter."""
+        """Rebuild the table from the current selection and filter.
+
+        Re-entry safe: if a refresh is already in progress (for example
+        because a Qt event pumped during ``waitCursor`` / cell-widget
+        destruction and fired a queued filter-combobox signal), we mark
+        a reentry as pending and bail out.  The in-flight call picks up
+        the pending flag on exit and schedules a single follow-up
+        refresh via ``evalDeferred`` — so bursts of rapid filter toggles
+        collapse into one extra rebuild, never overlap.
+        """
+        if self._destroyed:
+            return
+
+        if self._refreshing:
+            self._refresh_queued = True
+            return
+        self._refreshing = True
+
+        # Suppress Channel Box → table sync for the duration of the
+        # rebuild.  ``_on_cb_selection_changed`` is a Qt slot on a
+        # signal we don't own, so ``widget.blockSignals`` doesn't stop
+        # it; without this guard the CB signal can fire mid-clear and
+        # try to mutate rows that are being torn down.
+        prev_syncing = self._syncing_selection
+        self._syncing_selection = True
+
         cmds.waitCursor(state=True)
         try:
+            if not self._is_widget_alive(widget):
+                return
+
             widget.setUpdatesEnabled(False)
             widget.blockSignals(True)
+
+            # Tear down existing enum combobox cell widgets explicitly
+            # before ``clear()``.  ``clear()`` destroys them
+            # synchronously — if Qt still has a queued ``activated``
+            # signal for one of them (common with fast user input),
+            # it fires against a half-destroyed object and can crash.
+            # ``removeCellWidget`` + ``deleteLater`` defers destruction
+            # to the next idle cycle, after the queued signal has
+            # safely been dispatched to a disconnected slot.
+            self._teardown_cell_widgets(widget)
+
             widget.clear()
 
             nodes = self.controller.get_selected_nodes()
+            self._update_target_display(nodes)
             if not nodes:
+                self._footer_warning = ""
                 widget.add(
                     [["No selection", "", "", "", ""]],
                     headers=["Name", "", "", "Value", "Type"],
                 )
                 self._configure_columns(widget)
+                self._apply_row_height(widget)
                 return
+
+            self._footer_warning = ""
 
             filter_kwargs = self._get_filter_kwargs()
             rows, attr_states = self.controller.build_table_data(nodes, filter_kwargs)
 
-            # Apply wildcard text filter if the user typed something.
+            # Apply wildcard text filter when the toggle is on and a
+            # pattern is present.  Filtering itself is delegated to
+            # ``pythontk.IterUtils.filter_list``, which already handles
+            # comma-separated patterns, wildcards, and case-insensitivity.
             pattern = getattr(self.ui, "txt000", None)
-            if pattern and pattern.text().strip():
+            if self._filter_enabled and pattern and pattern.text().strip():
                 text = pattern.text().strip()
-                # Build name list from rows for filtering.
                 names = [r[0] for r in rows]
                 filtered = ptk.IterUtils.filter_list(names, inc=text, ignore_case=True)
                 keep = set(filtered)
@@ -607,6 +946,7 @@ class AttributeManagerSlots:
             # Make name cells editable for user-defined attrs and
             # store the original name so renames can be detected.
             self._set_name_editability(widget, nodes)
+            self._apply_row_height(widget)
 
             # Replace enum value cells with comboboxes.
             self._setup_enum_combos(widget, nodes)
@@ -619,18 +959,97 @@ class AttributeManagerSlots:
             )
             self._sync_table_to_channel_box(widget)
 
-        finally:
-            widget.blockSignals(False)
-            widget.setUpdatesEnabled(True)
-            cmds.waitCursor(state=False)
+        except RuntimeError:
+            # Widget (or a child) destroyed mid-refresh.
+            self.cleanup_scene_callbacks()
+            return
+        except Exception:
+            # Don't let a rebuild error take down the panel — log and
+            # continue so the next refresh has a chance to recover.
+            import logging
 
-        # Restore column visibility from the Show Type checkbox.
+            logging.getLogger(__name__).debug(
+                "attribute_manager refresh failed", exc_info=True
+            )
+        finally:
+            try:
+                widget.blockSignals(False)
+                widget.setUpdatesEnabled(True)
+            except RuntimeError:
+                pass
+            cmds.waitCursor(state=False)
+            self._syncing_selection = prev_syncing
+            self._refreshing = False
+
+            # If a re-entry was requested while we were busy, fire a
+            # single follow-up on the next idle tick so the user's
+            # latest filter/state wins without overlapping rebuilds.
+            if self._refresh_queued and not self._destroyed:
+                self._refresh_queued = False
+                cmds.evalDeferred(lambda w=widget: self._deferred_refresh(w))
+
+        # Restore Type column visibility from the Show Type checkbox.
         chk = getattr(self, "_chk_show_type", None)
         if chk is not None:
-            widget.setColumnHidden(self.COL_TYPE, not chk.isChecked())
+            try:
+                self.ui.tbl000.setColumnHidden(self.COL_TYPE, not chk.isChecked())
+            except RuntimeError:
+                pass
 
         if self._footer_controller:
-            self._footer_controller.update()
+            try:
+                self._footer_controller.update()
+            except Exception:
+                pass
+
+    def _teardown_cell_widgets(self, widget):
+        """Defer-destroy enum-combobox cell widgets before ``clear()``.
+
+        Only touches ``COL_VALUE`` — that's the single column where we
+        explicitly install cell widgets (``_setup_enum_combos``).  The
+        action columns (``COL_LOCK`` / ``COL_CONN``) are managed by
+        uitk's ``widget.actions`` subsystem, which may cache its own
+        cell widget references; tearing those down here would
+        invalidate that cache.
+
+        Detaches via ``removeCellWidget`` and schedules ``deleteLater``
+        so Qt can finish delivering any queued ``activated`` signal to
+        the (now disconnected) combo before the C++ object vanishes —
+        safer than letting ``clear()`` destroy them synchronously.
+        """
+        try:
+            row_count = widget.rowCount()
+        except RuntimeError:
+            return
+
+        for row in range(row_count):
+            try:
+                w = widget.cellWidget(row, self.COL_VALUE)
+            except RuntimeError:
+                return
+            if w is None:
+                continue
+            try:
+                # Block first so any already-queued signal that slips
+                # past removeCellWidget is discarded rather than
+                # dispatched during teardown.
+                w.blockSignals(True)
+                widget.removeCellWidget(row, self.COL_VALUE)
+                w.deleteLater()
+            except Exception:
+                pass
+
+    def _deferred_refresh(self, widget):
+        """Gated ``_refresh_table`` for ``evalDeferred`` scheduling.
+
+        Bails silently if the slots instance was torn down or the
+        widget destroyed between scheduling and dispatch.
+        """
+        if self._destroyed:
+            return
+        if not self._is_widget_alive(widget):
+            return
+        self._refresh_table(widget)
 
     def _sync_table_to_channel_box(self, widget):
         """Select table rows matching the current channel box selection.
@@ -701,7 +1120,15 @@ class AttributeManagerSlots:
             self._syncing_selection = False
 
     def _on_icon_cell_clicked(self, row, col):
-        """Handle clicks on the Lock or Connect icon columns."""
+        """Handle clicks on the Lock or Connect/Key icon columns.
+
+        Connect column behaviour:
+          - Plain click on ``none`` / ``keyframe`` → set keyframe at current time.
+          - Plain click on ``keyframe_active`` → remove the key at current time.
+          - Plain click on other connection states (expression, constraint,
+            driven_key, connected, muted) → no-op (use Ctrl+click instead).
+          - Ctrl+click on any non-``none`` state → break the connection.
+        """
         tbl = self.ui.tbl000
         name_item = tbl.item(row, self.COL_NAME)
         if not name_item or not name_item.text():
@@ -714,13 +1141,26 @@ class AttributeManagerSlots:
         if col == self.COL_LOCK:
             self.controller.toggle_lock(nodes, attr_name)
             self._refresh_table(tbl)
+            return
 
-        elif col == self.COL_CONN:
-            # Only attempt to break if the attr is actually connected.
-            state = tbl.actions.get(row, col)
+        if col != self.COL_CONN:
+            return
+
+        # cellClicked carries no modifier info; query the current state instead.
+        Qt = self.sb.QtCore.Qt
+        modifiers = self.sb.QtWidgets.QApplication.keyboardModifiers()
+        ctrl = bool(modifiers & Qt.ControlModifier)
+
+        state = tbl.actions.get(row, col)
+        if ctrl:
             if state and state != "none":
                 self.controller.break_connections(nodes, attr_name)
                 self._refresh_table(tbl)
+            return
+
+        if state in (None, "none", "keyframe", "keyframe_active"):
+            self.controller.toggle_key_at_current_time(nodes, attr_name)
+            self._refresh_table(tbl)
 
     def _configure_columns(self, widget):
         """Set column resize modes and widths."""
@@ -728,9 +1168,9 @@ class AttributeManagerSlots:
         header.setSectionsMovable(False)
         QHV = self.sb.QtWidgets.QHeaderView
 
-        # Data columns
-        header.setSectionResizeMode(self.COL_NAME, QHV.Interactive)
-        widget.setColumnWidth(self.COL_NAME, 160)
+        # Data columns — Name fits its content (right-aligned text then
+        # appears flush within whatever width the longest name demands).
+        header.setSectionResizeMode(self.COL_NAME, QHV.ResizeToContents)
 
         # Remaining data columns
         header.setSectionResizeMode(self.COL_VALUE, QHV.Stretch)
@@ -742,28 +1182,33 @@ class AttributeManagerSlots:
     # ------------------------------------------------------------------
 
     def _set_name_editability(self, widget, nodes):
-        """Make name cells editable for user-defined attrs.
+        """Set per-cell flags: right-align names, gate Name-column editing.
 
-        Stores the original attribute name in ``Qt.UserRole`` so
-        ``_handle_cell_edit`` can detect rename attempts.
+        Value-column editing is always allowed — edits are broadcast
+        across every selected node so users can batch-change multiple
+        objects at once (Maya channel-box behaviour).
+
+        The Name column (rename) is editable only in single-selection
+        and only for user-defined attributes, since renaming across a
+        multi-selection doesn't have a sensible single outcome.
         """
         Qt = self.sb.QtCore.Qt
         primary = nodes[0] if nodes else None
         user_attrs = (
             set(cmds.listAttr(primary, userDefined=True) or []) if primary else set()
         )
+        multi = len(nodes) > 1
 
         for row_idx in range(widget.rowCount()):
-            item = widget.item(row_idx, self.COL_NAME)
-            if not item:
-                continue
-            attr_name = item.text().strip()
-            # Store original name for rename detection.
-            item.setData(Qt.UserRole, attr_name)
-            if attr_name in user_attrs:
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
-            else:
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            name_item = widget.item(row_idx, self.COL_NAME)
+            if name_item:
+                name_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                attr_name = name_item.text().strip()
+                name_item.setData(Qt.UserRole, attr_name)
+                if not multi and attr_name in user_attrs:
+                    name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)
+                else:
+                    name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
 
     # Sentinel labels for enum combobox action items.
     _ENUM_ACTION_RENAME = "Rename"
@@ -929,7 +1374,13 @@ class AttributeManagerSlots:
         self._refresh_table(self.ui.tbl000)
 
     def _handle_cell_edit(self, row, col):
-        """Handle inline editing of the Name or Value column."""
+        """Handle inline editing of the Name or Value column.
+
+        Multi-selection is supported: value edits are broadcast to every
+        selected node.  Name edits (rename) are silently skipped when
+        more than one node is selected because renaming across
+        heterogeneous objects doesn't have a sensible single outcome.
+        """
         tbl = self.ui.tbl000
         nodes = self.controller.get_selected_nodes()
         if not nodes:
@@ -962,8 +1413,13 @@ class AttributeManagerSlots:
             return
 
         val_item = tbl.item(row, col)
-        # If a cell widget (combobox) owns this cell, skip text handling.
-        if val_item is None or tbl.cellWidget(row, col) is not None:
+        # Skip only when the cell owns a *persistent* widget (our enum
+        # combobox).  Delegate editors (QLineEdit) are also returned by
+        # ``cellWidget()`` under PySide6, so a blanket non-None check
+        # short-circuits every normal text edit.
+        cell_w = tbl.cellWidget(row, col)
+        QComboBox = self.sb.QtWidgets.QComboBox
+        if val_item is None or isinstance(cell_w, QComboBox):
             return
         new_text = val_item.text().strip()
 
@@ -1016,7 +1472,7 @@ class AttributeManagerSlots:
 
         Translates the Qt signal into table row highlights.
         """
-        if self._syncing_selection:
+        if self._syncing_selection or self._destroyed:
             return
 
         try:
@@ -1031,8 +1487,15 @@ class AttributeManagerSlots:
         if current_sel != self._last_cb_selection:
             self._syncing_selection = True
             try:
+                tbl = self.ui.tbl000
+                if not self._is_widget_alive(tbl):
+                    return
                 self._last_cb_selection = current_sel
-                self._sync_table_to_channel_box(self.ui.tbl000)
+                self._sync_table_to_channel_box(tbl)
+            except RuntimeError:
+                self.cleanup_scene_callbacks()
+            except Exception:
+                pass
             finally:
                 self._syncing_selection = False
 
@@ -1215,13 +1678,22 @@ class AttributeManagerSlots:
     # ------------------------------------------------------------------
 
     def _setup_scene_change_callbacks(self, widget):
-        """Register scene-change subscriptions and OpenMaya callbacks.
+        """Register all event subscriptions through ``ScriptJobManager``.
 
-        Uses ``MDGMessage.addConnectionCallback`` to detect connection
-        changes (make / break) so the table updates its color-coded
-        icons immediately.
+        SJM unifies cleanup for both ``pm.scriptJob`` events and
+        ``MMessage`` callbacks, so a single ``unsubscribe_all(owner=self)``
+        call (triggered by widget destruction or
+        :meth:`cleanup_scene_callbacks`) tears them all down.
+
+        Per-node attribute callbacks are tracked separately via
+        :attr:`_attr_change_tokens` because they are re-registered after
+        every selection change.
         """
         self.cleanup_scene_callbacks()
+        # ``cleanup_scene_callbacks`` raises the ``_destroyed`` guard so
+        # any in-flight deferreds short-circuit; re-arm it here so the
+        # freshly-registered callbacks actually run.
+        self._destroyed = False
 
         mgr = ScriptJobManager.instance()
         for event in ("SelectionChanged", "SceneOpened", "NewSceneOpened"):
@@ -1230,33 +1702,54 @@ class AttributeManagerSlots:
                 lambda w=widget: self._on_scene_change(w),
                 owner=self,
             )
+        # Time changes don't fire AttributeChanged callbacks for animated
+        # attrs, so subscribe separately and run the lightweight values-only
+        # updater (no full table rebuild — preserves selection / scroll).
+        mgr.subscribe(
+            "timeChanged",
+            lambda w=widget: self._on_time_changed(w),
+            owner=self,
+        )
         mgr.connect_cleanup(widget, owner=self)
 
-        # --- OpenMaya connection callback ---
+        # Global DG connection-changed callback — managed by SJM so it
+        # tears down with the rest of our subscriptions.
         try:
             import maya.api.OpenMaya as om2
 
             def _on_connection_change(src_plug, dst_plug, made, *args):
-                """Fires when any DG connection is made or broken."""
-                self._on_scene_change(widget)
+                # Defensive wrap: any exception escaping here enters
+                # Maya's DG callback pipeline and can destabilize it.
+                try:
+                    if self._destroyed:
+                        return
+                    self._on_scene_change(widget)
+                except Exception:
+                    pass
 
-            cb_id = om2.MDGMessage.addConnectionCallback(_on_connection_change)
-            self._om_callback_ids = [cb_id]
-        except Exception:
-            self._om_callback_ids = []
+            mgr.add_om_callback(
+                om2.MDGMessage.addConnectionCallback,
+                _on_connection_change,
+                owner=self,
+            )
+        except ImportError:
+            pass
 
-        # --- Per-node attribute-added/removed callbacks ---
-        self._node_attr_callback_ids = []
+        # Per-node attribute-added/removed and value-changed callbacks.
+        self._attr_change_tokens = []
         self._register_attr_change_callbacks(widget)
 
     def _register_attr_change_callbacks(self, widget):
-        """Register per-node attribute-added/removed and value-changed callbacks.
+        """Register per-node attribute callbacks via ``ScriptJobManager``.
 
-        Uses ``MNodeMessage.addAttributeAddedOrRemovedCallback`` to detect
-        when custom attributes are created or deleted on the selected nodes,
-        and ``MNodeMessage.addAttributeChangedCallback`` to detect value
-        changes (e.g. via channel box) so enum comboboxes stay in sync.
-        Re-called after every selection change to track the new selection.
+        - ``MNodeMessage.addAttributeAddedOrRemovedCallback`` detects when
+          custom attributes are added/removed on the selected nodes.
+        - ``MNodeMessage.addAttributeChangedCallback`` detects value
+          changes (e.g. from the channel box) so the table stays in sync.
+
+        Re-called after every selection change.  Tokens are tracked in
+        :attr:`_attr_change_tokens` so they can be cleared independently
+        of the persistent global subscriptions.
         """
         self._cleanup_attr_change_callbacks()
 
@@ -1266,136 +1759,398 @@ class AttributeManagerSlots:
 
         try:
             import maya.api.OpenMaya as om2
-
-            def _on_attr_added_removed(msg, plug, *args):
-                self._on_scene_change(widget)
-
-            def _on_attr_value_changed(msg, plug, other_plug, *args):
-                # Only react to value-set messages.
-                if not (msg & om2.MNodeMessage.kAttributeSet):
-                    return
-                self._on_attr_value_set(widget, plug)
-
-            sel = om2.MSelectionList()
-            for node_name in nodes:
-                try:
-                    sel.clear()
-                    sel.add(node_name)
-                    mobj = sel.getDependNode(0)
-                    cb_id = om2.MNodeMessage.addAttributeAddedOrRemovedCallback(
-                        mobj, _on_attr_added_removed
-                    )
-                    self._node_attr_callback_ids.append(cb_id)
-                    cb_id2 = om2.MNodeMessage.addAttributeChangedCallback(
-                        mobj, _on_attr_value_changed
-                    )
-                    self._node_attr_callback_ids.append(cb_id2)
-                except Exception:
-                    pass
         except ImportError:
-            pass
+            return
 
-    def _on_attr_value_set(self, widget, plug):
+        # Message bits we care about on the value/lock callback.
+        # Lock changes use distinct bits from kAttributeSet — without
+        # these, external lock toggles (channel box, other tools) never
+        # reach the table and the icon goes stale.
+        lock_mask = (
+            om2.MNodeMessage.kAttributeLocked | om2.MNodeMessage.kAttributeUnlocked
+        )
+        set_mask = om2.MNodeMessage.kAttributeSet
+
+        def _on_attr_added_removed(msg, plug, *args):
+            # Wrap defensively: exceptions escaping into Maya's API 2.0
+            # callback pipeline can destabilize the DG.
+            try:
+                if self._destroyed:
+                    return
+                self._on_scene_change(widget)
+            except Exception:
+                pass
+
+        def _on_attr_value_changed(msg, plug, other_plug, *args):
+            # Mutating Qt widgets synchronously from an MNodeMessage
+            # callback (which fires on the DG evaluation path) is a
+            # known crash vector during playback / batch edits.  We
+            # enqueue the touched attribute name and schedule a single
+            # coalesced flush on the idle loop — bursts of hundreds of
+            # kAttributeSet messages (value drags) collapse into one
+            # UI pass instead of flooding the deferred queue.
+            try:
+                if self._destroyed:
+                    return
+                try:
+                    attr_name = plug.partialName(useLongNames=True)
+                except Exception:
+                    return
+                touched = False
+                if msg & lock_mask:
+                    self._pending_lock_attrs.add(attr_name)
+                    touched = True
+                if msg & set_mask:
+                    self._pending_value_attrs.add(attr_name)
+                    touched = True
+                if touched:
+                    self._schedule_attr_flush(widget)
+            except Exception:
+                pass
+
+        mgr = ScriptJobManager.instance()
+        sel = om2.MSelectionList()
+        for node_name in nodes:
+            try:
+                sel.clear()
+                sel.add(node_name)
+                mobj = sel.getDependNode(0)
+            except Exception:
+                continue
+            for register_fn, callback in (
+                (
+                    om2.MNodeMessage.addAttributeAddedOrRemovedCallback,
+                    _on_attr_added_removed,
+                ),
+                (om2.MNodeMessage.addAttributeChangedCallback, _on_attr_value_changed),
+            ):
+                token = mgr.add_om_callback(register_fn, mobj, callback, owner=self)
+                if token is not None:
+                    self._attr_change_tokens.append(token)
+
+    def _is_widget_alive(self, widget):
+        """Return ``True`` if *widget*'s C++ pointer is still valid.
+
+        Qt wrappers survive their underlying QObject destruction; any
+        access then raises ``RuntimeError``.  We probe a cheap attribute
+        (``rowCount``) so the check never mutates state.
+        """
+        if widget is None:
+            return False
+        try:
+            widget.rowCount()
+            return True
+        except RuntimeError:
+            return False
+        except Exception:
+            return False
+
+    def _schedule_attr_flush(self, widget):
+        """Schedule a single coalesced flush of pending attribute updates.
+
+        Repeated calls while a flush is already pending are no-ops —
+        hundreds of kAttributeSet bursts collapse into one UI pass.
+        """
+        if self._attr_flush_pending or self._destroyed:
+            return
+        self._attr_flush_pending = True
+        cmds.evalDeferred(lambda w=widget: self._flush_attr_updates(w))
+
+    def _flush_attr_updates(self, widget):
+        """Drain pending value / lock updates in a single pass.
+
+        Called from ``evalDeferred``; defensive throughout because the
+        widget may have been destroyed and because we never want an
+        exception to reach Maya's main event loop.
+
+        If a full ``_refresh_table`` is currently running, drop the
+        pending queues and bail — the rebuild reads fresh state from
+        Maya for every visible attr, so any queued updates are
+        superseded.  Running the flush concurrently with the rebuild
+        would race on cell-widget state (``widget.actions.set`` calls
+        from both paths on the same rows).
+        """
+        self._attr_flush_pending = False
+
+        if self._destroyed:
+            return
+        if self._refreshing:
+            # Refresh will pick up fresh values — drop superseded
+            # updates.  New callbacks firing after refresh completes
+            # will schedule their own flush.
+            self._pending_value_attrs.clear()
+            self._pending_lock_attrs.clear()
+            return
+        if not self._is_widget_alive(widget):
+            self.cleanup_scene_callbacks()
+            return
+
+        # Snapshot-and-clear so late-arriving callbacks can queue up
+        # again without being lost mid-iteration.
+        lock_attrs = list(self._pending_lock_attrs)
+        self._pending_lock_attrs.clear()
+        value_attrs = list(self._pending_value_attrs)
+        self._pending_value_attrs.clear()
+
+        for name in lock_attrs:
+            try:
+                self._on_attr_lock_changed(widget, name)
+            except RuntimeError:
+                self.cleanup_scene_callbacks()
+                return
+            except Exception:
+                pass
+
+        for name in value_attrs:
+            try:
+                self._on_attr_value_set(widget, name)
+            except RuntimeError:
+                self.cleanup_scene_callbacks()
+                return
+            except Exception:
+                pass
+
+    def _on_attr_value_set(self, widget, attr_name):
         """Update the table cell for a single attribute whose value just changed.
 
         For enum attributes with a combobox widget this updates the
         combobox index directly (no full rebuild).  For other types it
         updates the cell text.
+
+        Invoked via ``evalDeferred`` from an MNodeMessage callback, so
+        the widget may have been destroyed between schedule and dispatch;
+        all widget access is guarded.
         """
         # Skip echo when we ourselves just set the value from the combobox.
         if getattr(self, "_combo_setting", False):
             return
 
-        attr_name = plug.partialName(useLongNames=True)
         nodes = self.controller.get_selected_nodes()
         if not nodes:
             return
         primary = nodes[0]
 
-        # Find the table row for this attribute.
-        for row in range(widget.rowCount()):
-            name_item = widget.item(row, self.COL_NAME)
-            if not name_item or name_item.text().strip() != attr_name:
-                continue
+        try:
+            row_count = widget.rowCount()
+        except RuntimeError:
+            self.cleanup_scene_callbacks()
+            return
 
-            combo = widget.cellWidget(row, self.COL_VALUE)
-            if combo is not None:
-                # Enum combobox — update index without re-firing our signal.
-                try:
-                    maya_idx = cmds.getAttr(f"{primary}.{attr_name}")
-                    maya_indices = combo.property("_maya_indices") or []
-                    if maya_idx in maya_indices:
-                        pos = maya_indices.index(maya_idx)
-                    else:
-                        pos = 0
-                    combo.blockSignals(True)
-                    combo.setCurrentIndex(pos)
-                    combo.blockSignals(False)
-                except Exception:
-                    pass
-            else:
-                # Plain text cell — update displayed value.
-                attr_type = self.controller.get_attr_type(primary, attr_name)
-                if attr_type == "enum":
-                    val_str = self.controller.get_enum_label(primary, attr_name) or ""
+        # Find the table row for this attribute.
+        try:
+            for row in range(row_count):
+                name_item = widget.item(row, self.COL_NAME)
+                if not name_item or name_item.text().strip() != attr_name:
+                    continue
+
+                combo = widget.cellWidget(row, self.COL_VALUE)
+                if combo is not None:
+                    # Enum combobox — update index without re-firing our signal.
+                    try:
+                        maya_idx = cmds.getAttr(f"{primary}.{attr_name}")
+                        maya_indices = combo.property("_maya_indices") or []
+                        if maya_idx in maya_indices:
+                            pos = maya_indices.index(maya_idx)
+                        else:
+                            pos = 0
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(pos)
+                        combo.blockSignals(False)
+                    except Exception:
+                        pass
                 else:
-                    val = self.controller.get_attr_value(primary, attr_name)
-                    val_str = self.controller.format_value(val)
-                cell = widget.item(row, self.COL_VALUE)
-                if cell:
-                    widget.blockSignals(True)
-                    cell.setText(val_str)
-                    widget.blockSignals(False)
-            break
+                    # Plain text cell — update displayed value.
+                    attr_type = self.controller.get_attr_type(primary, attr_name)
+                    if attr_type == "enum":
+                        val_str = (
+                            self.controller.get_enum_label(primary, attr_name) or ""
+                        )
+                    else:
+                        val = self.controller.get_attr_value(primary, attr_name)
+                        val_str = self.controller.format_value(val)
+                    cell = widget.item(row, self.COL_VALUE)
+                    if cell:
+                        widget.blockSignals(True)
+                        cell.setText(val_str)
+                        widget.blockSignals(False)
+                break
+        except RuntimeError:
+            self.cleanup_scene_callbacks()
+
+    def _on_attr_lock_changed(self, widget, attr_name):
+        """Update the Lock action-column icon for *attr_name*.
+
+        Driven by ``kAttributeLocked`` / ``kAttributeUnlocked`` messages so
+        external lock toggles (channel box, scripts, other tools) keep
+        the attribute manager's lock icon in sync.  No full rebuild —
+        preserves selection and scroll.
+        """
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return
+        primary = nodes[0]
+
+        try:
+            locked = cmds.getAttr(f"{primary}.{attr_name}", lock=True)
+        except Exception:
+            return
+
+        state = "locked" if locked else "unlocked"
+        try:
+            row_count = widget.rowCount()
+            for row in range(row_count):
+                name_item = widget.item(row, self.COL_NAME)
+                if name_item and name_item.text().strip() == attr_name:
+                    if widget.actions.get(row, self.COL_LOCK) != state:
+                        widget.actions.set(row, self.COL_LOCK, state)
+                    break
+        except RuntimeError:
+            self.cleanup_scene_callbacks()
 
     def _cleanup_attr_change_callbacks(self):
-        """Remove per-node attribute-added/removed callbacks."""
-        ids = getattr(self, "_node_attr_callback_ids", [])
-        if not ids:
-            return
-        try:
-            import maya.api.OpenMaya as om2
+        """Remove per-node attribute callbacks (SJM-managed)."""
+        tokens = getattr(self, "_attr_change_tokens", None)
+        if tokens:
+            mgr = ScriptJobManager.instance()
+            for token in tokens:
+                mgr.unsubscribe(token)
+        self._attr_change_tokens = []
 
-            for cb_id in ids:
-                try:
-                    om2.MMessage.removeCallback(cb_id)
-                except Exception:
-                    pass
-        except ImportError:
-            pass
-        self._node_attr_callback_ids = []
+    def _on_time_changed(self, widget):
+        """Lightweight refresh for ``timeChanged`` — values + key state only.
+
+        Skips type/lock detection and does NOT rebuild the table; updates
+        existing rows in place so the user's selection and scroll position
+        are preserved during scrubbing.
+        """
+        # Coalesce bursts of timeChanged events.
+        if getattr(self, "_time_refresh_pending", False) or self._destroyed:
+            return
+        self._time_refresh_pending = True
+
+        def _do():
+            self._time_refresh_pending = False
+            if self._destroyed:
+                return
+            if not self._is_widget_alive(widget):
+                self.cleanup_scene_callbacks()
+                return
+            try:
+                self._update_values_only(widget)
+            except Exception:
+                pass
+
+        cmds.evalDeferred(_do)
+
+    def _update_values_only(self, widget):
+        """Update value cells and connection-state icons for current rows.
+
+        All widget access is wrapped because a stale C++ pointer (the Qt
+        wrapper survives but the underlying object is gone) raises
+        ``RuntimeError`` rather than evaluating falsy — so a simple
+        ``if not widget`` check would let the failure escape.
+        """
+        try:
+            row_count = widget.rowCount()
+        except RuntimeError:
+            # Widget was destroyed between schedule and dispatch.
+            self.cleanup_scene_callbacks()
+            return
+
+        nodes = self.controller.get_selected_nodes()
+        if not nodes or row_count == 0:
+            return
+
+        try:
+            # Collect attribute names already shown in the table.
+            attr_names = []
+            for row in range(row_count):
+                name_item = widget.item(row, self.COL_NAME)
+                if name_item:
+                    name = name_item.text().strip()
+                    if name:
+                        attr_names.append(name)
+            if not attr_names:
+                return
+
+            data = self.controller.collect_value_strings(nodes, attr_names)
+
+            widget.blockSignals(True)
+            try:
+                for row in range(row_count):
+                    name_item = widget.item(row, self.COL_NAME)
+                    if not name_item:
+                        continue
+                    attr_name = name_item.text().strip()
+                    if attr_name not in data:
+                        continue
+                    val_str, conn_type = data[attr_name]
+
+                    # Value cell — only update plain text cells; enum
+                    # comboboxes are kept current via the
+                    # AttributeChanged callback path.
+                    if widget.cellWidget(row, self.COL_VALUE) is None:
+                        cell = widget.item(row, self.COL_VALUE)
+                        if cell and cell.text() != val_str:
+                            cell.setText(val_str)
+
+                    # Connection / key state — refresh the action icon so
+                    # the "key at current time" colour follows the time
+                    # slider.
+                    if widget.actions.get(row, self.COL_CONN) != conn_type:
+                        widget.actions.set(row, self.COL_CONN, conn_type)
+            finally:
+                widget.blockSignals(False)
+        except RuntimeError:
+            # Widget destroyed mid-update — silently drop.
+            self.cleanup_scene_callbacks()
 
     def _on_scene_change(self, widget):
         """Debounced callback for scriptJob events."""
-        if self._refresh_pending:
+        if self._refresh_pending or self._destroyed:
             return
         self._refresh_pending = True
 
         def _do_refresh():
             self._refresh_pending = False
-            try:
-                # If widget is dead or hidden, skip refresh
-                if not widget:  # or not widget.isVisible():
-                    return
-            except Exception:
-                # Widget likely destroyed
+            if self._destroyed:
+                return
+            if not self._is_widget_alive(widget):
                 self.cleanup_scene_callbacks()
                 return
 
-            self._refresh_table(widget)
-
-            # Re-register per-node callbacks for the (possibly new) selection.
-            self._register_attr_change_callbacks(widget)
-
-            # Reconnect the CB signal — the C++ pointer may have changed.
-            self._connect_cb_signal()
+            try:
+                self._refresh_table(widget)
+                # Re-register per-node callbacks for the (possibly new)
+                # selection.
+                self._register_attr_change_callbacks(widget)
+                # Reconnect the CB signal — the C++ pointer may have
+                # changed.
+                self._connect_cb_signal()
+            except RuntimeError:
+                self.cleanup_scene_callbacks()
+            except Exception:
+                # Defensive — anything escaping here is a no-op on the
+                # idle loop; surfacing traces from a scriptJob is
+                # unhelpful to the user.
+                pass
 
         cmds.evalDeferred(_do_refresh)
 
     def cleanup_scene_callbacks(self):
-        """Remove ScriptJobManager subscriptions, OpenMaya callbacks, and
-        disconnect the Channel Box selection signal."""
-        # Disconnect CB signal
+        """Tear down every event subscription owned by this slots instance.
+
+        SJM unifies both ``pm.scriptJob`` events and ``MMessage`` callbacks
+        under one ``owner=self`` grouping, so a single
+        :meth:`ScriptJobManager.unsubscribe_all` call handles them all.
+        The Channel Box's Qt selection signal is the only thing managed
+        outside SJM and is disconnected separately.
+        """
+        # Flip the guard *first* — any deferred callbacks that fire
+        # between now and the actual unsubscribe will early-return.
+        self._destroyed = True
+
+        # Disconnect the Channel Box Qt signal (not an SJM event).
         try:
             from mayatk.ui_utils.channel_box import ChannelBox
 
@@ -1404,28 +2159,20 @@ class AttributeManagerSlots:
             pass
         self._cb_signal_connected = False
 
-        # Clean up per-node attr callbacks first (synchronous)
-        self._cleanup_attr_change_callbacks()
+        # Clear per-node attr token list so a stale list doesn't linger.
+        self._attr_change_tokens = []
 
-        # Unsubscribe from centralized manager
-        ScriptJobManager.instance().unsubscribe_all(self)
+        # Drop any buffered attribute updates so a late flush doesn't
+        # fire against a torn-down widget.
+        self._pending_value_attrs.clear()
+        self._pending_lock_attrs.clear()
 
-        # Clean up OpenMaya callbacks
-        om_ids = list(getattr(self, "_om_callback_ids", []))
-        self._om_callback_ids = []
-
-        if om_ids:
-
-            def _kill_om(cb_ids):
-                try:
-                    import maya.api.OpenMaya as om2
-
-                    for cb_id in cb_ids:
-                        om2.MMessage.removeCallback(cb_id)
-                except Exception:
-                    pass
-
-            cmds.evalDeferred(lambda: _kill_om(om_ids))
+        # One call removes every script-job event AND every MMessage
+        # callback registered with ``owner=self``.
+        try:
+            ScriptJobManager.instance().unsubscribe_all(self)
+        except Exception:
+            pass
 
     def __del__(self):
         self.cleanup_scene_callbacks()
@@ -1446,9 +2193,5 @@ class AttributeManagerSlots:
         )
 
     def _resolve_footer_text(self) -> str:
-        nodes = self.controller.get_selected_nodes()
-        if not nodes:
-            return "No selection"
-        names = ", ".join(n.rsplit("|", 1)[-1] for n in nodes[:3])
-        suffix = f" (+{len(nodes) - 3})" if len(nodes) > 3 else ""
-        return f"{names}{suffix}"
+        """Footer now reports warnings / info; the target name lives in ``txt001``."""
+        return self._footer_warning or ""

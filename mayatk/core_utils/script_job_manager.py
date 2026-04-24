@@ -1,18 +1,28 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Centralized Maya scriptJob manager.
+"""Centralized Maya event subscription manager.
 
-Multiplexes one ``pm.scriptJob`` per event name to *N* subscriber
-callbacks, eliminating duplicated jobs across tools and providing a
-single, reliable cleanup path.
+Two kinds of Maya event sources are unified under one cleanup path:
+
+1. ``pm.scriptJob`` events (``SelectionChanged``, ``timeChanged``, …) —
+   multiplexed so at most one ``pm.scriptJob`` exists per event name.
+2. ``maya.api.OpenMaya.MMessage`` callbacks (``addConnectionCallback``,
+   ``addAttributeChangedCallback``, …) — registered through SJM so they
+   share the same ``owner`` / ``unsubscribe`` / widget-destroy machinery.
 
 Usage::
 
     from mayatk.core_utils.script_job_manager import ScriptJobManager
+    import maya.api.OpenMaya as om2
 
     mgr = ScriptJobManager.instance()
     mgr.subscribe("SceneOpened", self._on_scene, owner=self)
     mgr.subscribe("SelectionChanged", self._on_sel, owner=self, ephemeral=True)
+    mgr.add_om_callback(
+        om2.MDGMessage.addConnectionCallback,
+        self._on_connection_change,
+        owner=self,
+    )
     mgr.connect_cleanup(self.ui, owner=self)  # auto-unsubscribe on widget destroy
 """
 from __future__ import annotations
@@ -32,7 +42,7 @@ _SCENE_CHANGE_EVENTS = frozenset({"SceneOpened", "NewSceneOpened"})
 
 
 class _Subscription:
-    """Internal subscription record."""
+    """Internal subscription record for a ``pm.scriptJob`` listener."""
 
     __slots__ = ("token", "event", "callback", "owner", "ephemeral")
 
@@ -42,6 +52,22 @@ class _Subscription:
         self.callback = callback
         self.owner = owner
         self.ephemeral = ephemeral
+
+
+class _OMSubscription:
+    """Internal subscription record for an ``MMessage`` callback.
+
+    The ``cb_id`` is the value returned by the OpenMaya registration
+    function (e.g. ``MDGMessage.addConnectionCallback``).  Removal goes
+    through ``MMessage.removeCallback``.
+    """
+
+    __slots__ = ("token", "cb_id", "owner")
+
+    def __init__(self, token, cb_id, owner):
+        self.token = token
+        self.cb_id = cb_id
+        self.owner = owner
 
 
 class ScriptJobManager:
@@ -84,6 +110,7 @@ class ScriptJobManager:
         self._subs: Dict[int, _Subscription] = {}
         self._events: Dict[str, List[int]] = {}  # event -> [tokens]
         self._jobs: Dict[str, int] = {}  # event -> scriptJob id
+        self._om_subs: Dict[int, _OMSubscription] = {}
         self._counter = itertools.count(1)
         self._connected_widgets: Set[int] = set()
         self._suppressed: Dict[int, bool] = {}  # token -> True while suppressed
@@ -126,8 +153,78 @@ class ScriptJobManager:
         self._ensure_job(event)
         return token
 
+    def add_om_callback(
+        self,
+        register_fn: Callable,
+        *register_args: Any,
+        owner: Any = None,
+    ) -> Optional[int]:
+        """Register an OpenMaya ``MMessage`` callback under SJM management.
+
+        The callback is created by calling ``register_fn(*register_args)``.
+        The returned callback id is later removed via
+        ``maya.api.OpenMaya.MMessage.removeCallback`` when the
+        subscription is torn down (via :meth:`unsubscribe`,
+        :meth:`unsubscribe_all`, or widget destruction).
+
+        Examples
+        --------
+        Register a global DG connection-changed callback::
+
+            mgr.add_om_callback(
+                om2.MDGMessage.addConnectionCallback,
+                self._on_connection_change,
+                owner=self,
+            )
+
+        Register a per-node attribute-changed callback::
+
+            mgr.add_om_callback(
+                om2.MNodeMessage.addAttributeChangedCallback,
+                mobj,
+                self._on_attr_changed,
+                owner=self,
+            )
+
+        Parameters
+        ----------
+        register_fn : callable
+            The OpenMaya registration function (e.g.
+            ``om2.MDGMessage.addConnectionCallback``).
+        *register_args
+            Forwarded to *register_fn* in order.  The callback function is
+            usually the last positional argument.
+        owner : object, optional
+            Grouping key for :meth:`unsubscribe_all`.
+
+        Returns
+        -------
+        int or None
+            Opaque token for :meth:`unsubscribe`, or ``None`` if the
+            registration failed.
+        """
+        try:
+            cb_id = register_fn(*register_args)
+        except Exception as exc:
+            logger.debug(
+                "ScriptJobManager.add_om_callback: %s failed (%s)",
+                register_fn,
+                exc,
+            )
+            return None
+        token = next(self._counter)
+        self._om_subs[token] = _OMSubscription(token, cb_id, owner)
+        return token
+
     def unsubscribe(self, token: int) -> None:
-        """Remove a single subscription by *token*."""
+        """Remove a single subscription by *token* (script job or OM)."""
+        # OpenMaya callback subscription?
+        om_sub = self._om_subs.pop(token, None)
+        if om_sub is not None:
+            self._remove_om_callback(om_sub.cb_id)
+            return
+
+        # ScriptJob subscription
         sub = self._subs.pop(token, None)
         self._suppressed.pop(token, None)
         if sub is None:
@@ -142,8 +239,9 @@ class ScriptJobManager:
                 self._kill_job(sub.event)
 
     def unsubscribe_all(self, owner: Any) -> None:
-        """Remove every subscription registered under *owner*."""
+        """Remove every subscription registered under *owner* (both kinds)."""
         to_remove = [t for t, s in self._subs.items() if s.owner is owner]
+        to_remove += [t for t, s in self._om_subs.items() if s.owner is owner]
         for token in to_remove:
             self.unsubscribe(token)
 
@@ -167,11 +265,14 @@ class ScriptJobManager:
         self._suppressed.pop(token, None)
 
     def teardown(self) -> None:
-        """Kill every managed scriptJob and clear all subscriptions."""
+        """Kill every managed scriptJob, OM callback, and subscription."""
         for event in list(self._jobs):
             self._kill_job(event)
+        for sub in list(self._om_subs.values()):
+            self._remove_om_callback(sub.cb_id)
         self._subs.clear()
         self._events.clear()
+        self._om_subs.clear()
         self._suppressed.clear()
         self._connected_widgets.clear()
 
@@ -216,6 +317,19 @@ class ScriptJobManager:
         # Prune ephemeral subscriptions on scene change
         if event in _SCENE_CHANGE_EVENTS:
             self._prune_ephemerals()
+
+    def _remove_om_callback(self, cb_id: Any) -> None:
+        """Remove a single OpenMaya callback by id (best effort)."""
+        try:
+            import maya.api.OpenMaya as om2
+
+            om2.MMessage.removeCallback(cb_id)
+        except Exception as exc:
+            logger.debug(
+                "ScriptJobManager: failed to remove OM callback %s (%s)",
+                cb_id,
+                exc,
+            )
 
     def _prune_ephemerals(self) -> None:
         """Remove all ephemeral subscriptions (scene changed)."""
