@@ -17,6 +17,7 @@ from mayatk.node_utils.attributes.attribute_manager._attribute_manager import (
 )
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
 class AttributeManagerSlots:
@@ -74,6 +75,9 @@ class AttributeManagerSlots:
         self._current_target = None
         self._filter_invert = False  # replaces the deleted chk000 checkbox
         self._footer_controller = self._create_footer_controller()
+        self._footer_compact_btn = None
+        self._footer_lineedit = None
+        self._footer_edit_page = -1
 
         # Coalescing state for MNodeMessage callbacks.  Bursts of
         # attribute-changed events (value drags, batch setAttr, playback)
@@ -157,13 +161,42 @@ class AttributeManagerSlots:
             settings_key=False,
         )
 
-        # txt001 — current target display + inline rename for single selection.
+        # txt001 — current target display + double-click-to-rename.
+        # Read-only by default; double-click enters edit mode.
         txt1 = self.ui.txt001
         txt1.setPlaceholderText("No selection")
-        txt1.setToolTip(
-            "Currently editing — type a new name and press Enter to rename."
-        )
+        txt1.setToolTip("Double-click to rename.")
+        txt1.setReadOnly(True)
         txt1.editingFinished.connect(self._on_target_renamed)
+
+        def _txt001_dbl_click(event, _orig=txt1.mouseDoubleClickEvent):
+            if txt1.isReadOnly() and self._current_target is not None:
+                txt1.setReadOnly(False)
+                txt1.setToolTip(
+                    f"{self._current_target}"
+                    "\n\n(Type a new name and press Enter to rename.)"
+                )
+                txt1.selectAll()
+                txt1.setFocus()
+                return
+            _orig(event)
+
+        txt1.mouseDoubleClickEvent = _txt001_dbl_click
+
+        def _txt001_key_press(event, _orig=txt1.keyPressEvent):
+            from uitk.widgets.header import QtCore
+
+            if event.key() == QtCore.Qt.Key_Escape and not txt1.isReadOnly():
+                if self._current_target:
+                    txt1.blockSignals(True)
+                    txt1.setText(self._current_target.rsplit("|", 1)[-1])
+                    txt1.blockSignals(False)
+                txt1.setReadOnly(True)
+                txt1.setToolTip("Double-click to rename.")
+                return
+            _orig(event)
+
+        txt1.keyPressEvent = _txt001_key_press
         # "target" icon (not "pin") — avoids visual conflict with the
         # existing PinValuesOption plugin, and reads naturally as
         # "restrict to one target object".
@@ -195,6 +228,9 @@ class AttributeManagerSlots:
 
         # Stop timer when the UI is destroyed to avoid dangling callbacks.
         self.ui.destroyed.connect(self._filter_timer.stop)
+
+        # Wire compact-mode footer (edit page + target-toggle button).
+        self._setup_compact_footer()
 
     def apply_launch_config(self, targets=None, filter=None, search=None):
         """Configure the window from a :func:`launch` call.
@@ -299,13 +335,16 @@ class AttributeManagerSlots:
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Attribute Manager — Inspect, edit, and manage Maya node attributes.\n\n"
-                "• Filter attributes by type: Custom, Keyable, Locked, Connected, etc.\n"
-                "• Edit attribute values, lock/unlock, and toggle keyable state.\n"
-                "• Create new custom attributes on selected objects.\n"
-                "• Select Shape or History nodes from the header menu.\n"
-                "• Open Maya's Channel Control or Connection Editor."
+            setToolTip=fmt(
+                title="Attribute Manager",
+                body="Inspect, edit, and manage Maya node attributes.",
+                bullets=[
+                    "Filter attributes by type: Custom, Keyable, Locked, Connected, etc.",
+                    "Edit attribute values, lock/unlock, and toggle keyable state.",
+                    "Create new custom attributes on selected objects.",
+                    "Select Shape or History nodes from the header menu.",
+                    "Open Maya's <b>Channel Control</b> or <b>Connection Editor</b>.",
+                ],
             ),
         )
 
@@ -487,17 +526,47 @@ class AttributeManagerSlots:
         self.ui.tbl000.setColumnHidden(self.COL_TYPE, not visible)
 
     def _on_toggle_compact_view(self, enabled):
-        """Toggle compact view: ~20% shorter rows and hide the table's header."""
+        """Toggle compact view: shorter rows, hide table header, swap txt001↔footer name."""
+        leaving_compact = self._compact_view and not enabled
         self._compact_view = bool(enabled)
+
         # The *table's* horizontal header (the column label strip), NOT
         # the window's top-banner Header widget.  The window header stays
         # visible so the title / menu button remain accessible.
         self.ui.tbl000.horizontalHeader().setVisible(not self._compact_view)
         self._apply_row_height(self.ui.tbl000)
 
+        # Only one of (txt001, footer-name) is visible at a time.
+        txt1 = self.ui.txt001
+        txt1_widget = getattr(txt1, "container", None) or txt1
+        try:
+            txt1_widget.setVisible(not self._compact_view)
+        except Exception:
+            pass
+
+        # Footer compact-mode button mirrors the txt001 option_box target button.
+        if self._footer_compact_btn is not None:
+            try:
+                self._footer_compact_btn.setVisible(self._compact_view)
+            except Exception:
+                pass
+
+        # When leaving compact mode, reset single_object_mode so the
+        # option_box button (which starts in state-0 = multi-object) stays
+        # consistent with the actual mode.
+        if leaving_compact:
+            self.controller.single_object_mode = False
+
+        if self._footer_controller:
+            try:
+                self._footer_controller.update()
+            except Exception:
+                pass
+
     def _on_toggle_single_object(self, enabled):
         """Toggle single-object mode."""
         self.controller.single_object_mode = bool(enabled)
+        self._update_compact_btn_state()
         self._refresh_table(self.ui.tbl000)
 
     def _set_filter_enabled(self, enabled):
@@ -553,10 +622,8 @@ class AttributeManagerSlots:
                 self._current_target = nodes[0]
                 short = nodes[0].rsplit("|", 1)[-1]
                 txt.setText(short)
-                txt.setReadOnly(False)
-                txt.setToolTip(
-                    f"{nodes[0]}\n\n(Type a new name and press Enter to rename.)"
-                )
+                txt.setReadOnly(True)
+                txt.setToolTip(f"{nodes[0]}\n\n(Double-click to rename.)")
             else:
                 self._current_target = None
                 txt.setText(f"Multi-selection ({len(nodes)})")
@@ -569,7 +636,11 @@ class AttributeManagerSlots:
     def _on_target_renamed(self):
         """Handle inline rename of the single target via ``txt001``."""
         txt = self.ui.txt001
-        if txt.isReadOnly():
+        # Return to display mode first; prevents double-fire on Enter + focus-loss.
+        was_editing = not txt.isReadOnly()
+        txt.setReadOnly(True)
+        txt.setToolTip("Double-click to rename.")
+        if not was_editing:
             return
         old_full = self._current_target
         new_name = txt.text().strip()
@@ -580,8 +651,6 @@ class AttributeManagerSlots:
             return
         new_full = self.controller.rename_node(old_full, new_name)
         if new_full and new_full != old_full:
-            # Update the cached target *before* refresh so a duplicate
-            # editingFinished (focus loss + Enter) becomes a no-op.
             self._current_target = new_full
             if self.controller.is_pinned:
                 self.controller.pin_targets([new_full])
@@ -610,17 +679,17 @@ class AttributeManagerSlots:
 
         clr = self.ACTION_COLOR_MAP
         widget.option_box.add_action(
-            icon="ban",
+            icon="invert",
             tooltip="Invert filter",
             states=[
                 {
-                    "icon": "ban",
+                    "icon": "invert",
                     "tooltip": "Invert OFF — click to show the complement of the filter",
                     "color": clr["off"],
                     "callback": lambda: self._set_filter_invert(True),
                 },
                 {
-                    "icon": "ban",
+                    "icon": "invert",
                     "tooltip": "Invert ON — click to show the normal filter set",
                     "color": clr["active"],
                     "callback": lambda: self._set_filter_invert(False),
@@ -2181,6 +2250,142 @@ class AttributeManagerSlots:
     # Footer
     # ------------------------------------------------------------------
 
+    def _setup_compact_footer(self):
+        """Wire the footer for compact-mode use.
+
+        - Adds a QLineEdit as a third page in the footer's stacked widget
+          so double-clicking the footer label allows inline node rename.
+        - Adds a target-object toggle button visible only in compact mode.
+        """
+        footer = getattr(self.ui, "footer", None)
+        if not footer:
+            return
+
+        # -- Inline rename QLineEdit (page 2 of footer stacked widget) --------
+        try:
+            from qtpy import QtWidgets as _QW, QtCore as _QC
+
+            le = _QW.QLineEdit()
+            le.setFrame(False)
+            le.setStyleSheet("QLineEdit { background: transparent; border: none; }")
+            footer._stacked_widget.addWidget(le)
+            self._footer_lineedit = le
+            self._footer_edit_page = footer._stacked_widget.indexOf(le)
+            le.editingFinished.connect(self._on_footer_edit_finished)
+
+            def _footer_le_key_press(event, _orig=le.keyPressEvent):
+                if event.key() == _QC.Qt.Key_Escape:
+                    # Block signals so clearFocus() doesn't fire editingFinished
+                    # (which would commit as a rename — the opposite of cancel).
+                    le.blockSignals(True)
+                    try:
+                        footer._stacked_widget.setCurrentIndex(0)
+                    except Exception:
+                        pass
+                    le.clearFocus()
+                    le.blockSignals(False)
+                    return
+                _orig(event)
+
+            le.keyPressEvent = _footer_le_key_press
+        except Exception:
+            pass
+
+        # -- Double-click on footer label enters rename mode ------------------
+        try:
+
+            _orig_lbl_dbl = footer._status_label.mouseDoubleClickEvent
+
+            def _footer_label_dbl_click(event, _orig=_orig_lbl_dbl):
+                if self._compact_view and self._current_target is not None:
+                    self._enter_footer_edit_mode()
+                    return
+                _orig(event)
+
+            footer._status_label.mouseDoubleClickEvent = _footer_label_dbl_click
+        except Exception:
+            pass
+
+        # -- Compact target-object toggle button ------------------------------
+        try:
+            self._footer_compact_btn = footer.add_action_button(
+                icon_name="target",
+                tooltip=(
+                    "Multi-object mode — click to switch to single-object.\n"
+                    "All edits are broadcast to every selected node."
+                ),
+                callback=self._on_footer_compact_btn_clicked,
+            )
+            self._footer_compact_btn.setVisible(False)
+        except Exception:
+            self._footer_compact_btn = None
+
+    def _enter_footer_edit_mode(self):
+        """Switch the footer to an inline QLineEdit for node rename."""
+        footer = getattr(self.ui, "footer", None)
+        if not footer or self._footer_lineedit is None or self._footer_edit_page < 0:
+            return
+        short = (self._current_target or "").rsplit("|", 1)[-1]
+        self._footer_lineedit.blockSignals(True)
+        self._footer_lineedit.setText(short)
+        self._footer_lineedit.blockSignals(False)
+        footer._stacked_widget.setCurrentIndex(self._footer_edit_page)
+        self._footer_lineedit.selectAll()
+        self._footer_lineedit.setFocus()
+
+    def _on_footer_edit_finished(self):
+        """Commit (or discard) a rename initiated via the footer QLineEdit."""
+        footer = getattr(self.ui, "footer", None)
+        if footer:
+            try:
+                footer._stacked_widget.setCurrentIndex(0)
+            except Exception:
+                pass
+
+        if not self._current_target or self._footer_lineedit is None:
+            return
+        new_name = self._footer_lineedit.text().strip()
+        old_short = self._current_target.rsplit("|", 1)[-1]
+        if not new_name or new_name == old_short:
+            if self._footer_controller:
+                self._footer_controller.update()
+            return
+
+        new_full = self.controller.rename_node(self._current_target, new_name)
+        if new_full and new_full != self._current_target:
+            self._current_target = new_full
+            if self.controller.is_pinned:
+                self.controller.pin_targets([new_full])
+        self._refresh_table(self.ui.tbl000)
+
+    def _on_footer_compact_btn_clicked(self):
+        """Toggle single/multi-object mode from the compact footer button."""
+        self._on_toggle_single_object(not self.controller.single_object_mode)
+
+    def _update_compact_btn_state(self):
+        """Refresh the compact footer button icon colour to reflect the current mode."""
+        btn = self._footer_compact_btn
+        if btn is None:
+            return
+        clr = self.ACTION_COLOR_MAP
+        try:
+            from uitk.widgets.mixins.icon_manager import IconManager
+
+            color = clr["active"] if self.controller.single_object_mode else clr["off"]
+            h = max(btn.height(), 14)
+            size = (int(h * 0.7), int(h * 0.7))
+            IconManager.set_icon(btn, "target", size=size, color=color)
+        except Exception:
+            pass
+        tip = (
+            "Single-object mode — click to switch to multi-object.\n"
+            "Only the most recently selected object is edited."
+            if self.controller.single_object_mode
+            else "Multi-object mode — click to switch to single-object.\n"
+            "All edits are broadcast to every selected node."
+        )
+        btn.setToolTip(tip)
+
     def _create_footer_controller(self):
         footer = getattr(self.ui, "footer", None)
         if not footer:
@@ -2193,5 +2398,12 @@ class AttributeManagerSlots:
         )
 
     def _resolve_footer_text(self) -> str:
-        """Footer now reports warnings / info; the target name lives in ``txt001``."""
-        return self._footer_warning or ""
+        """In compact mode show the node name (mirrors txt001); otherwise show warnings."""
+        if self._footer_warning:
+            return self._footer_warning
+        if self._compact_view:
+            try:
+                return self.ui.txt001.text()
+            except Exception:
+                pass
+        return ""

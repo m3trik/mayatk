@@ -107,6 +107,7 @@ class GapManagerMixin:
     def _gap_edit_epilogue(self):
         """Common cleanup after any gap edit."""
         self._segment_cache.clear()
+        self._sub_row_cache.clear()
         if self.sequencer is not None:
             self.sequencer.store.mark_dirty()
         self._sync_to_widget()

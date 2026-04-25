@@ -8,6 +8,7 @@ Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
 import pythontk as ptk
 from uitk import Signals
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
@@ -77,6 +78,7 @@ class ShotsController(ptk.LoggingMixin):
         self._setup_delete_menu()
         self._setup_move_menu()
         self._setup_trim_menu()
+        self._setup_gap_menu()
 
         # Subscribe to class-level invalidation so the UI refreshes when
         # the persistence layer detects a scene change — no duplicate
@@ -276,7 +278,7 @@ class ShotsController(ptk.LoggingMixin):
                 det_relevant and mode != "zero_as_end" and not auto_no_anim
             )
 
-        # Editing group
+        # Gap (in Shot Editor)
         spn_gap = getattr(self.ui, "spn_gap", None)
         if spn_gap is not None:
             spn_gap.setEnabled(has_shots)
@@ -565,24 +567,50 @@ class ShotsController(ptk.LoggingMixin):
             store._save_user_prefs()
             store.notify_settings_changed()
 
-    def on_gap_changed(self, value) -> None:
+    def on_gap_changed(self, value, scope: str = "all") -> None:
         store = self._active_store()
-        if store is not None:
-            store.gap = float(value)
-            store.mark_dirty()
+        if store is None:
+            return
+        store.gap = float(value)
+        store.mark_dirty()
 
-            from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
-                ShotSequencer,
-            )
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
 
-            seq = ShotSequencer(store=store)
-            sorted_s = seq.sorted_shots()
-            if sorted_s:
-                import pymel.core as pm
-
-                with pm.UndoChunk():
-                    seq.respace(gap=store.gap, start_frame=sorted_s[0].start)
+        seq = ShotSequencer(store=store)
+        sorted_s = seq.sorted_shots()
+        if not sorted_s:
             store.notify_settings_changed()
+            return
+
+        import pymel.core as pm
+
+        if scope == "all":
+            with pm.UndoChunk():
+                seq.respace(gap=store.gap, start_frame=sorted_s[0].start)
+        else:
+            active_id = store.active_shot_id
+            idx = (
+                next((i for i, s in enumerate(sorted_s) if s.shot_id == active_id), None)
+                if active_id is not None
+                else None
+            )
+            if idx is None:
+                store.notify_settings_changed()
+                return
+            with pm.UndoChunk():
+                if scope in ("start", "start_end") and idx > 0:
+                    seq.move_shot(active_id, sorted_s[idx - 1].end + store.gap)
+                    sorted_s = seq.sorted_shots()
+                    idx = next(
+                        (i for i, s in enumerate(sorted_s) if s.shot_id == active_id),
+                        idx,
+                    )
+                if scope in ("end", "start_end") and idx < len(sorted_s) - 1:
+                    seq.move_shot(sorted_s[idx + 1].shot_id, sorted_s[idx].end + store.gap)
+
+        store.notify_settings_changed()
 
     # ---- shot editor actions ---------------------------------------------
 
@@ -695,6 +723,30 @@ class ShotsController(ptk.LoggingMixin):
             setText="Trim All Shots",
             setObjectName="btn_trim_all_shots",
             setToolTip="Trim empty space from every shot.",
+        )
+
+    def _setup_gap_menu(self) -> None:
+        """Attach scope combobox and action button to the gap spinbox option box."""
+        spn = getattr(self.ui, "spn_gap", None)
+        if spn is None:
+            return
+        from uitk.widgets.widgetComboBox import WidgetComboBox
+
+        menu = spn.option_box.menu
+        cmb_scope = menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_gap_scope",
+            setToolTip="Which shots to apply the gap value to.",
+        )
+        cmb_scope.addItem("All Shots", "all")
+        cmb_scope.addItem("Start", "start")
+        cmb_scope.addItem("End", "end")
+        cmb_scope.addItem("Start & End", "start_end")
+        menu.add(
+            "QPushButton",
+            setText="Apply Gap",
+            setObjectName="btn_apply_gap",
+            setToolTip="Apply the gap value to the selected shots.",
         )
 
     def on_delete_shot(self) -> None:
@@ -821,51 +873,36 @@ class ShotsSlots(ptk.LoggingMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Shots \u2014 Generation settings, shot properties, and gap\n"
-                "control for the Shot Manifest and Shot Sequencer.\n\n"
-                "Quick Start:\n"
-                "  1. Choose a generation mode and set Min Gap.\n"
-                "  2. Open the Shot Manifest or Shot Sequencer to generate\n"
-                "     shots (settings here are shared by both tools).\n"
-                "  3. Edit individual shot properties in the Shot Editor\n"
-                "     section below, or adjust the Gap spinner to respace\n"
-                "     all shots at once.\n\n"
-                "Generate from Animation:\n"
-                "  \u2022 Auto-Detect \u2014 Scans all scene animation and groups\n"
-                "    contiguous segments separated by gaps larger than\n"
-                "    the Min Gap threshold.\n"
-                "  \u2022 All Keys \u2014 Each selected keyframe becomes a shot\n"
-                "    boundary. Select keys in the Graph Editor first.\n"
-                "  \u2022 Skip Zero-Value \u2014 Like All Keys but ignores any\n"
-                "    keys with a value of 0.\n"
-                "  \u2022 Zero = Shot End \u2014 Non-zero keys start shots,\n"
-                "    zero-value keys end them (Min Gap is disabled).\n\n"
-                "  Min Gap: Minimum frame gap that separates segments into\n"
-                "  distinct shots, or merges nearby keys into one boundary.\n\n"
-                "Build:\n"
-                "  Defaults applied when any tool (Shot Manifest, Sequencer)\n"
-                "  constructs new shots.\n"
-                "  \u2022 Initial Length \u2014 Default frame length for a new shot\n"
-                "    before content-driven resizing.\n"
-                "  \u2022 Fit \u2014 Extend Only grows a shot to fit its behaviors/\n"
-                "    audio but never shrinks below Initial Length. Shrink &\n"
-                "    Extend resizes to fit contents exactly.\n"
-                "  \u2022 Snap to Whole Frames \u2014 Round every frame value\n"
-                "    (start, end, keyframes) to an integer at write time.\n\n"
-                "Gap (Editing):\n"
-                "  Sets the frame gap between consecutive shots. Adjusting\n"
-                "  this spinner immediately respaces all shots and moves\n"
-                "  their keyframes. The operation is undoable (Ctrl+Z).\n\n"
-                "Shot Editor:\n"
-                "  Select a shot from the dropdown to view or edit:\n"
-                "  \u2022 Name \u2014 Human-readable shot label.\n"
-                "  \u2022 Start / End \u2014 Frame range (syncs with Sequencer).\n"
-                "  \u2022 Description \u2014 Free-text notes.\n"
-                "  \u2022 Move To \u2014 Set position and click option box \u25b8 to reorder.\n"
-                "  \u2022 Delete \u2014 Remove shot (option box \u25b8 for Delete All).\n\n"
-                "Footer: Shot count, total duration, object count, and\n"
-                "overall frame range at a glance."
+            setToolTip=fmt(
+                title="Shots",
+                body="Generation settings, shot properties, and gap control shared by the Shot Manifest and Shot Sequencer.",
+                sections=[
+                    ("Quick Start", [
+                        "Choose a generation mode and set <b>Min Gap</b>.",
+                        "Open the Shot Manifest or Shot Sequencer to generate shots.",
+                        "Edit individual shot properties in the <b>Shot Editor</b> below, including the <b>Gap</b> spinner (option box ▸ to choose scope and apply).",
+                    ]),
+                    ("Generate from Animation", [
+                        "<b>Auto-Detect</b> \u2014 Scans all scene animation; groups contiguous segments separated by gaps larger than Min Gap.",
+                        "<b>All Keys</b> \u2014 Each selected keyframe becomes a shot boundary (select keys in the Graph Editor first).",
+                        "<b>Skip Zero-Value</b> \u2014 Like All Keys but ignores keys with a value of 0.",
+                        "<b>Zero = Shot End</b> \u2014 Non-zero keys start shots, zero-value keys end them (Min Gap is disabled).",
+                        "<b>Min Gap</b> \u2014 Minimum frame gap that separates segments into distinct shots.",
+                    ]),
+                    ("Build Defaults", [
+                        "<b>Initial Length</b> \u2014 Default frame length for a new shot before content-driven resizing.",
+                        "<b>Fit</b> \u2014 Extend Only grows a shot to fit its content but never shrinks. Shrink &amp; Extend resizes to fit exactly.",
+                        "<b>Snap to Whole Frames</b> \u2014 Round all frame values to integers at write time.",
+                    ]),
+                    ("Shot Editor", [
+                        "<b>Name</b> \u2014 Human-readable shot label.",
+                        "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
+                        "<b>Description</b> \u2014 Free-text notes.",
+                        "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
+                        "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
+                        "<b>Delete</b> \u2014 Remove shot; option box \u25b8 for Delete All.",
+                    ]),
+                ],
             ),
         )
 
@@ -878,13 +915,6 @@ class ShotsSlots(ptk.LoggingMixin):
     def cmb_detection_mode(self, index):
         """Detection mode combobox changed."""
         self.controller.on_detection_mode_changed(index)
-
-    @Signals("editingFinished")
-    def spn_gap(self):
-        """Global gap spinner committed (Enter or focus-out)."""
-        w = getattr(self.ui, "spn_gap", None)
-        if w is not None:
-            self.controller.on_gap_changed(w.value())
 
     def spn_initial_length(self, value):
         """Initial shot length changed."""
@@ -935,6 +965,15 @@ class ShotsSlots(ptk.LoggingMixin):
     def btn_move_shot(self):
         """Move shot to the position in spn_move_to."""
         self.controller.on_move_shot()
+
+    def btn_apply_gap(self):
+        """Apply gap value with the scope selected in the option box."""
+        spn = getattr(self.ui, "spn_gap", None)
+        cmb_scope = getattr(self.ui, "cmb_gap_scope", None)
+        if spn is None:
+            return
+        scope = cmb_scope.currentData() if cmb_scope is not None else "all"
+        self.controller.on_gap_changed(spn.value(), scope=scope)
 
     def btn_trim_empty(self):
         """Trim empty space from the selected shot."""

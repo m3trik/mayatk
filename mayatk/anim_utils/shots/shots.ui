@@ -276,53 +276,6 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
      </widget>
     </item>
     <item>
-     <widget class="CollapsableGroup" name="editing">
-      <property name="title">
-       <string>Edit</string>
-      </property>
-      <layout class="QVBoxLayout" name="verticalLayout_3">
-       <property name="spacing">
-        <number>1</number>
-       </property>
-       <property name="leftMargin">
-        <number>1</number>
-       </property>
-       <property name="topMargin">
-        <number>1</number>
-       </property>
-       <property name="rightMargin">
-        <number>1</number>
-       </property>
-       <property name="bottomMargin">
-        <number>1</number>
-       </property>
-       <item>
-        <widget class="SpinBox" name="spn_gap">
-         <property name="minimumSize">
-          <size>
-           <width>70</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>20</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Frame gap between shots. Changing this respaces
-all shots on the timeline.</string>
-         </property>
-         <property name="prefix">
-          <string>Gap:	</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </widget>
-    </item>
-    <item>
      <widget class="CollapsableGroup" name="shot_editor">
       <property name="title">
        <string>Shot Editor</string>
@@ -472,6 +425,28 @@ all shots on the timeline.</string>
          </property>
          <property name="placeholderText">
           <string>Description</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="SpinBox" name="spn_gap">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>20</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Frame gap between shots. Use the option box ▸ to choose scope and apply.</string>
+         </property>
+         <property name="prefix">
+          <string>Gap:	</string>
          </property>
         </widget>
        </item>

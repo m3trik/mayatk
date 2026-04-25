@@ -28,6 +28,7 @@ from uitk.widgets.sequencer._sequencer import (
     _COMMON_ATTRIBUTES,
     _DEFAULT_ATTRIBUTE_COLORS,
 )
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
     ShotBlock,
@@ -2721,11 +2722,12 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         cmb_scope = widget.menu.add(
             _WCB2,
             setObjectName="cmb_track_order",
-            setToolTip=(
-                "Control how object tracks are ordered across shots.\n\n"
-                "Visible: show objects from visible shots only.\n"
-                "Global: show all objects from every shot so tracks\n"
-                "never reorder when switching shots."
+            setToolTip=fmt(
+                title="Track Order",
+                bullets=[
+                    "<b>Visible:</b> Show objects from visible shots only.",
+                    "<b>Global:</b> Show all objects from every shot so tracks never reorder when switching shots.",
+                ],
             ),
         )
         cmb_scope.addItem("Track Order: Visible", "visible")
@@ -2788,54 +2790,43 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Shot Sequencer \u2014 Visual timeline editor for per-shot\n"
-                "animation with ripple editing, gap management, markers,\n"
-                "and audio tracks.\n\n"
-                "Quick Start:\n"
-                "  1. Click + to create a shot (or use the Manifest).\n"
-                "  2. Select a shot from the dropdown to load its clips.\n"
-                "  3. Drag clips to adjust timing; edges to resize.\n"
-                "  4. Use View Mode to see adjacent or all shots.\n\n"
-                "Shot Navigation:\n"
-                "  \u2022 Dropdown \u2014 Select shot (sets playback range,\n"
-                "    selects objects, reframes the timeline).\n"
-                "  \u2022 \u25c4 / \u25ba \u2014 Previous / next shot.\n"
-                "  \u2022 + \u2014 Append a new shot to the end.\n"
-                "  \u2022 View Mode (cycles): Current \u2192 Adjacent \u2192 All.\n"
-                "  \u2022 Shots / Markers selector \u2014 Switch dropdown content.\n"
-                "  \u2022 Refresh \u2014 Rebuild from Maya.\n"
-                "  \u2022 Right-click dropdown: New Shot, Generate Next Shot\n"
-                "    (finds the next unregistered animation cluster),\n"
-                "    Edit Shot, Delete Shot.\n\n"
-                "Ruler: Click/drag to move playhead, double-click to\n"
-                "  add a marker, mouse wheel to zoom, middle-drag to pan.\n\n"
-                "Shot Lane: Click a block to select that shot,\n"
-                "  double-click to open Shot Settings.\n\n"
-                "Clips:\n"
-                "  \u2022 Drag body \u2014 Move in time (ripple editing).\n"
-                "  \u2022 Drag edge \u2014 Resize (scales keyframes).\n"
-                "  \u2022 Shift+drag \u2014 Move boundaries only; keyframes\n"
-                "    stay in place. Useful for re-framing.\n"
-                "  \u2022 Ctrl while dragging \u2014 Per-frame snap override.\n"
-                "  \u2022 Right-click \u2014 Lock/Unlock, Rename, Delete Key.\n"
-                "  All clip edits are undoable (Ctrl+Z).\n\n"
-                "Tracks: Double-click a header to expand per-attribute\n"
-                "  sub-rows (diamond = spline, square = stepped).\n"
-                "  Right-click \u2014 Hide, Delete, Reveal in Outliner.\n\n"
-                "Gaps: Drag gap body to slide adjacent shots, drag an\n"
-                "  edge to resize one shot. Right-click to Lock/Unlock\n"
-                "  (locked gaps survive respace operations).\n\n"
-                "Range Highlight: Drag edges or body of the active-shot\n"
-                "  overlay to resize or move it (ripple downstream).\n\n"
-                "Markers: M or double-click ruler to add. Drag to move.\n"
-                "  Right-click to edit note, color, or style.\n\n"
-                "Audio: Auto-discovered from Maya audio nodes. Displays\n"
-                "  green clips with waveform. Read-only.\n\n"
-                "Keyboard:\n"
-                "  \u2190/\u2192 prev/next key \u2022 Shift+\u2190/\u2192 step \u00b11 frame\n"
-                "  Home/End start/end \u2022 F frame shot \u2022 M add marker\n"
-                "  Ctrl+Z undo \u2022 Ctrl+Shift+Z redo \u2022 Del delete keys"
+            setToolTip=fmt(
+                title="Shot Sequencer",
+                body="Visual timeline editor for per-shot animation with ripple editing, gap management, markers, and audio tracks.",
+                sections=[
+                    ("Quick Start", [
+                        "Click <b>+</b> to create a shot (or use the Manifest).",
+                        "Select a shot from the dropdown to load its clips.",
+                        "Drag clips to adjust timing; drag edges to resize.",
+                        "Use <b>View Mode</b> to see adjacent or all shots.",
+                    ]),
+                    ("Shot Navigation", [
+                        "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline). Right-click for New Shot, Generate Next Shot, Edit Shot, Delete Shot.",
+                        "<b>\u25c4 / \u25ba</b> \u2014 Previous / next shot. &nbsp; <b>+</b> \u2014 Append new shot.",
+                        "<b>View Mode</b> (cycles): Current \u2192 Adjacent \u2192 All.",
+                        "<b>Refresh</b> \u2014 Rebuild from Maya.",
+                    ]),
+                    ("Clips", [
+                        "<b>Drag body</b> \u2014 Move in time (ripple editing).",
+                        "<b>Drag edge</b> \u2014 Resize (scales keyframes).",
+                        "<b>Shift+drag</b> \u2014 Move boundaries only; keyframes stay in place.",
+                        "<b>Ctrl+drag</b> \u2014 Per-frame snap override.",
+                        "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Delete Key. All edits undoable (Ctrl+Z).",
+                    ]),
+                    ("Ruler / Tracks / Gaps / Markers", [
+                        "<b>Ruler:</b> Click/drag to move playhead, double-click to add a marker, scroll to zoom, middle-drag to pan.",
+                        "<b>Shot Lane:</b> Click to select, double-click to open Shot Settings.",
+                        "<b>Tracks:</b> Double-click header to expand per-attribute sub-rows. Right-click to hide, delete, or reveal in Outliner.",
+                        "<b>Gaps:</b> Drag body to slide adjacent shots, drag edge to resize. Right-click to lock.",
+                        "<b>Markers:</b> M or double-click ruler to add. Drag to move. Right-click to edit note, color, or style.",
+                        "<b>Audio:</b> Auto-discovered from Maya audio nodes. Read-only.",
+                    ]),
+                    ("Keyboard", [
+                        "\u2190/\u2192 prev/next key &nbsp;\u00b7&nbsp; Shift+\u2190/\u2192 step \u00b11 frame",
+                        "Home/End start/end &nbsp;\u00b7&nbsp; F frame shot &nbsp;\u00b7&nbsp; M add marker",
+                        "Ctrl+Z undo &nbsp;\u00b7&nbsp; Ctrl+Shift+Z redo &nbsp;\u00b7&nbsp; Del delete keys",
+                    ]),
+                ],
             ),
         )
 
