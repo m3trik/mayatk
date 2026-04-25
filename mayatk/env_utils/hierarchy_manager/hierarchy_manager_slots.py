@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
 import pymel.core as pm
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -1242,24 +1243,20 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Hierarchy Manager â€” Compare, diff, and synchronise scene\n"
-                "hierarchies against a reference file.\n\n"
-                "Workflow:\n"
-                "  1. Click the folder icon in the source tree header\n"
-                "     to browse for a reference scene (.ma / .mb).\n"
-                "  2. Press 'Diff' to compare the current scene against\n"
-                "     the reference. Differences are highlighted in the\n"
-                "     tree views and logged below.\n"
-                "  3. Select objects in the reference tree that you want\n"
-                "     to bring into the current scene.\n"
-                "  4. Press 'Pull' to import the selected objects.\n\n"
-                "Options:\n"
-                "  â€¢ Enable Dry Run in this menu to preview changes\n"
-                "    without modifying the scene.\n"
-                "  â€¢ Right-click either tree for additional actions\n"
-                "    (refresh, show differences, select in Maya).\n"
-                "  â€¢ Use the log-level combo to control output verbosity."
+            setToolTip=fmt(
+                title='Hierarchy Manager',
+                body='Compare, diff, and synchronise scene hierarchies against a reference file.',
+                steps=[
+                    'Click the <b>folder icon</b> in the source tree header to browse for a reference scene (.ma / .mb).',
+                    'Press <b>Diff</b> to compare the current scene against the reference. Differences are highlighted in the tree views and logged below.',
+                    'Select objects in the reference tree that you want to bring into the current scene.',
+                    'Press <b>Pull</b> to import the selected objects.',
+                ],
+                bullets=[
+                    'Enable <b>Dry Run</b> in this menu to preview changes without modifying the scene.',
+                    'Right-click either tree for additional actions (refresh, show differences, select in Maya).',
+                    'Use the log-level combo to control output verbosity.',
+                ],
             ),
         )
 

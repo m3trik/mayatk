@@ -6,6 +6,7 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 from uitk import Signals
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package
 from mayatk.edit_utils.naming._naming import Naming
@@ -29,10 +30,12 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "QComboBox",
             addItems=["Selection", "All Objects"],
             setObjectName="cmb_scope",
-            setToolTip=(
-                "Choose which objects operations act on:\n"
-                "  Selection — Only the current selection.\n"
-                "  All Objects — All scene objects."
+            setToolTip=fmt(
+                title="Scope",
+                bullets=[
+                    "<b>Selection</b> — Only the current selection.",
+                    "<b>All Objects</b> — All scene objects.",
+                ],
             ),
         )
 
@@ -41,22 +44,17 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Naming — Batch find, rename, and suffix scene objects.\n\n"
-                "Features:\n"
-                "  • Find: Select objects by name pattern (wildcards or regex).\n"
-                "  • Rename: Replace matched names with a new pattern.\n"
-                "    – Option: Retain existing type suffix during rename.\n"
-                "  • Convert Case: Change selected names to upper, lower,\n"
-                "    title, capitalize, or swapcase.\n"
-                "  • Suffix by Location: Auto-number objects by distance\n"
-                "    from a reference point (alphabetical or integer).\n"
-                "  • Strip Chars: Remove leading or trailing characters.\n"
-                "  • Suffix by Type: Append type-based suffixes (_GEO,\n"
-                "    _GRP, _JNT, etc.) with configurable suffix strings.\n\n"
-                "Tip: Use the option box (▸) on each button for settings.\n"
-                "Set Scope to 'All Objects' in the header menu to operate\n"
-                "on the entire scene instead of only the selection."
+            setToolTip=fmt(
+                title="Naming",
+                body="Batch find, rename, and suffix scene objects. Use the option box (▸) on each button for per-operation settings.",
+                bullets=[
+                    "<b>Find:</b> Select objects by name pattern (wildcards or regex).",
+                    "<b>Rename:</b> Replace matched names with a new pattern. Option: retain existing type suffix.",
+                    "<b>Convert Case:</b> Change selected names to upper, lower, title, capitalize, or swapcase.",
+                    "<b>Suffix by Location:</b> Auto-number objects by distance from a reference point (alphabetical or integer).",
+                    "<b>Strip Chars:</b> Remove leading or trailing characters.",
+                    "<b>Suffix by Type:</b> Append type-based suffixes (_GEO, _GRP, _JNT, etc.) with configurable strings.",
+                ],
             ),
         )
 

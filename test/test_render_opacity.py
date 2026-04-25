@@ -584,3 +584,226 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         self.assertFalse(self.cube.hasAttr("opacity"))
         # Unlock for teardown
         self.cube.visibility.unlock()
+
+
+class TestPrepareForExport(MayaTkTestCase):
+    """prepare_for_export must guarantee every animated opacity object also
+    carries visibility keys, since the Unity importer reconstructs per-object
+    fades from the visibility curves (animated custom properties bind to the
+    root Animator with empty paths and can't be mapped per-object)."""
+
+    def test_syncs_manually_keyed_opacity(self):
+        cube = pm.polyCube(name="manual_keyed_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+
+        # Hand-author opacity keys WITHOUT going through key_fade / behaviors
+        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+        pm.setKeyframe(cube, attribute="opacity", time=60, value=0.0)
+
+        # Pre-condition: no visibility keys yet — would silently fail in Unity
+        self.assertEqual(
+            pm.keyframe(cube, attribute="visibility", q=True, keyframeCount=True), 0
+        )
+
+        synced = RenderOpacity.prepare_for_export(objects=[cube])
+
+        self.assertIn(cube.name(), synced)
+        vis_count = pm.keyframe(
+            cube, attribute="visibility", q=True, keyframeCount=True
+        )
+        self.assertGreaterEqual(
+            vis_count,
+            3,
+            "Visibility must be keyed at every opacity transition",
+        )
+
+    def test_idempotent(self):
+        cube = pm.polyCube(name="already_synced_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+        # key_fade dual-keys both channels already
+        RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
+
+        synced = RenderOpacity.prepare_for_export(objects=[cube])
+        self.assertEqual(
+            synced, [], "Already-synced object must not be re-processed"
+        )
+
+    def test_scene_wide_scan(self):
+        c1 = pm.polyCube(name="scan_a")[0]
+        c2 = pm.polyCube(name="scan_b")[0]
+        c3 = pm.polyCube(name="scan_c_no_anim")[0]
+        RenderOpacity.create(objects=[c1, c2, c3], mode="attribute")
+
+        # Only c1 and c2 get opacity animation (c3 has the attr but no keys)
+        pm.setKeyframe(c1, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(c1, attribute="opacity", time=30, value=1.0)
+        pm.setKeyframe(c2, attribute="opacity", time=10, value=1.0)
+        pm.setKeyframe(c2, attribute="opacity", time=40, value=0.0)
+
+        # objects=None → scene-wide scan
+        synced = RenderOpacity.prepare_for_export()
+
+        self.assertIn(c1.name(), synced)
+        self.assertIn(c2.name(), synced)
+        self.assertNotIn(
+            c3.name(), synced, "Object without opacity keys must be skipped"
+        )
+
+    def test_multi_segment_animation(self):
+        """fade-in → hold → fade-out → hold → fade-in produces matching
+        visibility keys at every opacity transition boundary."""
+        cube = pm.polyCube(name="multi_segment_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+
+        # 5-segment opacity authoring
+        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=20, value=1.0)
+        pm.setKeyframe(cube, attribute="opacity", time=50, value=1.0)
+        pm.setKeyframe(cube, attribute="opacity", time=70, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=100, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=120, value=1.0)
+
+        RenderOpacity.prepare_for_export(objects=[cube])
+
+        vis_times = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
+        vis_vals = pm.keyframe(cube, attribute="visibility", q=True, vc=True)
+        self.assertEqual(
+            sorted(vis_times),
+            [1, 20, 50, 70, 100, 120],
+            "Visibility must be keyed at every opacity transition boundary",
+        )
+        # Boolean coercion: any opacity > 0 → visibility 1
+        expected = [0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+        for t, v in sorted(zip(vis_times, vis_vals)):
+            idx = sorted(vis_times).index(t)
+            self.assertEqual(v, expected[idx], f"vis@{t} = {v}, expected {expected[idx]}")
+
+    def test_preserves_manual_visibility_keys(self):
+        """When the user has authored more visibility keys than opacity keys,
+        prepare_for_export must NOT clobber that manual authoring."""
+        cube = pm.polyCube(name="manual_vis_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+
+        # 2 opacity keys, 4 manually-authored visibility keys.
+        # Use long-name plug path to target only the transform — pm.setKeyframe
+        # with attribute="visibility" hits the shape too and double-counts.
+        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=100, value=1.0)
+        vis_plug = f"{cube.longName()}.visibility"
+        for t, v in [(1, 0), (25, 1), (50, 0), (100, 1)]:
+            pm.setKeyframe(vis_plug, time=t, value=v)
+
+        synced = RenderOpacity.prepare_for_export(objects=[cube])
+        self.assertNotIn(
+            cube.name(), synced, "Should not resync — user has authored visibility"
+        )
+
+        vis_times = pm.keyframe(vis_plug, q=True, tc=True)
+        self.assertEqual(
+            sorted(set(vis_times)), [1, 25, 50, 100],
+            "Manual visibility keyframes must be preserved verbatim",
+        )
+
+    def test_partial_opacity_values_coerce_to_visible(self):
+        """Sub-1.0 opacity (e.g. 0.3) must produce visibility=1 — only
+        a literal 0.0 marks the object as fully hidden."""
+        cube = pm.polyCube(name="partial_opa_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+
+        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=10, value=0.001)  # epsilon-visible
+        pm.setKeyframe(cube, attribute="opacity", time=20, value=0.5)
+        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+
+        RenderOpacity.prepare_for_export(objects=[cube])
+
+        vis_vals = sorted(zip(
+            pm.keyframe(cube, attribute="visibility", q=True, tc=True),
+            pm.keyframe(cube, attribute="visibility", q=True, vc=True),
+        ))
+        self.assertEqual(vis_vals, [(1, 0.0), (10, 1.0), (20, 1.0), (30, 1.0)])
+
+    def test_hierarchy_opacity_on_parent_only(self):
+        """Opacity attr lives on a parent group transform; child meshes
+        carry the Renderers. The Unity importer descends to add controllers
+        on child Renderers, so the Maya side must still produce a usable
+        visibility curve on the parent."""
+        parent = pm.group(empty=True, name="opacity_parent_loc")
+        child = pm.polyCube(name="child_mesh")[0]
+        pm.parent(child, parent)
+
+        RenderOpacity.create(objects=[parent], mode="attribute")
+        pm.setKeyframe(parent, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(parent, attribute="opacity", time=30, value=1.0)
+
+        synced = RenderOpacity.prepare_for_export(objects=[parent])
+        self.assertIn(parent.name(), synced)
+
+        # Visibility on parent gets keyed; child geometry inherits via Maya
+        # transform vis. The Unity importer reads m_Enabled@Renderer on the
+        # child; Maya FBX export propagates parent visibility to child
+        # m_Enabled in the absence of overrides.
+        self.assertGreater(
+            pm.keyframe(parent, attribute="visibility", q=True, keyframeCount=True),
+            0,
+            "Parent visibility must be keyed even when geometry lives on child",
+        )
+
+    def test_prepare_after_key_fade_is_noop(self):
+        """key_fade already dual-keys; prepare_for_export must be a no-op
+        on top of it (idempotency under the canonical happy path)."""
+        cube = pm.polyCube(name="key_fade_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+        RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
+
+        vis_before = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
+        synced = RenderOpacity.prepare_for_export(objects=[cube])
+        vis_after = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
+
+        self.assertEqual(synced, [])
+        self.assertEqual(vis_before, vis_after, "Visibility keys must be untouched")
+
+    def test_visibility_query_ignores_shape_keys(self):
+        """Stray shape.visibility keys must not inflate the visibility
+        count and falsely satisfy the resync trigger.
+
+        Bug surface: ``pm.keyframe(obj, attribute='visibility')`` queries
+        BOTH transform.visibility and shape.visibility — if some other
+        tool keyed shape.visibility, our count would exceed opacity_count
+        and we'd skip resync even though transform.visibility is empty
+        (which is what the FBX exporter actually reads)."""
+        cube = pm.polyCube(name="shape_keyed_cube")[0]
+        RenderOpacity.create(objects=[cube], mode="attribute")
+
+        # Hand-author opacity, but only key SHAPE visibility (transform
+        # vis stays unkeyed — this is the silent-failure scenario)
+        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+        shape = cube.getShape()
+        if shape is not None:
+            for t, v in [(1, 0), (10, 1), (20, 0), (30, 1)]:
+                pm.setKeyframe(f"{shape.longName()}.visibility", time=t, value=v)
+
+        synced = RenderOpacity.prepare_for_export(objects=[cube])
+
+        self.assertIn(
+            cube.name(), synced,
+            "Must resync transform.visibility despite shape.visibility keys "
+            "— FBX export reads transform vis, not shape",
+        )
+
+    def test_object_without_opacity_attr_silently_skipped(self):
+        """Plain objects (no opacity attr) must not trigger errors when
+        passed to prepare_for_export — common case during scene-wide
+        operations that pass mixed selections."""
+        plain = pm.polyCube(name="plain_cube")[0]
+        opacity_obj = pm.polyCube(name="opacity_cube")[0]
+        RenderOpacity.create(objects=[opacity_obj], mode="attribute")
+        pm.setKeyframe(opacity_obj, attribute="opacity", time=1, value=0.0)
+        pm.setKeyframe(opacity_obj, attribute="opacity", time=30, value=1.0)
+
+        synced = RenderOpacity.prepare_for_export(objects=[plain, opacity_obj])
+
+        self.assertEqual(synced, [opacity_obj.name()])
+        self.assertFalse(plain.hasAttr("opacity"))

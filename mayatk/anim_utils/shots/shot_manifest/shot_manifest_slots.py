@@ -13,6 +13,7 @@ Range resolution is delegated to :func:`._range_resolver.resolve_ranges`.
 from typing import Dict, List, Optional, Tuple
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
@@ -126,7 +127,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             btn = getattr(self.ui, name, None)
             if btn is None:
                 continue
-            add_widget(btn, side="right")
+            add_widget(btn, side="right", background=True)
 
     # ---- first-show auto-populate ----------------------------------------
 
@@ -974,48 +975,36 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Shot Manifest \u2014 Build and validate shots from a CSV\n"
-                "file or by generating from animation in the scene.\n\n"
-                "Quick Start (CSV):\n"
-                "  1. Check the CSV checkbox and browse to a CSV file.\n"
-                "  2. Review parsed steps in the table; edit ranges\n"
-                "     or exclude steps as needed.\n"
-                "  3. Click Build to create shots with behaviors applied.\n"
-                "  4. Click Assess to verify completeness.\n\n"
-                "Quick Start (Generate from Animation):\n"
-                "  1. Uncheck CSV \u2014 shots are generated from animation\n"
-                "     using the settings in Shot Settings.\n"
-                "  2. Refine ranges in the table if needed.\n"
-                "  3. Click Build, then Assess.\n\n"
-                "Table Columns:\n"
-                "  Step \u2014 Step ID (e.g. A01).\n"
-                "  Section \u2014 Read-only grouping label from CSV.\n"
-                "  Description \u2014 Audio narration or step notes.\n"
-                "  Behaviors \u2014 Per-object actions (fade in/out, etc.).\n"
-                "    Click the label on a child row to toggle behaviors.\n"
-                "  Start / End \u2014 Frame range per step.\n"
-                "    Solid text = user-entered; dim italic = auto-filled.\n\n"
-                "Editing Ranges:\n"
-                "  \u2022 Double-click Start or End to type a frame or range\n"
-                "    (e.g. '120-250'). Downstream steps re-flow.\n"
-                "  \u2022 Right-click a range cell:\n"
-                "    \u2013 Set Start to Current Frame\n"
-                "    \u2013 Auto-fill from Gaps (regenerate and reflow)\n"
-                "    \u2013 Clear Range (revert to auto-fill)\n\n"
-                "Buttons:\n"
-                "  \u2022 Assess \u2014 Read-only comparison against live shots.\n"
-                "    Rows are color-tinted: red = missing, normal = valid.\n"
-                "  \u2022 Build \u2014 Create or update shots from loaded steps.\n"
-                "    Behaviors are applied automatically. Locked shots\n"
-                "    are never modified.\n\n"
-                "Right-Click Actions:\n"
-                "  \u2022 Step row: Exclude step, Open in Shot Sequencer\n"
-                "    (post-build), Show Excluded.\n"
-                "  \u2022 Child row: Show in Outliner, Re-apply Behaviors\n"
-                "    (post-build).\n\n"
-                "Tip: Red tint = missing objects or behaviors,\n"
-                "grey = locked shots, normal = valid steps."
+            setToolTip=fmt(
+                title="Shot Manifest",
+                body="Build and validate shots from a CSV file or by generating from scene animation.",
+                sections=[
+                    ("Quick Start \u2014 CSV", [
+                        "Check the <b>CSV</b> checkbox and browse to a CSV file.",
+                        "Review parsed steps in the table; edit ranges or exclude steps as needed.",
+                        "Click <b>Build</b> to create shots with behaviors applied.",
+                        "Click <b>Assess</b> to verify completeness.",
+                    ]),
+                    ("Quick Start \u2014 Animation", [
+                        "Uncheck <b>CSV</b> \u2014 shots are generated from animation using the settings in Shot Settings.",
+                        "Refine ranges in the table if needed.",
+                        "Click <b>Build</b>, then <b>Assess</b>.",
+                    ]),
+                    ("Table Columns", [
+                        "<b>Step</b> \u2014 Step ID (e.g. A01).",
+                        "<b>Section</b> \u2014 Read-only grouping label from CSV.",
+                        "<b>Description</b> \u2014 Audio narration or step notes.",
+                        "<b>Behaviors</b> \u2014 Per-object actions; click the child row label to toggle.",
+                        "<b>Start / End</b> \u2014 Frame range. Solid text = user-entered; dim italic = auto-filled.",
+                    ]),
+                    ("Editing &amp; Actions", [
+                        "Double-click Start or End to type a frame or range (e.g. '120-250'). Downstream steps re-flow.",
+                        "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
+                        "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked, normal = valid.",
+                        "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified.",
+                        "Right-click step row: Exclude, Open in Sequencer, Show Excluded.",
+                    ]),
+                ],
             ),
         )
 

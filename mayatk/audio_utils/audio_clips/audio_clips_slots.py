@@ -29,6 +29,7 @@ except ImportError:
 
 import pythontk as ptk
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
@@ -83,13 +84,12 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Auto Convert",
             setObjectName="chk_auto_convert",
-            setToolTip=(
-                "When enabled, non-Maya-playable audio formats\n"
-                "(MP3, OGG, M4A, FLAC, etc.) are automatically\n"
-                "converted to WAV on import via FFmpeg.\n\n"
-                "When disabled, only natively playable formats\n"
-                "(WAV, AIF, AIFF) are accepted — other formats\n"
-                "are silently skipped."
+            setToolTip=fmt(
+                title="Auto Convert",
+                bullets=[
+                    "<b>On:</b> Non-Maya audio formats (MP3, OGG, M4A, FLAC, etc.) are automatically converted to WAV on import via FFmpeg.",
+                    "<b>Off:</b> Only natively playable formats (WAV, AIF, AIFF) are accepted — other formats are silently skipped.",
+                ],
             ),
             setChecked=True,
         )
@@ -97,13 +97,13 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         widget.menu.add(
             "QComboBox",
             setObjectName="cmb_export_mode",
-            setToolTip=(
-                "Choose what to export:\n"
-                "• Composite — single mixed WAV of all keyed clips.\n"
-                "• Keyed Tracks — individual source clips that are\n"
-                "  keyed on the timeline (unused clips skipped).\n"
-                "• All Tracks — every loaded clip regardless of\n"
-                "  whether it has been keyed."
+            setToolTip=fmt(
+                title="Export Mode",
+                bullets=[
+                    "<b>Composite</b> — Single mixed WAV of all keyed clips.",
+                    "<b>Keyed Tracks</b> — Individual source clips keyed on the timeline (unused clips skipped).",
+                    "<b>All Tracks</b> — Every loaded clip, regardless of whether it has been keyed.",
+                ],
             ),
             addItems=["Composite", "Keyed Tracks", "All Tracks"],
         )
@@ -128,11 +128,9 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Suffix Time Range",
             setObjectName="chk_suffix_time_range",
-            setToolTip=(
-                "When exporting Keyed Tracks, append the keyed\n"
-                "frame range to each filename.\n\n"
-                "Example: Footstep_12-47.wav\n"
-                "(start frame 12, end frame 47)"
+            setToolTip=fmt(
+                body="When exporting Keyed Tracks, append the keyed frame range to each filename.",
+                rows=[("Example", "Footstep_12-47.wav &nbsp;<i>(start frame 12, end frame 47)</i>")],
             ),
             setChecked=False,
         )
@@ -154,29 +152,17 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Audio Clips — Scene-wide audio tracks keyed on the\n"
-                "canonical data node; drives a single composite WAV for\n"
-                "Time-Slider scrubbing.\n\n"
-                "Workflow:\n"
-                "  1. Click the folder icon on the tracks combo to\n"
-                "     browse for audio files.\n"
-                "     • File stems become track IDs.\n"
-                "     • Re-adding a file with the same stem replaces\n"
-                "       the path (keyframes are preserved).\n"
-                "  2. Select a loaded track in the combo.\n"
-                "  3. Move the timeline cursor to the desired start frame.\n"
-                "  4. Press 'Key Audio Event' to key the track ON (value=1).\n"
-                "     • Enable 'Auto End None' (option box ▸) to auto-key\n"
-                "       an OFF value (0) at the clip's end frame.\n"
-                "     • Enable 'Next Event' to auto-advance through tracks.\n"
-                "  5. Repeat for each audio cue.\n"
-                "  6. Click the refresh (↻) icon on the Key Audio Event\n"
-                "     option box to sync DG nodes and rebuild the\n"
-                "     composite WAV for scrub playback.\n\n"
-                "Note: Adding or replacing tracks while keyed events exist\n"
-                "triggers an automatic sync, so the composite reflects\n"
-                "the updated audio immediately."
+            setToolTip=fmt(
+                title="Audio Clips",
+                body="Scene-wide audio tracks keyed on the canonical data node; drives a single composite WAV for Time-Slider scrubbing.",
+                steps=[
+                    "Click the <b>folder icon</b> on the tracks combo to browse for audio files. File stems become track IDs; re-adding a file with the same stem replaces the path (keyframes are preserved).",
+                    "Select a loaded track in the combo.",
+                    "Move the timeline cursor to the desired start frame.",
+                    "Press <b>Key Audio Event</b> to key the track ON. Enable <b>Auto End None</b> (option box ▸) to auto-key an OFF value at the clip end. Enable <b>Next Event</b> to auto-advance through tracks.",
+                    "Repeat for each audio cue.",
+                    "Click <b>↻</b> on the <b>Key Audio Event</b> option box to sync DG nodes and rebuild the composite WAV for scrub playback.",
+                ],
             ),
         )
 
@@ -487,14 +473,13 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Next Event",
             setObjectName="chk_next_event",
-            setToolTip=(
-                "Automatically key the next track in the list.\n"
-                "The next track is determined by the most recent key\n"
-                "across all tracks:\n"
-                "  • If any track has been keyed, the track after the\n"
-                "    most-recently-keyed one is used (wrapping around).\n"
-                "  • Otherwise, the first track is used.\n"
-                "The combo selection updates to reflect the chosen track."
+            setToolTip=fmt(
+                title="Next Event",
+                body="Automatically key the next track in the list. The combo selection updates to reflect the chosen track.",
+                bullets=[
+                    "If any track has been keyed, the track after the most-recently-keyed one is used (wrapping around).",
+                    "Otherwise, the first track is used.",
+                ],
             ),
         )
         chk_key_all = widget.option_box.menu.add(

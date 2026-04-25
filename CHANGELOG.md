@@ -2,6 +2,7 @@
 
 ## 2026
 
+- **Render Opacity Pre-Export Safety Net** — added `RenderOpacity.prepare_for_export()` (per-object or scene-wide) that mirrors animated `opacity` onto `visibility` for every object missing the dual-key. Closes the silent-failure path where hand-authored opacity animation produced an empty Unity controller. Idempotent; preserves manually-keyed visibility (skips when vis_keys ≥ opa_keys). Updated stale `test_no_opacity_attr_falls_back_to_visibility_only` to reflect the production auto-promote-to-opacity design.
 - **Audio Events Import Conversion** — automatic source-to-WAV conversion (MP3/OGG/M4A/FLAC via `ffmpeg`) for timeline-safe Maya audio playback; cached outputs + UI/tooling updates.
 - **Audio Composite Refactor** — moved composite WAV mixing from `mayatk` into reusable `pythontk.AudioUtils`; Audio Events calls the shared utility.
 - **Audio Events DRY Cleanup** — `EventTriggers.remove` is the teardown SSoT; removed stale sync flags/guards in `audio_events_slots.py`; simplified Channel Box connect/disconnect.

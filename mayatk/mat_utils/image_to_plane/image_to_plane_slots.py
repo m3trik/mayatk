@@ -13,6 +13,7 @@ except ImportError:
     pass
 
 import mayatk as mtk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
 class ImageToPlaneSlots:
@@ -59,15 +60,17 @@ class ImageToPlaneSlots:
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Image to Plane — Creates textured polygon planes from images.\n\n"
-                "Workflow:\n"
-                "  1. Press 'Browse…' to select one or more image files.\n"
-                "  2. Choose material type (Stingray PBS / Standard Surface).\n"
-                "  3. Set the material suffix (default: _MAT).\n"
-                "  4. Set the plane height in scene units.\n"
-                "  5. Press 'Create Planes' to generate textured planes.\n"
-                "  6. Use 'Remove Selected' to delete planes and their materials."
+            setToolTip=fmt(
+                title="Image to Plane",
+                body="Creates textured polygon planes from images.",
+                steps=[
+                    "Press <b>Browse…</b> to select one or more image files.",
+                    "Choose material type (Stingray PBS / Standard Surface).",
+                    "Set the material suffix (default: _MAT).",
+                    "Set the plane height in scene units.",
+                    "Press <b>Create Planes</b> to generate textured planes.",
+                    "Use <b>Remove Selected</b> to delete planes and their materials.",
+                ],
             ),
         )
 

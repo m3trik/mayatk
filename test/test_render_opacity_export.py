@@ -378,29 +378,43 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
             "Visibility animation curve missing from FBX after behavior",
         )
 
-    def test_no_opacity_attr_falls_back_to_visibility_only(self):
-        """Objects without opacity attribute get visibility-only keys (unchanged).
+    def test_visibility_template_auto_promotes_to_opacity(self):
+        """A visibility-targeting behavior on a plain object auto-creates
+        the opacity attribute and dual-keys both channels.
 
-        This verifies we didn't break the standard path for non-opacity
-        objects.
+        Production design: every visibility fade flows through the opacity
+        path so the FBX always carries both a smooth ``opacity`` curve
+        (for the Unity ``RenderOpacityController``) and a stepped
+        ``visibility`` curve (for engines that read visibility natively).
         """
         from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
-        # No RenderOpacity.create — just plain object
+        # No RenderOpacity.create — start from a plain object
+        self.assertFalse(self.cube.hasAttr("opacity"))
+
         apply_behavior(self.cube.name(), "fade_in", start=1, end=30)
 
-        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
-        self.assertTrue(vis_keys, "Visibility should have keyframes")
-
-        # Opacity attribute should NOT exist
-        self.assertFalse(
+        # Auto-promotion must have occurred
+        self.assertTrue(
             self.cube.hasAttr("opacity"),
-            "Object without opacity setup should not gain opacity attr",
+            "Visibility-targeting behavior must auto-create the opacity attr "
+            "so the FBX gets a smooth opacity curve for the Unity controller",
         )
+
+        opacity_keys = pm.keyframe(self.cube, attribute="opacity", q=True, tc=True)
+        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
+        self.assertTrue(opacity_keys, "Opacity should have keyframes")
+        self.assertTrue(vis_keys, "Visibility should have keyframes")
 
         content = self._export_ascii_fbx()
         self.assertIn(
+            '"AnimCurveNode::opacity"',
+            content,
+            "Opacity animation curve missing — Unity controller can't drive fade",
+        )
+        self.assertIn(
             '"AnimCurveNode::Visibility"',
             content,
-            "Visibility animation curve missing for non-opacity object",
+            "Visibility animation curve missing — engines without opacity "
+            "support won't see the fade",
         )

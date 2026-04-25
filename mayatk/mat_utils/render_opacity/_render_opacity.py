@@ -26,6 +26,9 @@ class RenderOpacity(ptk.LoggingMixin):
     .. note:: Use :meth:`key_fade` to animate opacity fades with
               automatic visibility mirroring.  :meth:`create` sets up
               the mechanism (Attribute or Shader Graph) without keying.
+              Call :meth:`prepare_for_export` once before FBX export
+              when opacity has been hand-keyed (``key_fade`` and shot
+              behaviors already dual-key both channels).
 
     Two modes of operation:
 
@@ -209,6 +212,75 @@ class RenderOpacity(ptk.LoggingMixin):
             auto_create=auto_create,
             tangent=tangent,
         )
+
+    @classmethod
+    def prepare_for_export(cls, objects=None) -> List[str]:
+        """Sync visibility keyframes for every opacity object before FBX export.
+
+        Walks *objects* (or the entire scene when ``None``), and for each
+        transform that has the ``opacity`` attribute with animation but no
+        matching ``visibility`` keys, mirrors the opacity curve onto
+        ``visibility`` via :meth:`sync_visibility_from_opacity`.
+
+        Why this exists: the Unity importer reconstructs per-object opacity
+        fades from the ``visibility`` (m_Enabled) curves, because Unity
+        binds animated custom properties to the root Animator with empty
+        paths — the opacity custom-property curves cannot be mapped back
+        to individual objects.  An object with only ``opacity`` keys and
+        no ``visibility`` keys silently animates nothing in Unity.  The
+        :meth:`key_fade` helper and shot behaviors already dual-key both
+        channels; this method is a safety net for hand-authored opacity
+        animation.
+
+        Idempotent — objects already in sync are skipped.  Safe to call
+        from a scene-exporter pre-export hook.
+
+        Parameters:
+            objects: Objects to scan. If *None*, scans every transform in
+                the scene that has the ``opacity`` attribute.
+
+        Returns:
+            List of object names that were re-synced.
+        """
+        if objects is None:
+            # Scan only transforms — some shape and material nodes carry a
+            # native ``opacity`` attribute that is unrelated to RenderOpacity.
+            objects = [
+                t
+                for t in pm.ls(type="transform")
+                if t.hasAttr(cls.ATTR_NAME)
+            ]
+        else:
+            objects = pm.ls(objects)
+
+        synced: List[str] = []
+        needs_sync = []
+        for obj in objects:
+            if not obj.hasAttr(cls.ATTR_NAME):
+                continue
+            # Use long-name plug paths so the query targets ONLY the
+            # transform — passing attribute="visibility" by kwarg also
+            # hits the shape node and would double-count keys.
+            opa_plug = f"{obj.longName()}.{cls.ATTR_NAME}"
+            vis_plug = f"{obj.longName()}.visibility"
+            opa_keys = pm.keyframe(opa_plug, q=True, keyframeCount=True)
+            if not opa_keys:
+                continue
+            vis_keys = pm.keyframe(vis_plug, q=True, keyframeCount=True)
+            # Resync if visibility has no keys at all, or fewer keys than
+            # opacity (a partial sync from a stale state).
+            if not vis_keys or vis_keys < opa_keys:
+                needs_sync.append(obj)
+                synced.append(obj.name())
+
+        if needs_sync:
+            OpacityAttributeMode.sync_visibility_from_opacity(needs_sync)
+            cls.logger.info(
+                "prepare_for_export: synced visibility on %d object(s): %s",
+                len(synced),
+                ", ".join(synced),
+            )
+        return synced
 
     @classmethod
     def remove(

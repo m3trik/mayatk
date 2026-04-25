@@ -30,7 +30,6 @@ class AttributeManager:
         "Locked": {"locked": True},
         "Connected": {"_custom_filter": "connected"},
         "Settable": {"settable": True},
-        "Visible": {"visible": True},
         "Keyed": {"_custom_filter": "keyed"},
         "All": {},
     }
@@ -185,12 +184,14 @@ class AttributeManager:
             common = keyed_attrs
 
         if invert:
-            # Invert: return all attrs minus the filtered set
-            all_sets = [set(cmds.listAttr(n) or []) for n in nodes]
-            all_common = all_sets[0]
-            for s in all_sets[1:]:
-                all_common &= s
-            common = all_common - common
+            # Scope inversion to AE-visible attrs (visible=True excludes truly internal
+            # system attrs like caching/nodeState that listAttr() would include).
+            # This makes e.g. "Channel Box" + Invert = hidden-from-CB attrs.
+            vis_sets = [set(cmds.listAttr(n, visible=True) or []) for n in nodes]
+            vis_common = vis_sets[0]
+            for s in vis_sets[1:]:
+                vis_common &= s
+            common = vis_common - common
 
         if priority_sort or custom_filter == "channel_box":
             return AttributeManager._sort_channel_box(common)

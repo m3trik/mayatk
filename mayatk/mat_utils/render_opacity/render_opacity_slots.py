@@ -15,6 +15,7 @@ import logging
 
 import mayatk as mtk
 from mayatk.core_utils.script_job_manager import ScriptJobManager
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
 class RenderOpacitySlots:
@@ -60,10 +61,12 @@ class RenderOpacitySlots:
             setText="Last Selected Only",
             setObjectName="chk_last_selected",
             setChecked=False,
-            setToolTip=(
-                "When checked, only the last selected object\n"
-                "is processed instead of all selected objects.\n"
-                "Applies to Create, Key, and Remove operations."
+            setToolTip=fmt(
+                body="Applies to Create, Key, and Remove operations.",
+                bullets=[
+                    "<b>On:</b> Only the last selected object is processed.",
+                    "<b>Off:</b> All selected objects are processed.",
+                ],
             ),
         )
         widget.menu.add(
@@ -71,11 +74,11 @@ class RenderOpacitySlots:
             setText="Delete Visibility Keys",
             setObjectName="chk_delete_vis_keys",
             setChecked=False,
-            setToolTip=(
-                "When checked, existing visibility keyframes are\n"
-                "automatically deleted before applying opacity.\n"
-                "When unchecked, objects with visibility keys are\n"
-                "skipped with a warning."
+            setToolTip=fmt(
+                bullets=[
+                    "<b>On:</b> Existing visibility keyframes are deleted before applying opacity.",
+                    "<b>Off:</b> Objects with visibility keys are skipped with a warning.",
+                ],
             ),
         )
         widget.menu.add("Separator", setTitle="About")
@@ -83,17 +86,16 @@ class RenderOpacitySlots:
             "QPushButton",
             setText="Instructions",
             setObjectName="btn_instructions",
-            setToolTip=(
-                "Render Opacity — Adds a keyable opacity attribute to objects\n"
-                "for engine-ready transparency control.\n\n"
-                "Workflow:\n"
-                "  1. Select one or more objects.\n"
-                "  2. Choose Material or Attribute mode (option box ▸).\n"
-                "  3. Press 'Create' to apply.\n"
-                "  4. Press 'Key Render Opacity' to animate fades.\n"
-                "     • Use the option box to set frames, direction\n"
-                "       (Fade In / Fade Out / Auto), and timing.\n"
-                "  5. Use 'Remove Opacity' to clean up all artifacts."
+            setToolTip=fmt(
+                title="Render Opacity",
+                body="Adds a keyable opacity attribute to objects for engine-ready transparency control.",
+                steps=[
+                    "Select one or more objects.",
+                    "Choose Material or Attribute mode (option box ▸).",
+                    "Press <b>Create</b> to apply.",
+                    "Press <b>Key Render Opacity</b> to animate fades. Use the option box to set frames, direction (Fade In / Fade Out / Auto), and timing.",
+                    "Use <b>Remove Opacity</b> to clean up all artifacts.",
+                ],
             ),
         )
 
@@ -166,23 +168,23 @@ class RenderOpacitySlots:
             setText="End at Playhead",
             setObjectName="chk000",
             setChecked=True,
-            setToolTip=(
-                "When checked, the fade ends at the playhead\n"
-                "(keys span current\u2212frames \u2192 current).\n"
-                "When unchecked, the fade starts at the playhead\n"
-                "(keys span current \u2192 current+frames)."
+            setToolTip=fmt(
+                bullets=[
+                    "<b>On:</b> Fade ends at the playhead (keys span current\u2212frames \u2192 current).",
+                    "<b>Off:</b> Fade starts at the playhead (keys span current \u2192 current+frames).",
+                ],
             ),
         )
         cmb = widget.option_box.menu.add(
             "QComboBox",
             setObjectName="cmb_direction",
-            setToolTip=(
-                "Fade direction:\n"
-                "\u2022 Fade In: Key opacity 0 \u2192 1.\n"
-                "\u2022 Fade Out: Key opacity 1 \u2192 0.\n"
-                "\u2022 Auto: Detect from previous key \u2014\n"
-                "  if last keyed value is 1 \u2192 fade out,\n"
-                "  if 0 or no key \u2192 fade in."
+            setToolTip=fmt(
+                title="Fade Direction",
+                bullets=[
+                    "<b>Fade In:</b> Key opacity 0 \u2192 1.",
+                    "<b>Fade Out:</b> Key opacity 1 \u2192 0.",
+                    "<b>Auto:</b> Detect from previous key \u2014 if last value is 1 \u2192 fade out; if 0 or no key \u2192 fade in.",
+                ],
             ),
         )
         for text, data in [
