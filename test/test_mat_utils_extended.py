@@ -12,7 +12,6 @@ Tests for advanced MatUtils functionality including:
 import os
 import shutil
 import unittest
-import pymel.core as pm
 import maya.cmds as cmds
 from mayatk.mat_utils._mat_utils import MatUtils
 from base_test import MayaTkTestCase
@@ -42,10 +41,10 @@ class TestMatUtilsExtended(MayaTkTestCase):
 
     def _create_textured_material(self, name, texture_path):
         """Helper to create a material with a file node."""
-        mat = pm.shadingNode("lambert", asShader=True, name=name)
-        file_node = pm.shadingNode("file", asTexture=True, name=f"{name}_file")
-        file_node.fileTextureName.set(texture_path)
-        pm.connectAttr(file_node.outColor, mat.color)
+        mat = cmds.shadingNode("lambert", asShader=True, name=name)
+        file_node = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+        cmds.setAttr(f"{file_node}.fileTextureName", texture_path, type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{mat}.color")
         return mat, file_node
 
     # -------------------------------------------------------------------------
@@ -63,14 +62,15 @@ class TestMatUtilsExtended(MayaTkTestCase):
         duplicates = MatUtils.find_materials_with_duplicate_textures()
 
         # Should find that mat1 and mat2 are duplicates
-        # The key will be one of them, the value list will contain the other
+        # The key will be one of them, the value list will contain the other.
+        # Production returns plain string keys/values; coerce inputs to match.
         self.assertTrue(len(duplicates) > 0)
+        mat1_n, mat2_n = str(mat1), str(mat2)
 
-        # Check if mat1 or mat2 is the key
-        if mat1.name() in duplicates:
-            self.assertIn(mat2.name(), duplicates[mat1.name()])
-        elif mat2.name() in duplicates:
-            self.assertIn(mat1.name(), duplicates[mat2.name()])
+        if mat1_n in duplicates:
+            self.assertIn(mat2_n, duplicates[mat1_n])
+        elif mat2_n in duplicates:
+            self.assertIn(mat1_n, duplicates[mat2_n])
         else:
             self.fail("Neither mat1 nor mat2 found as duplicate key")
 
@@ -80,22 +80,22 @@ class TestMatUtilsExtended(MayaTkTestCase):
         mat2, _ = self._create_textured_material("mat2", self.tex1)
 
         # Assign mat1 to an object (so it has a SG)
-        sphere = pm.polySphere(name="test_sphere")[0]
-        MatUtils.assign_mat(sphere, mat1.name())
+        sphere = cmds.polySphere(name="test_sphere")[0]
+        MatUtils.assign_mat(sphere, mat1)
 
         # Assign mat2 to an object
-        cube = pm.polyCube(name="test_cube")[0]
-        MatUtils.assign_mat(cube, mat2.name())
+        cube = cmds.polyCube(name="test_cube")[0]
+        MatUtils.assign_mat(cube, mat2)
 
         # Consolidate
         MatUtils.reassign_duplicate_materials(delete=True)
 
         # mat2 should be deleted, cube should have mat1 assigned
-        self.assertFalse(pm.objExists("mat2"))
-        self.assertTrue(pm.objExists("mat1"))
+        self.assertFalse(cmds.objExists("mat2"))
+        self.assertTrue(cmds.objExists("mat1"))
 
         assigned = MatUtils.get_mats(cube)
-        self.assertEqual(assigned[0], mat1.name())
+        self.assertEqual(assigned[0], mat1)
 
     def test_different_attr_same_texture_not_duplicate(self):
         """Verify materials using the same texture on different attributes
@@ -110,10 +110,10 @@ class TestMatUtilsExtended(MayaTkTestCase):
         # mat_a: texture1 → color (diffuse)
         mat_a, _ = self._create_textured_material("matA", self.tex1)
         # mat_b: texture1 → transparency (different attribute, same file)
-        mat_b = pm.shadingNode("lambert", asShader=True, name="matB")
-        file_b = pm.shadingNode("file", asTexture=True, name="matB_file")
-        file_b.fileTextureName.set(self.tex1)
-        pm.connectAttr(file_b.outColor, mat_b.transparency)
+        mat_b = cmds.shadingNode("lambert", asShader=True, name="matB")
+        file_b = cmds.shadingNode("file", asTexture=True, name="matB_file")
+        cmds.setAttr(f"{file_b}.fileTextureName", self.tex1, type="string")
+        cmds.connectAttr(f"{file_b}.outColor", f"{mat_b}.transparency")
 
         duplicates = MatUtils.find_materials_with_duplicate_textures()
 
@@ -121,7 +121,7 @@ class TestMatUtilsExtended(MayaTkTestCase):
         for original, dup_list in duplicates.items():
             combined = [original] + dup_list
             self.assertFalse(
-                mat_a.name() in combined and mat_b.name() in combined,
+                mat_a in combined and mat_b in combined,
                 "Materials with same texture on different attributes "
                 "should not be duplicates",
             )
@@ -135,17 +135,17 @@ class TestMatUtilsExtended(MayaTkTestCase):
         # lambert with texture1 → color
         mat_lam, _ = self._create_textured_material("matLambert", self.tex1)
         # phong with texture1 → color
-        mat_phong = pm.shadingNode("phong", asShader=True, name="matPhong")
-        file_ph = pm.shadingNode("file", asTexture=True, name="matPhong_file")
-        file_ph.fileTextureName.set(self.tex1)
-        pm.connectAttr(file_ph.outColor, mat_phong.color)
+        mat_phong = cmds.shadingNode("phong", asShader=True, name="matPhong")
+        file_ph = cmds.shadingNode("file", asTexture=True, name="matPhong_file")
+        cmds.setAttr(f"{file_ph}.fileTextureName", self.tex1, type="string")
+        cmds.connectAttr(f"{file_ph}.outColor", f"{mat_phong}.color")
 
         duplicates = MatUtils.find_materials_with_duplicate_textures()
 
         for original, dup_list in duplicates.items():
             combined = [original] + dup_list
             self.assertFalse(
-                mat_lam.name() in combined and mat_phong.name() in combined,
+                mat_lam in combined and mat_phong in combined,
                 "Materials of different types should not be duplicates",
             )
 
@@ -161,27 +161,27 @@ class TestMatUtilsExtended(MayaTkTestCase):
         Fixed: 2026-03-08
         """
         # mat_x: texture1 → bump2d → normalCamera
-        mat_x = pm.shadingNode("lambert", asShader=True, name="matX")
-        file_x = pm.shadingNode("file", asTexture=True, name="matX_file")
-        file_x.fileTextureName.set(self.tex1)
-        bump_x = pm.shadingNode("bump2d", asUtility=True, name="matX_bump")
-        pm.connectAttr(file_x.outAlpha, bump_x.bumpValue)
-        pm.connectAttr(bump_x.outNormal, mat_x.normalCamera)
+        mat_x = cmds.shadingNode("lambert", asShader=True, name="matX")
+        file_x = cmds.shadingNode("file", asTexture=True, name="matX_file")
+        cmds.setAttr(f"{file_x}.fileTextureName", self.tex1, type="string")
+        bump_x = cmds.shadingNode("bump2d", asUtility=True, name="matX_bump")
+        cmds.connectAttr(f"{file_x}.outAlpha", f"{bump_x}.bumpValue")
+        cmds.connectAttr(f"{bump_x}.outNormal", f"{mat_x}.normalCamera")
 
         # mat_y: texture2 → bump2d → normalCamera (different texture)
-        mat_y = pm.shadingNode("lambert", asShader=True, name="matY")
-        file_y = pm.shadingNode("file", asTexture=True, name="matY_file")
-        file_y.fileTextureName.set(self.tex2)
-        bump_y = pm.shadingNode("bump2d", asUtility=True, name="matY_bump")
-        pm.connectAttr(file_y.outAlpha, bump_y.bumpValue)
-        pm.connectAttr(bump_y.outNormal, mat_y.normalCamera)
+        mat_y = cmds.shadingNode("lambert", asShader=True, name="matY")
+        file_y = cmds.shadingNode("file", asTexture=True, name="matY_file")
+        cmds.setAttr(f"{file_y}.fileTextureName", self.tex2, type="string")
+        bump_y = cmds.shadingNode("bump2d", asUtility=True, name="matY_bump")
+        cmds.connectAttr(f"{file_y}.outAlpha", f"{bump_y}.bumpValue")
+        cmds.connectAttr(f"{bump_y}.outNormal", f"{mat_y}.normalCamera")
 
         duplicates = MatUtils.find_materials_with_duplicate_textures()
 
         for original, dup_list in duplicates.items():
             combined = [original] + dup_list
             self.assertFalse(
-                mat_x.name() in combined and mat_y.name() in combined,
+                mat_x in combined and mat_y in combined,
                 "Materials with different textures behind utility nodes "
                 "should not be duplicates",
             )
@@ -203,11 +203,11 @@ class TestMatUtilsExtended(MayaTkTestCase):
 
         # Remap
         MatUtils.remap_texture_paths(
-            materials=[mat1.name()], new_dir=new_dir, silent=True
+            materials=[mat1], new_dir=new_dir, silent=True
         )
 
         # Check if path updated
-        current_path = file_node.fileTextureName.get().replace("\\", "/")
+        current_path = cmds.getAttr(f"{file_node}.fileTextureName").replace("\\", "/")
         # Note: Maya might resolve paths, so we check endswith or equality
         self.assertTrue(current_path.lower() == new_tex.lower())
 
@@ -216,13 +216,13 @@ class TestMatUtilsExtended(MayaTkTestCase):
         mat1, _ = self._create_textured_material("obj_mat1", self.tex1)
         mat2, _ = self._create_textured_material("obj_mat2", self.tex2)
 
-        cube1 = pm.polyCube()[0]
-        cube2 = pm.polyCube()[0]
+        cube1 = cmds.polyCube()[0]
+        cube2 = cmds.polyCube()[0]
 
-        MatUtils.assign_mat(cube1, mat1.name())
-        MatUtils.assign_mat(cube2, mat2.name())
+        MatUtils.assign_mat(cube1, mat1)
+        MatUtils.assign_mat(cube2, mat2)
 
-        result = MatUtils.filter_materials_by_objects([cube1.name()])
+        result = MatUtils.filter_materials_by_objects([cube1])
         self.assertIn(mat1, result)
         self.assertNotIn(mat2, result)
 
@@ -233,8 +233,8 @@ class TestMatUtilsExtended(MayaTkTestCase):
     def test_convert_bump_to_normal(self):
         """Test converting a bump map setup to a normal map setup."""
         # Create a bump setup
-        bump_file = pm.shadingNode("file", asTexture=True, name="bump_file")
-        bump_file.fileTextureName.set(self.tex1)
+        bump_file = cmds.shadingNode("file", asTexture=True, name="bump_file")
+        cmds.setAttr(f"{bump_file}.fileTextureName", self.tex1, type="string")
 
         # Convert
         normal_node = MatUtils.convert_bump_to_normal(
@@ -242,23 +242,24 @@ class TestMatUtilsExtended(MayaTkTestCase):
             create_file_node=False,  # Just return the bump2d node for testing logic
         )
 
-        self.assertTrue(pm.objExists(normal_node))
-        self.assertEqual(normal_node.bumpInterp.get(), 1)  # 1 = Tangent Space Normal
+        self.assertTrue(cmds.objExists(normal_node))
+        self.assertEqual(cmds.getAttr(f"{normal_node}.bumpInterp"), 1)  # 1 = Tangent Space Normal
 
         # Check connection
-        inputs = normal_node.bumpValue.inputs()
-        self.assertEqual(inputs[0], bump_file)
+        inputs = cmds.listConnections(f"{normal_node}.bumpValue") or []
+        self.assertTrue(inputs)
+        self.assertEqual(inputs[0], str(bump_file).split("|")[-1].split(":")[-1])
 
     def test_validate_normal_map_setup(self):
         """Test validation of normal map nodes."""
         # Create a valid normal map node
-        normal_file = pm.shadingNode("file", asTexture=True, name="normal_file")
-        normal_file.fileTextureName.set(self.tex1)
-        normal_file.colorSpace.set("Raw")
+        normal_file = cmds.shadingNode("file", asTexture=True, name="normal_file")
+        cmds.setAttr(f"{normal_file}.fileTextureName", self.tex1, type="string")
+        cmds.setAttr(f"{normal_file}.colorSpace", "Raw", type="string")
 
         # Create a material and connect it
-        mat = pm.shadingNode("standardSurface", asShader=True)
-        pm.connectAttr(normal_file.outColor, mat.normalCamera)
+        mat = cmds.shadingNode("standardSurface", asShader=True)
+        cmds.connectAttr(f"{normal_file}.outColor", f"{mat}.normalCamera")
 
         result = MatUtils.validate_normal_map_setup(normal_file, mat)
 
@@ -267,6 +268,6 @@ class TestMatUtilsExtended(MayaTkTestCase):
         self.assertEqual(result["color_space"], "Raw")
 
         # Test invalid setup (sRGB color space)
-        normal_file.colorSpace.set("sRGB")
+        cmds.setAttr(f"{normal_file}.colorSpace", "sRGB", type="string")
         result = MatUtils.validate_normal_map_setup(normal_file, mat)
         self.assertTrue(any("Color space" in w for w in result["warnings"]))

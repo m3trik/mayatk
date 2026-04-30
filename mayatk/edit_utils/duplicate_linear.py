@@ -5,7 +5,7 @@ try:
 except ImportError:
     pass
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
     import maya.api.OpenMaya as om
 except ImportError as error:
     print(__file__, error)
@@ -43,9 +43,9 @@ class DuplicateLinear:
 
             for i in range(num_copies):
                 if instance:
-                    dup = pm.instance(node)[0]
+                    dup = cmds.instance(node)[0]
                 else:
-                    dup = pm.duplicate(node, rr=True)[0]
+                    dup = cmds.duplicate(node, rr=True)[0]
 
                 # After applying transformations, add the duplicate to the isolation set
                 DisplayUtils.add_to_isolation_set(dup)
@@ -62,7 +62,7 @@ class DuplicateLinear:
 
                 # 1. Local Scale
                 m_dup = om.MMatrix(
-                    pm.xform(dup, query=True, worldSpace=True, matrix=True)
+                    cmds.xform(dup, query=True, worldSpace=True, matrix=True)
                 )
                 tm_dup = om.MTransformationMatrix(m_dup)
 
@@ -117,7 +117,7 @@ class DuplicateLinear:
 
                 m_final = m_rotated * mat_trans
 
-                pm.xform(dup, matrix=list(m_final), worldSpace=True)
+                cmds.xform(dup, matrix=list(m_final), worldSpace=True)
 
                 copies.append(dup)
 

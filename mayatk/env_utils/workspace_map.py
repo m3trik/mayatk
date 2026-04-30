@@ -1,13 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
 import os
 import re
 from typing import Optional, Dict, List, Tuple
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
@@ -535,7 +532,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
             if workspace_data and workspace_data.get("type") == "workspace":
                 workspace_path = workspace_data.get("path")
                 if workspace_path and os.path.isdir(workspace_path):
-                    pm.workspace(workspace_path, o=True)
+                    cmds.workspace(workspace_path, o=True)
                     self.logger.info(f"Opened workspace: {workspace_path}")
                     self.sb.message_box(f"Workspace set to:<br>{workspace_path}")
 

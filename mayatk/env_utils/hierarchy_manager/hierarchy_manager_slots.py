@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 # Third-party imports
+import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
-import pymel.core as pm
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package
@@ -130,7 +130,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self.ui.tree000.headerItem().setToolTip(
             0, ref_path if ref_path else "No reference scene set"
         )
-        scene = pm.sceneName()
+        scene = cmds.file(q=True, sceneName=True) or ""
         self.ui.tree001.headerItem().setToolTip(0, str(scene) if scene else "Untitled")
 
     def analyze_hierarchies(
@@ -169,7 +169,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             )
 
             # Ensure we have a valid comparison setup
-            selected = pm.selected(type="transform")
+            selected = cmds.ls(selection=True, type="transform") or []
             if not selected:
                 self.logger.notice(
                     "No objects selected â€” performing full scene hierarchy comparison"
@@ -269,7 +269,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         """Clean up any remaining temporary namespaces."""
         try:
             # Get all current namespaces
-            all_namespaces = pm.namespaceInfo(listOnlyNamespaces=True, recurse=True)
+            all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True)
 
             # Find temp import namespaces
             temp_namespaces = [ns for ns in all_namespaces if "temp_import_" in ns]
@@ -282,13 +282,13 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 for namespace in temp_namespaces:
                     try:
                         # Delete objects in namespace first
-                        namespace_objects = pm.ls(f"{namespace}:*")
+                        namespace_objects = cmds.ls(f"{namespace}:*")
                         if namespace_objects:
-                            pm.delete(namespace_objects)
+                            cmds.delete(namespace_objects)
 
                         # Remove namespace
-                        if pm.namespace(exists=namespace):
-                            pm.namespace(
+                        if cmds.namespace(exists=namespace):
+                            cmds.namespace(
                                 removeNamespace=namespace, mergeNamespaceWithRoot=True
                             )
                             self.logger.debug(f"Removed temp namespace: {namespace}")
@@ -336,7 +336,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         undo_opened = False
         if not dry_run:
             try:
-                pm.undoInfo(openChunk=True, chunkName="Pull Objects")
+                cmds.undoInfo(openChunk=True, chunkName="Pull Objects")
                 undo_opened = True
             except Exception:
                 pass
@@ -388,7 +388,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         finally:
             if undo_opened:
                 try:
-                    pm.undoInfo(closeChunk=True)
+                    cmds.undoInfo(closeChunk=True)
                 except Exception:
                     pass
 
@@ -433,7 +433,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         undo_opened = False
         if not dry_run:
             try:
-                pm.undoInfo(openChunk=True, chunkName="Repair Hierarchies")
+                cmds.undoInfo(openChunk=True, chunkName="Repair Hierarchies")
                 undo_opened = True
             except Exception:
                 pass
@@ -514,7 +514,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
             self.hierarchy_manager.dry_run = prev_dry_run
             if undo_opened:
                 try:
-                    pm.undoInfo(closeChunk=True)
+                    cmds.undoInfo(closeChunk=True)
                 except Exception:
                     pass
 
@@ -539,7 +539,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
     def _is_default_maya_camera(self, transform):
         """Check if a transform is a Maya default camera that should be excluded."""
         try:
-            node_name = transform.nodeName()
+            node_name = str(transform).split('|')[-1]
             return is_default_maya_camera(node_name, transform)
         except Exception:
             return False
@@ -611,7 +611,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                         self.logger.notice(
                             "Reference file changed on disk, re-importing"
                         )
-                    elif cached_transforms[0].exists():
+                    elif cmds.objExists(str(cached_transforms[0])):
                         self.logger.debug(
                             f"Reusing cached reference import ({len(cached_transforms)} transforms)"
                         )
@@ -657,7 +657,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         # Extract reference namespaces for UI filtering.
         self._reference_namespaces = sorted(
-            {t.nodeName().split(":")[0] for t in all_transforms if ":" in t.nodeName()}
+            {str(t).split('|')[-1].split(":")[0] for t in all_transforms if ":" in str(t).split('|')[-1]}
         )
         if self._reference_namespaces:
             self.logger.debug(
@@ -1200,7 +1200,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
     def _show_startup_text(self):
         """Display startup instructions in the log output widget."""
-        scene = pm.sceneName()
+        scene = cmds.file(q=True, sceneName=True) or ""
         scene_name = Path(scene).name if scene else "Untitled"
         workspace = self.controller.workspace or "(not set)"
 
@@ -1400,12 +1400,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 return
 
             try:
-                old_name = node.nodeName()
+                old_name = str(node).split('|')[-1]
                 if new_name == old_name:
                     return
 
                 node.rename(new_name)
-                actual_name = node.nodeName()
+                actual_name = str(node).split('|')[-1]
                 item._raw_name = actual_name
 
                 # Maya may have appended a number to avoid clashes
@@ -1418,7 +1418,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             except Exception as e:
                 # Revert the tree item text on failure
                 try:
-                    item.setText(0, node.nodeName())
+                    item.setText(0, str(node).split('|')[-1])
                 except Exception:
                     pass
                 self.controller.logger.error(f"Rename failed: {e}")
@@ -1447,13 +1447,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         "Drop target has no Maya node â€” reparent skipped."
                     )
                     return
-                pm.parent(node, parent_node)
+                cmds.parent(node, parent_node)
                 self.controller.logger.info(
                     f"Reparented '{node}' under '{parent_node}'"
                 )
             else:
                 # Dropped at root level â†’ world-parent
-                pm.parent(node, world=True)
+                cmds.parent(node, world=True)
                 self.controller.logger.info(f"Reparented '{node}' to world")
         except Exception as e:
             self.controller.logger.error(f"Maya reparent failed for '{node}': {e}")
@@ -1766,7 +1766,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # For full hierarchy compare, clear selection to trigger scene-wide comparison
         if diff_mode == "Full Hierarchy Compare":
             # Clear selection to force scene-wide analysis
-            pm.select(clear=True)
+            cmds.select(clear=True)
             self.logger.debug(
                 "Cleared selection for full scene hierarchy comparison (scene-wide mode)"
             )
@@ -1920,7 +1920,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             from qtpy.QtWidgets import QApplication
 
             QApplication.processEvents()
-            pm.refresh()
+            cmds.refresh()
 
             # Verify objects exist in Maya after pull
             self.logger.progress("Verifying pulled objects exist in Maya...")
@@ -1936,7 +1936,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 for obj_name in object_names:
                     clean_name = get_clean_node_name_from_string(obj_name)
 
-                    if pm.objExists(clean_name):
+                    if cmds.objExists(clean_name):
                         successfully_pulled += 1
                         # Track which root objects we found
                         root_name = (
@@ -1958,21 +1958,33 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 for obj_name in object_names:
                     clean_name = get_clean_node_name_from_string(obj_name)
 
-                    if pm.objExists(clean_name):
-                        obj = pm.PyNode(clean_name)
-                        children = obj.getChildren(type="transform")
+                    if cmds.objExists(clean_name):
+                        children = (
+                            cmds.listRelatives(
+                                clean_name, children=True, type="transform"
+                            )
+                            or []
+                        )
                         verify_rows.append([clean_name, "OK", str(len(children))])
                         if children:
-                            child_names = [c.nodeName() for c in children[:3]]
+                            child_names = [
+                                c.split("|")[-1] for c in children[:3]
+                            ]
                             self.logger.debug(
                                 f"   Children of {clean_name}: {child_names}{'...' if len(children) > 3 else ''}"
                             )
-                    elif pm.objExists(obj_name):
-                        obj = pm.PyNode(obj_name)
-                        children = obj.getChildren(type="transform")
+                    elif cmds.objExists(obj_name):
+                        children = (
+                            cmds.listRelatives(
+                                obj_name, children=True, type="transform"
+                            )
+                            or []
+                        )
                         verify_rows.append([obj_name, "OK", str(len(children))])
                         if children:
-                            child_names = [c.nodeName() for c in children[:3]]
+                            child_names = [
+                                c.split("|")[-1] for c in children[:3]
+                            ]
                             self.logger.debug(
                                 f"   Children of {obj_name}: {child_names}{'...' if len(children) > 3 else ''}"
                             )
@@ -2263,14 +2275,14 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         names = [str(n) for n in nodes]
         try:
-            pm.undoInfo(openChunk=True, chunkName="Delete Selected Objects")
-            pm.delete(nodes)
+            cmds.undoInfo(openChunk=True, chunkName="Delete Selected Objects")
+            cmds.delete(nodes)
             self.logger.info(f"Deleted {len(names)} object(s): {', '.join(names)}")
         except Exception as e:
             self.logger.error(f"Delete failed: {e}")
             return
         finally:
-            pm.undoInfo(closeChunk=True)
+            cmds.undoInfo(closeChunk=True)
 
         self.controller.refresh_trees()
 
@@ -2365,12 +2377,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 continue
 
             try:
-                old_name = node.nodeName()
+                old_name = str(node).split('|')[-1]
                 if new_name == old_name:
                     continue
 
                 node.rename(new_name)
-                actual_name = node.nodeName()
+                actual_name = str(node).split('|')[-1]
                 cur_item._raw_name = actual_name
 
                 # Block signals to prevent itemChanged from interfering

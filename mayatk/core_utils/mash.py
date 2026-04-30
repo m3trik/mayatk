@@ -3,7 +3,8 @@
 from importlib import import_module, reload
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
     import maya.OpenMaya as om
     import maya.OpenMayaFX as omfx
 except ImportError as error:
@@ -77,9 +78,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def ensure_plugin_loaded():
-        loaded = int(pm.pluginInfo("MASH", q=True, l=1))
+        loaded = int(cmds.pluginInfo("MASH", q=True, l=1))
         if not loaded:
-            pm.loadPlugin("MASH")
+            cmds.loadPlugin("MASH")
 
     @classmethod
     def create_network(
@@ -99,13 +100,14 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
         network = cls._resolve_network(network)
         objects_ = cls._filter_objects(objects, geometry)
         if not objects_:
-            return pm.mel.MASHinViewMessage(
-                pm.mel.getPluginResource("MASH", "kMASHMeshesOnly"), "Error"
+            mel.eval(
+                'MASHinViewMessage `getPluginResource "MASH" "kMASHMeshesOnly"` "Error"'
             )
+            return None
 
         if hideOnCreate:
             for obj in objects_:
-                pm.hide(obj)
+                cmds.hide(obj)
 
         waiter = cls._create_waiter(networkName)
         distNode = cls._create_distribute(waiter)
@@ -145,7 +147,7 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
         _instancer = cls._get_instancer(instancer)
         thisNode = cls.bake_instancer(
-            network, _instancer, _getMObjectFromName=_instancer.name()
+            network, _instancer, _getMObjectFromName=_instancer.split("|")[-1].split(":")[-1]
         )
         fnThisNode = om.MFnDependencyNode(thisNode)
 
@@ -153,7 +155,7 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
         first_frame = int(sf)
         result = []
         for frame in range(int(sf), int(ef)):
-            pm.currentTime(frame)
+            cmds.currentTime(frame)
             group = cls._prepare_instance_group(_instancer, frame, first_frame)
             visList = cls._read_visibility_array(fnThisNode, thisNode)
             result.extend(
@@ -178,8 +180,8 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     @staticmethod
     def _filter_objects(objects, geometry):
         if geometry == "Mesh":
-            return pm.ls(objects, lf=1, ni=1, dag=1, type="mesh", l=1)
-        return pm.ls(objects)
+            return cmds.ls(objects, lf=1, ni=1, dag=1, type="mesh", l=1)
+        return cmds.ls(objects)
 
     @classmethod
     def _resolve_network(cls, network):
@@ -190,16 +192,16 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def _create_waiter(name):
-        waiter = pm.createNode("MASH_Waiter", n=name)
-        pm.addAttr(waiter, hidden=True, at="message", longName="instancerMessage")
+        waiter = cmds.createNode("MASH_Waiter", n=name)
+        cmds.addAttr(waiter, hidden=True, at="message", longName="instancerMessage")
         return waiter
 
     @staticmethod
     def _create_distribute(waiter):
-        node = pm.createNode("MASH_Distribute", n="{}_Distribute".format(waiter.name()))
-        pm.setAttr(node.mapDirection, 4)
-        pm.connectAttr(node.outputPoints, waiter.inputPoints, force=1)
-        pm.connectAttr(node.waiterMessage, waiter.waiterMessage, f=1)
+        node = cmds.createNode("MASH_Distribute", n="{}_Distribute".format(waiter.split("|")[-1].split(":")[-1]))
+        cmds.setAttr(node.mapDirection, 4)
+        cmds.connectAttr(node.outputPoints, waiter.inputPoints, force=1)
+        cmds.connectAttr(node.waiterMessage, waiter.waiterMessage, f=1)
         return node
 
     @staticmethod
@@ -208,44 +210,44 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
             import mash_repro_utils
 
             reload(mash_repro_utils)
-            reproName = "{}_Repro".format(waiter.name())
-            instancer = pm.ls(mash_repro_utils.create_mash_repro_node(None, reproName))[
+            reproName = "{}_Repro".format(waiter.split("|")[-1].split(":")[-1])
+            instancer = cmds.ls(mash_repro_utils.create_mash_repro_node(None, reproName))[
                 0
             ]
         else:
-            instancerName = "{}_Instancer".format(waiter.name())
-            instancer = pm.createNode("instancer", name=instancerName)
-        pm.connectAttr(waiter.outputPoints, instancer.inputPoints, force=1)
-        pm.addAttr(instancer, hidden=True, at="message", longName="instancerMessage")
-        pm.connectAttr(waiter.instancerMessage, instancer.instancerMessage, f=1)
+            instancerName = "{}_Instancer".format(waiter.split("|")[-1].split(":")[-1])
+            instancer = cmds.createNode("instancer", name=instancerName)
+        cmds.connectAttr(waiter.outputPoints, instancer.inputPoints, force=1)
+        cmds.addAttr(instancer, hidden=True, at="message", longName="instancerMessage")
+        cmds.connectAttr(waiter.instancerMessage, instancer.instancerMessage, f=1)
         return instancer
 
     @staticmethod
     def _configure_distribution(node, distType, object_count):
         if object_count > 1:
-            pm.setAttr(node.pointCount, object_count)
+            cmds.setAttr(node.pointCount, object_count)
         arrangement_values = {
             "radialNetwork": 2,
             "gridNetwork": 6,
             "initialNetwork": 7,
         }
         if distType == "zeroNetwork":
-            pm.setAttr(node.amplitudeX, 0.0)
+            cmds.setAttr(node.amplitudeX, 0.0)
         elif distType in arrangement_values:
-            pm.setAttr(node.attr("arrangement"), arrangement_values[distType])
+            cmds.setAttr(f"{node}.arrangement", arrangement_values[distType])
 
     @staticmethod
     def _connect_prototypes(instancer, objects_, geometry):
-        for transform in pm.ls(objects_, transforms=1):
+        for transform in cmds.ls(objects_, transforms=1):
             if geometry == "Mesh":
                 import mash_repro_utils
 
                 mash_repro_utils.connect_mesh_group(
-                    instancer.name(), transform.name(), new_connection=True
+                    instancer.split("|")[-1].split(":")[-1], transform.split("|")[-1].split(":")[-1], new_connection=True
                 )
             else:
-                pm.mel.eval(
-                    "instancer -e -a -obj {} {};".format(transform, instancer.name())
+                mel.eval(
+                    "instancer -e -a -obj {} {};".format(transform, instancer.split("|")[-1].split(":")[-1])
                 )
 
     @staticmethod
@@ -269,31 +271,31 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def _get_instancer(instancer):
-        nodes = pm.ls(instancer, type="instancer")
+        nodes = cmds.ls(instancer, type="instancer")
         if not nodes:
             raise RuntimeError(
                 '"{}" is type: "{}". The required node type is "instancer".'.format(
-                    instancer, pm.nodeType(instancer)
+                    instancer, cmds.nodeType(instancer)
                 )
             )
         return nodes[0]
 
     @staticmethod
     def _determine_frame_range(bakeAnimation):
-        sf = int(pm.playbackOptions(q=True, min=True)) - 1
-        ef = int(pm.playbackOptions(q=True, max=True)) + 2
+        sf = int(cmds.playbackOptions(q=True, min=True)) - 1
+        ef = int(cmds.playbackOptions(q=True, max=True)) + 2
         if not bakeAnimation:
-            sf = pm.currentTime(query=True)
+            sf = cmds.currentTime(query=True)
             ef = sf + 1
         return sf, ef
 
     @staticmethod
     def _prepare_instance_group(instancer, frame, first_frame):
-        group_name = "{}_objects".format(instancer.name())
-        if frame == first_frame and pm.objExists(group_name):
-            pm.delete(group_name)
-        if not pm.objExists(group_name):
-            pm.createNode("transform", n=group_name)
+        group_name = "{}_objects".format(instancer.split("|")[-1].split(":")[-1])
+        if frame == first_frame and cmds.objExists(group_name):
+            cmds.delete(group_name)
+        if not cmds.objExists(group_name):
+            cmds.createNode("transform", n=group_name)
         return group_name
 
     @staticmethod
@@ -353,9 +355,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
                     bakeAnimation,
                 )
                 if bakeVisibility:
-                    pm.setAttr(created + ".v", visibility)
+                    cmds.setAttr(created + ".v", visibility)
                     if bakeAnimation:
-                        pm.setKeyframe(created + ".v")
+                        cmds.setKeyframe(created + ".v")
                 result.append(created)
         return result
 
@@ -365,10 +367,10 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     ):
         # Extract simple name from full path (remove namespace and pipes)
         simple_name = dag_path.partialPathName().rsplit(":", 1)[-1].rsplit("|", 1)[-1]
-        name = "{}_{}_".format(instancer.name(), simple_name, particle_index)
+        name = "{}_{}_".format(instancer.split("|")[-1].split(":")[-1], simple_name, particle_index)
         if bakeToIntances:
-            return pm.instance(dag_path.fullPathName(), leaf=1, name=name)[0]
-        return pm.duplicate(
+            return cmds.instance(dag_path.fullPathName(), leaf=1, name=name)[0]
+        return cmds.duplicate(
             dag_path.fullPathName(),
             returnRootsOnly=1,
             upstreamNodes=upstreamNodes,
@@ -377,20 +379,20 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def _parent_and_key_visibility(node, group, visibility, bakeAnimation):
-        parents = pm.listRelatives(node, p=True) or []
+        parents = cmds.listRelatives(node, p=True) or []
         parent_name = parents[0].name() if parents else None
         already_parented = parent_name == group
         if not already_parented:
             try:
-                pm.parent(node, group)
+                cmds.parent(node, group)
             except RuntimeError:
                 pass
-            pm.setKeyframe(node + ".visibility", v=0, t=pm.currentTime(q=True) - 1)
-            pm.setKeyframe(
+            cmds.setKeyframe(node + ".visibility", v=0, t=cmds.currentTime(q=True) - 1)
+            cmds.setKeyframe(
                 node + ".visibility", v=visibility if visibility is not None else 1
             )
         elif bakeAnimation and visibility is not None:
-            pm.setKeyframe(node + ".visibility", v=visibility)
+            cmds.setKeyframe(node + ".visibility", v=visibility)
 
     @staticmethod
     def _apply_transform_keys(
@@ -409,22 +411,22 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
         finalPoint = om.MPoint.origin * finalMatrixForPath
         if bakeTranslate:
             try:
-                pm.setAttr(node + ".t", finalPoint.x, finalPoint.y, finalPoint.z)
+                cmds.setAttr(node + ".t", finalPoint.x, finalPoint.y, finalPoint.z)
                 if bakeAnimation:
-                    pm.setKeyframe(node + ".t")
+                    cmds.setKeyframe(node + ".t")
             except RuntimeError:
                 pass
         if bakeRotation:
             r = tm.eulerRotation().asVector()
             try:
-                pm.setAttr(
+                cmds.setAttr(
                     node + ".r",
                     r[0] * _RAD_TO_DEG,
                     r[1] * _RAD_TO_DEG,
                     r[2] * _RAD_TO_DEG,
                 )
                 if bakeAnimation:
-                    pm.setKeyframe(node + ".r")
+                    cmds.setKeyframe(node + ".r")
             except RuntimeError:
                 pass
         if bakeScale:
@@ -439,9 +441,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
             sy2 = om.MScriptUtil().getDoubleArrayItem(scale_ptr, 1)
             sz2 = om.MScriptUtil().getDoubleArrayItem(scale_ptr, 2)
             try:
-                pm.setAttr(node + ".s", sx * sx2, sy * sy2, sz * sz2)
+                cmds.setAttr(node + ".s", sx * sx2, sy * sy2, sz * sz2)
                 if bakeAnimation:
-                    pm.setKeyframe(node + ".s")
+                    cmds.setKeyframe(node + ".s")
             except RuntimeError:
                 pass
 

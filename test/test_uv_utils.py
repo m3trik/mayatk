@@ -12,11 +12,11 @@ Tests for UvUtils class functionality including:
 - UV space movement
 """
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.uv_utils._uv_utils import UvUtils
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestUvUtils(MayaTkTestCase):
@@ -26,16 +26,16 @@ class TestUvUtils(MayaTkTestCase):
         """Set up test scene with standard geometry."""
         super().setUp()
         # Create test cube with UVs
-        self.cube = pm.polyCube(name="test_uv_cube")[0]
+        self.cube = cmds.polyCube(name="test_uv_cube")[0]
         # Create a second cube for transfer/density tests
-        self.cube2 = pm.polyCube(name="test_uv_cube2")[0]
-        pm.move(self.cube2, 5, 0, 0)
+        self.cube2 = cmds.polyCube(name="test_uv_cube2")[0]
+        cmds.move(5, 0, 0, self.cube2)
 
     def tearDown(self):
         """Clean up test geometry."""
         for obj in ["test_uv_cube", "test_uv_cube2"]:
-            if pm.objExists(obj):
-                pm.delete(obj)
+            if cmds.objExists(obj):
+                cmds.delete(obj)
         super().tearDown()
 
     # -------------------------------------------------------------------------
@@ -61,7 +61,7 @@ class TestUvUtils(MayaTkTestCase):
     def test_orient_shells(self):
         """Test orienting UV shells."""
         # Rotate UVs to random angle first
-        pm.polyEditUV(self.cube.map[:], angle=45)
+        cmds.polyEditUV(f"{self.cube}.map[*]", angle=45)
 
         # Pass as list because orient_shells expects iterable or list of components
         UvUtils.orient_shells([self.cube])
@@ -77,7 +77,7 @@ class TestUvUtils(MayaTkTestCase):
         UvUtils.move_to_uv_space(self.cube, u=1, v=0, relative=True)
 
         # Check bounding box of UVs
-        uvs = pm.polyEditUV(self.cube.map[:], q=True)
+        uvs = cmds.polyEditUV(f"{self.cube}.map[*]", q=True)
         u_coords = uvs[0::2]
         min_u = min(u_coords)
 
@@ -87,12 +87,12 @@ class TestUvUtils(MayaTkTestCase):
     def test_mirror_uvs(self):
         """Test mirroring UVs."""
         # Get initial UV positions
-        initial_uvs = pm.polyEditUV(self.cube.map[:], q=True)
+        initial_uvs = cmds.polyEditUV(f"{self.cube}.map[*]", q=True)
 
         # Mirror across U
         UvUtils.mirror_uvs(self.cube, axis="u", preserve_position=False)
 
-        mirrored_uvs = pm.polyEditUV(self.cube.map[:], q=True)
+        mirrored_uvs = cmds.polyEditUV(f"{self.cube}.map[*]", q=True)
         self.assertNotEqual(initial_uvs, mirrored_uvs)
 
     # def test_mirror_uvs_preserve_position(self):
@@ -118,7 +118,7 @@ class TestUvUtils(MayaTkTestCase):
     def test_get_uv_shell_border_edges(self):
         """Test getting UV border edges."""
         # Cut UVs to create borders
-        pm.polyMapCut(self.cube.e[0])
+        cmds.polyMapCut(f"{self.cube}.e[0]")
 
         borders = UvUtils.get_uv_shell_border_edges(self.cube)
         self.assertIsInstance(borders, list)
@@ -152,15 +152,15 @@ class TestUvUtils(MayaTkTestCase):
     def test_transfer_uvs(self):
         """Test transferring UVs."""
         # Modify cube2 UVs
-        pm.polyEditUV(self.cube2.map[:], u=0.5, v=0.5)
+        cmds.polyEditUV(f"{self.cube2}.map[*]", u=0.5, v=0.5)
 
         # Transfer from cube2 to cube1
         UvUtils.transfer_uvs(source=self.cube2, target=self.cube, tolerance=0.1)
 
         # Cube1 UVs should now match Cube2 (approx)
         # Simple check: bounding box center
-        uvs1 = pm.polyEvaluate(self.cube.map[:], bc2=True)
-        uvs2 = pm.polyEvaluate(self.cube2.map[:], bc2=True)
+        uvs1 = cmds.polyEvaluate(f"{self.cube}.map[*]", bc2=True)
+        uvs2 = cmds.polyEvaluate(f"{self.cube2}.map[*]", bc2=True)
 
         # Compare centers
         c1 = ((uvs1[0][0] + uvs1[1][0]) / 2, (uvs1[0][1] + uvs1[1][1]) / 2)
@@ -172,13 +172,13 @@ class TestUvUtils(MayaTkTestCase):
     def test_reorder_uv_sets(self):
         """Test reordering UV sets."""
         # Create extra UV set
-        pm.polyUVSet(self.cube, create=True, uvSet="map2")
+        cmds.polyUVSet(self.cube, create=True, uvSet="map2")
 
         # Current order: map1, map2
         # Reorder to: map2, map1
         UvUtils.reorder_uv_sets(self.cube, new_order=["map2", "map1"])
 
-        sets = pm.polyUVSet(self.cube, q=True, allUVSets=True)
+        sets = cmds.polyUVSet(self.cube, q=True, allUVSets=True)
         self.assertEqual(sets, ["map2", "map1"])
 
     # def test_remove_empty_uv_sets(self):
@@ -193,11 +193,11 @@ class TestUvUtilsEdgeCases(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.cube = pm.polyCube(name="test_edge_cube")[0]
+        self.cube = cmds.polyCube(name="test_edge_cube")[0]
 
     def tearDown(self):
-        if pm.objExists("test_edge_cube"):
-            pm.delete("test_edge_cube")
+        if cmds.objExists("test_edge_cube"):
+            cmds.delete("test_edge_cube")
         super().tearDown()
 
     def test_mirror_uvs_invalid_axis(self):

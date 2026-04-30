@@ -131,6 +131,12 @@ FitMode = Literal["extend_only", "fit_contents"]
 DEFAULT_INITIAL_SHOT_LENGTH: float = ShotStore.DEFAULT_INITIAL_SHOT_LENGTH
 DEFAULT_FIT_MODE: FitMode = ShotStore.DEFAULT_FIT_MODE  # type: ignore[assignment]
 
+# Placeholder length for audio steps whose source is not yet resolvable
+# (track not loaded, file missing).  Kept small so the shot visibly grows
+# to clip length once the source materialises — matches the default
+# fallback of ``compute_duration`` so both code paths agree.
+AUDIO_PLACEHOLDER_DURATION: float = 30.0
+
 
 @dataclass
 class PlannedKey:
@@ -263,6 +269,34 @@ def resolve_duration(
         raise ValueError(f"Unknown fit_mode: {fit_mode!r}")
 
     return duration, behavior_span, audio_span
+
+
+def _audio_placeholder_dur(step: BuilderStep) -> Optional[float]:
+    """Return ``AUDIO_PLACEHOLDER_DURATION`` if *step* is an audio step with
+    no resolvable source — i.e. the shot should grow to the clip length
+    once it loads, but currently has nothing to size by.  Returns ``None``
+    when a regular fit-mode + initial_shot_length policy should be used.
+    """
+    try:
+        from mayatk.audio_utils._audio_utils import AudioUtils as _AU
+    except Exception:
+        _AU = None  # type: ignore[assignment]
+
+    has_audio = False
+    for obj in step.objects:
+        if obj.kind != "audio":
+            continue
+        has_audio = True
+        if obj.source_path:
+            return None
+        if _AU is not None:
+            try:
+                tid = _AU.normalize_track_id(obj.name)
+                if _AU.has_track(tid) and _AU.get_path(tid):
+                    return None
+            except Exception:
+                pass
+    return AUDIO_PLACEHOLDER_DURATION if has_audio else None
 
 
 def plan_object_keys(
@@ -999,12 +1033,31 @@ class ShotManifest:
                     else:
                         start = adjusted_cursor
                     fps = self._resolve_fps()
-                    dur, _beh, _aud = resolve_duration(
-                        step,
-                        initial_shot_length,
-                        fit_mode,
-                        fps,
-                    )
+                    if rng is not None:
+                        # Range pinned by caller (rebuild / explicit user
+                        # ranges) — respect rng[1] as the end, but still
+                        # grow if measured content exceeds it.
+                        _content_dur, _beh, _aud = resolve_duration(
+                            step,
+                            initial_shot_length=0.0,
+                            fit_mode="fit_contents",
+                            fps=fps,
+                        )
+                        dur = max(rng[1] - rng[0], _content_dur)
+                    else:
+                        # Audio steps with no resolvable source get a
+                        # small placeholder so the shot grows once the
+                        # clip loads.
+                        placeholder = _audio_placeholder_dur(step)
+                        if placeholder is not None:
+                            dur = placeholder
+                        else:
+                            dur, _beh, _aud = resolve_duration(
+                                step,
+                                initial_shot_length,
+                                fit_mode,
+                                fps,
+                            )
                     end = start + dur
 
                 scene_objs = [o for o in step.objects if o.kind != "audio"]
@@ -1356,7 +1409,7 @@ class ShotManifest:
         Parameters:
             steps: Parsed steps from the CSV.
             exists_fn: Callable that returns ``True`` when an object name
-                exists in the scene.  Defaults to ``pymel.core.objExists``.
+                exists in the scene.  Defaults to ``cmds.objExists``.
             verify_fn: Callable ``(obj, behavior, start, end) -> bool``
                 that returns ``True`` when the expected behaviour keys
                 exist.  Defaults to

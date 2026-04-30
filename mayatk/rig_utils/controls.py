@@ -6,21 +6,22 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
 
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, leaf_name
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
 @dataclass(frozen=True)
 class ControlNodes:
-    control: "pm.nt.Transform"
-    group: Optional["pm.nt.Transform"] = None
+    control: str
+    group: Optional[str] = None
 
 
 class _ControlsMeta(type):
@@ -65,12 +66,12 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     it will be aligned in world-space.
     """
 
-    _PRESETS: ClassVar[Dict[str, Callable[..., "pm.nt.Transform"]]] = {}
+    _PRESETS: ClassVar[Dict[str, Callable[..., str]]] = {}
 
     @staticmethod
     def _merge_curve_shapes(
-        target_transform: "pm.nt.Transform",
-        source_transforms: Iterable["pm.nt.Transform"],
+        target_transform: str,
+        source_transforms: Iterable[str],
         *,
         delete_sources: bool = True,
     ) -> None:
@@ -79,57 +80,57 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         for src in source_transforms:
             if not src or src == target_transform:
                 continue
-            shapes = pm.listRelatives(src, shapes=True, path=True) or []
+            shapes = cmds.listRelatives(src, shapes=True, path=True) or []
             for s in shapes:
                 try:
-                    pm.parent(s, target_transform, r=True, s=True)
+                    cmds.parent(s, target_transform, r=True, s=True)
                 except Exception:
-                    pm.parent(s, target_transform, s=True)
+                    cmds.parent(s, target_transform, s=True)
             if delete_sources:
                 try:
-                    pm.delete(src)
+                    cmds.delete(src)
                 except Exception:
                     pass
 
     @classmethod
     def _curves_from_poly(
         cls,
-        poly_transform: "pm.nt.Transform",
+        poly_transform: str,
         name: str,
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """Extract wireframe curves from a polygon mesh, delete it,
         and return a single transform containing all edge curves.
         """
-        mesh_shapes = pm.listRelatives(poly_transform, shapes=True, type="mesh") or []
+        mesh_shapes = cmds.listRelatives(poly_transform, shapes=True, type="mesh") or []
         if not mesh_shapes:
             raise RuntimeError(
                 f"Controls._curves_from_poly: no mesh under {poly_transform}"
             )
         mesh = mesh_shapes[0]
-        num_edges = mesh.numEdges()
+        num_edges = cmds.polyEvaluate(mesh, edge=True)
 
-        curves: List[pm.nt.Transform] = []
+        curves: List[str] = []
         for edge_idx in range(num_edges):
-            verts = pm.polyListComponentConversion(
+            verts = cmds.polyListComponentConversion(
                 f"{mesh}.e[{edge_idx}]", fromEdge=True, toVertex=True
             )
-            verts = pm.ls(verts, flatten=True)
-            positions = [pm.pointPosition(v, world=True) for v in verts]
+            verts = cmds.ls(verts, flatten=True) or []
+            positions = [cmds.pointPosition(v, world=True) for v in verts]
             if len(positions) >= 2:
-                curves.append(pm.curve(p=positions, d=1))
+                curves.append(cmds.curve(p=positions, d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
-        pm.delete(poly_transform)
+        cmds.delete(poly_transform)
         return base
 
     @staticmethod
-    def _safe_freeze(node: "pm.nt.Transform") -> None:
+    def _safe_freeze(node: str) -> None:
         try:
             XformUtils.freeze_transforms(node, t=True, r=True, s=True)
         except Exception:
             try:
-                pm.makeIdentity(node, apply=True, t=True, r=True, s=True, pn=True)
+                cmds.makeIdentity(node, apply=True, t=True, r=True, s=True, pn=True)
             except Exception:
                 pass
 
@@ -144,56 +145,57 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         font: str = "Arial",
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         center: bool = True,
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """Create a single transform containing curve-text shapes."""
 
         if text is None or str(text) == "":
             raise ValueError("Controls: text cannot be empty")
 
-        grp = pm.textCurves(ch=False, f=font, t=str(text))
-        grp = pm.ls(grp, type="transform", long=True) or []
+        cmds.textCurves(ch=False, f=font, t=str(text))
+        # Maya may have selected the text root after textCurves — normalise via ls.
+        grp = cmds.ls(selection=True, type="transform", long=True) or []
         if not grp:
             raise RuntimeError("Controls: textCurves produced no transform")
         root = grp[0]
 
-        root = pm.rename(root, name)
+        root = cmds.rename(root, name)
 
         # Normalize orientation, size, and placement
         rx, ry, rz = cls._axis_to_rotation(axis)
         if any(abs(v) > 1e-8 for v in (rx, ry, rz)):
-            pm.rotate(root, (rx, ry, rz), r=True, os=True)
+            cmds.rotate(rx, ry, rz, root, r=True, os=True)
 
         if size and abs(float(size) - 1.0) > 1e-8:
-            pm.scale(root, float(size), float(size), float(size), r=True)
+            cmds.scale(float(size), float(size), float(size), root, r=True)
 
         if center:
             try:
                 # Center in local space by shifting so bbox center is at origin
-                bb = pm.exactWorldBoundingBox(root)
+                bb = cmds.exactWorldBoundingBox(root)
                 cx = (bb[0] + bb[3]) / 2.0
                 cy = (bb[1] + bb[4]) / 2.0
                 cz = (bb[2] + bb[5]) / 2.0
-                pm.move(-cx, -cy, -cz, root, r=True, ws=True)
+                cmds.move(-cx, -cy, -cz, root, r=True, ws=True)
             except Exception:
                 pass
 
         if offset and any(abs(v) > 1e-8 for v in offset):
-            pm.move(offset[0], offset[1], offset[2], root, r=True, os=True)
+            cmds.move(offset[0], offset[1], offset[2], root, r=True, os=True)
 
         cls._safe_freeze(root)
 
         # Flatten: bring any nested curve shapes up to root so this behaves like a single object
-        descendants = pm.listRelatives(root, ad=True, type="transform") or []
+        descendants = cmds.listRelatives(root, ad=True, type="transform") or []
         for d in descendants:
-            shapes = pm.listRelatives(d, shapes=True, path=True) or []
+            shapes = cmds.listRelatives(d, shapes=True, path=True) or []
             for s in shapes:
                 try:
-                    pm.parent(s, root, r=True, s=True)
+                    cmds.parent(s, root, r=True, s=True)
                 except Exception:
-                    pm.parent(s, root, s=True)
+                    cmds.parent(s, root, s=True)
         for d in descendants:
             try:
-                pm.delete(d)
+                cmds.delete(d)
             except Exception:
                 pass
 
@@ -218,19 +220,19 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
 
     @staticmethod
     def _apply_wire_color(
-        node: "pm.nt.Transform", color: Union[int, Tuple[float, float, float]]
+        node: str, color: Union[int, Tuple[float, float, float]]
     ) -> None:
         if color is None:
             return
 
         try:
             if isinstance(color, int):
-                if node.hasAttr("overrideEnabled"):
-                    node.overrideEnabled.set(1)
-                if node.hasAttr("overrideRGBColors"):
-                    node.overrideRGBColors.set(0)
-                if node.hasAttr("overrideColor"):
-                    node.overrideColor.set(int(color))
+                if Attributes.has_attr(node, "overrideEnabled"):
+                    cmds.setAttr(f"{node}.overrideEnabled", 1)
+                if Attributes.has_attr(node, "overrideRGBColors"):
+                    cmds.setAttr(f"{node}.overrideRGBColors", 0)
+                if Attributes.has_attr(node, "overrideColor"):
+                    cmds.setAttr(f"{node}.overrideColor", int(color))
                 return
 
             if (
@@ -245,25 +247,27 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 )
         except Exception as exc:
             try:
-                pm.warning(f"Controls: color assignment failed on {node}: {exc}")
+                cmds.warning(f"Controls: color assignment failed on {node}: {exc}")
             except Exception:
                 pass
 
     @staticmethod
-    def _match_transform(node: "pm.nt.Transform", target: Any) -> None:
+    def _match_transform(node: str, target: Any) -> None:
         target_xform = NodeUtils.get_transform_node(target)
         if not target_xform:
             return
-        tgt = pm.ls(target_xform, flatten=True)[0]
+        tgt = (cmds.ls(target_xform, flatten=True) or [None])[0]
+        if not tgt:
+            return
         try:
-            pm.delete(pm.parentConstraint(tgt, node, mo=False))
-            pm.delete(pm.scaleConstraint(tgt, node, mo=False))
+            cmds.delete(cmds.parentConstraint(tgt, node, mo=False))
+            cmds.delete(cmds.scaleConstraint(tgt, node, mo=False))
         except Exception:
-            pm.delete(pm.parentConstraint(tgt, node, mo=False))
+            cmds.delete(cmds.parentConstraint(tgt, node, mo=False))
 
     @classmethod
     def register_preset(
-        cls, name: str, builder: Callable[..., "pm.nt.Transform"]
+        cls, name: str, builder: Callable[..., str]
     ) -> None:
         """Register a new control preset.
 
@@ -283,7 +287,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         size: float = 1.0,
         axis: str = "y",
         match: Any = None,
-        parent: Optional["pm.nt.Transform"] = None,
+        parent: Optional[str] = None,
         color: Union[int, Tuple[float, float, float], None] = None,
         offset_group: bool = True,
         group_suffix: str = "_GRP",
@@ -292,7 +296,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         tag_as_controller: bool = True,
         return_nodes: bool = False,
         **kwargs,
-    ) -> Union["pm.nt.Transform", ControlNodes]:
+    ) -> Union[str, ControlNodes]:
         """Create a NURBS control.
 
         Parameters:
@@ -312,7 +316,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             **kwargs: Forwarded to the preset builder (preset-specific parameters).
 
         Returns:
-            pm.nt.Transform (control) by default, or ControlNodes if return_nodes=True.
+            str (control transform name) by default, or ControlNodes if return_nodes=True.
         """
         if not cls._PRESETS:
             cls._register_builtin_presets()
@@ -333,10 +337,10 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if preset_norm not in ("text",):
             rx, ry, rz = cls._axis_to_rotation(axis)
             if any(abs(v) > 1e-8 for v in (rx, ry, rz)):
-                pm.rotate(ctrl, (rx, ry, rz), r=True, os=True)
+                cmds.rotate(rx, ry, rz, ctrl, r=True, os=True)
 
         if size and abs(float(size) - 1.0) > 1e-8:
-            pm.scale(ctrl, float(size), float(size), float(size), r=True)
+            cmds.scale(float(size), float(size), float(size), ctrl, r=True)
 
         if freeze:
             cls._safe_freeze(ctrl)
@@ -345,8 +349,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         top = ctrl
         if offset_group:
             grp_name = f"{base}{group_suffix}" if group_suffix else f"{base}_GRP"
-            grp = pm.group(em=True, n=grp_name)
-            pm.parent(ctrl, grp)
+            grp = cmds.group(em=True, n=grp_name)
+            cmds.parent(ctrl, grp)
             top = grp
 
         if match is not None:
@@ -354,15 +358,15 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
 
         if parent is not None:
             try:
-                top.setParent(parent)
+                top = cmds.parent(top, str(parent))[0]
             except Exception:
-                pm.parent(top, parent)
+                pass
 
         cls._apply_wire_color(ctrl, color)
 
         if tag_as_controller:
             try:
-                pm.controller(ctrl)
+                cmds.controller(ctrl)
             except Exception:
                 pass
 
@@ -377,19 +381,19 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         controls: Iterable[Any],
         name: Optional[str] = None,
         *,
-        parent: Optional["pm.nt.Transform"] = None,
+        parent: Optional[str] = None,
         match: Any = None,
         color: Union[int, Tuple[float, float, float], None] = None,
         delete_sources: bool = True,
         ctrl_suffix: str = "_CTRL",
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """Combine multiple control transforms into a single selectable transform.
 
         This merges all curve shapes under the provided transforms into one transform.
         Typical use: merge a control with a standalone text control.
         """
 
-        resolved: List[pm.nt.Transform] = []
+        resolved: List[str] = []
         for item in controls or []:
             if item is None:
                 continue
@@ -398,27 +402,27 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             else:
                 node = NodeUtils.get_transform_node(item) or item
             try:
-                node = pm.ls(node, flatten=True)[0]
+                node = (cmds.ls(node, flatten=True) or [None])[0]
             except Exception:
                 continue
-            if node not in resolved:
+            if node and node not in resolved:
                 resolved.append(node)
 
         if not resolved:
             raise ValueError("Controls.combine: no valid controls provided")
 
-        base = name or resolved[0].name()
+        base = name or leaf_name(resolved[0]).split(":")[-1]
         if ctrl_suffix and not base.endswith(ctrl_suffix):
             base = f"{base}{ctrl_suffix}"
 
         if len(resolved) == 1:
             combined = resolved[0]
             try:
-                combined = pm.rename(combined, base)
+                combined = cmds.rename(combined, base)
             except Exception:
                 pass
         else:
-            combined = pm.group(em=True, n=base)
+            combined = cmds.group(em=True, n=base)
 
             # Put the combined transform at the first control's xform for nicer pivots.
             try:
@@ -433,9 +437,9 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
 
         if parent is not None:
             try:
-                combined.setParent(parent)
+                combined = cmds.parent(combined, str(parent))[0]
             except Exception:
-                pm.parent(combined, parent)
+                pass
 
         cls._apply_wire_color(combined, color)
         return combined
@@ -473,7 +477,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         cls.register_preset("text", cls._build_text)
 
     @classmethod
-    def _build_diamond(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_diamond(cls, *, name: str, axis: str = "y", **_) -> str:
         """3D octahedron — two four-sided pyramids joined at the equator."""
         r = 1.0  # equatorial radius
         h = 1.25  # half-height (top/bottom apex)
@@ -487,19 +491,19 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (0.0, 0.0, -r),
         ]
 
-        curves: List[pm.nt.Transform] = []
+        curves: List[str] = []
         # Equatorial ring
-        curves.append(pm.curve(p=eq + [eq[0]], d=1))
+        curves.append(cmds.curve(p=eq + [eq[0]], d=1))
         # Ribs from top to equator and bottom to equator
         for pt in eq:
-            curves.append(pm.curve(p=[top, pt, bot], d=1))
+            curves.append(cmds.curve(p=[top, pt, bot], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
-    def _build_arrow(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_arrow(cls, *, name: str, axis: str = "y", **_) -> str:
         """3D arrow with depth — reads well from any camera angle."""
         # Flat arrow outline
         y = 0.0
@@ -518,21 +522,21 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         top_pts = [(x, d, z) for (x, _, z) in outline]
         bot_pts = [(x, -d, z) for (x, _, z) in outline]
 
-        curves: List[pm.nt.Transform] = []
-        curves.append(pm.curve(p=top_pts, d=1))
-        curves.append(pm.curve(p=bot_pts, d=1))
+        curves: List[str] = []
+        curves.append(cmds.curve(p=top_pts, d=1))
+        curves.append(cmds.curve(p=bot_pts, d=1))
         # Vertical struts at key vertices (skip redundant ones for cleanliness)
         for i in (0, 2, 3, 4, 6):
-            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+            curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
     def _build_two_way_arrow(
         cls, *, name: str, axis: str = "y", **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """3D two-way arrow with depth."""
         outline = [
             (-1.6, 0.0, 0.0),
@@ -551,21 +555,21 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         top_pts = [(x, d, z) for (x, _, z) in outline]
         bot_pts = [(x, -d, z) for (x, _, z) in outline]
 
-        curves: List[pm.nt.Transform] = []
-        curves.append(pm.curve(p=top_pts, d=1))
-        curves.append(pm.curve(p=bot_pts, d=1))
+        curves: List[str] = []
+        curves.append(cmds.curve(p=top_pts, d=1))
+        curves.append(cmds.curve(p=bot_pts, d=1))
         # Vertical struts at arrow-tip and shaft corners
         for i in (0, 1, 4, 5, 6, 9):
-            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+            curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
     def _build_four_way_arrow(
         cls, *, name: str, axis: str = "y", **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """3D four-way arrow with depth."""
         L = 1.6
         head_len = 0.5
@@ -605,27 +609,27 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         top_pts = [(x, d, z) for (x, z) in pts_xz]
         bot_pts = [(x, -d, z) for (x, z) in pts_xz]
 
-        curves: List[pm.nt.Transform] = []
-        curves.append(pm.curve(p=top_pts, d=1))
-        curves.append(pm.curve(p=bot_pts, d=1))
+        curves: List[str] = []
+        curves.append(cmds.curve(p=top_pts, d=1))
+        curves.append(cmds.curve(p=bot_pts, d=1))
         # Struts at all four arrow tips and the inner elbow corners
         for i in (0, 1, 5, 6, 7, 11, 12, 13, 17, 18, 19, 23):
-            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+            curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
     def _build_target(
         cls, *, name: str, axis: str = "y", sections: int = 24, **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """3D target — three orthogonal circles (gimbal/gyroscope)."""
-        xy = pm.circle(name=name, ch=False, r=1.0, s=int(sections), nr=(0, 0, 1))[0]
-        xz = pm.circle(
+        xy = cmds.circle(name=name, ch=False, r=1.0, s=int(sections), nr=(0, 0, 1))[0]
+        xz = cmds.circle(
             name=f"{name}_xz", ch=False, r=1.0, s=int(sections), nr=(0, 1, 0)
         )[0]
-        yz = pm.circle(
+        yz = cmds.circle(
             name=f"{name}_yz", ch=False, r=1.0, s=int(sections), nr=(1, 0, 0)
         )[0]
 
@@ -639,16 +643,16 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         name: str,
         axis: str = "y",
         **_,
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """3D chevron — triangular prism pointing in +Z."""
-        prism = pm.polyPrism(l=0.35, w=1.6, ns=3, sh=1, sc=0, ax=(0, 1, 0), ch=False)[0]
+        prism = cmds.polyPrism(l=0.35, w=1.6, ns=3, sh=1, sc=0, ax=(0, 1, 0), ch=False)[0]
         # Flatten Y and stretch Z for a chevron silhouette
-        pm.scale(prism, 1.0, 0.5, 1.2, r=True)
-        pm.makeIdentity(prism, apply=True, t=True, r=True, s=True, pn=True)
+        cmds.scale(1.0, 0.5, 1.2, prism, r=True)
+        cmds.makeIdentity(prism, apply=True, t=True, r=True, s=True, pn=True)
         return cls._curves_from_poly(prism, name)
 
     @classmethod
-    def _build_box(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_box(cls, *, name: str, axis: str = "y", **_) -> str:
         """Simple cube wireframe — 12 edges, no bevels."""
         p = 1.0
         verts = [
@@ -676,24 +680,24 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (3, 7),  # verticals
         ]
 
-        curves: List[pm.nt.Transform] = []
+        curves: List[str] = []
         for i, j in edges:
-            curves.append(pm.curve(p=[verts[i], verts[j]], d=1))
+            curves.append(cmds.curve(p=[verts[i], verts[j]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
     def _build_beveled_cube(
         cls, *, name: str, axis: str = "y", **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """Beveled cube — polyCube with all edges beveled at 50%,
         converted to NURBS curves via edge extraction.
         """
-        cube = pm.polyCube(w=2, h=2, d=2, sx=1, sy=1, sz=1, ch=True)[0]
-        pm.polyBevel3(
-            cube.e[:],
+        cube = cmds.polyCube(w=2, h=2, d=2, sx=1, sy=1, sz=1, ch=True)[0]
+        cmds.polyBevel3(
+            f"{cube}.e[*]",
             offset=0.5,
             offsetAsFraction=True,
             segments=1,
@@ -701,13 +705,13 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             chamfer=True,
             ch=True,
         )
-        pm.delete(cube, ch=True)
+        cmds.delete(cube, ch=True)
         return cls._curves_from_poly(cube, name)
 
     @classmethod
     def _build_ball(
         cls, *, name: str, axis: str = "y", sections: int = 20, **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         # Geodesic sphere (icosahedron wireframe) for a cleaner, more "designed" control.
         # Golden ratio for icosahedron vertex positions
         phi = (1.0 + 5.0**0.5) / 2.0
@@ -765,26 +769,26 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (9, 11),
         ]
 
-        curves: List[pm.nt.Transform] = []
+        curves: List[str] = []
         for i, j in edges:
-            curves.append(pm.curve(p=[verts[i], verts[j]], d=1))
+            curves.append(cmds.curve(p=[verts[i], verts[j]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
-    def _build_torus(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_torus(cls, *, name: str, axis: str = "y", **_) -> str:
         """Torus — polyTorus converted to NURBS curves."""
-        torus = pm.polyTorus(r=0.8, sr=0.25, tw=0, sx=12, sy=4, ax=(0, 1, 0), ch=False)[
-            0
-        ]
+        torus = cmds.polyTorus(
+            r=0.8, sr=0.25, tw=0, sx=12, sy=4, ax=(0, 1, 0), ch=False
+        )[0]
         return cls._curves_from_poly(torus, name)
 
     @classmethod
-    def _build_helix(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_helix(cls, *, name: str, axis: str = "y", **_) -> str:
         """Helix — polyHelix converted to NURBS curves."""
-        helix = pm.polyHelix(
+        helix = cmds.polyHelix(
             c=2,
             h=6,
             w=5,
@@ -792,22 +796,21 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             sa=5,
             sco=15,
             sc=0,
-            rcap=False,
             ax=(0, 1, 0),
             ch=False,
         )[0]
         return cls._curves_from_poly(helix, name)
 
     @classmethod
-    def _build_geosphere(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_geosphere(cls, *, name: str, axis: str = "y", **_) -> str:
         """Geosphere — icosahedron subdivided once to form a geodesic sphere."""
-        ico = pm.polyPlatonic(solidType=1, r=1.0, ch=True)[0]
-        pm.polySmooth(ico, divisions=1, ch=True)
-        pm.delete(ico, ch=True)
+        ico = cmds.polyPlatonicSolid(solidType=1, r=1.0, ch=True)[0]
+        cmds.polySmooth(ico, divisions=1, ch=True)
+        cmds.delete(ico, ch=True)
         return cls._curves_from_poly(ico, name)
 
     @classmethod
-    def _build_pyramid(cls, *, name: str, axis: str = "y", **_) -> "pm.nt.Transform":
+    def _build_pyramid(cls, *, name: str, axis: str = "y", **_) -> str:
         """3D four-sided pyramid — apex above a square base."""
         apex = (0.0, 1.2, 0.0)
         base_pts = [
@@ -817,21 +820,21 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (-0.8, 0.0, 0.8),
         ]
 
-        curves: List[pm.nt.Transform] = []
+        curves: List[str] = []
         # Base square
-        curves.append(pm.curve(p=base_pts + [base_pts[0]], d=1))
+        curves.append(cmds.curve(p=base_pts + [base_pts[0]], d=1))
         # Ribs from apex to each base corner
         for pt in base_pts:
-            curves.append(pm.curve(p=[apex, pt], d=1))
+            curves.append(cmds.curve(p=[apex, pt], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
     @classmethod
     def _build_star(
         cls, *, name: str, axis: str = "y", points: int = 6, **_
-    ) -> "pm.nt.Transform":
+    ) -> str:
         """3D star burst — outer and inner rings connected by radial spokes,
         with a subtle Y-depth for viewport readability."""
         import math
@@ -856,14 +859,14 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         top_pts = [(x, d, z) for (x, _, z) in star_pts]
         bot_pts = [(x, -d, z) for (x, _, z) in star_pts]
 
-        curves: List[pm.nt.Transform] = []
-        curves.append(pm.curve(p=top_pts, d=1))
-        curves.append(pm.curve(p=bot_pts, d=1))
+        curves: List[str] = []
+        curves.append(cmds.curve(p=top_pts, d=1))
+        curves.append(cmds.curve(p=bot_pts, d=1))
         # Vertical struts at outer points only (every other vertex)
         for i in range(0, len(star_pts) - 1, 2):
-            curves.append(pm.curve(p=[top_pts[i], bot_pts[i]], d=1))
+            curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
-        base = pm.group(em=True, n=name)
+        base = cmds.group(em=True, n=name)
         cls._merge_curve_shapes(base, curves, delete_sources=True)
         return base
 
@@ -878,7 +881,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         center: bool = True,
         **_,
-    ) -> "pm.nt.Transform":
+    ) -> str:
         return cls._create_text_curves(
             text=str(text or ""),
             name=name,

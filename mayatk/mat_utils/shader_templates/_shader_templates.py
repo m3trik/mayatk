@@ -4,7 +4,7 @@ import yaml
 from typing import Any, List, Optional, Dict, Callable
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -42,7 +42,7 @@ class GraphCollector:
         visited_nodes.add(node_name)
 
         placeholder_name = self._get_placeholder_name(node)
-        node_type = pm.nodeType(node)
+        node_type = cmds.nodeType(str(node))
         self._create_node_entry(graph_info, placeholder_name, node, node_type)
         self._process_connections(node, graph_info, placeholder_name, acceptable_nodes)
 
@@ -51,7 +51,7 @@ class GraphCollector:
         if node_name in self.node_name_map:
             return self.node_name_map[node_name]
 
-        node_type = pm.nodeType(node)
+        node_type = cmds.nodeType(str(node))
         self.placeholder_counter[node_type] = (
             self.placeholder_counter.get(node_type, 0) + 1
         )
@@ -64,9 +64,8 @@ class GraphCollector:
     def _create_node_entry(self, graph_info, placeholder_name, node, node_type):
         attributes = Attributes.get_attributes(node, exc_defaults=True)
 
-        # Ensure fileTextureName is captured for file nodes
         if node_type == "file":
-            image_name = pm.getAttr(f"{node}.fileTextureName")
+            image_name = cmds.getAttr(f"{node}.fileTextureName")
             if image_name:
                 attributes["fileTextureName"] = str(image_name)
 
@@ -77,9 +76,13 @@ class GraphCollector:
                 continue
 
             try:
-                attr = node.attr(attr_name)
+                plug = f"{node}.{attr_name}"
                 # Skip if connected (driven by another node) or is a message attribute
-                if attr.isDestination() or attr.type() == "message":
+                is_dest = bool(
+                    cmds.listConnections(plug, source=True, destination=False)
+                )
+                attr_type = cmds.getAttr(plug, type=True)
+                if is_dest or attr_type == "message":
                     continue
             except Exception:
                 pass
@@ -97,41 +100,54 @@ class GraphCollector:
             },
         }
 
-        # Adding metadata for file nodes regarding their map type
         if node_type == "file":
             image_name = attributes.get("fileTextureName", "")
             map_type = MapFactory.resolve_map_type(image_name)
             graph_info[placeholder_name]["metadata"]["map_type"] = map_type
 
     def _is_connected_to_shading_engine(self, node):
-        # Check connections for links to ShadingEngine nodes
-        for connection in node.connections():
-            if isinstance(connection, pm.nt.ShadingEngine):
+        for connection in cmds.listConnections(str(node)) or []:
+            if cmds.nodeType(connection) == "shadingEngine":
                 return True
         return False
 
     def _process_connections(
         self, node, graph_info, placeholder_name, acceptable_nodes
     ):
-        for connection in node.connections(c=True, p=True, scn=True):
-            src_attr, dest_attr = connection
-            if src_attr.isSource() and dest_attr.isDestination():
-                if (
-                    str(src_attr.node()) in acceptable_nodes
-                    and str(dest_attr.node()) in acceptable_nodes
-                ):
-                    self._create_connection_entry(
-                        graph_info, placeholder_name, src_attr, dest_attr
-                    )
+        # Get outgoing connections: node is source → destination=True
+        plug_pairs = (
+            cmds.listConnections(
+                str(node),
+                connections=True,
+                plugs=True,
+                source=False,
+                destination=True,
+                skipConversionNodes=True,
+            )
+            or []
+        )
+        for i in range(0, len(plug_pairs), 2):
+            src_attr = plug_pairs[i]       # plug on queried node (output)
+            dest_attr = plug_pairs[i + 1]  # plug on connected node (input)
+            src_node = src_attr.split(".")[0]
+            dest_node = dest_attr.split(".")[0]
+            if src_node in acceptable_nodes and dest_node in acceptable_nodes:
+                self._create_connection_entry(
+                    graph_info, placeholder_name, src_attr, dest_attr
+                )
 
     def _create_connection_entry(
         self, graph_info, placeholder_name, src_attr, dest_attr
     ):
-        src_node_placeholder = self._get_placeholder_name(src_attr.node())
-        dest_node_placeholder = self._get_placeholder_name(dest_attr.node())
+        src_node = src_attr.split(".")[0]
+        dest_node = dest_attr.split(".")[0]
+        src_attr_name = src_attr.split(".", 1)[1]
+        dest_attr_name = dest_attr.split(".", 1)[1]
+        src_node_placeholder = self._get_placeholder_name(src_node)
+        dest_node_placeholder = self._get_placeholder_name(dest_node)
         connection_info = {
-            "source": f"{src_node_placeholder}.{src_attr.longName()}",
-            "target": f"{dest_node_placeholder}.{dest_attr.longName()}",
+            "source": f"{src_node_placeholder}.{src_attr_name}",
+            "target": f"{dest_node_placeholder}.{dest_attr_name}",
         }
         graph_info[placeholder_name]["connections"].append(connection_info)
 
@@ -139,23 +155,20 @@ class GraphCollector:
 class GraphSaver(GraphCollector):
     def save_graph(
         self,
-        nodes: List[object],
+        nodes: List[str],
         file_path: str,
-        exclude_types: Optional[List[str]] = None,  # Accept list of strings directly
+        exclude_types: Optional[List[str]] = None,
     ) -> None:
         if not nodes:
-            pm.warning("No nodes selected or provided for template saving.")
+            cmds.warning("No nodes selected or provided for template saving.")
             return
 
-        # Expand nodes to include upstream history to capture the full network
-        nodes = pm.listHistory(nodes)
+        nodes = cmds.listHistory(nodes) or []
 
-        # Convert exclude_types to lowercase for case-insensitive comparison
         exclude_types_lower = [t.lower() for t in ptk.make_iterable(exclude_types)]
 
-        # Filter nodes to exclude specified types using their type name, converted to lowercase
         filtered_nodes = [
-            node for node in nodes if node.nodeType().lower() not in exclude_types_lower
+            node for node in nodes if cmds.nodeType(str(node)).lower() not in exclude_types_lower
         ]
 
         graph_info = self.collect_graph(filtered_nodes)
@@ -186,7 +199,7 @@ class GraphRestorer:
         self.texture_paths = texture_paths  # List of texture paths
         self.name = name  # Custom name for the shader if provided
         self.graph_config = self.load_yaml()
-        self.nodes = {}  # Dictionary to map placeholders to PyNode objects
+        self.nodes = {}  # Dictionary to map placeholders to node names
         self.registry = ConversionRegistry()
 
     def load_yaml(self):
@@ -208,7 +221,6 @@ class GraphRestorer:
 
         logger = logging.getLogger("ShaderTemplateManager")
 
-        # Check if file nodes are present in the template
         file_nodes_found = any(
             info["type"] == "file" for info in self.graph_config.values()
         )
@@ -217,7 +229,6 @@ class GraphRestorer:
                 "Texture paths provided but no file nodes found in template. The template might be incomplete or saved with an older version."
             )
 
-        # Dictionary to hold available map types and their paths
         available_map_types = {}
         for path in self.texture_paths:
             map_type = MapFactory.resolve_map_type(path)
@@ -241,7 +252,6 @@ class GraphRestorer:
         metadata = node_info.get("metadata", {})
         required_map_type = metadata.get("map_type", "")
 
-        # Determine output directory and base name from available textures
         output_dir = ""
         base_name = "generated_map"
         ext = "png"
@@ -268,14 +278,11 @@ class GraphRestorer:
             candidates = [required_map_type] + list(fallbacks)
             file_path = context.resolve_map(*candidates, allow_conversion=True)
 
-        # Set the file path if available
         if file_path:
-            # Handle in-memory images (e.g. from conversions)
             if not isinstance(file_path, (str, bytes, os.PathLike)):
                 import tempfile
 
                 temp_dir = tempfile.gettempdir()
-                # Create a unique name
                 temp_name = f"generated_{required_map_type}_{id(file_path)}.png"
                 temp_path = os.path.join(temp_dir, temp_name)
                 try:
@@ -295,11 +302,8 @@ class GraphRestorer:
                 f"Node '{placeholder}': Missing texture for '{required_map_type}'"
             )
 
-        # Determine the name for shaders and shading groups
         node_name = self._determine_node_name(node_type)
 
-        # Ensure fileTextureName is passed explicitly if present in attributes
-        # This handles cases where attributes might be filtered or processed differently
         ftn = attributes.get("fileTextureName")
 
         node = NodeUtils.create_render_node(
@@ -309,9 +313,52 @@ class GraphRestorer:
             **attributes,
         )
 
+        # StingrayPBS nodes need the Standard.sfx graph loaded before any
+        # ``TEX_color_map`` / ``TEX_normal_map`` etc. attributes exist.
+        # Without this, ``restore_connections`` can't wire textures into
+        # the shader.  ``loadGraph`` *resets* all node attributes, so we
+        # load the graph FIRST (after node creation, before applying the
+        # snapshot ``attributes``) so the saved values aren't wiped.
+        if node and node_type == "StingrayPBS":
+            try:
+                EnvUtils.load_plugin("shaderFXPlugin")
+                maya_install_path = EnvUtils.get_env_info("install_path")
+                graph = os.path.join(
+                    maya_install_path,
+                    "presets",
+                    "ShaderFX",
+                    "Scenes",
+                    "StingrayPBS",
+                    "Standard.sfx",
+                )
+                if os.path.exists(graph):
+                    cmds.shaderfx(sfxnode=str(node), loadGraph=graph)
+                    # Re-apply the snapshot attributes that loadGraph wiped.
+                    for k, v in (attributes or {}).items():
+                        if k in ("fileTextureName",):
+                            continue
+                        plug = f"{node}.{k}"
+                        if not cmds.attributeQuery(k, node=node, exists=True):
+                            continue
+                        try:
+                            if isinstance(v, (list, tuple)) and len(v) == 3:
+                                cmds.setAttr(plug, *v, type="double3")
+                            elif isinstance(v, (list, tuple)) and len(v) == 16:
+                                cmds.setAttr(plug, *v, type="matrix")
+                            elif isinstance(v, str):
+                                cmds.setAttr(plug, v, type="string")
+                            else:
+                                cmds.setAttr(plug, v)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load Standard.sfx into StingrayPBS '{node}': {e}"
+                )
+
         if node and ftn:
             try:
-                pm.setAttr(f"{node}.fileTextureName", ftn, type="string")
+                cmds.setAttr(f"{node}.fileTextureName", ftn, type="string")
             except Exception as e:
                 logger.warning(f"Failed to set fileTextureName on {node}: {e}")
 
@@ -322,9 +369,8 @@ class GraphRestorer:
             logging.error(f"Failed to create node: {placeholder}")
 
     def _determine_node_name(self, node_type):
-        classification_string = pm.getClassification(node_type)
+        classification_string = cmds.getClassification(node_type)
         if any("shader/surface" in c for c in classification_string):
-            # Use provided name or derive from texture if not given
             if self.name:
                 return self.name
             elif self.texture_paths:
@@ -333,14 +379,13 @@ class GraphRestorer:
 
     def _handle_shading_group(self, node, node_name, node_type):
         if node_name and "shader" in node_type:
-            # Optionally name the shading group linked to this shader
-            shading_group = pm.sets(
+            shading_group = cmds.sets(
                 renderable=True,
                 noSurfaceShader=True,
                 empty=True,
                 name=f"{node_name}SG",
             )
-            pm.connectAttr(f"{node}.outColor", f"{shading_group}.surfaceShader")
+            cmds.connectAttr(f"{node}.outColor", f"{shading_group}.surfaceShader")
 
     def restore_connections(self):
         """Connect nodes as specified in the graph configuration."""
@@ -362,7 +407,7 @@ class GraphRestorer:
                     tgt_node = self.nodes.get(tgt_placeholder)
 
                     if src_node and tgt_node:
-                        pm.connectAttr(
+                        cmds.connectAttr(
                             f"{src_node}.{src_attr}",
                             f"{tgt_node}.{tgt_attr}",
                             force=True,
@@ -450,7 +495,6 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Initialize the header widget."""
         widget.setTitle("Shader Templates")
-        # Open the templates directory
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setObjectName="lbl_open_templates_dir",
@@ -482,7 +526,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         if self.last_restored_nodes:
             MatUtils.graph_materials(self.last_restored_nodes)
         else:
-            pm.warning("No material has been restored yet.")
+            cmds.warning("No material has been restored yet.")
 
     def lbl_open_templates_dir(self):
         """Open the shader templates directory in file explorer."""
@@ -492,8 +536,8 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def cmb002_init(self, widget):
         """Initialize the ComboBox for shader templates."""
         if not widget.is_initialized:
-            widget.restore_state = True  # Enable state restore
-            widget.refresh_on_show = True  # Call this method on show
+            widget.restore_state = True
+            widget.refresh_on_show = True
             widget.menu.add(
                 self.sb.registered_widgets.Label,
                 setObjectName="lbl000",
@@ -530,7 +574,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         }
         widget.clear()
         for label, path in items.items():
-            widget.addItem(label, path)  # Make sure to set the item data here
+            widget.addItem(label, path)
 
     def rename_template_safe(self, widget, new_name):
         """Safe rename that checks for None."""
@@ -546,7 +590,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 
         os.rename(current_path, new_path)
         self.logger.info(f"Template renamed to: {new_path}")
-        widget.init_slot()  # Refresh ComboBox
+        widget.init_slot()
 
     def lbl000(self):
         """Set the ComboBox as editable to allow renaming."""
@@ -559,7 +603,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         if os.path.exists(template_path):
             os.remove(template_path)
             self.logger.info(f"Template deleted: {template_path}")
-        self.ui.cmb002.init_slot()  # Refresh ComboBox
+        self.ui.cmb002.init_slot()
 
     def lbl002(self):
         """Open the selected template in the default editor."""
@@ -576,7 +620,6 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.error("No template selected.")
             return
 
-        # Use the facade instead of direct instantiation
         restored_nodes = ShaderTemplates.restore_template(
             yaml_file_path, self.image_files or []
         )
@@ -600,7 +643,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 
     def b002(self):
         """Save current graph as a new shader template."""
-        selected_nodes = pm.selected()
+        selected_nodes = cmds.ls(selection=True) or []
         script_directory = os.path.dirname(__file__)
         template_directory = os.path.join(script_directory, "templates")
 
@@ -613,7 +656,6 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.error("File already exists.")
             return
 
-        # Use the facade
         ShaderTemplates.save_template(
             selected_nodes,
             file_path,

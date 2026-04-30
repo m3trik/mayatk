@@ -42,7 +42,7 @@ class MatManifest(ptk.HelpMixin):
         """Build a manifest from the materials assigned to *objects*.
 
         Parameters:
-            objects: Maya transform/shape nodes (strings or PyNodes).
+            objects: Maya transform/shape nodes (strings or nodes).
 
         Returns:
             Manifest dict ready for serialisation.

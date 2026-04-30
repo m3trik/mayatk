@@ -6,14 +6,14 @@ import cv2
 from typing import Optional, Tuple, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
     import maya.api.OpenMaya as om2
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 # From this package:
-from mayatk import CoreUtils
+from mayatk import CoreUtils, NodeUtils
 
 
 class ShadowRig(ptk.LoggingMixin):
@@ -44,11 +44,11 @@ class ShadowRig(ptk.LoggingMixin):
         if targets is None:
             self.targets = []
         elif isinstance(targets, (list, tuple)):
-            self.targets = [pm.PyNode(t) for t in targets]
+            self.targets = [str(t) for t in targets]
         else:
-            self.targets = [pm.PyNode(targets)]
+            self.targets = [str(targets)]
 
-        self.light = pm.PyNode(light) if light else None
+        self.light = str(light) if light else None
         self.shadow_plane = None
         self.contact_locator = None
         self.ground_height = ground_height
@@ -62,18 +62,28 @@ class ShadowRig(ptk.LoggingMixin):
 
     def create_contact_locator(self):
         """Create a locator at the lowest point of the combined objects to act as the shadow anchor."""
-        bbox = pm.exactWorldBoundingBox(self.targets)
+        bbox = cmds.exactWorldBoundingBox(self.targets)
         # BBox is [xmin, ymin, zmin, xmax, ymax, zmax]
         center_x = (bbox[0] + bbox[3]) / 2.0
         min_y = bbox[1]
         center_z = (bbox[2] + bbox[5]) / 2.0
 
-        self.contact_locator = pm.spaceLocator(name=f"{self._name_base}_contact_loc")
-        self.contact_locator.translate.set(center_x, min_y, center_z)
-        self.contact_locator.localScale.set(0.2, 0.2, 0.2)
+        self.contact_locator = cmds.spaceLocator(
+            name=f"{self._name_base}_contact_loc"
+        )[0]
+        cmds.setAttr(
+            f"{self.contact_locator}.translate",
+            center_x,
+            min_y,
+            center_z,
+            type="double3",
+        )
+        cmds.setAttr(
+            f"{self.contact_locator}.localScale", 0.2, 0.2, 0.2, type="double3"
+        )
 
         # Parent to first target so it moves/animates with it
-        pm.parent(self.contact_locator, self.targets[0])
+        self.contact_locator = cmds.parent(self.contact_locator, self.targets[0])[0]
 
         return self.contact_locator
 
@@ -86,18 +96,26 @@ class ShadowRig(ptk.LoggingMixin):
             position: Initial position if creating new.
             source_name: Name for the shadow source locator.
         """
-        if pm.objExists(source_name):
-            self.light = pm.PyNode(source_name)
+        if cmds.objExists(source_name):
+            self.light = source_name
             print(f"Using existing shadow source: {self.light}")
         else:
-            self.light = pm.spaceLocator(name=source_name)
-            self.light.translate.set(position)
-            self.light.localScale.set(1, 1, 1)
+            self.light = cmds.spaceLocator(name=source_name)[0]
+            cmds.setAttr(
+                f"{self.light}.translate",
+                position[0],
+                position[1],
+                position[2],
+                type="double3",
+            )
+            cmds.setAttr(f"{self.light}.localScale", 1, 1, 1, type="double3")
 
             # Yellow color
-            shape = self.light.getShape()
-            shape.overrideEnabled.set(True)
-            shape.overrideColor.set(17)
+            shapes = NodeUtils.get_shapes(self.light, no_intermediate=False)
+            if shapes:
+                shape = shapes[0]
+                cmds.setAttr(f"{shape}.overrideEnabled", True)
+                cmds.setAttr(f"{shape}.overrideColor", 17)
 
         return self.light
 
@@ -107,12 +125,12 @@ class ShadowRig(ptk.LoggingMixin):
             raise ValueError("Target object(s) required")
 
         # Get combined footprint size from all targets
-        bbox = pm.exactWorldBoundingBox(self.targets)
+        bbox = cmds.exactWorldBoundingBox(self.targets)
         width = (bbox[3] - bbox[0]) * 1.1
         depth = (bbox[5] - bbox[2]) * 1.1
         self.plane_size = max(width, depth, 1.0)
 
-        self.shadow_plane = pm.polyPlane(
+        self.shadow_plane = cmds.polyPlane(
             name=f"{self._name_base}_shadow",
             width=self.plane_size,
             height=self.plane_size,
@@ -122,10 +140,10 @@ class ShadowRig(ptk.LoggingMixin):
         )[0]
 
         # Add custom attributes for controlling shadow
-        if not pm.attributeQuery(
+        if not cmds.attributeQuery(
             "shadowIntensity", node=self.shadow_plane, exists=True
         ):
-            pm.addAttr(
+            cmds.addAttr(
                 self.shadow_plane,
                 ln="shadowIntensity",
                 at="float",
@@ -134,8 +152,8 @@ class ShadowRig(ptk.LoggingMixin):
                 dv=1.0,
                 k=True,
             )
-        if not pm.attributeQuery("falloffPower", node=self.shadow_plane, exists=True):
-            pm.addAttr(
+        if not cmds.attributeQuery("falloffPower", node=self.shadow_plane, exists=True):
+            cmds.addAttr(
                 self.shadow_plane,
                 ln="falloffPower",
                 at="float",
@@ -144,8 +162,8 @@ class ShadowRig(ptk.LoggingMixin):
                 dv=1.2,
                 k=True,
             )
-        if not pm.attributeQuery("scaleInfluence", node=self.shadow_plane, exists=True):
-            pm.addAttr(
+        if not cmds.attributeQuery("scaleInfluence", node=self.shadow_plane, exists=True):
+            cmds.addAttr(
                 self.shadow_plane,
                 ln="scaleInfluence",
                 at="float",
@@ -155,25 +173,31 @@ class ShadowRig(ptk.LoggingMixin):
                 k=True,
             )
         # Store base plane size for expression calculations
-        if not pm.attributeQuery("basePlaneSize", node=self.shadow_plane, exists=True):
-            pm.addAttr(
+        if not cmds.attributeQuery("basePlaneSize", node=self.shadow_plane, exists=True):
+            cmds.addAttr(
                 self.shadow_plane,
                 ln="basePlaneSize",
                 at="float",
                 dv=self.plane_size,
                 k=False,
             )
-        self.shadow_plane.basePlaneSize.set(self.plane_size)
+        cmds.setAttr(f"{self.shadow_plane}.basePlaneSize", self.plane_size)
 
         # Keep plane centered - pivot at center, vertices centered around origin
         # The expression handles positioning based on light direction
-        pm.xform(self.shadow_plane, pivots=[0, 0, 0], objectSpace=True)
+        cmds.xform(self.shadow_plane, pivots=[0, 0, 0], objectSpace=True)
 
         # Position at combined targets center
-        bbox = pm.exactWorldBoundingBox(self.targets)
+        bbox = cmds.exactWorldBoundingBox(self.targets)
         center_x = (bbox[0] + bbox[3]) / 2.0
         center_z = (bbox[2] + bbox[5]) / 2.0
-        self.shadow_plane.translate.set(center_x, self.ground_height + 0.01, center_z)
+        cmds.setAttr(
+            f"{self.shadow_plane}.translate",
+            center_x,
+            self.ground_height + 0.01,
+            center_z,
+            type="double3",
+        )
 
         return self.shadow_plane
 
@@ -186,7 +210,7 @@ class ShadowRig(ptk.LoggingMixin):
                   'auto' chooses the axis perpendicular to the widest dimension.
             recursive: If True, include descendant meshes (e.g. for groups/locators).
         """
-        workspace = pm.workspace(q=True, rd=True)
+        workspace = cmds.workspace(q=True, rd=True)
         output_dir = os.path.join(workspace, "sourceimages")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -194,7 +218,7 @@ class ShadowRig(ptk.LoggingMixin):
         self.texture_path = os.path.join(output_dir, texture_name)
 
         # Get combined mesh bounds from all targets
-        bbox = pm.exactWorldBoundingBox(self.targets)
+        bbox = cmds.exactWorldBoundingBox(self.targets)
 
         # Auto-detect best axis if requested
         if axis == "auto":
@@ -239,24 +263,29 @@ class ShadowRig(ptk.LoggingMixin):
         for target in self.targets:
             if recursive:
                 target_shapes = (
-                    pm.listRelatives(target, shapes=True, ad=True, type="mesh") or []
+                    cmds.listRelatives(
+                        target, shapes=True, ad=True, type="mesh", fullPath=True
+                    )
+                    or []
                 )
             else:
-                target_shapes = pm.listRelatives(target, shapes=True, type="mesh") or []
+                target_shapes = (
+                    cmds.listRelatives(
+                        target, shapes=True, type="mesh", fullPath=True
+                    )
+                    or []
+                )
 
             if not target_shapes:
-                shape = target.getShape() if hasattr(target, "getShape") else None
-                if shape:
-                    target_shapes = [shape]
+                direct_shapes = NodeUtils.get_shapes(target, no_intermediate=True)
+                if direct_shapes:
+                    target_shapes = direct_shapes
 
             shapes.extend(target_shapes)
 
         for shape in shapes:
             try:
-                # Use full path to ensure uniqueness
-                shape_path = (
-                    shape.fullPath() if hasattr(shape, "fullPath") else str(shape)
-                )
+                shape_path = str(shape)
 
                 # Get the dag path for the shape
                 sel_list = om2.MSelectionList()
@@ -368,7 +397,7 @@ class ShadowRig(ptk.LoggingMixin):
 
     def _create_silhouette_fallback(self, size, axis):
         """Fallback vertex-based silhouette if render fails."""
-        bbox = pm.exactWorldBoundingBox(self.target)
+        bbox = cmds.exactWorldBoundingBox(self.target)
 
         axis = axis.lower()
         if axis == "y":
@@ -391,10 +420,10 @@ class ShadowRig(ptk.LoggingMixin):
         img = np.zeros((size, size, 4), dtype=np.uint8)
         mask = np.zeros((size, size), dtype=np.uint8)
 
-        vtx_count = pm.polyEvaluate(self.target, vertex=True)
+        vtx_count = cmds.polyEvaluate(self.target, vertex=True)
         points = []
         for i in range(vtx_count):
-            pos = pm.pointPosition(f"{self.target}.vtx[{i}]", w=True)
+            pos = cmds.pointPosition(f"{self.target}.vtx[{i}]", w=True)
             pu = int(((pos[u_idx] - u_center) / extent + 0.5) * size)
             pv = int((1.0 - ((pos[v_idx] - v_center) / extent + 0.5)) * size)
             pu = np.clip(pu, 0, size - 1)
@@ -469,88 +498,100 @@ class ShadowRig(ptk.LoggingMixin):
         # Try Stingray PBS first (best Unity compatibility)
         # Falls back to standardSurface if Stingray not available
         try:
-            self.shader = pm.shadingNode(
+            self.shader = cmds.shadingNode(
                 "StingrayPBS", asShader=True, name=f"{self.shadow_plane}_mat"
             )
 
             # Set up for transparent shadow
-            self.shader.base_color.set(0, 0, 0)  # Black shadow
-            self.shader.metallic.set(0)  # No metallic
-            self.shader.roughness.set(1)  # Full roughness (no reflections)
+            cmds.setAttr(f"{self.shader}.base_color", 0, 0, 0, type="double3")
+            cmds.setAttr(f"{self.shader}.metallic", 0)
+            cmds.setAttr(f"{self.shader}.roughness", 1)
 
             # Enable opacity
-            self.shader.use_opacity_map.set(True)
+            cmds.setAttr(f"{self.shader}.use_opacity_map", True)
 
             # Create file node for texture
-            file_node = pm.shadingNode(
+            file_node = cmds.shadingNode(
                 "file", asTexture=True, name=f"{self.shadow_plane}_tex"
             )
-            file_node.fileTextureName.set(self.texture_path)
+            cmds.setAttr(
+                f"{file_node}.fileTextureName", self.texture_path, type="string"
+            )
 
-            place2d = pm.shadingNode(
+            place2d = cmds.shadingNode(
                 "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
             )
-            place2d.outUV >> file_node.uv
-            place2d.outUvFilterSize >> file_node.uvFilterSize
+            cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
+            cmds.connectAttr(
+                f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize"
+            )
 
             # Connect alpha to opacity
-            file_node.outAlpha >> self.shader.opacity_map
+            cmds.connectAttr(f"{file_node}.outAlpha", f"{self.shader}.opacity_map")
 
             # Create opacity multiplier for expression control
-            self.opacity_mult = pm.shadingNode(
+            self.opacity_mult = cmds.shadingNode(
                 "multiplyDivide",
                 asUtility=True,
                 name=f"{self.shadow_plane}_opacity_mult",
             )
-            file_node.outAlpha >> self.opacity_mult.input1X
-            self.opacity_mult.input2X.set(1.0)  # Will be driven by expression
+            cmds.connectAttr(
+                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X"
+            )
+            cmds.setAttr(f"{self.opacity_mult}.input2X", 1.0)
 
-            # Note: Stingray PBS opacity_map doesn't go through multiply easily,
-            # so we use the overall opacity attribute for expression control
-            # This is simplified - for full control, use a layered shader
-
-            print(f"Created Stingray PBS material (Unity-compatible)")
+            print("Created Stingray PBS material (Unity-compatible)")
 
         except Exception as e:
             print(f"Stingray PBS not available ({e}), using standardSurface")
 
-            self.shader = pm.shadingNode(
+            self.shader = cmds.shadingNode(
                 "standardSurface", asShader=True, name=f"{self.shadow_plane}_mat"
             )
-            self.shader.baseColor.set(0, 0, 0)
-            self.shader.specular.set(0)  # No specular
-            self.shader.metalness.set(0)  # No metallic
-            self.shader.specularRoughness.set(1)  # Full roughness
+            cmds.setAttr(f"{self.shader}.baseColor", 0, 0, 0, type="double3")
+            cmds.setAttr(f"{self.shader}.specular", 0)
+            cmds.setAttr(f"{self.shader}.metalness", 0)
+            cmds.setAttr(f"{self.shader}.specularRoughness", 1)
 
-            file_node = pm.shadingNode(
+            file_node = cmds.shadingNode(
                 "file", asTexture=True, name=f"{self.shadow_plane}_tex"
             )
-            file_node.fileTextureName.set(self.texture_path)
+            cmds.setAttr(
+                f"{file_node}.fileTextureName", self.texture_path, type="string"
+            )
 
-            place2d = pm.shadingNode(
+            place2d = cmds.shadingNode(
                 "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
             )
-            place2d.outUV >> file_node.uv
-            place2d.outUvFilterSize >> file_node.uvFilterSize
+            cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
+            cmds.connectAttr(
+                f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize"
+            )
 
             # Create opacity multiplier controlled by expression
-            self.opacity_mult = pm.shadingNode(
+            self.opacity_mult = cmds.shadingNode(
                 "multiplyDivide",
                 asUtility=True,
                 name=f"{self.shadow_plane}_opacity_mult",
             )
-            file_node.outAlpha >> self.opacity_mult.input1X
-            file_node.outAlpha >> self.opacity_mult.input1Y
-            file_node.outAlpha >> self.opacity_mult.input1Z
+            cmds.connectAttr(
+                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X"
+            )
+            cmds.connectAttr(
+                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1Y"
+            )
+            cmds.connectAttr(
+                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1Z"
+            )
 
             # Connect to shader opacity
-            self.opacity_mult.output >> self.shader.opacity
+            cmds.connectAttr(f"{self.opacity_mult}.output", f"{self.shader}.opacity")
 
-        sg = pm.sets(
+        sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{self.shader}_SG"
         )
-        self.shader.outColor >> sg.surfaceShader
-        pm.sets(sg, fe=self.shadow_plane)
+        cmds.connectAttr(f"{self.shader}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(self.shadow_plane, fe=sg)
 
         return self.shader
 
@@ -573,12 +614,12 @@ class ShadowRig(ptk.LoggingMixin):
         expr_name = f"{self.shadow_plane}_expr"
 
         dm_name = f"{self._name_base}_contact_dm"
-        if pm.objExists(dm_name):
-            pm.delete(dm_name)
-        dm_node = pm.createNode("decomposeMatrix", name=dm_name)
+        if cmds.objExists(dm_name):
+            cmds.delete(dm_name)
+        dm_node = cmds.createNode("decomposeMatrix", name=dm_name)
 
         source = self.contact_locator if self.contact_locator else self.targets[0]
-        source.worldMatrix[0] >> dm_node.inputMatrix
+        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{dm_node}.inputMatrix")
 
         expr_code = f"""
 // ----------------------------------------------------------------------
@@ -657,10 +698,10 @@ $opacity = clamp(0.0, 1.0, $opacity);
 {self.opacity_mult}.input2Y = $opacity;
 {self.opacity_mult}.input2Z = $opacity;
 """
-        if pm.objExists(expr_name):
-            pm.delete(expr_name)
+        if cmds.objExists(expr_name):
+            cmds.delete(expr_name)
 
-        pm.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
+        cmds.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
 
     def _expr_stretch(self):
         """Stretch mode: plane stays axis-aligned, uses scale + translation.
@@ -672,12 +713,12 @@ $opacity = clamp(0.0, 1.0, $opacity);
         expr_name = f"{self.shadow_plane}_expr"
 
         dm_name = f"{self._name_base}_contact_dm"
-        if pm.objExists(dm_name):
-            pm.delete(dm_name)
-        dm_node = pm.createNode("decomposeMatrix", name=dm_name)
+        if cmds.objExists(dm_name):
+            cmds.delete(dm_name)
+        dm_node = cmds.createNode("decomposeMatrix", name=dm_name)
 
         source = self.contact_locator if self.contact_locator else self.targets[0]
-        source.worldMatrix[0] >> dm_node.inputMatrix
+        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{dm_node}.inputMatrix")
 
         expr_code = f"""
 // ----------------------------------------------------------------------
@@ -755,10 +796,10 @@ $opacity = clamp(0.0, 1.0, $opacity);
 {self.opacity_mult}.input2Y = $opacity;
 {self.opacity_mult}.input2Z = $opacity;
 """
-        if pm.objExists(expr_name):
-            pm.delete(expr_name)
+        if cmds.objExists(expr_name):
+            cmds.delete(expr_name)
 
-        pm.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
+        cmds.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
 
     @classmethod
     def create(
@@ -803,8 +844,8 @@ $opacity = clamp(0.0, 1.0, $opacity);
         shadow.create_material()
         shadow.setup_expression()
 
-        grp = pm.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
-        pm.parent(shadow.shadow_plane, grp)
+        grp = cmds.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
+        cmds.parent(shadow.shadow_plane, grp)
         # contact_locator stays on first target
 
         target_names = ", ".join(str(t) for t in shadow.targets)
@@ -856,7 +897,7 @@ class ShadowRigSlots:
     @CoreUtils.undoable
     def create_shadow(self):
         """Create projected shadow for selected objects."""
-        sel = pm.selected()
+        sel = cmds.ls(selection=True) or []
         if not sel:
             self.sb.message_box("Please select target object(s).")
             return
@@ -903,7 +944,7 @@ class ShadowRigSlots:
 
 
 if __name__ == "__main__":
-    sel = pm.selected()
+    sel = cmds.ls(selection=True) or []
     if not sel:
         print("Select object(s) first.")
     else:

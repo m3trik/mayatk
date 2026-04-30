@@ -3,7 +3,7 @@ import logging
 from typing import List, Dict, Optional, Union, Any, Tuple
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 
@@ -97,11 +97,12 @@ class SegmentKeysInfo:
                 print(header)
         else:
             if header is None:
-                scene_name = pm.sceneName()
-                if scene_name:
-                    scene_name = scene_name.basename()
-                else:
-                    scene_name = "Untitled"
+                scene_path = cmds.file(query=True, sceneName=True)
+                scene_name = (
+                    scene_path.replace("\\", "/").rsplit("/", 1)[-1]
+                    if scene_path
+                    else "Untitled"
+                )
                 header = f"Animation Info - {scene_name}"
 
             print(f"\\n{header}")
@@ -225,8 +226,8 @@ class SegmentKeys(SegmentKeysInfo):
 
     Segment Structure:
         {
-            'obj': pm.PyNode,           # The source transform object
-            'curves': List[pm.PyNode],  # Animation curves for this segment
+            'obj': str,                 # The source transform object
+            'curves': List[str],        # Animation curves for this segment
             'keyframes': List[float],   # All keyframe times
             'start': float,             # Segment start time
             'end': float,               # Segment end time
@@ -236,13 +237,13 @@ class SegmentKeys(SegmentKeysInfo):
 
     Group Structure:
         {
-            'objects': List[pm.PyNode],      # All objects in the group
-            'curves': List[pm.PyNode],       # All curves in the group
+            'objects': List[str],            # All objects in the group
+            'curves': List[str],             # All curves in the group
             'keyframes': List[float],        # Combined keyframe times
             'start': float,                  # Group start time
             'end': float,                    # Group end time
             'duration': float,               # Group duration
-            'obj': pm.PyNode,                # Representative object (first)
+            'obj': str,                      # Representative object (first)
             'sub_groups': List[dict],        # Original segment dicts
         }
 
@@ -502,7 +503,7 @@ class SegmentKeys(SegmentKeysInfo):
     @classmethod
     def print_scene_info(
         cls,
-        objects: Optional[List["pm.PyNode"]] = None,
+        objects: Optional[List[str]] = None,
         detailed: bool = True,
         csv_output: bool = False,
         by_time: bool = False,
@@ -518,12 +519,12 @@ class SegmentKeys(SegmentKeysInfo):
             ignore_holds: If True, reports only active animation (excludes static holds).
         """
         if not objects:
-            objects = pm.selected(type="transform")
+            objects = cmds.ls(selection=True, type="transform") or []
         if not objects:
-            objects = pm.ls(type="transform")
+            objects = cmds.ls(type="transform") or []
 
         if not objects:
-            pm.warning("No objects found to analyze.")
+            cmds.warning("No objects found to analyze.")
             return
 
         # Collect segments with split_static=True to get full detail
@@ -536,7 +537,7 @@ class SegmentKeys(SegmentKeysInfo):
         )
 
         if not segments:
-            pm.warning("No animation found on the specified objects.")
+            cmds.warning("No animation found on the specified objects.")
             return
 
         cls.print_time_ranges(
@@ -759,7 +760,7 @@ class SegmentKeys(SegmentKeysInfo):
             curves = group.get("curves", [])
             # print(f"DEBUG: Group {i} curves: {[c.name() for c in curves]}")
             for curve in curves:
-                # Use name to ensure identity across PyNode instances
+                # Use name to ensure identity across node instances
                 try:
                     curve_id = curve.name()
                 except Exception:
@@ -871,7 +872,7 @@ class SegmentKeys(SegmentKeysInfo):
                 merged_groups.append(merged)
 
                 # Warn about merge
-                pm.warning(
+                cmds.warning(
                     f"Merged {len(indices)} groups sharing curves: {', '.join(merged_obj_names)}. Shared curves prevent independent staggering."
                 )
 
@@ -994,7 +995,7 @@ class SegmentKeys(SegmentKeysInfo):
         is ``True``.
 
         Parameters:
-            curves: List of animation curves to analyze (PyNodes or strings).
+            curves: List of animation curves to analyze (nodes or strings).
             tolerance: Value tolerance for detecting static segments.
             ignore_visibility_holds: If True, visibility curves are treated like any
                 other curve (static holds are ignored).
@@ -1207,12 +1208,12 @@ class SegmentKeys(SegmentKeysInfo):
             dst_range = (dst_start - eps, dst_end + eps)
             for curve in curves:
                 try:
-                    dest_keys = pm.keyframe(
+                    dest_keys = cmds.keyframe(
                         curve, q=True, time=dst_range, timeChange=True
                     )
                     if not dest_keys:
                         continue
-                    dest_vals = pm.keyframe(
+                    dest_vals = cmds.keyframe(
                         curve, q=True, time=dst_range, valueChange=True
                     )
                     if not dest_vals or len(dest_vals) != len(dest_keys):
@@ -1224,13 +1225,13 @@ class SegmentKeys(SegmentKeysInfo):
                             continue
                         # Check if value matches curve value just before/after
                         try:
-                            v_before = pm.keyframe(
+                            v_before = cmds.keyframe(
                                 curve,
                                 q=True,
                                 eval=True,
                                 time=(kt - 1, kt - 1),
                             )
-                            v_after = pm.keyframe(
+                            v_after = cmds.keyframe(
                                 curve,
                                 q=True,
                                 eval=True,
@@ -1247,7 +1248,7 @@ class SegmentKeys(SegmentKeysInfo):
                                     curve,
                                     kt,
                                 )
-                                pm.cutKey(curve, time=(kt, kt), clear=True)
+                                cmds.cutKey(curve, time=(kt, kt), clear=True)
                         except Exception:
                             pass
                 except Exception:
@@ -1255,6 +1256,7 @@ class SegmentKeys(SegmentKeysInfo):
 
         for curve in curves:
             try:
+                curve = str(curve)
                 kw_range = {}
                 if time_range:
                     start, end = float(time_range[0]), float(time_range[1])
@@ -1263,7 +1265,7 @@ class SegmentKeys(SegmentKeysInfo):
                     pass
 
                 # Skip if no keys match
-                matched_keys = pm.keyframe(curve, q=True, **kw_range)
+                matched_keys = cmds.keyframe(curve, q=True, **kw_range)
                 if not matched_keys:
                     _log.debug("[SHIFT] %s: no keys in range — skipping", curve)
                     continue
@@ -1275,7 +1277,7 @@ class SegmentKeys(SegmentKeysInfo):
                 )
 
                 # Single-pass: move keys directly to the destination
-                pm.keyframe(
+                cmds.keyframe(
                     curve,
                     edit=True,
                     relative=True,
@@ -1284,7 +1286,7 @@ class SegmentKeys(SegmentKeysInfo):
                 )
             except RuntimeError as e:
                 _log.error("[SHIFT] Exception for %s: %s", curve, e)
-                pm.warning(f"Failed to move keys for {curve}: {e}")
+                cmds.warning(f"Failed to move keys for {curve}: {e}")
 
     @classmethod
     def execute_stagger(

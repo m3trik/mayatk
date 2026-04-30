@@ -1,5 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+import maya.mel as mel
+
 import os
 import re
 import time
@@ -10,10 +16,6 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # From this package:
@@ -65,7 +67,7 @@ class SceneExporter(ptk.LoggingMixin):
             self.logger.debug("Static list or query provided for objects. Validating.")
 
         # Use cmds.ls to ensure we have a list of full path strings
-        # This handles PyNodes, strings, or mixed lists
+        # This handles nodes, strings, or mixed lists
         objs = cmds.ls(objects, long=True, flatten=True) or []
 
         # Exclude default Maya cameras from export
@@ -167,7 +169,7 @@ class SceneExporter(ptk.LoggingMixin):
 
             # Select objects to export
             if export_visible:
-                # Use cmds.select for performance (avoids PyNode overhead)
+                # Use cmds.select for performance (avoids node overhead)
                 cmds.select(self.task_manager.objects, replace=True)
                 self.logger.info(
                     f"Selected {len(self.task_manager.objects)} objects for export."
@@ -179,8 +181,8 @@ class SceneExporter(ptk.LoggingMixin):
 
             # Perform the actual export
             try:
-                # Use cmds.file for export to avoid PyMel overhead
-                # pm.exportSelected wraps cmds.file(..., exportSelected=True)
+                # Use cmds.file for export to avoid object-wrapper overhead
+                # cmds.exportSelected wraps cmds.file(..., exportSelected=True)
                 cmds.file(
                     self.export_path,
                     force=True,
@@ -284,7 +286,7 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 return matches[-1]
 
-        scene_path = pm.sceneName() or "untitled"
+        scene_path = cmds.file(query=True, sceneName=True) or "untitled"
         scene_name = os.path.splitext(os.path.basename(scene_path))[0]
         export_name = self.output_name or scene_name
         export_name = export_name.removesuffix(".fbx").removesuffix(".FBX")
@@ -366,7 +368,7 @@ class SceneExporter(ptk.LoggingMixin):
             preset_path_escaped = preset_file.replace("\\", "/")
 
             try:
-                pm.mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
+                mel.eval(f'FBXLoadExportPresetFile -f "{preset_path_escaped}"')
                 self.logger.info(
                     f"Loaded FBX export preset from {preset_path_escaped}."
                 )
@@ -414,7 +416,7 @@ class SceneExporter(ptk.LoggingMixin):
 
         for setting in settings:
             try:
-                value = pm.mel.eval(f"{setting} -q")
+                value = mel.eval(f"{setting} -q")
                 results[setting] = value
                 self.logger.info(f"{setting} is set to: {value}")
             except RuntimeError as e:
@@ -955,13 +957,15 @@ class SceneExporterSlots(SceneExporter):
         self.load_fbx_export_preset(self.ui.cmb000.currentData())
 
         # Reset the layout to ensure it updates.
-        pm.mel.refresh()
-        pm.mel.FBXUICallBack(-1, "updateUIWithProperties")
+        mel.eval("refresh")
+        mel.eval('FBXUICallBack -1 "updateUIWithProperties"')
 
         def _launch_editor():
-            if not pm.window("gameExporterWindow", exists=True):
+            if not cmds.window("gameExporterWindow", exists=True):
                 try:
-                    pm.mel.FBXUICallBack(-1, "editExportPresetInNewWindow", "fbx")
+                    mel.eval(
+                        'FBXUICallBack -1 "editExportPresetInNewWindow" "fbx"'
+                    )
                 except Exception as e:
                     self.logger.error(
                         f"Failed to open the FBX export preset editor: {e}"

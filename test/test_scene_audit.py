@@ -18,7 +18,7 @@ except ImportError:
     except ImportError:
         pass
 
-import pymel.core as pm
+import maya.cmds as cmds
 from mayatk.core_utils.diagnostics.scene_diag import (
     SceneAnalyzer,
     SceneDiagnostics,
@@ -34,7 +34,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
     def test_clean_scene(self):
         """Test analysis on a clean scene (simple cube)."""
-        cube = pm.polyCube(name="CleanCube")[0]
+        cube = cmds.polyCube(name="CleanCube")[0]
         records = self.analyzer.analyze([cube])
         report = self.analyzer.generate_report(records)
 
@@ -46,7 +46,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
     def test_high_poly(self):
         """Test detection of high poly meshes."""
         # 100x100 sphere is approx 19800 tris (poles are tris)
-        sphere = pm.polySphere(
+        sphere = cmds.polySphere(
             name="DenseSphere", subdivisionsX=100, subdivisionsY=100
         )[0]
 
@@ -64,7 +64,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
         """Test detection of N-gons."""
         # Create a pentagon (5-sided face)
         points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0.5, 1.5, 0), (0, 1, 0)]
-        plane = pm.polyCreateFacet(p=points, name="NgonFace")[0]
+        plane = cmds.polyCreateFacet(p=points, name="NgonFace")[0]
 
         records = self.analyzer.analyze([plane])
         report = self.analyzer.generate_report(records)
@@ -76,17 +76,17 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
     def test_multi_material(self):
         """Test detection of multiple material slots."""
-        cube = pm.polyCube()[0]
+        cube = cmds.polyCube()[0]
 
-        mat1 = pm.shadingNode("lambert", asShader=True, name="Mat1")
-        sg1 = pm.sets(renderable=True, noSurfaceShader=True, empty=True, name="SG1")
-        mat1.outColor >> sg1.surfaceShader
-        pm.sets(sg1, forceElement=cube)
+        mat1 = cmds.shadingNode("lambert", asShader=True, name="Mat1")
+        sg1 = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SG1")
+        cmds.connectAttr(f"{mat1}.outColor", f"{sg1}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg1)
 
-        mat2 = pm.shadingNode("lambert", asShader=True, name="Mat2")
-        sg2 = pm.sets(renderable=True, noSurfaceShader=True, empty=True, name="SG2")
-        mat2.outColor >> sg2.surfaceShader
-        pm.sets(sg2, forceElement=cube.f[0])
+        mat2 = cmds.shadingNode("lambert", asShader=True, name="Mat2")
+        sg2 = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SG2")
+        cmds.connectAttr(f"{mat2}.outColor", f"{sg2}.surfaceShader", force=True)
+        cmds.sets(f"{cube}.f[0]", edit=True, forceElement=sg2)
 
         # Use strict profile
         profile = AuditProfile(max_slots=1)
@@ -105,23 +105,26 @@ class TestSceneDiagnostics(MayaTkTestCase):
             tex_path = tmp.name.replace("\\", "/")
 
         try:
-            cube1 = pm.polyCube(name="Cube1")[0]
-            cube2 = pm.polyCube(name="Cube2")[0]
+            cube1 = cmds.polyCube(name="Cube1")[0]
+            cube2 = cmds.polyCube(name="Cube2")[0]
 
-            file_node = pm.shadingNode("file", asTexture=True)
-            file_node.fileTextureName.set(tex_path)
+            file_node = cmds.shadingNode("file", asTexture=True)
+            cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
 
-            mat = pm.shadingNode("lambert", asShader=True)
-            file_node.outColor >> mat.color
+            mat = cmds.shadingNode("lambert", asShader=True)
+            cmds.connectAttr(f"{file_node}.outColor", f"{mat}.color", force=True)
 
-            sg = pm.sets(renderable=True, noSurfaceShader=True, empty=True)
-            mat.outColor >> sg.surfaceShader
-            pm.sets(sg, forceElement=[cube1, cube2])
+            sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+            cmds.sets([cube1, cube2], edit=True, forceElement=sg)
 
             records = self.analyzer.analyze([cube1, cube2])
             report = self.analyzer.generate_report(records)
 
-            rec1 = next(r for r in report.top_offenders if r.transform == "Cube1")
+            rec1 = next(
+                r for r in report.top_offenders
+                if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
+            )
 
             self.assertEqual(rec1.material.unique_paths_local, 0)
             self.assertEqual(rec1.material.unique_paths_scene, 1)
@@ -130,17 +133,20 @@ class TestSceneDiagnostics(MayaTkTestCase):
                 tmp2.write(b"fake image data 2")
                 tex_path2 = tmp2.name.replace("\\", "/")
 
-            file_node2 = pm.shadingNode("file", asTexture=True)
-            file_node2.fileTextureName.set(tex_path2)
-            mat2 = pm.shadingNode("lambert", asShader=True)
-            file_node2.outColor >> mat2.color
-            sg2 = pm.sets(renderable=True, noSurfaceShader=True, empty=True)
-            mat2.outColor >> sg2.surfaceShader
-            pm.sets(sg2, forceElement=cube1)
+            file_node2 = cmds.shadingNode("file", asTexture=True)
+            cmds.setAttr(f"{file_node2}.fileTextureName", tex_path2, type="string")
+            mat2 = cmds.shadingNode("lambert", asShader=True)
+            cmds.connectAttr(f"{file_node2}.outColor", f"{mat2}.color", force=True)
+            sg2 = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+            cmds.connectAttr(f"{mat2}.outColor", f"{sg2}.surfaceShader", force=True)
+            cmds.sets(cube1, edit=True, forceElement=sg2)
 
             records = self.analyzer.analyze([cube1, cube2])
             report = self.analyzer.generate_report(records)
-            rec1 = next(r for r in report.top_offenders if r.transform == "Cube1")
+            rec1 = next(
+                r for r in report.top_offenders
+                if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
+            )
 
             self.assertEqual(rec1.material.unique_paths_local, 1)
 
@@ -161,7 +167,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
             self.fail(f"print_report failed with empty report: {e}")
 
         # Test with populated report
-        cube = pm.polyCube(name="PrintCube")[0]
+        cube = cmds.polyCube(name="PrintCube")[0]
         records = self.analyzer.analyze([cube])
         report = self.analyzer.generate_report(records)
         try:
@@ -172,22 +178,22 @@ class TestSceneDiagnostics(MayaTkTestCase):
     def test_oversized_texture_logic(self):
         """Test that shared oversized textures are not penalized as heavily."""
         # Create two cubes
-        cube1 = pm.polyCube(name="Cube1")[0]
-        cube2 = pm.polyCube(name="Cube2")[0]
+        cube1 = cmds.polyCube(name="Cube1")[0]
+        cube2 = cmds.polyCube(name="Cube2")[0]
 
         # Create a material and assign to both
-        mat = pm.shadingNode("lambert", asShader=True, name="SharedMat")
-        sg = pm.sets(renderable=True, noSurfaceShader=True, empty=True, name="SharedSG")
-        mat.outColor >> sg.surfaceShader
-        pm.sets(sg, forceElement=cube1)
-        pm.sets(sg, forceElement=cube2)
+        mat = cmds.shadingNode("lambert", asShader=True, name="SharedMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SharedSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube1, edit=True, forceElement=sg)
+        cmds.sets(cube2, edit=True, forceElement=sg)
 
         # Mock _analyze_material_node to return a large texture
         original_method = self.analyzer._analyze_material_node
 
         def mock_analyze_material_node(mat_node):
             # Check if the node name matches (it might be a PyNode or string)
-            if mat_node and mat_node.name() == mat.name():
+            if mat_node and mat_node == mat:
                 return {
                     "transparent": False,
                     "type": "lambert",
@@ -227,7 +233,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
         # 2. Analyze ONLY Cube1 (Unique context)
         # We must remove cube2 so the texture becomes truly unique to cube1
         # Otherwise, the analyzer correctly sees it's shared with another object (even if unselected)
-        pm.delete(cube2)
+        cmds.delete(cube2)
 
         # If we only analyze Cube1, the texture appears unique to the selection scope (count=1)
         records_single = self.analyzer.analyze([cube1], profile=profile)

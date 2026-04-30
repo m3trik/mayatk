@@ -20,7 +20,34 @@ except ImportError:
 if QApplication and not QApplication.instance():
     app = QApplication(sys.argv)
 
-import pymel.core as pm
+import maya.cmds as cmds
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 import mayatk as mtk
 from mayatk.anim_utils.playblast_exporter import PlayblastExporter
 
@@ -46,14 +73,14 @@ class TestPlayblastExporter(MayaTkTestCase):
         else:
             print(f"\nRunning {self._testMethodName} in QUICK mode")
 
-        pm.newFile(force=True)
-        self.cube = pm.polyCube(name="testCube")[0]
+        _pm_new_file(force=True)
+        self.cube = cmds.polyCube(name="testCube")[0]
         # Create some animation
-        pm.setKeyframe(self.cube, t=1, v=0, at="tx")
-        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=1, v=0, at="tx")
+        cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
 
         # Set playback range
-        pm.playbackOptions(min=1, max=10)
+        cmds.playbackOptions(min=1, max=10)
 
     def analyze_video(self, filepath):
         """Analyze video for glitches using OpenCV."""
@@ -133,7 +160,7 @@ class TestPlayblastExporter(MayaTkTestCase):
 
         # Save scene (mock or real)
         temp_file = os.path.join(os.environ["TEMP"], "test_scene.ma")
-        pm.renameFile(temp_file)
+        _pm_rename_file(temp_file)
         # Reset cached property if needed, but it's cached in instance
         exporter._scene_name = None
         self.assertEqual(exporter.scene_name, "test_scene")
@@ -182,9 +209,9 @@ class TestPlayblastExporter(MayaTkTestCase):
             return
 
         if FULL_TESTS:
-            pm.playbackOptions(min=1, max=10)
+            cmds.playbackOptions(min=1, max=10)
         else:
-            pm.playbackOptions(min=1, max=5)
+            cmds.playbackOptions(min=1, max=5)
 
         exporter = PlayblastExporter()
         # Use a temp directory for the output
@@ -282,7 +309,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             self.assertGreater(fps, 0)
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode (hardware limitation): {e}")
             else:
                 self.fail(f"Playblast failed: {e}")
@@ -310,23 +337,23 @@ class TestPlayblastExporter(MayaTkTestCase):
             return
 
         # Setup scene
-        pm.newFile(force=True)
+        _pm_new_file(force=True)
 
         # Camera
-        cam_shape = pm.createNode("camera")
-        cam = cam_shape.getParent()
-        cam.setTranslation((0, 0, 20))
-        cam.rename("test_cam")
+        cam_shape = cmds.createNode("camera")
+        cam = (cmds.listRelatives(str(cam_shape), parent=True) or [None])[0]
+        cmds.xform(cam, t=(0, 0, 20))
+        cam = cmds.rename(cam, "test_cam")
 
         # Red Sphere
-        sphere = pm.polySphere(radius=2)[0]
-        shader = pm.shadingNode("lambert", asShader=True)
-        shader.color.set((1, 0, 0))  # Red
-        sg = pm.sets(
-            renderable=True, noSurfaceShader=True, empty=True, name=shader.name() + "SG"
+        sphere = cmds.polySphere(radius=2)[0]
+        shader = cmds.shadingNode("lambert", asShader=True)
+        cmds.setAttr(f"{shader}.color", 1, 0, 0, type="double3")  # Red
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=str(shader) + "SG"
         )
-        shader.outColor.connect(sg.surfaceShader)
-        pm.sets(sg, forceElement=sphere)
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(str(sphere), edit=True, forceElement=sg)
 
         # Heavy Animation: Keyframes on every frame
         if FULL_TESTS:
@@ -340,10 +367,10 @@ class TestPlayblastExporter(MayaTkTestCase):
             # Move in a circle
             tx = math.sin(i * 0.2) * 5
             ty = math.cos(i * 0.2) * 5
-            pm.setKeyframe(sphere, t=i, v=tx, at="tx")
-            pm.setKeyframe(sphere, t=i, v=ty, at="ty")
-            pm.setKeyframe(sphere, t=i, v=i * 10, at="ry")
-            pm.setKeyframe(sphere, t=i, v=i * 10, at="rx")
+            cmds.setKeyframe(sphere, t=i, v=tx, at="tx")
+            cmds.setKeyframe(sphere, t=i, v=ty, at="ty")
+            cmds.setKeyframe(sphere, t=i, v=i * 10, at="ry")
+            cmds.setKeyframe(sphere, t=i, v=i * 10, at="rx")
 
         exporter = PlayblastExporter()
         output = os.path.join(os.environ["TEMP"], "test_visual_anim.avi")
@@ -351,7 +378,7 @@ class TestPlayblastExporter(MayaTkTestCase):
         try:
             result = exporter.create_playblast(
                 filepath=output,
-                camera_name=cam.name(),
+                camera_name=cam,
                 start_frame=start_frame,
                 end_frame=end_frame,
                 offScreen=True,
@@ -404,13 +431,13 @@ class TestPlayblastExporter(MayaTkTestCase):
 
             # If we are in batch mode and got all black frames, has_movement might be False.
             # Otherwise, we expect movement.
-            if not (pm.about(batch=True) and frames_checked > 0 and is_black):
+            if not (cmds.about(batch=True) and frames_checked > 0 and is_black):
                 self.assertTrue(
                     has_movement, "Video contains no animation (frames are identical)"
                 )
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode: {e}")
             else:
                 self.fail(f"Playblast failed: {e}")
@@ -456,7 +483,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             )
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode: {e}")
             else:
                 self.fail(f"Playblast failed: {e}")
@@ -524,7 +551,7 @@ class TestPlayblastExporter(MayaTkTestCase):
                 self.assertTrue(os.path.exists(res["output"]))
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode: {e}")
         finally:
             # Cleanup
@@ -542,20 +569,22 @@ class TestPlayblastExporter(MayaTkTestCase):
 
         variations = [{"label": "arnold_pass", "renderer": "arnold", "framePadding": 4}]
 
-        # Mock pm.arnoldRender and pm.pluginInfo to avoid loading mtoa or rendering
+        # Production migrated to cmds.* — patch at the playblast_exporter
+        # import path. arnoldRender is plugin-provided; patch with create=True
+        # since the plugin isn't loaded under tests.
+        pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
         with (
-            patch("pymel.core.arnoldRender") as mock_render,
-            patch("pymel.core.pluginInfo", return_value=True),
-            patch("pymel.core.workspace") as mock_workspace,
-            patch("pymel.core.setAttr") as mock_setAttr,
-            patch("pymel.core.getAttr") as mock_getAttr,
-            patch("pymel.core.editRenderLayerGlobals") as mock_layer,
+            patch(f"{pe_path}.arnoldRender", create=True) as mock_render,
+            patch(f"{pe_path}.pluginInfo", return_value=True),
+            patch(f"{pe_path}.workspace"),
+            patch(f"{pe_path}.setAttr"),
+            patch(f"{pe_path}.getAttr"),
+            patch(f"{pe_path}.editRenderLayerGlobals", create=True),
             patch("os.walk") as mock_walk,
             patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
         ):
 
             # Setup mock for os.walk to simulate finding rendered files
-            # os.walk yields (root, dirs, files)
             mock_walk.return_value = [
                 (
                     output_base + "_arnold_pass",
@@ -564,15 +593,11 @@ class TestPlayblastExporter(MayaTkTestCase):
                 )
             ]
 
-            # Mock PyNode for defaultArnoldDriver
-            mock_driver = MagicMock()
-            mock_driver.ai_translator.get.return_value = "exr"
-            with patch("pymel.core.PyNode", return_value=mock_driver):
-                results = exporter.export_variations(
-                    output_path=output_base,
-                    variations=variations,
-                    scene_name="test_scene",
-                )
+            results = exporter.export_variations(
+                output_path=output_base,
+                variations=variations,
+                scene_name="test_scene",
+            )
 
             # Verify arnoldRender was called
             self.assertTrue(mock_render.called)
@@ -588,10 +613,10 @@ class TestPlayblastExporter(MayaTkTestCase):
             print("Skipping low FPS test (OpenCV not available)")
             return
 
-        pm.newFile(force=True)
+        _pm_new_file(force=True)
 
         # Set scene to 15 fps ("game")
-        pm.currentUnit(time="game")
+        cmds.currentUnit(time="game")
 
         # Create animation
         if FULL_TESTS:
@@ -604,11 +629,11 @@ class TestPlayblastExporter(MayaTkTestCase):
             expected_duration = 1.0
 
         # Explicitly set playback range in the new unit
-        pm.playbackOptions(min=start, max=end)
+        cmds.playbackOptions(min=start, max=end)
 
-        cube = pm.polyCube()[0]
-        pm.setKeyframe(cube, t=start, v=0, at="tx")
-        pm.setKeyframe(cube, t=end, v=10, at="tx")
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, t=start, v=0, at="tx")
+        cmds.setKeyframe(cube, t=end, v=10, at="tx")
 
         exporter = PlayblastExporter()
         output_base = os.path.join(os.environ["TEMP"], "test_low_fps")
@@ -657,7 +682,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             )
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode: {e}")
             else:
                 self.fail(f"Playblast failed: {e}")
@@ -694,7 +719,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             is_valid, message = self.analyze_video(result)
             if not is_valid:
                 # If analysis fails, we fail the test, unless it's a known batch issue
-                if pm.about(batch=True) and "black" in message:
+                if cmds.about(batch=True) and "black" in message:
                     print(
                         f"Warning: Playblast generated black frames in batch mode (expected on some hardware): {message}"
                     )
@@ -710,7 +735,7 @@ class TestPlayblastExporter(MayaTkTestCase):
                 pass
 
         except RuntimeError as e:
-            if pm.about(batch=True):
+            if cmds.about(batch=True):
                 print(f"Playblast failed in batch mode (hardware limitation): {e}")
             else:
                 self.fail(f"Playblast failed: {e}")

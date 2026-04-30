@@ -39,6 +39,7 @@ class TestAudioReproFromScene(MayaTkTestCase):
         if os.path.exists(LOG):
             os.remove(LOG)
 
+    @unittest.skipUnless(os.path.exists(SCENE), f"Scene file missing: {SCENE}")
     def test_repro(self):
         from mayatk.anim_utils.shots._shots import (
             ShotStore,
@@ -55,7 +56,7 @@ class TestAudioReproFromScene(MayaTkTestCase):
         )
         from mayatk.audio_utils._audio_utils import AudioUtils as au
 
-        pm.mel.file(SCENE, open=True, force=True)
+        cmds.file(SCENE, open=True, force=True)
         _log(f"opened {os.path.basename(SCENE)}")
 
         store = ShotStore.active()

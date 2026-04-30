@@ -14,6 +14,7 @@ Companion modules provide orthogonal concerns:
 - :mod:`.migrate`      — legacy schema migration
 - :mod:`.segments` — segment discovery for sequencer / manifest
 """
+import maya.mel as mel
 import json
 import logging
 import re
@@ -41,10 +42,6 @@ class TrackEvent:
     start: float
     stop: Optional[float] = None
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 try:
     import maya.cmds as cmds
@@ -283,10 +280,10 @@ class AudioUtils(ptk.HelpMixin):
     @staticmethod
     def get_fps() -> float:
         """Return the current Maya scene framerate (or 24.0 outside Maya)."""
-        if pm is None:
+        if cmds is None:
             return _DEFAULT_FPS
         try:
-            fps = pm.mel.eval("float $fps = `currentTimeUnitToFPS`")
+            fps = mel.eval("float $fps = `currentTimeUnitToFPS`")
             return float(fps) if fps else _DEFAULT_FPS
         except Exception:
             return _DEFAULT_FPS

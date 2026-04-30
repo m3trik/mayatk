@@ -223,7 +223,7 @@ def build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]
 
     for obj in objects:
         try:
-            obj_key = obj.fullPath()  # unique DAG path (PyMEL — cached, fast)
+            obj_key = cmds.ls(str(obj), l=True)[0]  # unique DAG path
             obj_name = obj_key.rsplit("|", 1)[-1]  # short name from string
             obj_type = cmds.nodeType(obj_key)
             parent = cmds.listRelatives(obj_key, parent=True, fullPath=True)

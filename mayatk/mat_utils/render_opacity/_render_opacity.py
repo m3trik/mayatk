@@ -1,12 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pass
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -52,8 +53,8 @@ class RenderOpacity(ptk.LoggingMixin):
         result = []
         for obj in objects:
             try:
-                vis_plug = f"{obj.longName()}.visibility"
-                keys = pm.keyframe(vis_plug, query=True, timeChange=True)
+                vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
+                keys = cmds.keyframe(vis_plug, query=True, timeChange=True)
                 if keys:
                     result.append(obj)
             except Exception:
@@ -91,7 +92,7 @@ class RenderOpacity(ptk.LoggingMixin):
                 or more objects have visibility keyframes.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             cls.logger.warning("No objects selected.")
             return {}
@@ -99,13 +100,13 @@ class RenderOpacity(ptk.LoggingMixin):
         # --- Handle existing visibility keys --------------------------
         vis_keyed = cls.objects_with_visibility_keys(objects)
         if vis_keyed:
-            names = [o.name() for o in vis_keyed]
+            names = [o.split("|")[-1].split(":")[-1] for o in vis_keyed]
             if delete_visibility_keys:
                 for obj in vis_keyed:
-                    vis_plug = f"{obj.longName()}.visibility"
-                    pm.cutKey(vis_plug, clear=True)
+                    vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
+                    cmds.cutKey(vis_plug, clear=True)
                     # Reset visibility to on after removing keys
-                    obj.visibility.set(True)
+                    cmds.setAttr(vis_plug, True)
                 cls.logger.info("Deleted visibility keys on: %s", ", ".join(names))
             else:
                 msg = (
@@ -146,7 +147,7 @@ class RenderOpacity(ptk.LoggingMixin):
             objects: Objects to check. If *None*, uses the current selection.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             return
         OpacityAttributeMode.ensure_connections(objects)
@@ -164,7 +165,7 @@ class RenderOpacity(ptk.LoggingMixin):
             objects: Objects to sync. If *None*, uses the current selection.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             return
         OpacityAttributeMode.sync_visibility_from_opacity(objects)
@@ -200,7 +201,7 @@ class RenderOpacity(ptk.LoggingMixin):
             List of ``(object_name, "in"|"out")`` per keyed object.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             cls.logger.warning("No objects selected.")
             return []
@@ -247,31 +248,31 @@ class RenderOpacity(ptk.LoggingMixin):
             # native ``opacity`` attribute that is unrelated to RenderOpacity.
             objects = [
                 t
-                for t in pm.ls(type="transform")
-                if t.hasAttr(cls.ATTR_NAME)
+                for t in cmds.ls(type="transform")
+                if cmds.attributeQuery(cls.ATTR_NAME, node=t, exists=True)
             ]
         else:
-            objects = pm.ls(objects)
+            objects = cmds.ls(objects)
 
         synced: List[str] = []
         needs_sync = []
         for obj in objects:
-            if not obj.hasAttr(cls.ATTR_NAME):
+            if not cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
                 continue
             # Use long-name plug paths so the query targets ONLY the
             # transform — passing attribute="visibility" by kwarg also
             # hits the shape node and would double-count keys.
-            opa_plug = f"{obj.longName()}.{cls.ATTR_NAME}"
-            vis_plug = f"{obj.longName()}.visibility"
-            opa_keys = pm.keyframe(opa_plug, q=True, keyframeCount=True)
+            opa_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.{cls.ATTR_NAME}"
+            vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
+            opa_keys = cmds.keyframe(opa_plug, q=True, keyframeCount=True)
             if not opa_keys:
                 continue
-            vis_keys = pm.keyframe(vis_plug, q=True, keyframeCount=True)
+            vis_keys = cmds.keyframe(vis_plug, q=True, keyframeCount=True)
             # Resync if visibility has no keys at all, or fewer keys than
             # opacity (a partial sync from a stale state).
             if not vis_keys or vis_keys < opa_keys:
                 needs_sync.append(obj)
-                synced.append(obj.name())
+                synced.append(obj.split("|")[-1].split(":")[-1])
 
         if needs_sync:
             OpacityAttributeMode.sync_visibility_from_opacity(needs_sync)
@@ -295,7 +296,7 @@ class RenderOpacity(ptk.LoggingMixin):
             mode: ``"attribute"``, ``"material"``, or ``None`` (cleans both).
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             # cls.logger.warning("No objects selected.")
             return

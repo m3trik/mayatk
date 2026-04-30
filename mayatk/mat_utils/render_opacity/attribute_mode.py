@@ -5,10 +5,8 @@ from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
-    pm = None  # type: ignore[assignment]
     cmds = None  # type: ignore[assignment]
 
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -51,11 +49,12 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
         Attributes.apply_preset("opacity", objects)
 
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects):
             # Remove any legacy condition-node driver left from older versions
             cls._remove_legacy_vis_driver(obj)
 
-            results[obj.name()] = {"attrs_created": [f"{obj.name()}.{cls.ATTR_NAME}"]}
+            short = obj.split("|")[-1].split(":")[-1]
+            results[short] = {"attrs_created": [f"{short}.{cls.ATTR_NAME}"]}
             cls.logger.info(f"Verified {cls.ATTR_NAME} on {obj}")
 
         return results
@@ -89,18 +88,18 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Returns:
             List of ``(object_name, "in"|"out")`` for each keyed object.
         """
-        objects = pm.ls(objects)
+        objects = cmds.ls(objects)
         if not objects:
             return []
 
         if auto_create:
-            missing = [o for o in objects if not o.hasAttr(cls.ATTR_NAME)]
+            missing = [o for o in objects if not cmds.attributeQuery(cls.ATTR_NAME, node=o, exists=True)]
             if missing:
                 cls.create(missing)
 
         keyed: List[Tuple[str, str]] = []
         for obj in objects:
-            if not obj.hasAttr(cls.ATTR_NAME):
+            if not cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
                 continue
 
             # Resolve direction
@@ -117,15 +116,15 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             # Key opacity (smooth channel)
             # Use explicit plug path to target the transform only —
             # the kwarg form (attribute=) also hits the shape node.
-            opacity_plug = f"{obj.longName()}.{cls.ATTR_NAME}"
-            pm.setKeyframe(
+            opacity_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.{cls.ATTR_NAME}"
+            cmds.setKeyframe(
                 opacity_plug,
                 time=start,
                 value=start_val,
                 inTangentType=itt,
                 outTangentType=tangent,
             )
-            pm.setKeyframe(
+            cmds.setKeyframe(
                 opacity_plug,
                 time=end,
                 value=end_val,
@@ -136,9 +135,9 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             # Mirror to visibility (stepped binary)
             # Use longName to unambiguously target the transform —
             # short names also match the shape node.
-            vis_plug = f"{obj.longName()}.visibility"
+            vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
             for t, v in ((start, start_val), (end, end_val)):
-                pm.setKeyframe(
+                cmds.setKeyframe(
                     vis_plug,
                     time=t,
                     value=1.0 if v > 0 else 0.0,
@@ -153,7 +152,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                     outTangentType="step",
                 )
 
-            keyed.append((obj.name(), "in" if fade_in else "out"))
+            keyed.append((obj.split("|")[-1].split(":")[-1], "in" if fade_in else "out"))
 
         return keyed
 
@@ -166,7 +165,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Defaults to fade-in when no previous key exists.
         """
         key_times = (
-            pm.keyframe(obj, attribute="opacity", query=True, timeChange=True) or []
+            cmds.keyframe(obj, attribute="opacity", query=True, timeChange=True) or []
         )
         prev_time = None
         for t in sorted(key_times):
@@ -176,7 +175,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 break
         if prev_time is None:
             return True
-        vals = pm.keyframe(
+        vals = cmds.keyframe(
             obj,
             attribute="opacity",
             query=True,
@@ -194,27 +193,30 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Handles condition nodes created by older versions of this module
         so that visibility is free for direct keyframing.
         """
-        if obj.visibility.isLocked():
+        vis_plug = f"{obj}.visibility"
+        if cmds.getAttr(vis_plug, lock=True):
             return
 
-        inputs = obj.visibility.inputs()
+        inputs = (
+            cmds.listConnections(vis_plug, source=True, destination=False) or []
+        )
         if (
             inputs
-            and isinstance(inputs[0], pm.nt.Condition)
-            and cls._VIS_DRIVER_RE.search(inputs[0].name())
+            and cmds.objectType(inputs[0]) == "condition"
+            and cls._VIS_DRIVER_RE.search(inputs[0].split("|")[-1].split(":")[-1])
         ):
-            pm.delete(inputs[0])
+            cmds.delete(inputs[0])
             try:
-                obj.visibility.set(True)
+                cmds.setAttr(vis_plug, True)
             except Exception:
                 pass
 
         # Also clean orphaned VisDrivers still connected via opacity
-        if obj.hasAttr(cls.ATTR_NAME):
-            conds = pm.listConnections(obj.attr(cls.ATTR_NAME), type="condition") or []
+        if cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
+            conds = cmds.listConnections(f"{obj}.{cls.ATTR_NAME}", type="condition") or []
             for c in conds:
-                if cls._VIS_DRIVER_RE.search(c.name()):
-                    pm.delete(c)
+                if cls._VIS_DRIVER_RE.search(c.split("|")[-1].split(":")[-1]):
+                    cmds.delete(c)
 
     @classmethod
     def sync_visibility_from_opacity(cls, objects) -> None:
@@ -233,35 +235,35 @@ class OpacityAttributeMode(ptk.LoggingMixin):
            derived from opacity.  Any hand-keyed visibility animation that
            does not correspond to an opacity key will be lost.
         """
-        for obj in pm.ls(objects):
-            if not obj.hasAttr(cls.ATTR_NAME):
+        for obj in cmds.ls(objects):
+            if not cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
                 continue
-            if obj.visibility.isLocked():
+            if cmds.getAttr(f"{obj}.visibility", lock=True):
                 continue
 
             # Remove any legacy condition-node driver first
             cls._remove_legacy_vis_driver(obj)
 
-            times = pm.keyframe(obj, attribute=cls.ATTR_NAME, q=True, tc=True)
+            times = cmds.keyframe(obj, attribute=cls.ATTR_NAME, q=True, tc=True)
             if not times:
                 continue
 
-            values = pm.keyframe(obj, attribute=cls.ATTR_NAME, q=True, vc=True)
-            in_tans = pm.keyTangent(
+            values = cmds.keyframe(obj, attribute=cls.ATTR_NAME, q=True, vc=True)
+            in_tans = cmds.keyTangent(
                 obj, attribute=cls.ATTR_NAME, q=True, inTangentType=True
             )
-            out_tans = pm.keyTangent(
+            out_tans = cmds.keyTangent(
                 obj, attribute=cls.ATTR_NAME, q=True, outTangentType=True
             )
 
             # Clear existing visibility keys so repeated calls don't
             # accumulate duplicates.  Use full DAG path to target the
             # transform only — short names also match the shape.
-            vis_attr = f"{obj.longName()}.visibility"
-            pm.cutKey(vis_attr, clear=True)
+            vis_attr = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
+            cmds.cutKey(vis_attr, clear=True)
 
             for t, v, it, ot in zip(times, values, in_tans, out_tans):
-                pm.setKeyframe(
+                cmds.setKeyframe(
                     vis_attr,
                     time=t,
                     value=1.0 if v > 0 else 0.0,
@@ -284,15 +286,16 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     @classmethod
     def remove(cls, objects):
         for obj in objects:
-            if not obj.hasAttr(cls.ATTR_NAME):
+            obj = str(obj)
+            if not cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
                 continue
 
             # Clean up any legacy condition-node visibility driver
             cls._remove_legacy_vis_driver(obj)
 
             # Delete anim curves first (deleteAttr errors on connected attrs)
-            curves = pm.listConnections(obj.attr(cls.ATTR_NAME), type="animCurve")
+            curves = cmds.listConnections(f"{obj}.{cls.ATTR_NAME}", type="animCurve")
             if curves:
-                pm.delete(curves)
-            obj.deleteAttr(cls.ATTR_NAME)
+                cmds.delete(curves)
+            cmds.deleteAttr(f"{obj}.{cls.ATTR_NAME}")
             cls.logger.info(f"Removed {cls.ATTR_NAME} from {obj}")

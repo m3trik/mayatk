@@ -5,13 +5,55 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
 
 import maya.cmds as cmds
-import pymel.core as pm
 import pythontk as ptk
+
+
+# ---------------------------------------------------------------------------
+# Helpers for legacy node-or-string call patterns.
+# ---------------------------------------------------------------------------
+
+
+def _full_path(node) -> str:
+    """``cmds.ls(str(node), l=True)[0]`` for node or string nodes."""
+    if node is None:
+        return ""
+    if hasattr(node, "fullPath"):
+        try:
+            return cmds.ls(str(node), l=True)[0]
+        except Exception:
+            pass
+    s = str(node)
+    long_paths = cmds.ls(s, long=True) or [s]
+    return long_paths[0]
+
+
+def _node_name(node) -> str:
+    """``str(node).split('|')[-1]`` for node or string nodes (leaf name w/ namespace)."""
+    if node is None:
+        return ""
+    if hasattr(node, "nodeName"):
+        try:
+            return str(node).split('|')[-1]
+        except Exception:
+            pass
+    return str(node).split("|")[-1]
+
+
+def _rename(node, new_name) -> str:
+    """Rename a node-or-string node; returns the resulting name."""
+    if hasattr(node, "rename"):
+        try:
+            node.rename(new_name)
+            return _node_name(node)
+        except Exception:
+            pass
+    return cmds.rename(str(node), new_name)
 
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.cam_utils._cam_utils import CamUtils
 from mayatk.display_utils.color_manager import ColorUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 # ---------------------------------------------------------------------------
@@ -25,10 +67,10 @@ MAYA_DEFAULT_CAMERAS = CamUtils.DEFAULT_CAMERAS
 def get_clean_node_name(node) -> str:
     """Get a consistent clean node name for matching (strips namespace)."""
     try:
-        node_name = node.nodeName()
+        node_name = str(node).split('|')[-1]
         if node_name:
             return node_name.split(":")[-1] if ":" in node_name else node_name
-        full_path = node.fullPath()
+        full_path = cmds.ls(str(node), l=True)[0]
         last_component = full_path.split("|")[-1] if "|" in full_path else str(node)
         return (
             last_component.split(":")[-1] if ":" in last_component else last_component
@@ -72,7 +114,7 @@ def is_default_maya_camera(path: str, node) -> bool:
         base_name = path.split("|")[-1].split(":")[-1]
         if base_name not in MAYA_DEFAULT_CAMERAS:
             return False
-        long_path = node.fullPath() if hasattr(node, "fullPath") else str(node)
+        long_path = cmds.ls(str(node), l=True)[0] if hasattr(node, "fullPath") else str(node)
         shapes = cmds.listRelatives(long_path, shapes=True, fullPath=True) or []
         for shape in shapes:
             if cmds.nodeType(shape) == "camera":
@@ -85,7 +127,7 @@ def is_default_maya_camera(path: str, node) -> bool:
 def should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool:
     """Filter nodes by shape types."""
     try:
-        long_path = node.fullPath() if hasattr(node, "fullPath") else str(node)
+        long_path = cmds.ls(str(node), l=True)[0] if hasattr(node, "fullPath") else str(node)
         shapes = cmds.listRelatives(long_path, shapes=True, fullPath=True) or []
         if not shapes:
             return True  # Keep transform-only nodes
@@ -134,36 +176,35 @@ def select_objects_in_maya(object_names: List[str]) -> int:
 def _rename_node_removing_namespace(
     node, allow_maya_auto_rename: bool = False, logger=None
 ):
-    """Rename a single PyMEL *node* by stripping its namespace prefix.
+    """Rename a single *node* by stripping its namespace prefix.
 
     If *allow_maya_auto_rename* is True Maya will resolve conflicts automatically.
     Otherwise a ``_1``, ``_2`` … suffix is appended manually.
     """
     try:
-        current_name = node.nodeName()
+        current_name = str(node).split('|')[-1]
         if ":" not in current_name:
             return  # nothing to strip
         clean_name = current_name.split(":")[-1]
 
         if allow_maya_auto_rename:
             try:
-                node.rename(clean_name)
-                final_name = node.nodeName()
+                final_name = _rename(node, clean_name)
                 if logger and final_name != clean_name:
                     logger.debug(f"Maya auto-renamed {current_name} -> {final_name}")
             except RuntimeError as e:
                 if logger:
                     logger.debug(f"Maya auto-rename failed for {current_name}: {e}")
         else:
-            if not pm.objExists(clean_name) or pm.PyNode(clean_name) == node:
-                node.rename(clean_name)
+            if not cmds.objExists(clean_name) or _full_path(clean_name) == _full_path(node):
+                _rename(node, clean_name)
             else:
                 counter = 1
                 unique_name = f"{clean_name}_{counter}"
-                while pm.objExists(unique_name):
+                while cmds.objExists(unique_name):
                     counter += 1
                     unique_name = f"{clean_name}_{counter}"
-                node.rename(unique_name)
+                _rename(node, unique_name)
                 if logger:
                     logger.debug(f"Renamed {current_name} -> {unique_name} (conflict)")
     except RuntimeError as e:
@@ -180,7 +221,7 @@ class HierarchyMapBuilder:
     """Builds hierarchy path maps for Maya transforms.
 
     Uses ``maya.cmds`` internally for significantly faster scene traversal
-    compared to PyMEL, while still returning PyMEL nodes in the resulting map
+    compared to using object wrappers, while still returning node names in the resulting map
     so that downstream consumers keep working unchanged.
     """
 
@@ -193,12 +234,12 @@ class HierarchyMapBuilder:
         """Build a mapping of hierarchical paths to transform nodes.
 
         Args:
-            root: ``"SCENE_WIDE_MODE"`` sentinel or a PyMEL transform root.
+            root: ``"SCENE_WIDE_MODE"`` sentinel or a transform root node.
             exclude_namespace_prefixes: namespace prefixes to skip.
             strip_namespaces: if True, strip namespace prefixes from stored
                 component names.
         """
-        # First pass: traverse with cmds (strings only — no PyMEL overhead).
+        # First pass: traverse with cmds (strings only).
         key_to_long: Dict[str, str] = {}
         exclude_ns = exclude_namespace_prefixes or []
 
@@ -228,20 +269,18 @@ class HierarchyMapBuilder:
                 if cmds.nodeType(asm) == "transform":
                     _traverse(asm)
         else:
-            _traverse(root.fullPath())
+            _traverse(_full_path(root))
 
-        # Second pass: batch-convert long paths to PyMEL nodes in one call.
+        # Second pass: validate long paths still exist; values are now strings.
         if not key_to_long:
             return {}
         long_paths = list(key_to_long.values())
-        pymel_nodes = pm.ls(long_paths)
-        long_to_pynode = {n.longName(): n for n in pymel_nodes}
+        valid = set(cmds.ls(long_paths, long=True) or [])
 
         path_map: Dict[str, Any] = {}
         for key, long_path in key_to_long.items():
-            node = long_to_pynode.get(long_path)
-            if node is not None:
-                path_map[key] = node
+            if long_path in valid:
+                path_map[key] = long_path
 
         return path_map
 
@@ -249,14 +288,14 @@ class HierarchyMapBuilder:
     def build_path_map_from_nodes(
         nodes: List[Any], strip_namespaces: bool = False
     ) -> Dict[str, Any]:
-        """Build a path map from an arbitrary list of PyMEL transform nodes.
+        """Build a path map from an arbitrary list of transform node names.
 
         Root nodes are inferred as those whose parent is not in the set.
-        Uses cmds for traversal; values remain PyMEL nodes.
+        Uses cmds for traversal; values are node name strings.
         """
         path_map: Dict[str, Any] = {}
-        # Map long paths → PyMEL nodes for fast lookup
-        node_paths = {n.fullPath(): n for n in nodes}
+        # Map long paths → node strings for fast lookup
+        node_paths = {_full_path(n): _full_path(n) for n in nodes}
         long_path_set = set(node_paths)
 
         def _is_root(long_path: str) -> bool:
@@ -346,7 +385,7 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         dry_run: bool = False,
     ) -> Optional[Tuple[Any, str]]:
         """Find fuzzy match for target object using pre-built name index."""
-        if pm.objExists(target_name):
+        if cmds.objExists(target_name):
             log_prefix = "[DRY-RUN] " if dry_run else ""
             self.logger.debug(
                 f"{log_prefix}Target '{target_name}' exists in current scene - will attempt fuzzy match for replacement"
@@ -433,9 +472,9 @@ class HierarchyManager(ptk.LoggingMixin):
                 # Derive namespaces from imported reference objects
                 ref_namespaces = sorted(
                     {
-                        n.nodeName().split(":")[0]
+                        str(n).split('|')[-1].split(":")[0]
                         for n in reference_objects
-                        if ":" in n.nodeName()
+                        if ":" in str(n).split('|')[-1]
                     }
                 )
                 if ref_namespaces:
@@ -552,7 +591,7 @@ class HierarchyManager(ptk.LoggingMixin):
                             for raw_path, node in path_map.items():
                                 cleaned = clean_hierarchy_path(raw_path)
                                 try:
-                                    shapes = node.getShapes()
+                                    shapes = NodeUtils.get_shapes(node)
                                     if shapes:
                                         stypes = sorted({s.nodeType() for s in shapes})
                                     else:
@@ -889,14 +928,14 @@ class HierarchyManager(ptk.LoggingMixin):
     # ------------------------------------------------------------------ #
 
     def _resolve_node(self, cleaned_path: str, source: str = "current"):
-        """Resolve a cleaned diff path to a live PyMEL node.
+        """Resolve a cleaned diff path to a live node name.
 
         Args:
             cleaned_path: Namespace-stripped hierarchy path from the diff.
             source: ``"current"`` or ``"reference"`` — which path map to look up.
 
         Returns:
-            PyMEL transform node, or *None* if not found.
+            Transform node name, or *None* if not found.
         """
         if source == "current":
             raw = self.clean_to_raw_current.get(cleaned_path)
@@ -907,8 +946,11 @@ class HierarchyManager(ptk.LoggingMixin):
 
         if raw and raw in path_map:
             node = path_map[raw]
+            # path_map values may be strings (post-migration build_path_map) or
+            # nodes (legacy callers / direct test injection). Validate via
+            # cmds.objExists to handle both.
             try:
-                if node.exists():
+                if cmds.objExists(str(node)):
                     return node
             except Exception:
                 pass
@@ -921,7 +963,7 @@ class HierarchyManager(ptk.LoggingMixin):
 
         *path* is a pipe-separated cleaned hierarchy path, e.g.
         ``GRP_A|GRP_B|LEAF``.  For this example the method ensures ``GRP_A``
-        and ``GRP_B`` exist and returns the PyMEL node for ``GRP_B``.
+        and ``GRP_B`` exist and returns the node name for ``GRP_B``.
 
         Uses parent-relative child lookups to correctly handle duplicate
         names at different hierarchy levels (e.g. ``A|A|A``).
@@ -934,7 +976,7 @@ class HierarchyManager(ptk.LoggingMixin):
         for component in parts[:-1]:  # everything except the leaf
             if current_parent is not None:
                 # Look for component as a direct child of current_parent
-                parent_long = current_parent.fullPath()
+                parent_long = cmds.ls(str(current_parent), l=True)[0]
                 children = (
                     cmds.listRelatives(
                         parent_long,
@@ -950,11 +992,11 @@ class HierarchyManager(ptk.LoggingMixin):
                         match = c
                         break
                 if match:
-                    current_parent = pm.PyNode(match)
+                    current_parent = match
                 else:
-                    new_grp = pm.createNode("transform", name=component)
+                    new_grp = cmds.createNode("transform", name=component)
                     HierarchyManager._unlock_if_stub(current_parent)
-                    pm.parent(new_grp, current_parent)
+                    cmds.parent(new_grp, current_parent)
                     HierarchyManager._relock_if_stub(current_parent)
                     HierarchyManager._finalize_stub_node(new_grp)
                     current_parent = new_grp
@@ -962,9 +1004,9 @@ class HierarchyManager(ptk.LoggingMixin):
                 # Root level — use leading pipe for unambiguous lookup
                 root_path = f"|{component}"
                 if cmds.objExists(root_path):
-                    current_parent = pm.PyNode(root_path)
+                    current_parent = root_path
                 else:
-                    current_parent = pm.createNode("transform", name=component)
+                    current_parent = cmds.createNode("transform", name=component)
                     HierarchyManager._finalize_stub_node(current_parent)
         return current_parent
 
@@ -1000,7 +1042,7 @@ class HierarchyManager(ptk.LoggingMixin):
                 parent = self._ensure_parent_chain(cleaned_path)
                 # Check if leaf already exists under this specific parent
                 if parent is not None:
-                    parent_long = parent.fullPath()
+                    parent_long = cmds.ls(str(parent), l=True)[0]
                     children = (
                         cmds.listRelatives(
                             parent_long,
@@ -1022,14 +1064,14 @@ class HierarchyManager(ptk.LoggingMixin):
                         )
                         continue
 
-                stub = pm.createNode("transform", name=leaf)
+                stub = cmds.createNode("transform", name=leaf)
                 if parent:
                     self._unlock_if_stub(parent)
-                    pm.parent(stub, parent)
+                    cmds.parent(stub, parent)
                     self._relock_if_stub(parent)
                 self._finalize_stub_node(stub)
-                created.append(stub.nodeName())
-                self.logger.debug(f"Created stub: {stub.fullPath()}")
+                created.append(str(stub).split('|')[-1])
+                self.logger.debug(f"Created stub: {cmds.ls(str(stub), l=True)[0]}")
             except Exception as e:
                 self.logger.warning(f"Failed to create stub for {cleaned_path}: {e}")
 
@@ -1094,7 +1136,7 @@ class HierarchyManager(ptk.LoggingMixin):
     def _unlock_if_stub(node) -> None:
         """Unlock *node* if it was locked by :meth:`_finalize_stub_node`.
 
-        Call before ``pm.delete`` or ``pm.parent`` on a node that may be a
+        Call before ``cmds.delete`` or ``cmds.parent`` on a node that may be a
         locked stub.  Safe to call on any node (non-stubs are ignored).
         """
         name = str(node)
@@ -1108,7 +1150,7 @@ class HierarchyManager(ptk.LoggingMixin):
     def _relock_if_stub(node) -> None:
         """Re-lock *node* if it carries the stub attribute.
 
-        Call after ``pm.parent`` to restore the protection that was
+        Call after ``cmds.parent`` to restore the protection that was
         temporarily lifted by :meth:`_unlock_if_stub`.
         """
         name = str(node)
@@ -1179,7 +1221,7 @@ class HierarchyManager(ptk.LoggingMixin):
         try:
             # Use fullPath when available to avoid ambiguity with
             # duplicate short names at different hierarchy levels.
-            name = node.fullPath() if hasattr(node, "fullPath") else str(node)
+            name = cmds.ls(str(node), l=True)[0] if hasattr(node, "fullPath") else str(node)
             if not cmds.objExists(name):
                 return False
             shapes = cmds.listRelatives(name, shapes=True, fullPath=True) or []
@@ -1207,7 +1249,7 @@ class HierarchyManager(ptk.LoggingMixin):
 
             # If the node itself is a locator, start from its parent GRP
             if HierarchyManager._is_locator_transform(current):
-                parent = current.getParent()
+                parent = NodeUtils.get_parent(current, type=None, full_path=True)
                 if parent is not None:
                     root = parent
                     current = parent
@@ -1215,12 +1257,12 @@ class HierarchyManager(ptk.LoggingMixin):
                     return current  # locator at world root
 
             while True:
-                parent = current.getParent()
+                parent = NodeUtils.get_parent(current, type=None, full_path=True)
                 if parent is None:
                     break
                 if HierarchyManager._is_locator_transform(parent):
                     # Parent is a locator — the GRP above it is the root
-                    grandparent = parent.getParent()
+                    grandparent = NodeUtils.get_parent(parent, type=None, full_path=True)
                     if grandparent is not None:
                         root = grandparent
                         current = grandparent
@@ -1270,11 +1312,11 @@ class HierarchyManager(ptk.LoggingMixin):
 
             root = self._find_locator_group_root(node)
             if root is not None:
-                root_full = root.fullPath().lstrip("|")
+                root_full = cmds.ls(str(root), l=True)[0].lstrip("|")
                 # Find the cleaned path for this root
                 root_cleaned = None
                 for clean, raw in self.clean_to_raw_current.items():
-                    if raw == root_full or raw == root.fullPath():
+                    if raw == root_full or raw == cmds.ls(str(root), l=True)[0]:
                         root_cleaned = clean
                         break
                 if root_cleaned is None:
@@ -1585,10 +1627,10 @@ class HierarchyManager(ptk.LoggingMixin):
             return moved
 
         # Ensure quarantine group exists
-        if pm.objExists(group):
-            quarantine_grp = pm.PyNode(group)
+        if cmds.objExists(group):
+            quarantine_grp = group
         else:
-            quarantine_grp = pm.createNode("transform", name=group)
+            quarantine_grp = cmds.createNode("transform", name=group)
 
         skipped_animated: List[str] = []
         for cleaned_path in needs_move:
@@ -1602,9 +1644,9 @@ class HierarchyManager(ptk.LoggingMixin):
                 skipped_animated.append(cleaned_path)
                 continue
             try:
-                pm.parent(node, quarantine_grp)
-                moved.append(node.nodeName())
-                self.logger.debug(f"Quarantined: {node.fullPath()}")
+                cmds.parent(str(node), quarantine_grp)
+                moved.append(str(node).split('|')[-1])
+                self.logger.debug(f"Quarantined: {cmds.ls(str(node), l=True)[0]}")
             except Exception as e:
                 self.logger.warning(f"Failed to quarantine {cleaned_path}: {e}")
 
@@ -1672,9 +1714,10 @@ class HierarchyManager(ptk.LoggingMixin):
                     continue
 
             try:
-                old_name = node.nodeName()
-                node.rename(ref_leaf)
-                actual_name = node.nodeName()
+                old_name = str(node).split('|')[-1]
+                # Use _rename helper \u2014 handles both node (in-place mutation)
+                # and string (cmds.rename) inputs.
+                actual_name = _rename(node, ref_leaf)
                 renamed.append(actual_name)
                 self.logger.debug(f"Renamed: '{old_name}' \u2192 '{actual_name}'")
             except Exception as e:
@@ -1729,31 +1772,33 @@ class HierarchyManager(ptk.LoggingMixin):
                 continue
 
             try:
-                old_parent = node.getParent()
+                old_parent = NodeUtils.get_parent(node, type=None, full_path=True)
                 target_parent = self._ensure_parent_chain(reference_path)
                 if target_parent:
                     self._unlock_if_stub(target_parent)
-                    pm.parent(node, target_parent)
+                    cmds.parent(str(node), str(target_parent))
                     self._relock_if_stub(target_parent)
                 else:
-                    pm.parent(node, world=True)
-                fixed.append(node.nodeName())
-                self.logger.debug(f"Reparented: {node.nodeName()} -> {node.fullPath()}")
+                    cmds.parent(str(node), world=True)
+                fixed.append(str(node).split('|')[-1])
+                self.logger.debug(f"Reparented: {str(node).split('|')[-1]} -> {cmds.ls(str(node), l=True)[0]}")
 
-                # Clean up now-empty source parent (avoids leftover shells)
-                if old_parent and old_parent.exists():
-                    children = old_parent.getChildren(type="transform")
-                    shapes = old_parent.getShapes()
+                # Clean up now-empty source parent (avoids leftover shells).
+                # old_parent is a string (cmds.listRelatives) or None — validate
+                # via cmds.objExists, not node .exists().
+                if old_parent and cmds.objExists(str(old_parent)):
+                    children = NodeUtils.get_children(old_parent, type="transform")
+                    shapes = NodeUtils.get_shapes(old_parent)
                     if not children and not shapes:
                         if HierarchyManager._has_animation_data(old_parent):
                             self.logger.debug(
                                 f"Preserved empty parent "
-                                f"'{old_parent.nodeName()}' (has animation data)"
+                                f"'{str(old_parent).split('|')[-1]}' (has animation data)"
                             )
                         else:
-                            old_name = old_parent.nodeName()
+                            old_name = str(old_parent).split('|')[-1]
                             HierarchyManager._unlock_if_stub(old_parent)
-                            pm.delete(old_parent)
+                            cmds.delete(str(old_parent))
                             self.logger.debug(
                                 f"Deleted empty source parent: {old_name}"
                             )
@@ -1886,7 +1931,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
         for i, obj in enumerate(objects_to_process):
             try:
-                if not obj.exists():
+                if not cmds.objExists(str(obj)):
                     self.logger.warning(f"Object {obj} no longer exists, skipping")
                     continue
 
@@ -1909,26 +1954,26 @@ class ObjectSwapper(ptk.LoggingMixin):
         # Build set of all object paths for quick lookup
         for obj in objects:
             try:
-                object_paths.add(obj.fullPath())
+                object_paths.add(cmds.ls(str(obj), l=True)[0])
             except Exception:
                 continue
 
         # Check each object to see if it's a root (no parent in the selected set)
         for obj in objects:
             try:
-                obj_path = obj.fullPath()
+                obj_path = cmds.ls(str(obj), l=True)[0]
                 is_root = True
 
                 # Check if any parent of this object is also in the selected set
-                current = obj.getParent()
+                current = NodeUtils.get_parent(obj, type=None, full_path=True)
                 while current and is_root:
-                    parent_path = current.fullPath()
+                    parent_path = cmds.ls(str(current), l=True)[0]
                     if parent_path in object_paths:
                         is_root = (
                             False  # This object is a child of another selected object
                         )
                         break
-                    current = current.getParent()
+                    current = NodeUtils.get_parent(current, type=None, full_path=True)
 
                 if is_root:
                     root_objects.append(obj)
@@ -1954,11 +1999,11 @@ class ObjectSwapper(ptk.LoggingMixin):
         """Recursively collect an object and all its transform children."""
         try:
             # Check if object still exists before processing
-            if not obj.exists():
+            if not cmds.objExists(str(obj)):
                 self.logger.debug(f"Object {obj} no longer exists, skipping")
                 return
 
-            obj_name = obj.fullPath()
+            obj_name = cmds.ls(str(obj), l=True)[0]
             if obj_name in processed_set:
                 return
 
@@ -1966,7 +2011,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             result_list.append(obj)
 
             # Get all transform children
-            children = obj.getChildren(type="transform")
+            children = NodeUtils.get_children(obj, type="transform")
             for child in children:
                 self._collect_object_and_children(child, result_list, processed_set)
 
@@ -1980,7 +2025,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         ``_process_with_hierarchy*`` / ``_process_as_root_object`` methods.
 
         Args:
-            obj: PyMEL transform node from the imported namespace.
+            obj: Transform node name from the imported namespace.
             clean_name: Namespace-stripped leaf name for the object.
             merge: When True (Merge Hierarchies mode), existing objects with
                 the same name are replaced.  When False (Add to Scene mode),
@@ -2013,7 +2058,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         if not HierarchyManager._has_animation_data(existing, check_descendants=True):
             # No animation at all — safe to delete unconditionally
             HierarchyManager._unlock_if_stub(existing)
-            pm.delete(existing)
+            cmds.delete(str(existing))
             return True
 
         classification = HierarchyManager._classify_animation(existing)
@@ -2067,7 +2112,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             f"from '{name}' to replacement ({transfer_result['method']})"
         )
         HierarchyManager._unlock_if_stub(existing)
-        pm.delete(existing)
+        cmds.delete(str(existing))
         return True
 
     # -- hierarchy (pull_children=True) --------------------------------
@@ -2079,12 +2124,12 @@ class ObjectSwapper(ptk.LoggingMixin):
         try:
             # In merge mode, delete any pre-existing object with the same
             # name so the pulled version can take its place.
-            if merge and pm.objExists(clean_name):
-                existing = pm.PyNode(clean_name)
+            if merge and cmds.objExists(clean_name):
+                existing = clean_name
                 self.logger.debug(f"Replacing existing object: {clean_name}")
                 if not self._safe_merge_delete(existing, obj):
                     try:
-                        pm.delete(obj)
+                        cmds.delete(str(obj))
                     except Exception:
                         pass
                     return
@@ -2098,8 +2143,8 @@ class ObjectSwapper(ptk.LoggingMixin):
             self._cleanup_namespaces(obj, allow_auto_rename=allow_auto_rename)
 
             # Final rename of the root if needed (after namespace removal).
-            if obj.nodeName() != clean_name:
-                obj.rename(clean_name)
+            if str(obj).split('|')[-1] != clean_name:
+                _rename(obj, clean_name)
 
         except Exception as e:
             self.logger.warning(f"Hierarchy integration failed for {clean_name}: {e}")
@@ -2114,12 +2159,12 @@ class ObjectSwapper(ptk.LoggingMixin):
     ):
         """Pull a single object (no children) into the scene."""
         try:
-            if merge and pm.objExists(clean_name):
-                existing = pm.PyNode(clean_name)
+            if merge and cmds.objExists(clean_name):
+                existing = clean_name
                 self.logger.debug(f"Replacing existing object: {clean_name}")
                 if not self._safe_merge_delete(existing, obj):
                     try:
-                        pm.delete(obj)
+                        cmds.delete(str(obj))
                     except Exception:
                         pass
                     return
@@ -2130,14 +2175,14 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Single objects don't carry a subtree, but may still have a
             # namespace prefix that needs stripping.
-            if ":" in obj.nodeName():
+            if ":" in str(obj).split('|')[-1]:
                 _rename_node_removing_namespace(
                     obj, allow_maya_auto_rename=allow_auto_rename, logger=self.logger
                 )
 
-            if obj.nodeName() != clean_name:
-                obj.rename(clean_name)
-                actual = obj.nodeName()
+            if str(obj).split('|')[-1] != clean_name:
+                _rename(obj, clean_name)
+                actual = str(obj).split('|')[-1]
                 if actual != clean_name:
                     self.logger.debug(f"Maya auto-renamed to: {actual}")
 
@@ -2156,37 +2201,41 @@ class ObjectSwapper(ptk.LoggingMixin):
         component, and ensures each ancestor exists.  Finally parents *obj*
         under the deepest ancestor (or at world if there are none).
         """
-        original_path = obj.fullPath()
+        original_path = cmds.ls(str(obj), l=True)[0]
         path_components = [
             get_clean_node_name_from_string(c) for c in original_path.split("|") if c
         ]
 
         if len(path_components) <= 1:
             # Root-level object — just parent to world.
-            pm.parent(obj, world=True)
+            try:
+                cmds.parent(str(obj), world=True)
+            except RuntimeError:
+                # Already parented to world.
+                pass
             return
 
         # Ensure each ancestor exists (everything except the leaf).
         current_parent = None
         for component_name in path_components[:-1]:
-            if pm.objExists(component_name):
-                current_parent = pm.PyNode(component_name)
+            if cmds.objExists(component_name):
+                current_parent = component_name
             else:
-                parent_obj = pm.createNode("transform", name=component_name)
+                parent_obj = cmds.createNode("transform", name=component_name)
                 if current_parent:
-                    pm.parent(parent_obj, current_parent)
+                    cmds.parent(parent_obj, current_parent)
                 current_parent = parent_obj
 
         if current_parent:
-            pm.parent(obj, current_parent)
+            cmds.parent(str(obj), str(current_parent))
         else:
-            pm.parent(obj, world=True)
+            cmds.parent(str(obj), world=True)
 
     def _cleanup_namespaces(self, obj, *, allow_auto_rename: bool):
         """Strip temp-import namespaces from *obj*'s hierarchy and materials."""
-        if ":" not in obj.nodeName():
+        if ":" not in str(obj).split('|')[-1]:
             return
-        self.logger.debug(f"Removing namespace from hierarchy under {obj.nodeName()}")
+        self.logger.debug(f"Removing namespace from hierarchy under {str(obj).split('|')[-1]}")
         self._remove_namespace_from_hierarchy(
             obj, allow_maya_auto_rename=allow_auto_rename
         )
@@ -2197,9 +2246,15 @@ class ObjectSwapper(ptk.LoggingMixin):
     @staticmethod
     def _place_at_root(obj, clean_name: str):
         """Last-resort fallback: parent *obj* to world and rename."""
-        pm.parent(obj, world=True)
-        if obj.nodeName() != clean_name:
-            obj.rename(clean_name)
+        if not str(obj) or not cmds.objExists(str(obj)):
+            return
+        try:
+            cmds.parent(str(obj), world=True)
+        except RuntimeError:
+            # Already at world.
+            pass
+        if str(obj).split('|')[-1] != clean_name:
+            _rename(obj, clean_name)
 
     def _remove_namespace_from_hierarchy(self, root_obj, allow_maya_auto_rename=False):
         """Remove namespace from an entire hierarchy of objects.
@@ -2223,7 +2278,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             for obj in all_objects:
                 try:
-                    current_name = obj.nodeName()
+                    current_name = str(obj).split('|')[-1]
                     if ":" in current_name:
                         # Remove namespace prefix
                         clean_name = current_name.split(":")[-1]
@@ -2233,7 +2288,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             # Maya will automatically add suffixes like INTERACTIVE1, INTERACTIVE2, etc.
                             try:
                                 obj.rename(clean_name)
-                                final_name = obj.nodeName()
+                                final_name = str(obj).split('|')[-1]
                                 if final_name != clean_name:
                                     self.logger.debug(
                                         f"Maya auto-renamed {current_name} to {final_name}"
@@ -2250,10 +2305,10 @@ class ObjectSwapper(ptk.LoggingMixin):
                             # For "Merge Hierarchies" mode: Use manual conflict resolution
                             # Only rename if the clean name doesn't already exist
                             if (
-                                not pm.objExists(clean_name)
-                                or pm.PyNode(clean_name) == obj
+                                not cmds.objExists(clean_name)
+                                or _full_path(clean_name) == _full_path(obj)
                             ):
-                                obj.rename(clean_name)
+                                _rename(obj, clean_name)
                                 self.logger.debug(
                                     f"Renamed {current_name} to {clean_name}"
                                 )
@@ -2261,7 +2316,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 # Find a unique name with _1, _2, etc.
                                 counter = 1
                                 unique_name = f"{clean_name}_{counter}"
-                                while pm.objExists(unique_name):
+                                while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
                                 obj.rename(unique_name)
@@ -2300,7 +2355,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             # Get shading engines connected to this shape
                             shading_groups = shape.outputs(type="shadingEngine")
                             for sg in shading_groups:
-                                sg_name = sg.nodeName()
+                                sg_name = str(sg).split('|')[-1]
                                 if ":" in sg_name and sg_name not in [
                                     "initialShadingGroup",
                                     "initialParticleSE",
@@ -2318,7 +2373,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
                                     for mat in materials:
                                         if mat and hasattr(mat, "nodeType"):
-                                            mat_name = mat.nodeName()
+                                            mat_name = str(mat).split('|')[-1]
                                             if ":" in mat_name and mat_name not in [
                                                 "lambert1",
                                                 "particleCloud1",
@@ -2333,7 +2388,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                                         if node and hasattr(
                                                             node, "nodeType"
                                                         ):
-                                                            node_name = node.nodeName()
+                                                            node_name = str(node).split('|')[-1]
                                                             if ":" in node_name:
                                                                 materials_to_process.add(
                                                                     node
@@ -2358,14 +2413,14 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Process materials first
             for material in materials_to_process:
                 try:
-                    current_name = material.nodeName()
+                    current_name = str(material).split('|')[-1]
                     if ":" in current_name:
                         clean_name = current_name.split(":")[-1]
 
                         if allow_maya_auto_rename:
                             try:
                                 material.rename(clean_name)
-                                final_name = material.nodeName()
+                                final_name = str(material).split('|')[-1]
                                 self.logger.debug(
                                     f"Renamed material {current_name} to {final_name}"
                                 )
@@ -2375,7 +2430,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 )
                         else:
                             # Manual conflict resolution for materials
-                            if not pm.objExists(clean_name):
+                            if not cmds.objExists(clean_name):
                                 material.rename(clean_name)
                                 self.logger.debug(
                                     f"Renamed material {current_name} to {clean_name}"
@@ -2383,7 +2438,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             else:
                                 counter = 1
                                 unique_name = f"{clean_name}_{counter}"
-                                while pm.objExists(unique_name):
+                                while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
                                 material.rename(unique_name)
@@ -2397,14 +2452,14 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Process shading engines
             for sg in shading_engines_to_process:
                 try:
-                    current_name = sg.nodeName()
+                    current_name = str(sg).split('|')[-1]
                     if ":" in current_name:
                         clean_name = current_name.split(":")[-1]
 
                         if allow_maya_auto_rename:
                             try:
                                 sg.rename(clean_name)
-                                final_name = sg.nodeName()
+                                final_name = str(sg).split('|')[-1]
                                 self.logger.debug(
                                     f"Renamed shading engine {current_name} to {final_name}"
                                 )
@@ -2414,7 +2469,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 )
                         else:
                             # Manual conflict resolution for shading engines
-                            if not pm.objExists(clean_name):
+                            if not cmds.objExists(clean_name):
                                 sg.rename(clean_name)
                                 self.logger.debug(
                                     f"Renamed shading engine {current_name} to {clean_name}"
@@ -2422,7 +2477,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                             else:
                                 counter = 1
                                 unique_name = f"{clean_name}_{counter}"
-                                while pm.objExists(unique_name):
+                                while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
                                 sg.rename(unique_name)

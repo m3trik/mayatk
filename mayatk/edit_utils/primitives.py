@@ -4,8 +4,9 @@ This module provides functionality for creating various primitive objects
 with flexible parameter handling.
 """
 
+import maya.cmds as cmds
+import maya.mel as mel
 import math
-import pymel.core as pm
 from typing import Optional, List
 
 # Import required utilities
@@ -48,7 +49,7 @@ class Primitives:
         translate = kwargs.pop("translate", False)
         axis = kwargs.pop("axis", [0, 90, 0])
 
-        selection = pm.selected()
+        selection = cmds.ls(selection=True) or []
 
         # Define primitive creation functions with default parameters
         def create_poly_cube(**kw):
@@ -62,7 +63,7 @@ class Primitives:
                 "subdivisionsZ": 1,
             }
             defaults.update(kw)
-            return pm.polyCube(**defaults)
+            return cmds.polyCube(**defaults)
 
         def create_poly_sphere(**kw):
             defaults = {
@@ -72,7 +73,7 @@ class Primitives:
                 "subdivisionsY": 12,
             }
             defaults.update(kw)
-            return pm.polySphere(**defaults)
+            return cmds.polySphere(**defaults)
 
         def create_poly_cylinder(**kw):
             defaults = {
@@ -84,7 +85,7 @@ class Primitives:
                 "subdivisionsZ": 1,
             }
             defaults.update(kw)
-            return pm.polyCylinder(**defaults)
+            return cmds.polyCylinder(**defaults)
 
         def create_poly_plane(**kw):
             defaults = {
@@ -95,7 +96,7 @@ class Primitives:
                 "subdivisionsY": 1,
             }
             defaults.update(kw)
-            return pm.polyPlane(**defaults)
+            return cmds.polyPlane(**defaults)
 
         def create_circle(**kw):
             defaults = {"axis": "y", "numPoints": 12, "radius": 5, "mode": 0}
@@ -112,7 +113,7 @@ class Primitives:
                 "subdivisionsZ": 1,
             }
             defaults.update(kw)
-            return pm.polyCone(**defaults)
+            return cmds.polyCone(**defaults)
 
         def create_poly_pyramid(**kw):
             defaults = {
@@ -123,7 +124,7 @@ class Primitives:
                 "subdivisionsCaps": 1,
             }
             defaults.update(kw)
-            return pm.polyPyramid(**defaults)
+            return cmds.polyPyramid(**defaults)
 
         def create_poly_torus(**kw):
             defaults = {
@@ -135,7 +136,7 @@ class Primitives:
                 "subdivisionsY": 5,
             }
             defaults.update(kw)
-            return pm.polyTorus(**defaults)
+            return cmds.polyTorus(**defaults)
 
         def create_poly_helix(**kw):
             defaults = {
@@ -149,7 +150,7 @@ class Primitives:
                 "subdivisionsCaps": 0,
             }
             defaults.update(kw)
-            return pm.polyHelix(**defaults)
+            return cmds.polyHelix(**defaults)
 
         def create_poly_pipe(**kw):
             defaults = {
@@ -161,15 +162,15 @@ class Primitives:
                 "subdivisionsCaps": 1,
             }
             defaults.update(kw)
-            return pm.polyPipe(**defaults)
+            return cmds.polyPipe(**defaults)
 
         def create_geosphere(**kw):
             defaults = {"axis": axis, "radius": 5, "sideLength": 5, "polyType": 0}
             defaults.update(kw)
-            return pm.polyPrimitive(**defaults)
+            return cmds.polyPrimitive(**defaults)
 
         def create_platonic_solids(**kw):
-            return pm.mel.eval("performPolyPrimitive PlatonicSolid 0;")
+            return mel.eval("performPolyPrimitive PlatonicSolid 0;")
 
         def create_nurbs_cube(**kw):
             defaults = {
@@ -184,7 +185,7 @@ class Primitives:
                 "u": 1,
             }
             defaults.update(kw)
-            return pm.nurbsCube(**defaults)
+            return cmds.nurbsCube(**defaults)
 
         def create_nurbs_sphere(**kw):
             defaults = {
@@ -201,7 +202,7 @@ class Primitives:
                 "ax": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.sphere(**defaults)
+            return cmds.sphere(**defaults)
 
         def create_nurbs_cylinder(**kw):
             defaults = {
@@ -219,7 +220,7 @@ class Primitives:
                 "ax": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.cylinder(**defaults)
+            return cmds.cylinder(**defaults)
 
         def create_nurbs_cone(**kw):
             defaults = {
@@ -237,7 +238,7 @@ class Primitives:
                 "ax": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.cone(**defaults)
+            return cmds.cone(**defaults)
 
         def create_nurbs_plane(**kw):
             defaults = {
@@ -251,7 +252,7 @@ class Primitives:
                 "lr": 1,
             }
             defaults.update(kw)
-            return pm.nurbsPlane(**defaults)
+            return cmds.nurbsPlane(**defaults)
 
         def create_nurbs_torus(**kw):
             defaults = {
@@ -270,7 +271,7 @@ class Primitives:
                 "ax": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.torus(**defaults)
+            return cmds.torus(**defaults)
 
         def create_nurbs_circle(**kw):
             defaults = {
@@ -285,7 +286,7 @@ class Primitives:
                 "nr": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.circle(**defaults)
+            return cmds.circle(**defaults)
 
         def create_nurbs_square(**kw):
             defaults = {
@@ -298,7 +299,7 @@ class Primitives:
                 "nr": (0, 1, 0),
             }
             defaults.update(kw)
-            return pm.nurbsSquare(**defaults)
+            return cmds.nurbsSquare(**defaults)
 
         primitives = {
             "polygon": {
@@ -327,12 +328,12 @@ class Primitives:
                 "square": create_nurbs_square,
             },
             "light": {
-                "ambient": lambda **kw: pm.ambientLight(**kw),
-                "directional": lambda **kw: pm.directionalLight(**kw),
-                "point": lambda **kw: pm.pointLight(**kw),
-                "spot": lambda **kw: pm.spotLight(**kw),
-                "area": lambda **kw: pm.shadingNode("areaLight", asLight=True, **kw),
-                "volume": lambda **kw: pm.shadingNode(
+                "ambient": lambda **kw: cmds.ambientLight(**kw),
+                "directional": lambda **kw: cmds.directionalLight(**kw),
+                "point": lambda **kw: cmds.pointLight(**kw),
+                "spot": lambda **kw: cmds.spotLight(**kw),
+                "area": lambda **kw: cmds.shadingNode("areaLight", asLight=True, **kw),
+                "volume": lambda **kw: cmds.shadingNode(
                     "volumeLight", asLight=True, **kw
                 ),
             },
@@ -384,7 +385,7 @@ class Primitives:
         if history:
             # Create Linear NURBS circle to drive the polygon
             # Degree 1 ensures straight edges between points (polygonal shape)
-            curve_trans, curve_shape = pm.circle(
+            curve_trans, curve_shape = cmds.circle(
                 center=(0, 0, 0),
                 normal=ax,
                 radius=radius,
@@ -395,18 +396,18 @@ class Primitives:
 
             # Create planar polygon surface from the curve
             # This creates a single-sided mesh with history
-            mesh_nodes = pm.planarSrf(
-                curve_trans, polygon=1, name=name, pixelError=1
+            mesh_nodes = cmds.planarSrf(
+                curve_trans, polygon=1, name=name, tolerance=1
             )  # [transform, historyNode]
             mesh_trans = mesh_nodes[0]
 
             # Hide the construction curve
-            pm.hide(curve_trans)
+            cmds.hide(curve_trans)
 
             # Match intended position
             if center != [0, 0, 0]:
-                pm.move(mesh_trans, center)
-                pm.move(curve_trans, center)
+                cmds.move(mesh_trans, center)
+                cmds.move(curve_trans, center)
 
             return mesh_nodes
 
@@ -431,12 +432,12 @@ class Primitives:
 
             radian = radian + math.radians(degree)
 
-        node = pm.ls(pm.polyCreateFacet(point=vertexPoints, name=name))
-        pm.polyNormal(node, normalMode=4)  # 4=reverse and propagate
+        node = cmds.ls(cmds.polyCreateFacet(point=vertexPoints, name=name))
+        cmds.polyNormal(node, normalMode=4)  # 4=reverse and propagate
 
         if mode == 1:
-            pm.polySubdivideFacet(divisions=1, mode=1)
+            cmds.polySubdivideFacet(divisions=1, mode=1)
         elif mode == 2:
-            pm.polySubdivideFacet(divisions=1, mode=0)
+            cmds.polySubdivideFacet(divisions=1, mode=0)
 
         return node

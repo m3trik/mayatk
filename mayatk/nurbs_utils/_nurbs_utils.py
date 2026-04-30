@@ -1,11 +1,12 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from typing import List, Tuple, Union, Optional
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
@@ -50,8 +51,8 @@ class NurbsUtils(ptk.HelpMixin):
         Returns:
                 (obj) nurbsToPoly history node.
         """
-        # pm.undoInfo(openChunk=1)
-        sel = pm.ls(sl=True)
+        # cmds.undoInfo(openChunk=1)
+        sel = cmds.ls(sl=True)
 
         if len(sel) > 1:
             if angle_loft_between_two_curves:
@@ -71,7 +72,7 @@ class NurbsUtils(ptk.HelpMixin):
                     reverseSurfaceNormals=reverseSurfaceNormals,
                 )
             else:
-                result = pm.loft(
+                result = cmds.loft(
                     sel,
                     u=uniform,
                     c=close,
@@ -86,7 +87,7 @@ class NurbsUtils(ptk.HelpMixin):
             return "# Error: Operation requires the selection of two curves or polygon edge sets. #"
 
         if polygon:  # convert nurb surface to polygon.
-            converted = pm.nurbsToPoly(
+            converted = cmds.nurbsToPoly(
                 result[0],
                 mnd=1,
                 f=3,
@@ -110,12 +111,12 @@ class NurbsUtils(ptk.HelpMixin):
             )
             for obj in result:
                 try:
-                    pm.delete(obj)
+                    cmds.delete(obj)
                 except Exception:
                     pass
             result = converted
 
-        # pm.undoInfo(closeChunk=1)
+        # cmds.undoInfo(closeChunk=1)
         return result
 
     @classmethod
@@ -130,9 +131,10 @@ class NurbsUtils(ptk.HelpMixin):
         Returns:
                 (obj) Bezier curve.
         """
-        # pm.undoInfo(openChunk=1)
-        p1 = pm.objectCenter(start)
-        p2 = pm.objectCenter(end)
+        start = str(start)
+        end = str(end)
+        p1 = cmds.objectCenter(start)
+        p2 = cmds.objectCenter(end)
         hypotenuse = ptk.distance_between_points(p1, p2)
 
         v1, v2 = cls.getCrossProductOfCurves([start, end], normalize=1, values=1)
@@ -163,14 +165,14 @@ class NurbsUtils(ptk.HelpMixin):
             max_vect = ptk.get_vector_from_two_points(p1, p3)
             p1, p2 = p2, p1
 
-        # pm.spaceLocator(position=p1); pm.spaceLocator(position=p2); pm.spaceLocator(position=p3)
+        # cmds.spaceLocator(position=p1); cmds.spaceLocator(position=p2); cmds.spaceLocator(position=p3)
 
         p4 = ptk.move_point_relative(p3, min_dist, max_vect)
-        # pm.spaceLocator(position=p4)
+        # cmds.spaceLocator(position=p4)
         p5 = ptk.get_center_of_two_points(p4, p1)
-        # pm.spaceLocator(position=p5)
+        # cmds.spaceLocator(position=p5)
         p6 = ptk.get_center_of_two_points(p3, p5)
-        # pm.spaceLocator(position=p6)
+        # cmds.spaceLocator(position=p6)
 
         # add weighting to the curve points.
         p1w, p3w, p4w, p2w = [
@@ -180,8 +182,8 @@ class NurbsUtils(ptk.HelpMixin):
             (p2[0], p2[1], p2[2], 1),
         ]
 
-        result = pm.curve(pw=[p1w, p3w, p4w, p2w], k=[0, 0, 0, 1, 1, 1], bezier=1)
-        # pm.undoInfo(closeChunk=1)
+        result = cmds.curve(pw=[p1w, p3w, p4w, p2w], k=[0, 0, 0, 1, 1, 1], bezier=1)
+        # cmds.undoInfo(closeChunk=1)
 
         return result
 
@@ -199,7 +201,7 @@ class NurbsUtils(ptk.HelpMixin):
         Returns:
                 (list) The duplicated objects in order of start to end.
         """
-        # pm.undoInfo(openChunk=1)
+        # cmds.undoInfo(openChunk=1)
         # create a MASH network
         mashNW, _waiter, instNode, distNode = MashToolkit.create_network(
             objects=start,
@@ -207,18 +209,18 @@ class NurbsUtils(ptk.HelpMixin):
             hideOnCreate=False,
         )
 
-        curveNode = pm.ls(mashNW.addNode("MASH_Curve").name)[0]
-        pm.connectAttr(path.worldSpace[0], curveNode.inCurves[0], force=1)
+        curveNode = cmds.ls(mashNW.addNode("MASH_Curve").name)[0]
+        cmds.connectAttr(path.worldSpace[0], curveNode.inCurves[0], force=1)
 
-        pm.setAttr(curveNode.stopAtEnd, 1)  # 0=off, 1=on
-        pm.setAttr(curveNode.clipStart, 0)
-        pm.setAttr(curveNode.clipEnd, 1)
-        pm.setAttr(curveNode.equalSpacing, 1)
-        pm.setAttr(curveNode.timeStep, 1)
-        pm.setAttr(curveNode.curveLengthAffectsSpeed, 1)
+        cmds.setAttr(curveNode.stopAtEnd, 1)  # 0=off, 1=on
+        cmds.setAttr(curveNode.clipStart, 0)
+        cmds.setAttr(curveNode.clipEnd, 1)
+        cmds.setAttr(curveNode.equalSpacing, 1)
+        cmds.setAttr(curveNode.timeStep, 1)
+        cmds.setAttr(curveNode.curveLengthAffectsSpeed, 1)
 
-        pm.setAttr(distNode.pointCount, count)
-        pm.setAttr(distNode.amplitudeX, 0)
+        cmds.setAttr(distNode.pointCount, count)
+        cmds.setAttr(distNode.amplitudeX, 0)
 
         baked_curves = MashToolkit.bake_instancer(mashNW, instNode)
 
@@ -226,8 +228,8 @@ class NurbsUtils(ptk.HelpMixin):
         for curve in reversed(baked_curves):
             result.append(curve)
 
-        pm.delete(mashNW.waiter.name())  # delete the MASH network.
-        # pm.undoInfo(closeChunk=1)
+        cmds.delete(mashNW.waiter.name())  # delete the MASH network.
+        # cmds.undoInfo(closeChunk=1)
 
         return result
 
@@ -259,14 +261,14 @@ class NurbsUtils(ptk.HelpMixin):
         Returns:
                 (list) Loft object name and node name.
         """
-        if pm.objectType(start) == "mesh":  # vs. 'nurbsCurve'
-            start, startNode = pm.polyToCurve(
+        if cmds.objectType(start) == "mesh":  # vs. 'nurbsCurve'
+            start, startNode = cmds.polyToCurve(
                 start, form=2, degree=3, conformToSmoothMeshPreview=True
             )  # extract curve from mesh
         XformUtils.reset_translation(start)  # reset the transforms to world origin.
 
-        if pm.objectType(end) == "mesh":  # vs. 'nurbsCurve'
-            end, endNode = pm.polyToCurve(
+        if cmds.objectType(end) == "mesh":  # vs. 'nurbsCurve'
+            end, endNode = cmds.polyToCurve(
                 end, form=2, degree=3, conformToSmoothMeshPreview=True
             )  # extract curve from mesh
         XformUtils.reset_translation(end)  # reset the transforms to world origin.
@@ -274,7 +276,7 @@ class NurbsUtils(ptk.HelpMixin):
         path = cls.create_curve_between_two_objs(start, end)
         curves = cls.duplicate_along_curve(path, start, count=count)
 
-        result = pm.loft(
+        result = cmds.loft(
             curves,
             u=uniform,
             c=close,
@@ -288,11 +290,11 @@ class NurbsUtils(ptk.HelpMixin):
 
         if cleanup:  # perform cleanup by deleting construction curves.
             try:
-                curves_parent = pm.listRelatives(curves[1], parent=1)
-                pm.delete(curves_parent)
-                pm.delete(end)
-                pm.delete(path)
-                pm.delete(start)
+                curves_parent = cmds.listRelatives(curves[1], parent=1)
+                cmds.delete(curves_parent)
+                cmds.delete(end)
+                cmds.delete(path)
+                cmds.delete(start)
             except Exception as e:
                 print(e)
 
@@ -311,31 +313,31 @@ class NurbsUtils(ptk.HelpMixin):
         Returns:
                 (dict) closest vertex/cv pairs (one pair for each given curve) ex. {<vertex from set1>:<vertex from set2>}.
         """
-        x = pm.ls(x, flatten=True)
+        x = cmds.ls(x, flatten=True)
 
-        npcNode = pm.ls(pm.createNode("nearestPointOnCurve"))[0]
+        npcNode = cmds.ls(cmds.createNode("nearestPointOnCurve"))[0]
 
         result = {}
-        for curve in pm.ls(curves):
-            pm.connectAttr(curve.worldSpace, npcNode.inputCurve, force=1)
+        for curve in cmds.ls(curves):
+            cmds.connectAttr(f"{curve}.worldSpace", f"{npcNode}.inputCurve", force=1)
 
             for i in x:
                 if not isinstance(i, (tuple, list, set)):
-                    pos = pm.pointPosition(i)
+                    pos = cmds.pointPosition(i)
                 else:
                     pos = i
-                pm.setAttr(npcNode.inPosition, pos)
+                cmds.setAttr(f"{npcNode}.inPosition", *pos)
 
                 distance = ptk.distance_between_points(
-                    pos, pm.getAttr(npcNode.position)
+                    pos, cmds.getAttr(f"{npcNode}.position")[0]
                 )
-                p = pm.getAttr(npcNode.parameter)
+                p = cmds.getAttr(f"{npcNode}.parameter")
                 if not tolerance:
                     result[str(i)] = p
                 elif distance < tolerance:
                     result[str(i)] = p
 
-        pm.delete(npcNode)
+        cmds.delete(npcNode)
 
         return result
 
@@ -362,37 +364,38 @@ class NurbsUtils(ptk.HelpMixin):
         ex. filtered = get_cv_info(<curve>, 'normal', <normal>) #filter results for those that match the given value.
         """
         result = {}
-        for curve in pm.ls(c):
-            if ".cv" in str(curve):  # if CV given.
+        for curve in cmds.ls(c):
+            curve = str(curve)
+            if ".cv" in curve:  # if CV given.
                 cvs = curve
-                curve = pm.listRelatives(cvs, parent=1)
+                curve = cmds.listRelatives(cvs, parent=1)
             else:  # if curve(s) given
-                cvs = curve.cv
+                cvs = f"{curve}.cv[*]"
 
             parameters = cls.get_closest_cv(
                 cvs, curve
             )  # use get_closest_cv to get the parameter location for each of the curves CVs.
             for cv, p in parameters.items():
                 if returned_type == "position":  # Get cv position
-                    v = pm.pointOnCurve(curve, parameter=p, position=True)
+                    v = cmds.pointOnCurve(curve, parameter=p, position=True)
                 elif returned_type == "localPosition":
-                    v = pm.getAttr(cv)  # local cv position
+                    v = cmds.getAttr(cv)  # local cv position
                 elif returned_type == "tangent":  # Get cv tangent
-                    v = pm.pointOnCurve(curve, parameter=p, tangent=True)
+                    v = cmds.pointOnCurve(curve, parameter=p, tangent=True)
                 elif returned_type == "normalizedTangent":
-                    v = pm.pointOnCurve(curve, parameter=p, normalizedTangent=True)
+                    v = cmds.pointOnCurve(curve, parameter=p, normalizedTangent=True)
                 elif returned_type == "normal":  # Get cv normal
-                    v = pm.pointOnCurve(curve, parameter=p, normal=True)
+                    v = cmds.pointOnCurve(curve, parameter=p, normal=True)
                 elif returned_type == "normalizedNormal":
-                    v = pm.pointOnCurve(
+                    v = cmds.pointOnCurve(
                         curve, parameter=p, normalizedNormal=True
                     )  # Returns the (x,y,z) normalized normal of curve1 at parameter 0.5.
                 elif returned_type == "curvatureRadius":  # Get cv curvature
-                    v = pm.pointOnCurve(
+                    v = cmds.pointOnCurve(
                         curve, parameter=p, curvatureRadius=True
                     )  # Returns the curvature radius of curve1 at parameter 0.5.
                 elif returned_type == "curvatureCenter":
-                    v = pm.pointOnCurve(curve, parameter=p, curvatureCenter=True)
+                    v = cmds.pointOnCurve(curve, parameter=p, curvatureCenter=True)
                 elif returned_type == "parameter":  # Return the CVs parameter.
                     v = p
                 elif returned_type == "count":  # total number of cv's for the curve.
@@ -440,8 +443,8 @@ class NurbsUtils(ptk.HelpMixin):
                 (dict)(list)
         """
         result = {}
-        for curve in pm.ls(curves):
-            p0 = pm.objectCenter(curve)
+        for curve in cmds.ls(curves):
+            p0 = cmds.objectCenter(curve)
 
             cvPos = cls.get_cv_info(curve, "position")
             cvs = list(cvPos.keys())

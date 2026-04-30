@@ -1,11 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+    import maya.mel as mel
+except ImportError:
+    cmds = None
+
 import os
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 from uitk.widgets.footer import FooterStatusController
 
 # From this package:
@@ -96,7 +99,7 @@ class TexturePathEditorSlots:
         if path and os.path.exists(path):
             os.startfile(path)
         else:
-            pm.warning(f"Source images directory not found: {path}")
+            cmds.warning(f"Source images directory not found: {path}")
 
     def lbl010(self):
         """Set Texture Paths for All File Nodes."""
@@ -107,12 +110,12 @@ class TexturePathEditorSlots:
         if not texture_dir:
             return
 
-        all_file_nodes = pm.ls(type="file")
+        all_file_nodes = cmds.ls(type="file")
         if not all_file_nodes:
-            pm.warning("No file nodes in the scene.")
+            cmds.warning("No file nodes in the scene.")
             return
 
-        pm.displayInfo(f"Setting texture paths to: {texture_dir}")
+        om.MGlobal.displayInfo(f"Setting texture paths to: {texture_dir}")
         MatUtils.remap_texture_paths(file_nodes=all_file_nodes, new_dir=texture_dir)
 
         # Refresh the table widget to show updated paths
@@ -124,7 +127,7 @@ class TexturePathEditorSlots:
 
         all_file_nodes = cmds.ls(type="file")
         if not all_file_nodes:
-            pm.warning("No file nodes in the scene.")
+            cmds.warning("No file nodes in the scene.")
             return
 
         self._find_and_copy_workflow(all_file_nodes)
@@ -133,12 +136,12 @@ class TexturePathEditorSlots:
         """Shared workflow for finding and copying textures.
 
         Parameters:
-            file_nodes: List of file node names (strings) or PyNodes.
+            file_nodes: List of file node names (strings) or nodes.
         """
         from maya import cmds
 
-        # Normalize to string names for performance (avoids PyNode overhead)
-        node_names = [n.name() if hasattr(n, "name") else str(n) for n in file_nodes]
+        # Normalize to string names for performance (avoids node overhead)
+        node_names = [n.split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n) for n in file_nodes]
 
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
@@ -152,7 +155,7 @@ class TexturePathEditorSlots:
             file_nodes=node_names, source_dir=source_dir, recursive=True
         )
         if not found_textures:
-            pm.warning("No textures found.")
+            cmds.warning("No textures found.")
             return
 
         dest_dir = self.sb.dir_dialog(
@@ -190,7 +193,7 @@ class TexturePathEditorSlots:
                     "\\", "/"
                 )
 
-            pm.undoInfo(openChunk=True, chunkName="Remap Found Textures")
+            cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
             try:
                 count = 0
                 for node_name in nodes_to_remap:
@@ -224,20 +227,20 @@ class TexturePathEditorSlots:
                         f"{node_name}.fileTextureName", final_path, type="string"
                     )
                     count += 1
-                pm.displayInfo(f"Remapped {count} file nodes.")
+                om.MGlobal.displayInfo(f"Remapped {count} file nodes.")
             finally:
-                pm.undoInfo(closeChunk=True)
+                cmds.undoInfo(closeChunk=True)
         else:
-            pm.warning("No file nodes matched the copied textures.")
+            cmds.warning("No file nodes matched the copied textures.")
 
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
 
     def lbl013(self):
         """Convert to Relative Paths (Global)"""
-        all_file_nodes = pm.ls(type="file")
+        all_file_nodes = cmds.ls(type="file")
         if not all_file_nodes:
-            pm.warning("No file nodes in the scene.")
+            cmds.warning("No file nodes in the scene.")
             return
         MatUtils.remap_texture_paths(file_nodes=all_file_nodes)
 
@@ -377,19 +380,19 @@ class TexturePathEditorSlots:
                 print(f"TexturePathEditor: Error refreshing table on scene change: {e}")
 
         # Use evalDeferred to coalesce multiple events and ensure scene is ready
-        pm.evalDeferred(do_refresh)
+        cmds.evalDeferred(do_refresh)
 
     def _refresh_table_content(self, widget):
         """Refresh the table content with current scene data."""
         # Show wait cursor during refresh for large scenes
-        pm.waitCursor(state=True)
+        cmds.waitCursor(state=True)
         try:
             widget.setUpdatesEnabled(False)
             widget.blockSignals(
                 True
             )  # Prevent cellChanged from firing during population
             widget.clear()
-            # Optimization: Request strings only to avoid PyNode creation overhead
+            # Optimization: Request strings only to avoid node creation overhead
             rows = MatUtils.get_file_nodes(
                 return_type="shaderName|path|fileNodeName", raw=True
             )
@@ -398,7 +401,7 @@ class TexturePathEditorSlots:
 
             formatted = []
             for shader_name, path, file_node_name in rows:
-                # Pass strings for display; PyNodes will be resolved on-demand by context menu actions
+                # Pass strings for display; nodes will be resolved on-demand by context menu actions
                 formatted.append([shader_name, path, file_node_name])
 
             # Populate table (triggers cellChanged if signals not blocked)
@@ -429,7 +432,7 @@ class TexturePathEditorSlots:
         finally:
             widget.blockSignals(False)
             widget.setUpdatesEnabled(True)
-            pm.waitCursor(state=False)
+            cmds.waitCursor(state=False)
 
         if self._footer_controller:
             self._footer_controller.update()
@@ -513,18 +516,18 @@ class TexturePathEditorSlots:
         shader_node = None
         if shader_name:
             try:
-                shader_node = pm.PyNode(shader_name)
-            except (pm.MayaNodeError, TypeError):
+                shader_node = shader_name
+            except (cmds.MayaNodeError, TypeError):
                 shader_node = None
 
-        # Resolve actual PyNode for the file node column payload
+        # Resolve actual node for the file node column payload
         if isinstance(file_node_data, (list, tuple)):
             file_node_data = next(
                 (value for value in file_node_data if hasattr(value, "name")), None
             )
         elif file_node_data and not hasattr(file_node_data, "name"):
             try:
-                file_node_data = pm.PyNode(file_node_data)
+                file_node_data = file_node_data
             except Exception:
                 file_node_data = None
 
@@ -536,7 +539,7 @@ class TexturePathEditorSlots:
         elif shader_node:
             # Use listHistory directly on the shader - much faster than get_file_nodes
             try:
-                history = pm.listHistory(shader_node, type="file") or []
+                history = cmds.ls(cmds.listHistory(shader_node) or [], type="file") or []
                 material_file_nodes = list(dict.fromkeys(history))  # unique, ordered
             except Exception:
                 material_file_nodes = []
@@ -566,7 +569,7 @@ class TexturePathEditorSlots:
 
         if not selection:
             if warn_on_empty:
-                pm.displayWarning("No row selected.")
+                cmds.warning("No row selected.")
             return []
 
         contexts = []
@@ -579,7 +582,7 @@ class TexturePathEditorSlots:
             contexts.append(context)
 
         if require_file_nodes and not contexts:
-            pm.displayWarning("No valid file nodes found in the selected row(s).")
+            cmds.warning("No valid file nodes found in the selected row(s).")
             return []
 
         return contexts
@@ -652,7 +655,7 @@ class TexturePathEditorSlots:
 
         # Deduplicate
         nodes_to_delete = list(set(nodes_to_delete))
-        node_names = [n.name() for n in nodes_to_delete]
+        node_names = [n.split('|')[-1].split(':')[-1] for n in nodes_to_delete]
 
         count = len(nodes_to_delete)
         msg = f"Are you sure you want to delete {count} file node(s)?"
@@ -663,11 +666,11 @@ class TexturePathEditorSlots:
 
         if reply == "Yes":
             try:
-                pm.delete(nodes_to_delete)
-                pm.displayInfo(f"Deleted {count} file node(s).")
+                cmds.delete(nodes_to_delete)
+                om.MGlobal.displayInfo(f"Deleted {count} file node(s).")
                 self.ui.tbl000.init_slot()
             except Exception as e:
-                pm.displayError(f"Failed to delete file nodes: {str(e)}")
+                om.MGlobal.displayError(f"Failed to delete file nodes: {str(e)}")
 
     def select_file_node(self, selection=None):
         """Select the file nodes from the selected rows."""
@@ -687,10 +690,10 @@ class TexturePathEditorSlots:
             return
 
         try:
-            pm.select(nodes_to_select, r=True)
-            pm.displayInfo(f"Selected {len(nodes_to_select)} file node(s).")
+            cmds.select(nodes_to_select, r=True)
+            om.MGlobal.displayInfo(f"Selected {len(nodes_to_select)} file node(s).")
         except Exception as e:
-            pm.displayError(f"Failed to select file nodes: {str(e)}")
+            om.MGlobal.displayError(f"Failed to select file nodes: {str(e)}")
 
     def row_show_in_hypershade(self, selection=None):
         """Graph the selected file node in the Hypershade."""
@@ -733,14 +736,14 @@ class TexturePathEditorSlots:
                 print(f"Failed to query objects for '{shader_name}': {e}")
 
         if not all_assigned_objects:
-            pm.displayWarning("No scene objects found for the selected materials.")
+            cmds.warning("No scene objects found for the selected materials.")
             return
 
         try:
-            pm.select(all_assigned_objects, r=True)
-            pm.displayInfo(f"Selected objects for {len(contexts)} material(s).")
+            cmds.select(all_assigned_objects, r=True)
+            om.MGlobal.displayInfo(f"Selected objects for {len(contexts)} material(s).")
         except Exception as e:
-            pm.displayError(f"Failed to select objects: {str(e)}")
+            om.MGlobal.displayError(f"Failed to select objects: {str(e)}")
 
     def remap_to_relative(self, selection=None):
         """Remap the selected file nodes' texture paths to relative paths."""
@@ -751,12 +754,12 @@ class TexturePathEditorSlots:
         try:
             self._remap_context_textures(contexts)
 
-            pm.displayInfo(
+            om.MGlobal.displayInfo(
                 f"Remapped textures for {len(contexts)} item(s) to relative paths."
             )
             self.ui.tbl000.init_slot()
         except Exception as e:
-            pm.displayError(f"Failed to remap file nodes to relative path: {str(e)}")
+            om.MGlobal.displayError(f"Failed to remap file nodes to relative path: {str(e)}")
 
     def row_set_texture_directory(self, selection=None):
         contexts = self._get_selected_contexts(selection)
@@ -783,7 +786,7 @@ class TexturePathEditorSlots:
             all_file_nodes.extend(context["file_nodes"])
 
         if not all_file_nodes:
-            pm.warning("No file nodes found in selection.")
+            cmds.warning("No file nodes found in selection.")
             return
 
         self._find_and_copy_workflow(all_file_nodes)
@@ -797,15 +800,15 @@ class TexturePathEditorSlots:
             if shader_node and hasattr(shader_node, "rename"):
                 try:
                     shader_node.rename(value)
-                    pm.displayInfo(f"Renamed shader to: {value}")
+                    om.MGlobal.displayInfo(f"Renamed shader to: {value}")
                 except Exception as e:
-                    pm.warning(f"Failed to rename shader: {e}")
+                    cmds.warning(f"Failed to rename shader: {e}")
 
         elif col == 1:  # File path update
             file_node = tbl.item_data(row, 2)
             if file_node and hasattr(file_node, "fileTextureName"):
                 file_node.fileTextureName.set(value)
-                pm.displayInfo(f"Updated texture path to: {value}")
+                om.MGlobal.displayInfo(f"Updated texture path to: {value}")
                 tbl.apply_formatting()  # Recheck path formatting after update
                 if self._footer_controller:
                     self._footer_controller.update()
@@ -815,25 +818,25 @@ class TexturePathEditorSlots:
             if file_node and hasattr(file_node, "rename"):
                 try:
                     file_node.rename(value)
-                    pm.displayInfo(f"Renamed file node to: {value}")
+                    om.MGlobal.displayInfo(f"Renamed file node to: {value}")
                 except Exception as e:
-                    pm.warning(f"Failed to rename file node: {e}")
+                    cmds.warning(f"Failed to rename file node: {e}")
 
         if col in (0, 2):
             node_name = value
-            if pm.objExists(node_name):
-                pm.select(node_name, r=True)
+            if cmds.objExists(node_name):
+                cmds.select(node_name, r=True)
                 try:
-                    pm.mel.eval("NodeEditorWindow;")
+                    mel.eval("NodeEditorWindow;")
                     # Attempt to find the Node Editor panel
-                    editors = pm.getPanel(scriptType="nodeEditorPanel")
+                    editors = cmds.getPanel(scriptType="nodeEditorPanel")
                     if editors:
                         # Use the first found editor
                         editor_name = editors[0] + "NodeEditorEd"
-                        pm.mel.eval(f"nodeEditor -e -f true {editor_name};")
+                        mel.eval(f"nodeEditor -e -f true {editor_name};")
                     else:
                         # Fallback to default name if query fails
-                        pm.mel.eval("nodeEditor -e -f true nodeEditor1;")
+                        mel.eval("nodeEditor -e -f true nodeEditor1;")
                 except Exception:
                     # Fail silently if Node Editor interaction doesn't work (non-critical)
                     pass
@@ -854,7 +857,7 @@ class TexturePathEditorSlots:
 
     def lbl014(self):
         """Select table rows associated with selected objects."""
-        selection = pm.ls(sl=True, flatten=True)
+        selection = cmds.ls(sl=True, flatten=True)
         if not selection:
             self.sb.message_box("Select object(s) first.")
             return
@@ -862,7 +865,7 @@ class TexturePathEditorSlots:
         # Get materials from selection
         mats = MatUtils.get_mats(selection)
         if not mats:
-            pm.warning("No materials found on selected objects.")
+            cmds.warning("No materials found on selected objects.")
             return
 
         # OPTIMIZATION: Get file nodes directly via listHistory on materials
@@ -870,14 +873,14 @@ class TexturePathEditorSlots:
         target_node_names = set()
         for mat in mats:
             try:
-                file_nodes = pm.listHistory(mat, type="file") or []
+                file_nodes = cmds.ls(cmds.listHistory(mat) or [], type="file") or []
                 for fn in file_nodes:
-                    target_node_names.add(fn.name())
+                    target_node_names.add(fn.split('|')[-1].split(':')[-1])
             except Exception:
                 pass
 
         if not target_node_names:
-            pm.warning("No file nodes found for selected objects.")
+            cmds.warning("No file nodes found for selected objects.")
             return
 
         table = self.ui.tbl000
@@ -892,7 +895,7 @@ class TexturePathEditorSlots:
                 continue
 
             node_name = (
-                node_data.name() if hasattr(node_data, "name") else str(node_data)
+                node_data.split('|')[-1].split(':')[-1] if hasattr(node_data, "name") else str(node_data)
             )
 
             if node_name in target_node_names:
@@ -907,7 +910,7 @@ class TexturePathEditorSlots:
                         table.scrollToItem(path_item)
 
         if selected_count > 0:
-            pm.displayInfo(f"Selected {selected_count} rows in the table.")
+            om.MGlobal.displayInfo(f"Selected {selected_count} rows in the table.")
 
     def lbl015(self):
         """Select Broken Paths"""
@@ -951,12 +954,12 @@ class TexturePathEditorSlots:
                 # Scroll to first selected
                 widget.scrollToItem(widget.item(rows_to_select[0], 1))
 
-                pm.displayInfo(f"Selected {len(rows_to_select)} broken paths.")
+                om.MGlobal.displayInfo(f"Selected {len(rows_to_select)} broken paths.")
             else:
-                pm.displayInfo("No broken paths found.")
+                om.MGlobal.displayInfo("No broken paths found.")
 
         except Exception as e:
-            pm.warning(f"Error selecting broken paths: {e}")
+            cmds.warning(f"Error selecting broken paths: {e}")
         finally:
             widget.setSelectionMode(selection_mode)
 

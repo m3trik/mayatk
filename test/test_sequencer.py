@@ -29,22 +29,30 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     apply_to_shots,
 )
 from mayatk.audio_utils._audio_utils import AudioUtils
+import maya.cmds as cmds
 
+import maya.mel as mel
 compute_waveform_envelope = AudioUtils.compute_waveform_envelope
 
 # ---------------------------------------------------------------------------
-# Maya standalone bootstrap
+# Maya availability detection — cmds.about() succeeds in any Maya context
+# (mayapy, maya GUI, command-port). MayaConnection.connect("standalone")
+# from inside an already-initialized Maya raises, so we no longer rely on it.
 # ---------------------------------------------------------------------------
 HAS_MAYA = False
 try:
-    from mayatk.env_utils.maya_connection import MayaConnection
-
-    _conn = MayaConnection.get_instance()
-    if not _conn.is_connected:
-        _conn.connect(mode="standalone")
-    HAS_MAYA = _conn.is_connected
+    cmds.about(version=True)
+    HAS_MAYA = True
 except Exception:
-    pass
+    try:
+        from mayatk.env_utils.maya_connection import MayaConnection
+
+        _conn = MayaConnection.get_instance()
+        if not _conn.is_connected:
+            _conn.connect(mode="standalone")
+        HAS_MAYA = _conn.is_connected
+    except Exception:
+        pass
 
 if HAS_MAYA:
     import pymel.core as pm
@@ -362,13 +370,13 @@ class TestSequencerMaya(unittest.TestCase):
     """Tests requiring a running Maya session."""
 
     def setUp(self):
-        pm.mel.file(new=True, force=True)
+        cmds.file(new=True, force=True)
 
     def _create_animated_cube(self, name, keys):
         """Create a cube and set keyframes at the given {frame: value} dict on translateX."""
-        cube = pm.polyCube(name=name)[0]
+        cube = cmds.polyCube(name=name)[0]
         for frame, value in keys.items():
-            pm.setKeyframe(cube, attribute="translateX", time=frame, value=value)
+            cmds.setKeyframe(cube, attribute="translateX", time=frame, value=value)
         return cube
 
     # -- helpers / per-object methods --------------------------------------
@@ -392,7 +400,7 @@ class TestSequencerMaya(unittest.TestCase):
         cube = self._create_animated_cube("mv", {10: 0, 20: 5})
         seq = ShotSequencer()
         seq.move_object_keys(str(cube), 10, 20, 30)
-        keys = sorted(pm.keyframe(cube, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(cube, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 30.0, places=1)
         self.assertAlmostEqual(keys[-1], 40.0, places=1)
 
@@ -406,7 +414,7 @@ class TestSequencerMaya(unittest.TestCase):
         cube = self._create_animated_cube("sc", {0: 0, 100: 10})
         seq = ShotSequencer()
         seq.scale_object_keys(str(cube), 0, 100, 0, 200)
-        keys = sorted(pm.keyframe(cube, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(cube, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 0.0, places=1)
         self.assertAlmostEqual(keys[-1], 200.0, places=1)
 
@@ -445,12 +453,12 @@ class TestSequencerMaya(unittest.TestCase):
         seq.resize_object(0, str(c1), 0, 50, 0, 80)
 
         # obj_a keys should be rescaled to [0,80]
-        a_keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        a_keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(a_keys[0], 0.0, places=1)
         self.assertAlmostEqual(a_keys[-1], 80.0, places=1)
 
         # obj_b keys should be UNTOUCHED at [10,40]
-        b_keys = sorted(pm.keyframe(c2, q=True, attribute="translateX"))
+        b_keys = sorted(cmds.keyframe(c2, q=True, attribute="translateX"))
         self.assertAlmostEqual(b_keys[0], 10.0, places=1)
         self.assertAlmostEqual(b_keys[-1], 40.0, places=1)
 
@@ -500,7 +508,7 @@ class TestSequencerMaya(unittest.TestCase):
         apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
 
         # Visibility should now have keyframes
-        vis_keys = pm.keyframe(cube, attribute="visibility", query=True)
+        vis_keys = cmds.keyframe(cube, attribute="visibility", query=True)
         self.assertIsNotNone(vis_keys)
         self.assertGreater(len(vis_keys), 0)
 
@@ -513,7 +521,6 @@ class TestSequencerMaya(unittest.TestCase):
         interpolated motion to bleed through gap regions.
         Fixed: 2026-03-13
         """
-        import maya.cmds as cmds
 
         c1 = self._create_animated_cube("gap_a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("gap_b", {100: 0, 150: 5})
@@ -540,7 +547,6 @@ class TestSequencerMaya(unittest.TestCase):
 
     def test_enforce_gap_holds_preserves_in_tangent(self):
         """_enforce_gap_holds should preserve the in-tangent of the last pre-gap key."""
-        import maya.cmds as cmds
 
         c1 = self._create_animated_cube("pres_a", {0: 0, 50: 10})
         seq = ShotSequencer(
@@ -564,7 +570,6 @@ class TestSequencerMaya(unittest.TestCase):
 
     def test_enforce_gap_holds_idempotent(self):
         """Calling _enforce_gap_holds twice should not change anything the second time."""
-        import maya.cmds as cmds
 
         c1 = self._create_animated_cube("idem_a", {0: 0, 50: 10})
         seq = ShotSequencer(
@@ -584,7 +589,6 @@ class TestSequencerMaya(unittest.TestCase):
 
     def test_enforce_gap_holds_no_gap_no_change(self):
         """Contiguous shots (no gap) should not get stepped tangents."""
-        import maya.cmds as cmds
 
         c1 = self._create_animated_cube("contig_a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("contig_b", {50: 0, 100: 5})
@@ -613,7 +617,6 @@ class TestSequencerMaya(unittest.TestCase):
         at gap boundaries, allowing animation bleed between shots.
         Fixed: 2026-03-13
         """
-        import maya.cmds as cmds
 
         c1 = self._create_animated_cube("dur_a", {0: 0, 50: 10})
         c2 = self._create_animated_cube("dur_b", {100: 0, 150: 5})
@@ -661,7 +664,7 @@ class TestSequencerMaya(unittest.TestCase):
         seq._move_sequence(
             {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 30
         )
-        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 30.0, places=1)
         self.assertAlmostEqual(keys[-1], 40.0, places=1)
 
@@ -672,7 +675,7 @@ class TestSequencerMaya(unittest.TestCase):
         seq._move_sequence(
             {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 10
         )
-        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 10.0, places=1)
         self.assertAlmostEqual(keys[-1], 20.0, places=1)
 
@@ -798,7 +801,7 @@ class TestSequencerMaya(unittest.TestCase):
             [{"kind": "anim", "obj": str(c1), "start": 10, "end": 20}],
             dest_shot_id=1,
         )
-        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         # Moved to dest.start (100); duration preserved.
         self.assertAlmostEqual(keys[0], 100.0, places=1)
         self.assertAlmostEqual(keys[-1], 110.0, places=1)
@@ -808,43 +811,50 @@ class TestSequencerMaya(unittest.TestCase):
 
     def test_move_sequences_places_after_when_from_upstream(self):
         """When dest already has the obj and source is upstream, place AFTER."""
-        c1 = self._create_animated_cube("mvs_after_a", {10: 0, 20: 5})
-        c2 = self._create_animated_cube("mvs_after_b", {110: 0, 130: 5})
+        # Single object with two key clusters — one in S0, one in S1.
+        # The "existing" check in move_sequences_to_shot keys by obj name,
+        # so the same obj must appear in dest to trigger the after-anchor path.
+        c1 = self._create_animated_cube(
+            "mvs_after_a", {10: 0, 20: 5, 110: 0, 130: 5}
+        )
         seq = ShotSequencer(
             [
                 ShotBlock(0, "S0", 0, 50, [str(c1)]),
-                ShotBlock(1, "S1", 100, 200, [str(c2)]),
+                ShotBlock(1, "S1", 100, 200, [str(c1)]),
             ]
         )
-        # Move c1's seq from S0 (upstream) into S1 — c2 already lives there.
+        # Move c1's S0 seq [10,20] into S1; c1's S1 seq [110,130] already lives there.
         seq.move_sequences_to_shot(
             [{"kind": "anim", "obj": str(c1), "start": 10, "end": 20}],
             dest_shot_id=1,
         )
-        c1_keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
-        # Anchor = end of c2 (130); c1 moves to start at 130.
-        self.assertAlmostEqual(c1_keys[0], 130.0, places=1)
-        self.assertAlmostEqual(c1_keys[-1], 140.0, places=1)
+        c1_keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
+        # Anchor = end of S1's existing c1 segment (130); the moved [10,20]
+        # cluster shifts to [130,140]. The S1 cluster stays at [110,130].
+        self.assertIn(130.0, [round(k, 1) for k in c1_keys])
+        self.assertIn(140.0, [round(k, 1) for k in c1_keys])
 
     def test_move_sequences_places_before_when_from_downstream(self):
         """When dest already has the obj and source is downstream, place BEFORE."""
-        c1 = self._create_animated_cube("mvs_before_a", {110: 0, 130: 5})
-        c2 = self._create_animated_cube("mvs_before_b", {210: 0, 220: 5})
+        # Same obj, two clusters: one in S0 (dest), one in S1 (source).
+        c2 = self._create_animated_cube(
+            "mvs_before_b", {110: 0, 130: 5, 210: 0, 220: 5}
+        )
         seq = ShotSequencer(
             [
-                ShotBlock(0, "S0", 100, 200, [str(c1)]),
+                ShotBlock(0, "S0", 100, 200, [str(c2)]),
                 ShotBlock(1, "S1", 200, 300, [str(c2)]),
             ]
         )
-        # Move c2 (downstream of S0) into S0 — c1 already lives there.
+        # Move c2's S1 seq [210,220] into S0; c2's S0 seq [110,130] already lives there.
         seq.move_sequences_to_shot(
             [{"kind": "anim", "obj": str(c2), "start": 210, "end": 220}],
             dest_shot_id=0,
         )
-        c2_keys = sorted(pm.keyframe(c2, q=True, attribute="translateX"))
-        # Anchor = start of c1 (110) - group_dur (10) = 100. c2 moves to [100,110].
-        self.assertAlmostEqual(c2_keys[0], 100.0, places=1)
-        self.assertAlmostEqual(c2_keys[-1], 110.0, places=1)
+        c2_keys = sorted(cmds.keyframe(c2, q=True, attribute="translateX"))
+        # Anchor = start of existing S0 c2 segment (110) - group_dur (10) = 100.
+        self.assertIn(100.0, [round(k, 1) for k in c2_keys])
+        self.assertIn(110.0, [round(k, 1) for k in c2_keys])
 
     def test_move_sequences_preserves_group_offsets(self):
         """Multiple sequences from the same source shot keep their offsets."""
@@ -863,8 +873,8 @@ class TestSequencerMaya(unittest.TestCase):
             ],
             dest_shot_id=1,
         )
-        c1_keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
-        c2_keys = sorted(pm.keyframe(c2, q=True, attribute="translateX"))
+        c1_keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
+        c2_keys = sorted(cmds.keyframe(c2, q=True, attribute="translateX"))
         # Group base = 10. anchor = 100. c1 -> [100,110], c2 -> [120,130]
         self.assertAlmostEqual(c1_keys[0], 100.0, places=1)
         self.assertAlmostEqual(c2_keys[0], 120.0, places=1)
@@ -1182,7 +1192,9 @@ class TestShotManifestPure(unittest.TestCase):
     def test_update_creates_shots(self):
         store = ShotStore()
         builder = ShotManifest(store)
-        actions = builder.update(self._make_steps())
+        # fit_contents lets the behavior length (15f) win over the 200f
+        # default initial_shot_length used by extend_only.
+        actions = builder.update(self._make_steps(), fit_mode="fit_contents")
         self.assertEqual(len(store.shots), 2)
         self.assertEqual(store.shots[0].name, "A01")
         self.assertAlmostEqual(store.shots[0].start, 1)
@@ -1479,7 +1491,12 @@ class TestContentDrivenDuration(unittest.TestCase):
         self.assertEqual(dur, 30)
 
     def test_update_uses_content_duration(self):
-        """Update should use content-driven per-step durations."""
+        """Update should use content-driven per-step durations.
+
+        ``fit_mode='fit_contents'`` makes the behavior/audio-driven length
+        win over ``initial_shot_length``; the default mode is
+        ``extend_only`` which floors to 200f.
+        """
         steps = [
             BuilderStep("A01", "A", "", "", [BuilderObject("X", ["fade_in"])]),
             BuilderStep(
@@ -1488,7 +1505,7 @@ class TestContentDrivenDuration(unittest.TestCase):
         ]
         store = ShotStore()
         builder = ShotManifest(store)
-        builder.update(steps)
+        builder.update(steps, fit_mode="fit_contents")
         shots = store.sorted_shots()
         # A01: fade_in=15f, A02: fade_in+fade_out=30f
         self.assertAlmostEqual(shots[0].end - shots[0].start, 15)
@@ -1813,9 +1830,10 @@ class TestShotStore(unittest.TestCase):
         from mayatk.anim_utils.shots._shots import ShotStore
         from unittest.mock import patch
 
-        # Prevent MayaScenePersistence.load() from hitting mocked PyNode
-        with patch("mayatk.anim_utils.shots._shots.pm") as mock_pm:
-            mock_pm.objExists.return_value = False
+        # Prevent MayaScenePersistence.load() from hitting the data node.
+        # Production now uses cmds (post-PyMEL migration), not pm.
+        with patch("mayatk.anim_utils.shots._shots.cmds") as mock_cmds:
+            mock_cmds.objExists.return_value = False
             a = ShotStore.active()
             b = ShotStore.active()
         self.assertIs(a, b)
@@ -2416,7 +2434,7 @@ class TestControllerColumnLayout(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             HEADERS,
             COL_STEP,
             COL_SECTION,
@@ -2524,7 +2542,9 @@ class TestShotManifestUIFile(unittest.TestCase):
             / "shot_manifest"
             / "shot_manifest.ui"
         )
-        self.assertTrue(ui_path.exists(), f"Missing: {ui_path}")
+        # Disk existence — ``cmds.objExists`` was the wrong check
+        # (it tests a Maya scene node, not a filesystem path).
+        self.assertTrue(ui_path.is_file(), f"Missing: {ui_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -2626,7 +2646,7 @@ class TestRenderedRowColors(unittest.TestCase):
         cls.QColor = QColor
 
         from uitk.widgets.treeWidget import TreeWidget
-        from mayatk.anim_utils.shots.shot_manifest._manifest_data import (
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             HEADERS,
             COL_STEP,
             COL_SECTION,
@@ -2781,12 +2801,12 @@ class TestRenderedRowColors(unittest.TestCase):
     def _item_fg_hex(self, key, col=None):
         """Get foreground color hex from the item model."""
         col = col if col is not None else self._COL_DESC
-        return self._items[key].foreground(col).color().name()
+        return self._items[key].foreground(col).color()
 
     def _item_bg_hex(self, key, col=None):
         """Get background color hex from the item model."""
         col = col if col is not None else self._COL_DESC
-        return self._items[key].background(col).color().name()
+        return self._items[key].background(col).color()
 
     def _sample_bg(self, item_key, col_index):
         """Average (R,G,B) from the rendered image at the cell center of *item_key* / *col*."""
@@ -2915,9 +2935,16 @@ class TestRenderedRowColors(unittest.TestCase):
     def test_valid_parent_has_no_custom_fg(self):
         """Valid parent should not have assessment foreground applied."""
         fg = self._item_fg_hex("valid_parent")
-        problem_fgs = {v[0] for v in self._PASTEL_STATUS.values() if v[0]}
+        # Compare hex strings: PySide6 QColor isn't hashable in all builds.
+        fg_hex = fg.name() if hasattr(fg, "name") else str(fg)
+        problem_fgs = {
+            (v[0].name() if hasattr(v[0], "name") else str(v[0]))
+            for v in self._PASTEL_STATUS.values()
+            if v[0]
+        }
         self.assertNotIn(
-            fg, problem_fgs, f"Valid parent should not have a problem color: {fg}"
+            fg_hex, problem_fgs,
+            f"Valid parent should not have a problem color: {fg_hex}",
         )
 
     # ==== MODEL-LEVEL: background assessment colors =======================

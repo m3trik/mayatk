@@ -1,11 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except ImportError:
+    cmds = None
+    om = None
+
 from typing import List, Tuple, Optional, Union
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
@@ -30,8 +33,8 @@ class WheelRig(ptk.LoggingMixin):
         rig_name (str): Optional name for the rig.
 
     Attributes:
-        control (pm.nodetypes.Transform): The control object.
-        wheels (List[pm.nodetypes.Transform]): Wheel transforms.
+        control (object): The control object.
+        wheels (List[object]): Wheel transforms.
         rig_name (str): Name of the rig.
     """
 
@@ -46,8 +49,8 @@ class WheelRig(ptk.LoggingMixin):
 
         # Check for persistent rig ID
         stored_name = (
-            self.control.getAttr("wheelRigId")
-            if self.control.hasAttr("wheelRigId")
+            cmds.getAttr(f"{self.control}.wheelRigId")
+            if cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
             else None
         )
         self._rig_name = (
@@ -55,15 +58,16 @@ class WheelRig(ptk.LoggingMixin):
         )
 
         # Persist ID
-        if not self.control.hasAttr("wheelRigId"):
-            self.control.addAttr("wheelRigId", dt="string")
-        self.control.wheelRigId.set(self._rig_name)
+        if not cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True):
+            cmds.addAttr(str(self.control), longName="wheelRigId", dataType="string")
+        cmds.setAttr(f"{self.control}.wheelRigId", self._rig_name, type="string")
 
         if freeze_transforms:
-            XformUtils.freeze_transforms(self.control)
-            XformUtils.freeze_transforms(self.wheels)
-
-        self.control.rig = self  # Allow access via control.rig
+            # Freeze translate only — rotation must be preserved so the
+            # auto-flip pass can read mirrored-wheel orientation from the
+            # world matrix.
+            XformUtils.freeze_transforms(self.control, translate=True)
+            XformUtils.freeze_transforms(self.wheels, translate=True)
 
     @property
     def rig_name(self) -> str:
@@ -76,7 +80,7 @@ class WheelRig(ptk.LoggingMixin):
 
     def get_expressions(
         self, filter_by_rig: bool = False
-    ) -> List[pm.nodetypes.Expression]:
+    ) -> List[object]:
         """Return all expression nodes connected to the control.
 
         Parameters:
@@ -86,11 +90,11 @@ class WheelRig(ptk.LoggingMixin):
             List of expression nodes.
         """
         # Expressions read from control, so they are destinations of control's connections.
-        exprs = self.control.listConnections(type="expression") or []
+        exprs = cmds.listConnections(str(self.control), type="expression") or []
         exprs = list(set(exprs))
 
         if filter_by_rig:
-            exprs = [e for e in exprs if self.rig_name in e.name()]
+            exprs = [e for e in exprs if self.rig_name in e.split('|')[-1].split(':')[-1]]
         return exprs
 
     def delete_expressions(self, filter_by_rig: bool = True) -> None:
@@ -102,7 +106,7 @@ class WheelRig(ptk.LoggingMixin):
         """
         exprs = self.get_expressions(filter_by_rig=filter_by_rig)
         if exprs:
-            pm.delete(exprs)
+            cmds.delete(exprs)
             self.logger.info(
                 f"Deleted {len(exprs)} expressions for rig: {self.rig_name}"
             )
@@ -111,8 +115,8 @@ class WheelRig(ptk.LoggingMixin):
 
         # Clean up the decomposeMatrix utility node
         decomp_name = f"{self.rig_name}_decompose"
-        if pm.objExists(decomp_name):
-            pm.delete(decomp_name)
+        if cmds.objExists(decomp_name):
+            cmds.delete(decomp_name)
             self.logger.info(f"Deleted decomposeMatrix node: {decomp_name}")
 
     @CoreUtils.undoable
@@ -121,7 +125,7 @@ class WheelRig(ptk.LoggingMixin):
         movement_axis: str = "translateZ",
         rotation_axis: Optional[str] = None,
         wheel_height: float = 1.0,
-        wheels: Optional[List["pm.nodetypes.Transform"]] = None,
+        wheels: Optional[List["object"]] = None,
         use_world_space: bool = False,
     ) -> None:
         """
@@ -179,18 +183,18 @@ class WheelRig(ptk.LoggingMixin):
                 "wheelHeight" if suffix_idx == 0 else f"wheelHeight_{suffix_idx}"
             )
 
-            if not self.control.hasAttr(candidate):
+            if not cmds.attributeQuery(candidate, node=str(self.control), exists=True):
                 # Found a free slot, create it
-                self.control.addAttr(candidate, k=True, dv=wheel_height, min=0.001)
+                cmds.addAttr(str(self.control), longName=candidate, k=True, dv=wheel_height, min=0.001)
                 height_attr_name = candidate
                 break
 
             # Attribute exists, check if value matches our target height
-            existing_val = self.control.attr(candidate).get()
+            existing_val = cmds.getAttr(f"{self.control}.{candidate}")
             if abs(existing_val - wheel_height) < epsilon:
                 # Close enough, reuse this attribute
                 # Update it exactly to be sure
-                self.control.attr(candidate).set(wheel_height)
+                cmds.setAttr(f"{self.control}.{candidate}", wheel_height)
                 height_attr_name = candidate
                 break
 
@@ -198,23 +202,25 @@ class WheelRig(ptk.LoggingMixin):
             suffix_idx += 1
 
         # Global control attributes (shared across all wheel groups)
-        if not self.control.hasAttr("enableRotation"):
-            self.control.addAttr("enableRotation", k=True, dv=1.0, min=0.0, max=1.0)
-        if not self.control.hasAttr("spinDirection"):
-            self.control.addAttr("spinDirection", k=True, dv=1.0)
+        if not cmds.attributeQuery("enableRotation", node=str(self.control), exists=True):
+            cmds.addAttr(str(self.control), longName="enableRotation", k=True, dv=1.0, min=0.0, max=1.0)
+        if not cmds.attributeQuery("spinDirection", node=str(self.control), exists=True):
+            cmds.addAttr(str(self.control), longName="spinDirection", k=True, dv=1.0)
 
         # Ensure attributes are exposed in the Channel Box
         for attr_name in [height_attr_name, "enableRotation", "spinDirection"]:
             try:
-                self.control.attr(attr_name).setKeyable(True)
+                cmds.setAttr(f"{self.control}.{attr_name}", keyable=True)
             except Exception:
                 pass  # Ignore if already keyable or locked logic interferes
 
         # Helper to get the world-space vector for the chosen rotation axis
         def get_axis_vector(node, axis_name):
             idx = {"rotateX": 0, "rotateY": 1, "rotateZ": 2}.get(axis_name, 0)
-            # transform.getMatrix(ws=True) returns a matrix where rows 0,1,2 are x,y,z axes
-            return pm.dt.Vector(node.getMatrix(ws=True)[idx][:3])
+            # transform world matrix is 16 floats; rows 0/1/2 are x/y/z axes
+            wm = cmds.xform(str(node), q=True, m=True, ws=True)
+            row = wm[idx * 4 : idx * 4 + 3]
+            return om.MVector(*row)
 
         # Get the control's reference vector for alignment check
         control_vec = get_axis_vector(self.control, rotation_axis)
@@ -224,12 +230,14 @@ class WheelRig(ptk.LoggingMixin):
             # Create or reuse a decomposeMatrix node for world-space position.
             # This captures parent movement, not just local translate.
             decomp_name = f"{self.rig_name}_decompose"
-            if pm.objExists(decomp_name):
-                decomp = pm.PyNode(decomp_name)
+            if cmds.objExists(decomp_name):
+                decomp = decomp_name
             else:
-                decomp = pm.createNode("decomposeMatrix", name=decomp_name)
-                self.control.attr("worldMatrix[0]").connect(
-                    decomp.inputMatrix, force=True
+                decomp = cmds.createNode("decomposeMatrix", name=decomp_name)
+                cmds.connectAttr(
+                    f"{self.control}.worldMatrix[0]",
+                    f"{decomp}.inputMatrix",
+                    force=True,
                 )
 
             _ws_attr_map = {
@@ -243,23 +251,23 @@ class WheelRig(ptk.LoggingMixin):
             distance_attr = f"{self.control}.{movement_axis}"
 
         for wheel in wheels:
-            attr = wheel.attr(rotation_axis)
+            attr = f"{wheel}.{rotation_axis}"
 
             # Determine auto-flip based on alignment with control
             # If the wheel is flipped 180 (e.g. right side vs left side), dot product will be negative
             wheel_vec = get_axis_vector(wheel, rotation_axis)
-            dot_prod = control_vec.dot(wheel_vec)
+            dot_prod = control_vec * wheel_vec  # MVector dot product via * operator
             auto_flip = -1.0 if dot_prod < 0 else 1.0
 
             # Disconnect any existing incoming connections
-            if attr.isConnected():
-                for src in attr.listConnections(p=True, s=True, d=False):
-                    pm.disconnectAttr(src, attr)
+            if cmds.listConnections(attr, source=True, destination=False):
+                for src in cmds.listConnections(attr, p=True, s=True, d=False):
+                    cmds.disconnectAttr(src, attr)
 
             # Delete any previous expression node tied to this wheel
-            expr_name = f"{self.rig_name}_{wheel.name()}_expr"
-            if pm.objExists(expr_name):
-                pm.delete(expr_name)
+            expr_name = f"{self.rig_name}_{wheel.split('|')[-1].split(':')[-1]}_expr"
+            if cmds.objExists(expr_name):
+                cmds.delete(expr_name)
 
             # Build new expression
             expr_text = (
@@ -273,15 +281,15 @@ class WheelRig(ptk.LoggingMixin):
                 f"{wheel}.{rotation_axis} = $rotation * $enable;\n"
             )
 
-            expr_node = pm.expression(s=expr_text, name=expr_name)
+            expr_node = cmds.expression(s=expr_text, name=expr_name)
 
             # Optional: log for debug
             self.logger.debug(
-                f"Rigged wheel: {wheel.name()} with expression: {expr_node.name()}"
+                f"Rigged wheel: {wheel.split('|')[-1].split(':')[-1]} with expression: {expr_node.split('|')[-1].split(':')[-1]}"
             )
 
         self.logger.info(
-            f"Wheel rig rotation updated for wheels: {[w.name() for w in wheels]}"
+            f"Wheel rig rotation updated for wheels: {[w.split('|')[-1].split(':')[-1] for w in wheels]}"
         )
 
 
@@ -418,7 +426,7 @@ class WheelRigSlots:
 
     def resolve_selection(
         self,
-    ) -> Tuple["pm.nodetypes.Transform", List["pm.nodetypes.Transform"]]:
+    ) -> Tuple["object", List["object"]]:
         """Resolve the current selection into control (driver) and wheels.
 
         The driver is expected to be the **last** selected object.
@@ -429,7 +437,7 @@ class WheelRigSlots:
         Raises:
             ValueError if selection is invalid.
         """
-        sel = pm.selected(flatten=True)
+        sel = cmds.ls(sl=True, flatten=True)
         if len(sel) < 2:
             raise ValueError(
                 "Select one or more wheel objects, then the driver (last)."
@@ -447,14 +455,14 @@ class WheelRigSlots:
 
     def set_wheel_height(self):
         """Get the wheel height from the selected object's bounding box."""
-        selected = pm.selected(flatten=True)
+        selected = cmds.ls(sl=True, flatten=True)
         try:
             obj = selected[0]
         except IndexError:
-            pm.warning("Select a single object to determine wheel height.")
+            cmds.warning("Select a single object to determine wheel height.")
             return
 
-        bbox = pm.xform(obj, q=True, bb=True)
+        bbox = cmds.xform(obj, q=True, bb=True)
         # Determine dimension based on inferred rotation axis
         # Move Z -> Rotate X -> Diameter is Y or Z (Height/Depth)
         # Move X -> Rotate Z -> Diameter is X or Y (Width/Height)
@@ -503,13 +511,13 @@ class WheelRigSlots:
 
     def update_rig_name_placeholder(self):
         """Update the rig name placeholder based on the driver (last selected)."""
-        selected = pm.selected(flatten=True)
+        selected = cmds.ls(sl=True, flatten=True)
         if not selected:
             return
 
         control = selected[-1]
 
-        default_name = f"{control.name()}_wheel_rig"
+        default_name = f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
         self.ui.txt000.setPlaceholderText(default_name)
 
     def cleanup(self):
@@ -528,7 +536,7 @@ class WheelRigSlots:
             if rig is None:
                 raise AttributeError
             # Validate the cached rig's control still exists in the scene.
-            # PyMEL stores DAG paths; if the node was renamed, reparented,
+            # cmds stores DAG paths; if the node was renamed, reparented,
             # or deleted the reference goes stale and .name() will raise.
             try:
                 rig.control.name()
@@ -543,11 +551,11 @@ class WheelRigSlots:
                 return None
 
             # Check persistent ID on control to recover correct name
-            if control.hasAttr("wheelRigId"):
+            if cmds.attributeQuery("wheelRigId", node=control, exists=True):
                 rig_name = control.wheelRigId.get()
                 self.rig_name = rig_name  # Sync UI
             else:
-                rig_name = self.rig_name or f"{control.name()}_wheel_rig"
+                rig_name = self.rig_name or f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
 
             existing = getattr(control, "rig", None)
             if isinstance(existing, WheelRig):

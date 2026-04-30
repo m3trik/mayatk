@@ -3,33 +3,87 @@
 """Geometry analysis and matching logic for AutoInstancer."""
 from __future__ import annotations
 
-from typing import Optional, Tuple, Any, Union, List
+from typing import Optional, Tuple, Union, List
 import numpy as np
 from scipy.spatial import KDTree
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
     import maya.api.OpenMaya as om
 except ImportError:
     pass
 
 import pythontk as ptk
+from mayatk.core_utils._core_utils import CoreUtils, leaf_name, get_bounding_box
+from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.xform_utils._xform_utils import get_translation, get_object_matrix
 
 
-def calculate_mesh_volume(node) -> float:
-    """Calculate mesh volume using divergence theorem (numpy)."""
+def _mfn(shape):
+    """Return an ``MFnMesh`` for *shape* via the canonical CoreUtils helper."""
+    return CoreUtils.get_mfn_mesh(shape, api_version=2)
+
+
+def mesh_points(shape, world: bool = False):
+    """``MPointArray`` for *shape*. Object space by default."""
+    space = om.MSpace.kWorld if world else om.MSpace.kObject
+    return _mfn(shape).getPoints(space)
+
+
+def mesh_triangles(shape):
+    """``(counts, indices)`` from ``MFnMesh.getTriangles``, as plain lists."""
+    counts, indices = _mfn(shape).getTriangles()
+    return list(counts), list(indices)
+
+
+def mesh_uv_set_names(shape):
+    return list(_mfn(shape).getUVSetNames())
+
+
+def mesh_get_uvs(shape, uv_set=None):
+    fn = _mfn(shape)
+    return fn.getUVs(uv_set) if uv_set is not None else fn.getUVs()
+
+
+def mesh_num_uvs(shape, uv_set=None):
+    fn = _mfn(shape)
+    return fn.numUVs(uv_set) if uv_set is not None else fn.numUVs()
+
+
+def _np_to_mmatrix(m: np.ndarray) -> "om.MMatrix":
+    """Build an ``om.MMatrix`` from a 4x4 numpy array.
+
+    Maya stores matrices in row-major order with translation in row 3,
+    matching Maya's native layout. ``om.MMatrix(iterable)`` consumes 16
+    floats in the same order, so ``ndarray.flatten()`` is a direct mapping.
+    """
+    return om.MMatrix(m.flatten().tolist())
+
+
+def _is_mesh_shape(shape: Optional[str]) -> bool:
+    if not shape:
+        return False
     try:
-        if isinstance(node, pm.nodetypes.Transform):
-            shape = node.getShape()
+        return cmds.objectType(shape) == "mesh"
+    except Exception:
+        return False
+
+
+def calculate_mesh_volume(node: str) -> float:
+    """Calculate mesh volume using the divergence theorem (numpy)."""
+    try:
+        if cmds.objectType(node) == "transform":
+            shape = NodeUtils.get_shape(node)
         else:
             shape = node
 
-        if not shape or not isinstance(shape, pm.nodetypes.Mesh):
+        if not _is_mesh_shape(shape):
             return 0.0
 
-        # getTriangles returns (counts, indices)
-        _, indices = shape.getTriangles()
-        points = np.array(shape.getPoints(space="world"))
+        # MFnMesh.getTriangles -> (counts, indices). Indices are flat triplets.
+        _, indices = mesh_triangles(shape)
+        pts = mesh_points(shape, world=True)
+        points = np.array([(p.x, p.y, p.z) for p in pts])
 
         if not indices or len(indices) % 3 != 0:
             return 0.0
@@ -49,37 +103,32 @@ def calculate_mesh_volume(node) -> float:
 class ShellInfo:
     """Stores cached analysis data for a single shell."""
 
-    def __init__(self, node: pm.nodetypes.Transform):
+    def __init__(self, node: str):
         self.node = node
-        self.name = node.name()
+        self.name = leaf_name(node)
 
-        # Geometry stats
-        shape = node.getShape()
-        self.num_verts = shape.numVertices() if shape else 0
-        self.num_faces = shape.numPolygons() if shape else 0
-
-        # Spatial data
-        self.bbox = node.getBoundingBox(space="world")
-        # Handle PyMEL vs OpenMaya differences
-        if callable(self.bbox.min):
-            self.min_pt = self.bbox.min()
-            self.max_pt = self.bbox.max()
-            self.centroid = self.bbox.center()
+        shape = NodeUtils.get_shape(node)
+        if shape and _is_mesh_shape(shape):
+            self.num_verts = cmds.polyEvaluate(shape, vertex=True) or 0
+            self.num_faces = cmds.polyEvaluate(shape, face=True) or 0
         else:
-            self.min_pt = self.bbox.min
-            self.max_pt = self.bbox.max
-            self.centroid = self.bbox.center
+            self.num_verts = 0
+            self.num_faces = 0
 
-        self.size = self.max_pt - self.min_pt
+        self.bbox = get_bounding_box(node, world=True)
+        self.min_pt = self.bbox.min
+        self.max_pt = self.bbox.max
+        self.centroid = self.bbox.center
+        self.size = self.bbox.size
         self.volume = self.size.x * self.size.y * self.size.z
-        self.diagonal = self.size.length()
+        self.diagonal = self.bbox.diagonal
 
         # Accurate Volume (Rotation Invariant)
         self.mesh_volume = calculate_mesh_volume(node)
 
         # Surface Area (Rotation Invariant, fallback for open meshes)
         try:
-            area = pm.polyEvaluate(node, area=True)
+            area = cmds.polyEvaluate(node, area=True)
             if isinstance(area, (list, tuple)):
                 area = area[0]
             self.mesh_area = float(area)
@@ -115,14 +164,15 @@ class GeometryMatcher:
             return 0.0
         return round(value, precision)
 
-    def get_pca_basis(self, node: pm.nodetypes.Transform) -> Optional[pm.dt.Matrix]:
+    def get_pca_basis(self, node: str) -> Optional["om.MMatrix"]:
         """Returns the PCA basis matrix (rotation only) for the node's mesh."""
-        shape = node.getShape()
-        if not shape or not isinstance(shape, pm.nodetypes.Mesh):
+        shape = NodeUtils.get_shape(node)
+        if not _is_mesh_shape(shape):
             return None
 
         try:
-            points = np.array(shape.getPoints(space="world"))
+            pts = mesh_points(shape, world=True)
+            points = np.array([(p.x, p.y, p.z) for p in pts])
             if len(points) < 3:
                 return None
 
@@ -131,46 +181,35 @@ class GeometryMatcher:
             cov = np.cov(centered, rowvar=False)
             evals, evecs = np.linalg.eigh(cov)
 
-            # evecs columns are the eigenvectors.
-            # We use X=evecs[:, 2], Y=evecs[:, 1], Z=evecs[:, 0] (Right handed?)
-            x_axis = pm.dt.Vector(evecs[:, 2])
-            y_axis = pm.dt.Vector(evecs[:, 1])
+            # X=evecs[:, 2], Y=evecs[:, 1] (largest two eigenvectors)
+            x_axis = evecs[:, 2]
+            y_axis = evecs[:, 1]
+            # Right-handed
+            z_axis = np.cross(x_axis, y_axis)
 
-            # Ensure right-handed system
-            z_axis = x_axis.cross(y_axis)
-
-            # Construct rotation matrix
-            mat = pm.dt.Matrix()
-            mat[0] = [x_axis.x, x_axis.y, x_axis.z, 0]
-            mat[1] = [y_axis.x, y_axis.y, y_axis.z, 0]
-            mat[2] = [z_axis.x, z_axis.y, z_axis.z, 0]
-            mat[3] = [0, 0, 0, 1]
-
-            return mat
+            mat = np.eye(4)
+            mat[0, :3] = x_axis
+            mat[1, :3] = y_axis
+            mat[2, :3] = z_axis
+            return _np_to_mmatrix(mat)
 
         except Exception:
             return None
 
     def get_mesh_signature(
-        self, transform: pm.nodetypes.Transform, include_area: bool = True
+        self, transform: str, include_area: bool = True
     ) -> Optional[Tuple]:
         """Get a lightweight signature for quick rejection."""
-        mesh = transform.getShape()
+        mesh = NodeUtils.get_shape(transform)
         if not mesh:
             return None
 
-        num_verts = mesh.numVertices()
-        num_edges = mesh.numEdges()
-        num_faces = mesh.numPolygons()
+        num_verts = cmds.polyEvaluate(mesh, vertex=True) or 0
+        num_edges = cmds.polyEvaluate(mesh, edge=True) or 0
+        num_faces = cmds.polyEvaluate(mesh, face=True) or 0
 
         approx_area = 0.0
         # Area is not scale invariant, so we ignore it for signature matching
-        # if include_area:
-        #     try:
-        #         area = pm.polyEvaluate(mesh, area=True)
-        #         approx_area = self.quantize(area, 2)
-        #     except Exception:
-        #         approx_area = 0.0
 
         # PCA Signature (Eigenvalues)
         pca_sig = ()
@@ -179,7 +218,8 @@ class GeometryMatcher:
         # We rely on topological counts and the detailed check in are_meshes_identical.
         if self.scale_tolerance <= 0:
             try:
-                points = np.array(mesh.getPoints(space="object"))
+                pts = mesh_points(mesh, world=False)
+                points = np.array([(p.x, p.y, p.z) for p in pts])
                 if len(points) > 3:
                     centroid = np.mean(points, axis=0)
                     centered = points - centroid
@@ -187,7 +227,7 @@ class GeometryMatcher:
                     cov = np.cov(centered, rowvar=False)
                     evals, _ = np.linalg.eigh(cov)
 
-                    # Normalize eigenvalues for scale invariance (Uniform scale only)
+                    # Normalize for scale invariance (uniform scale only)
                     max_eval = np.max(evals)
                     if max_eval > 1e-6:
                         evals = evals / max_eval
@@ -199,18 +239,18 @@ class GeometryMatcher:
 
         materials = ()
         if self.require_same_material:
-            sgs = mesh.listConnections(type="shadingEngine") or []
-            materials = tuple(sorted(list(set([sg.name() for sg in sgs]))))
+            sgs = cmds.listConnections(mesh, type="shadingEngine") or []
+            materials = tuple(sorted(set(leaf_name(sg) for sg in sgs)))
 
         uv_signature = ()
         if self.check_uvs:
-            uv_sets = mesh.getUVSetNames() or []
+            uv_sets = mesh_uv_set_names(mesh)
             uv_counts = []
             for uv_set in uv_sets:
                 try:
-                    uv_counts.append(mesh.numUVs(uv_set))
+                    uv_counts.append(mesh_num_uvs(mesh, uv_set))
                 except TypeError:
-                    uv_counts.append(mesh.numUVs())
+                    uv_counts.append(mesh_num_uvs(mesh))
             uv_signature = (tuple(uv_sets), tuple(uv_counts))
 
         return (
@@ -232,11 +272,9 @@ class GeometryMatcher:
             scales: (3,) scale factors (1/sqrt(eigenvalues))
             centroid: (3,) centroid
         """
-        # Center
         centroid = np.mean(points, axis=0)
         centered = points - centroid
 
-        # PCA
         cov = np.cov(centered, rowvar=False)
         eigenvalues, eigenvectors = np.linalg.eigh(cov)
 
@@ -246,35 +284,29 @@ class GeometryMatcher:
         eigenvectors = eigenvectors[:, idx]
 
         # Calculate scales (1 / sqrt(variance))
-        # Handle small variance to avoid division by zero
         valid_variance = eigenvalues.copy()
-        valid_variance[valid_variance < 1e-9] = 1.0  # Avoid div/0
+        valid_variance[valid_variance < 1e-9] = 1.0
         scales = 1.0 / np.sqrt(valid_variance)
-
-        # If variance was effectively zero, scale should be 1.0 (no scaling)
         scales[eigenvalues < 1e-9] = 1.0
 
-        # Whiten
-        # P_w = P * V * S
         whitened = np.dot(centered, eigenvectors) * scales
 
         return whitened, eigenvectors, scales, centroid
 
-    def _check_whitened_match(self, p1, p2, tolerance):
-        """Check if two whitened point clouds match under axis sign flips."""
+    def _check_whitened_match(self, p1, p2, tolerance) -> Optional[np.ndarray]:
+        """Check if two whitened point clouds match under axis sign flips.
+
+        Returns a 4x4 numpy diagonal-sign matrix on success (caller-assembled
+        into the final relative transform).
+        """
         import itertools
 
-        # Build KDTree for p1 once
         tree = KDTree(p1)
-
         best_dist = float("inf")
 
-        # 3 axes signs
         for signs in itertools.product([1, -1], repeat=3):
-            # Apply flip
             p2_flipped = p2 * signs
 
-            # Query tree
             dists, _ = tree.query(p2_flipped, k=1)
             max_dist = np.max(dists)
 
@@ -282,8 +314,7 @@ class GeometryMatcher:
                 best_dist = max_dist
 
             if max_dist <= tolerance:
-                # Found a match!
-                m_w = pm.dt.Matrix()
+                m_w = np.eye(4)
                 m_w[0, 0] = signs[0]
                 m_w[1, 1] = signs[1]
                 m_w[2, 2] = signs[2]
@@ -295,20 +326,20 @@ class GeometryMatcher:
         return None
 
     def are_meshes_identical(
-        self, t1: pm.nodetypes.Transform, t2: pm.nodetypes.Transform
-    ) -> Tuple[bool, Optional[pm.dt.Matrix]]:
+        self, t1: str, t2: str
+    ) -> Tuple[bool, Optional["om.MMatrix"]]:
         """Detailed geometric comparison using robust PCA alignment.
 
         Returns:
             (is_identical, relative_transform_matrix)
         """
-        m1 = t1.getShape()
-        m2 = t2.getShape()
+        m1 = NodeUtils.get_shape(t1)
+        m2 = NodeUtils.get_shape(t2)
         if not m1 or not m2:
             return False, None
 
-        pts1 = m1.getPoints(space="object")
-        pts2 = m2.getPoints(space="object")
+        pts1 = mesh_points(m1, world=False)
+        pts2 = mesh_points(m2, world=False)
         if len(pts1) != len(pts2):
             return False, None
 
@@ -335,9 +366,10 @@ class GeometryMatcher:
             [(float(p.x), float(p.y), float(p.z)) for p in pts2], dtype=float
         )
 
-        # Intermediate check: Unordered Identity check
-        # If vertices are just reordered but geometry is same in local space, Fast Path fails but this succeeds.
-        # We prefer Identity over a potentially ambiguous PCA transform.
+        # Intermediate check: unordered identity
+        # If vertices are reordered but geometry matches in local space, the
+        # fast path fails but this succeeds. Prefer identity over a possibly
+        # ambiguous PCA transform.
         tree = KDTree(pts2_array)
         dists, _ = tree.query(pts1_array, k=1)
         if np.max(dists) <= self.tolerance:
@@ -352,7 +384,7 @@ class GeometryMatcher:
             return True, None
 
         if self.scale_tolerance > 0:
-            # Use Whitening (PCA Normalization) for arbitrary scale matching
+            # Whitening (PCA Normalization) for arbitrary scale matching
             p1_w, v1, s1, c1 = self._whiten_points(pts1_array)
             p2_w, v2, s2, c2 = self._whiten_points(pts2_array)
 
@@ -361,87 +393,72 @@ class GeometryMatcher:
                 print(f"  S1: {s1}")
                 print(f"  S2: {s2}")
 
-            # Find transform between whitened clouds (Rotation/Reflection only)
-            # We use get_pca_transform on the whitened points
-            # Since they are already aligned to axes, this effectively checks sign flips and symmetry
-            # Relax tolerance for whitened check as we are comparing normalized shapes
             whitened_tolerance = max(self.tolerance * 100.0, 0.15)
 
-            # Use internal check instead of ptk.MathUtils.get_pca_transform
             m_w = self._check_whitened_match(p1_w, p2_w, whitened_tolerance)
 
-            if not m_w:
+            if m_w is None:
                 if self.verbose:
                     print(f"[DEBUG] Whitened PCA transform failed for {t1} vs {t2}")
                 return False, None
 
-            # Construct Final Matrix
-            # M = V1 * S1 * M_w * S2_inv * V2_T
-
-            # We pick the first valid match
-            # m_w is already a matrix
-
-            # Convert numpy parts to Maya matrices
-            m_v1 = pm.dt.Matrix(v1.tolist())
-            m_s1 = pm.dt.Matrix()
+            # Construct final matrix: M = V1 * S1 * M_w * S2_inv * V2_T
+            m_v1 = np.eye(4)
+            m_v1[:3, :3] = v1
+            m_s1 = np.eye(4)
             m_s1[0, 0] = s1[0]
             m_s1[1, 1] = s1[1]
             m_s1[2, 2] = s1[2]
-
-            m_s2_inv = pm.dt.Matrix()
+            m_s2_inv = np.eye(4)
             m_s2_inv[0, 0] = 1.0 / s2[0]
             m_s2_inv[1, 1] = 1.0 / s2[1]
             m_s2_inv[2, 2] = 1.0 / s2[2]
+            m_v2_T = np.eye(4)
+            m_v2_T[:3, :3] = v2.T
 
-            m_v2_T = pm.dt.Matrix(v2.T.tolist())  # Transpose of V2
+            m_combined = m_v1 @ m_s1 @ m_w @ m_s2_inv @ m_v2_T
 
-            # Combine
-            m_combined = m_v1 * m_s1 * m_w * m_s2_inv * m_v2_T
+            # Translation: T = C2 - (C1 transformed by m_combined rotation)
+            v_c1 = np.array([c1[0], c1[1], c1[2], 1.0])
+            transformed = v_c1 @ m_combined
+            m_combined[3, 0] = c2[0] - transformed[0]
+            m_combined[3, 1] = c2[1] - transformed[1]
+            m_combined[3, 2] = c2[2] - transformed[2]
 
-            # Calculate Translation
-            v_c1 = pm.dt.Vector(c1[0], c1[1], c1[2])
-            v_c2 = pm.dt.Vector(c2[0], c2[1], c2[2])
-            v_transformed_c1 = v_c1 * m_combined
-            v_translation = v_c2 - v_transformed_c1
+            return True, _np_to_mmatrix(m_combined)
 
-            m_combined[3, 0] = v_translation.x
-            m_combined[3, 1] = v_translation.y
-            m_combined[3, 2] = v_translation.z
-
-            return True, m_combined
-
-        # Standard path (Uniform Scale or No Scale)
-        # Calculate centroids
+        # Standard path (uniform scale or no scale).  Center both vert
+        # clouds and compare — detects same-shape / different-translation
+        # cases (e.g. one mesh frozen at an offset, another not). The
+        # match itself is desirable for assembly reconstruction but the
+        # auto-translation acceptance is too lax for strict leaf-
+        # instancing where a frozen-at-offset cube should remain distinct
+        # from a transform-translated one.  Gate the *acceptance* on
+        # ``scale_tolerance > 0`` (the user's opt-in for geometric-
+        # equivalence matching) but always center for the downstream PCA
+        # path (``c1`` / ``c2`` are referenced below).
         c1 = np.mean(pts1_array, axis=0)
         c2 = np.mean(pts2_array, axis=0)
 
-        # Center points
         centered1 = pts1_array - c1
         centered2 = pts2_array - c2
 
-        # No scale tolerance: use raw centered points
+        if self.scale_tolerance > 0:
+            tree = KDTree(centered2)
+            dists, _ = tree.query(centered1, k=1)
+            if float(dists.max()) <= float(self.tolerance):
+                if self.verbose:
+                    print(f"[DEBUG] KDTree matched for {t1} vs {t2}")
+
+                # Pure-translation match (rotation = identity)
+                m = np.eye(4)
+                m[3, 0] = c2[0] - c1[0]
+                m[3, 1] = c2[1] - c1[1]
+                m[3, 2] = c2[2] - c1[2]
+                return True, _np_to_mmatrix(m)
+
         pts1_array = centered1
         pts2_array = centered2
-
-        tree = KDTree(pts2_array)
-        dists, _ = tree.query(pts1_array, k=1)
-        if float(dists.max()) <= float(self.tolerance):
-            if self.verbose:
-                print(f"[DEBUG] KDTree matched for {t1} vs {t2}")
-
-            # Construct full matrix: T = C2 - (C1)
-            m = pm.dt.Matrix()
-
-            # Calculate Translation
-            v_c1 = pm.dt.Vector(c1[0], c1[1], c1[2])
-            v_c2 = pm.dt.Vector(c2[0], c2[1], c2[2])
-            v_transformed_c1 = v_c1 * m
-            v_translation = v_c2 - v_transformed_c1
-
-            m[3, 0] = v_translation.x
-            m[3, 1] = v_translation.y
-            m[3, 2] = v_translation.z
-            return True, m
 
         # Robust PCA Alignment (handles baked rotations and symmetry)
         matrix_list = ptk.MathUtils.get_pca_transform(
@@ -449,38 +466,34 @@ class GeometryMatcher:
         )
 
         if matrix_list:
-            m_rot = pm.dt.Matrix(matrix_list)
-            m_combined = m_rot
+            # matrix_list is a flat 16-element list (row-major)
+            m_combined = np.array(matrix_list, dtype=float).reshape(4, 4)
 
-            # Calculate Translation: T = C2 - (M_combined * C1)
-            v_c1 = pm.dt.Vector(c1[0], c1[1], c1[2])
-            v_c2 = pm.dt.Vector(c2[0], c2[1], c2[2])
-            v_transformed_c1 = v_c1 * m_combined
-            v_translation = v_c2 - v_transformed_c1
-
-            m_combined[3, 0] = v_translation.x
-            m_combined[3, 1] = v_translation.y
-            m_combined[3, 2] = v_translation.z
-            return True, m_combined
+            # Translation: T = C2 - (M_combined * C1)
+            v_c1 = np.array([c1[0], c1[1], c1[2], 1.0])
+            transformed = v_c1 @ m_combined
+            m_combined[3, 0] = c2[0] - transformed[0]
+            m_combined[3, 1] = c2[1] - transformed[1]
+            m_combined[3, 2] = c2[2] - transformed[2]
+            return True, _np_to_mmatrix(m_combined)
 
         return False, None
 
-    def _are_uvs_identical(self, m1: pm.nodetypes.Mesh, m2: pm.nodetypes.Mesh) -> bool:
+    def _are_uvs_identical(self, m1: str, m2: str) -> bool:
         """Compare UVs of two meshes (assumes identical vertex order)."""
-        sets1 = m1.getUVSetNames() or []
-        sets2 = m2.getUVSetNames() or []
+        sets1 = mesh_uv_set_names(m1)
+        sets2 = mesh_uv_set_names(m2)
 
         if set(sets1) != set(sets2):
             return False
 
         for uv_set in sets1:
-            u1, v1 = m1.getUVs(uv_set)
-            u2, v2 = m2.getUVs(uv_set)
+            u1, v1 = mesh_get_uvs(m1, uv_set)
+            u2, v2 = mesh_get_uvs(m2, uv_set)
 
             if len(u1) != len(u2):
                 return False
 
-            # Compare arrays
             if not np.allclose(u1, u2, atol=self.uv_tolerance) or not np.allclose(
                 v1, v2, atol=self.uv_tolerance
             ):
@@ -488,28 +501,23 @@ class GeometryMatcher:
 
         return True
 
-    def get_hierarchy_signature(self, node: pm.nodetypes.Transform) -> Tuple:
+    def get_hierarchy_signature(self, node: str) -> Tuple:
         """Recursive signature generation for hierarchy comparison."""
-        # 1. Check for Shape (Geometry)
-        shape = node.getShape()
+        # 1. Geometry signature (if a mesh shape is present)
+        shape = NodeUtils.get_shape(node)
         geo_sig = None
-        if (
-            shape
-            and isinstance(shape, pm.nodetypes.Mesh)
-            and not shape.intermediateObject.get()
-        ):
+        if shape and _is_mesh_shape(shape) and not NodeUtils.is_intermediate(shape):
             geo_sig = self.get_mesh_signature(node)
 
-        # 2. Check Children (Hierarchy)
-        children = node.getChildren(type="transform")
+        # 2. Children
+        children = NodeUtils.get_children(node, type="transform")
         child_sigs = []
 
         for child in children:
-            # Get child's signature recursively
             c_sig = self.get_hierarchy_signature(child)
 
-            # Use Distance for rotation invariance
-            dist = child.getTranslation(space="object").length()
+            # Use distance for rotation invariance
+            dist = get_translation(child, world=False).length()
             dist_sig = self.quantize(dist, 2)
 
             if self.scale_tolerance > 0:
@@ -517,7 +525,6 @@ class GeometryMatcher:
 
             child_sigs.append((c_sig, dist_sig))
 
-        # Sort children signatures to ensure order independence
         child_sigs.sort(key=lambda x: str(x))
 
         return (geo_sig, tuple(child_sigs))
@@ -527,77 +534,77 @@ class GeometryMatcher:
         if m1 is None and m2 is None:
             return True
         if m1 is None:
-            m1 = pm.dt.Matrix()
+            m1 = om.MMatrix()
         if m2 is None:
-            m2 = pm.dt.Matrix()
+            m2 = om.MMatrix()
+        return m1.isEquivalent(m2, self.tolerance)
 
-        return m1.isEquivalent(m2, tol=self.tolerance)
-
-    def are_meshes_identical_with_transform(self, t1, t2, matrix):
+    def are_meshes_identical_with_transform(self, t1: str, t2: str, matrix) -> bool:
         """Check if t1 transformed by matrix matches t2."""
-        m1 = t1.getShape()
-        m2 = t2.getShape()
+        m1 = NodeUtils.get_shape(t1)
+        m2 = NodeUtils.get_shape(t2)
         if not m1 or not m2:
             return False
 
-        pts1 = np.array(m1.getPoints(space="object"))
-        pts2 = np.array(m2.getPoints(space="object"))
+        pts_a = mesh_points(m1, world=False)
+        pts_b = mesh_points(m2, world=False)
 
-        if len(pts1) != len(pts2):
+        if len(pts_a) != len(pts_b):
             return False
 
-        # Handle None matrix (Identity)
+        pts1 = np.array([(p.x, p.y, p.z) for p in pts_a])
+        pts2 = np.array([(p.x, p.y, p.z) for p in pts_b])
+
+        # Identity if matrix is None or an MMatrix-equivalent identity
         if matrix is None:
-            matrix = pm.dt.Matrix()
+            mat_arr = np.eye(4)
+        elif isinstance(matrix, np.ndarray):
+            mat_arr = matrix
+        else:
+            # om.MMatrix supports getElement(r, c)
+            mat_arr = np.array(
+                [[matrix.getElement(r, c) for c in range(4)] for r in range(4)]
+            )
 
-        # Get local matrices to transform points to parent space
-        # We use numpy for matrix multiplication
-        mat1 = np.array(t1.getMatrix(objectSpace=True))
-        mat2 = np.array(t2.getMatrix(objectSpace=True))
+        # Local matrices to transform points to parent space
+        m1_om = get_object_matrix(t1, world=False)
+        m2_om = get_object_matrix(t2, world=False)
+        mat1 = np.array(
+            [[m1_om.getElement(r, c) for c in range(4)] for r in range(4)]
+        )
+        mat2 = np.array(
+            [[m2_om.getElement(r, c) for c in range(4)] for r in range(4)]
+        )
 
-        # Transform pts1 to parent space
-        # pts1 is (N, 3). Matrix is 4x4.
         ones = np.ones((len(pts1), 1))
         pts1_h = np.hstack([pts1, ones])
-        pts1_parent = np.dot(pts1_h, mat1)  # Result is (N, 4)
+        pts1_parent = np.dot(pts1_h, mat1)  # (N, 4)
 
-        # Apply relative transform (parent to parent)
-        # matrix is the transform from Parent1 to Parent2
-        # So pts1_target = pts1_parent * matrix
-        pts1_target = np.dot(pts1_parent, np.array(matrix))[:, :3]
+        pts1_target = np.dot(pts1_parent, mat_arr)[:, :3]
 
-        # Transform pts2 to parent space
         pts2_h = np.hstack([pts2, ones])
         pts2_parent = np.dot(pts2_h, mat2)[:, :3]
 
-        # Compare pts1_target vs pts2_parent
         tree = KDTree(pts2_parent)
         dists, _ = tree.query(pts1_target, k=1)
         max_dist = np.max(dists)
 
-        if max_dist <= self.tolerance:
-            return True
-
-        return False
+        return max_dist <= self.tolerance
 
     def are_hierarchies_identical(
         self,
-        t1: pm.nodetypes.Transform,
-        t2: pm.nodetypes.Transform,
-        expected_transform: Optional[pm.dt.Matrix] = None,
+        t1: str,
+        t2: str,
+        expected_transform: Optional["om.MMatrix"] = None,
         is_root: bool = False,
-    ) -> Tuple[bool, Optional[pm.dt.Matrix]]:
+    ) -> Tuple[bool, Optional["om.MMatrix"]]:
         """Detailed hierarchy comparison. Returns (is_identical, relative_transform)."""
-        # 1. Check Mesh Identity (if present)
-        s1 = t1.getShape()
-        s2 = t2.getShape()
+        # 1. Mesh identity (if present)
+        s1 = NodeUtils.get_shape(t1)
+        s2 = NodeUtils.get_shape(t2)
 
-        has_mesh1 = (
-            s1 and isinstance(s1, pm.nodetypes.Mesh) and not s1.intermediateObject.get()
-        )
-        has_mesh2 = (
-            s2 and isinstance(s2, pm.nodetypes.Mesh) and not s2.intermediateObject.get()
-        )
+        has_mesh1 = s1 and _is_mesh_shape(s1) and not NodeUtils.is_intermediate(s1)
+        has_mesh2 = s2 and _is_mesh_shape(s2) and not NodeUtils.is_intermediate(s2)
 
         if has_mesh1 != has_mesh2:
             return False, None
@@ -620,10 +627,10 @@ class GeometryMatcher:
                 if not is_identical:
                     return False, None
 
-                # Verify that the found transform actually aligns the geometry in parent space
-                # This catches cases where shapes match but local transforms differ (e.g. scale/rotation)
-                # NOTE: If is_root is True, we skip this check because we expect the roots to be at different locations.
-                # We trust are_meshes_identical to have verified the shape geometry.
+                # Verify the found transform actually aligns geometry in parent
+                # space. Catches cases where shapes match but local transforms
+                # differ (scale/rotation). For roots we expect different
+                # locations, so skip — trust the shape-level check.
                 if not is_root and not self.are_meshes_identical_with_transform(
                     t1, t2, rel_mtx
                 ):
@@ -636,21 +643,24 @@ class GeometryMatcher:
                 relative_transform = rel_mtx
                 transform_determined = True
 
-        # 2. Check Children
-        children1 = t1.getChildren(type="transform")
-        children2 = t2.getChildren(type="transform")
+        # 2. Children
+        children1 = NodeUtils.get_children(t1, type="transform")
+        children2 = NodeUtils.get_children(t2, type="transform")
 
         if len(children1) != len(children2):
             return False, None
 
         # Sort children by distance from parent and mesh complexity
-        def get_sort_key(node):
-            dist = node.getTranslation(space="object").length()
+        def get_sort_key(node: str):
+            dist = get_translation(node, world=False).length()
             mesh_sig = (0, 0, 0)
-            shape = node.getShape()
-            if shape and isinstance(shape, pm.nodetypes.Mesh):
-                mesh_sig = (shape.numVertices(), shape.numEdges(), shape.numPolygons())
-
+            shape = NodeUtils.get_shape(node)
+            if shape and _is_mesh_shape(shape):
+                mesh_sig = (
+                    cmds.polyEvaluate(shape, vertex=True) or 0,
+                    cmds.polyEvaluate(shape, edge=True) or 0,
+                    cmds.polyEvaluate(shape, face=True) or 0,
+                )
             if self.scale_tolerance > 0:
                 return (0.0, mesh_sig)
             return (round(dist, 3), mesh_sig)
@@ -661,22 +671,20 @@ class GeometryMatcher:
         processed_pairs = []
 
         for c1, c2 in zip(children1, children2):
-            # Check Distance to Parent
+            # Distance to parent
             if self.scale_tolerance <= 0:
-                d1 = c1.getTranslation(space="object").length()
-                d2 = c2.getTranslation(space="object").length()
+                d1 = get_translation(c1, world=False).length()
+                d2 = get_translation(c2, world=False).length()
                 if abs(d1 - d2) > self.tolerance:
                     return False, None
 
-            # Recursive Check
             is_child_identical, child_rel_mtx = self.are_hierarchies_identical(
                 c1, c2, relative_transform
             )
 
             if is_child_identical:
-                # Check Transform Consistency
                 if transform_determined:
-                    # Case: We thought it was Identity (None), but child says otherwise
+                    # Thought it was identity (None), but child says otherwise
                     if relative_transform is None and child_rel_mtx is not None:
                         all_compatible = True
                         for p1, p2 in processed_pairs:
@@ -699,7 +707,7 @@ class GeometryMatcher:
                 processed_pairs.append((c1, c2))
                 continue
 
-            # If failed, and we have a transform, maybe it was the wrong transform?
+            # If failed and we have a transform, maybe it was the wrong one
             if transform_determined:
                 if self.verbose:
                     print(
@@ -713,7 +721,6 @@ class GeometryMatcher:
                         print(
                             f"[DEBUG] Independent match found. Checking compatibility with {len(processed_pairs)} pairs."
                         )
-                    # Check if this new transform works for all previous pairs
                     all_compatible = True
                     for p1, p2 in processed_pairs:
                         if self.verbose:
@@ -738,17 +745,17 @@ class GeometryMatcher:
 
             return False, None
 
-        # 3. Check Internal Structure (Pairwise Distances)
+        # 3. Internal structure (pairwise distances)
         if self.scale_tolerance <= 0 and len(children1) > 1:
             for i in range(len(children1)):
                 for j in range(i + 1, len(children1)):
-                    p1_i = children1[i].getTranslation(space="object")
-                    p1_j = children1[j].getTranslation(space="object")
-                    dist1 = p1_i.distanceTo(p1_j)
+                    p1_i = get_translation(children1[i], world=False)
+                    p1_j = get_translation(children1[j], world=False)
+                    dist1 = (p1_i - p1_j).length()
 
-                    p2_i = children2[i].getTranslation(space="object")
-                    p2_j = children2[j].getTranslation(space="object")
-                    dist2 = p2_i.distanceTo(p2_j)
+                    p2_i = get_translation(children2[i], world=False)
+                    p2_j = get_translation(children2[j], world=False)
+                    dist2 = (p2_i - p2_j).length()
 
                     if abs(dist1 - dist2) > self.tolerance:
                         return False, None

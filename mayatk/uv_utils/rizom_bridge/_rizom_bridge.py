@@ -4,12 +4,14 @@ import tempfile
 from pathlib import Path
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ModuleNotFoundError as error:
     print(__file__, error)
 
 # From this package:
 from mayatk import NodeUtils, UvUtils
+from mayatk.core_utils._core_utils import leaf_name, short_name
 from pythontk.core_utils.app_launcher import AppLauncher
 from pythontk.str_utils._str_utils import StrUtils
 
@@ -34,7 +36,7 @@ class RizomUVBridge:
         self._rizom_path = rizom_path
         self._export_path = None  # Default to None, to be set during processing
         self._script_path = None  # Stores the path to the UV script file
-        # Mapping of exported (temporary suffixed) transform short names -> original transform PyNode
+        # Mapping of exported (temporary suffixed) transform short names -> original transform str
         self._export_name_map = {}
         # Suffix applied to temporary duplicate nodes to avoid FBX re-import overwriting originals
         self._temp_suffix = "__RZTMP"
@@ -136,45 +138,45 @@ class RizomUVBridge:
         import_namespace = "RizomUVImport"
 
         # Remove the namespace if it already exists to ensure clean import
-        if pm.namespace(exists=import_namespace):
+        if cmds.namespace(exists=import_namespace):
             print(f"Debug: Removing existing namespace: {import_namespace}")
-            pm.namespace(removeNamespace=import_namespace, mergeNamespaceWithRoot=True)
+            cmds.namespace(removeNamespace=import_namespace, mergeNamespaceWithRoot=True)
 
         # Create a fresh namespace
-        pm.namespace(addNamespace=import_namespace)
+        cmds.namespace(addNamespace=import_namespace)
         print(f"Debug: Created namespace: {import_namespace}")
 
         try:
             if file_ext == ".fbx":
                 # Ensure FBX plugin is loaded first
-                if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+                if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
                     print("Debug: Loading FBX plugin...")
-                    pm.loadPlugin("fbxmaya")
+                    cmds.loadPlugin("fbxmaya")
 
                 print("Debug: Importing FBX using Maya file command...")
 
                 # Use Maya's file command for reliable namespace import
                 import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
                 print(f"Debug: Executing command: {import_cmd}")
-                pm.mel.eval(import_cmd)
+                mel.eval(import_cmd)
 
                 # Get all objects in the namespace - try different approaches
-                imported_objs = pm.ls(f"{import_namespace}:*", type="transform")
+                imported_objs = cmds.ls(f"{import_namespace}:*", type="transform") or []
                 print(f"Debug: Transform objects in namespace: {imported_objs}")
 
                 # If no transforms found, check for any nodes in the namespace
                 if not imported_objs:
-                    all_namespace_nodes = pm.ls(f"{import_namespace}:*")
+                    all_namespace_nodes = cmds.ls(f"{import_namespace}:*") or []
                     print(f"Debug: All nodes in namespace: {all_namespace_nodes}")
 
                     # Try to find shapes and get their transforms
-                    shape_nodes = pm.ls(f"{import_namespace}:*", type="mesh")
+                    shape_nodes = cmds.ls(f"{import_namespace}:*", type="mesh") or []
                     if shape_nodes:
                         imported_objs = []
                         for shape in shape_nodes:
-                            transforms = pm.listRelatives(
+                            transforms = cmds.listRelatives(
                                 shape, parent=True, type="transform"
-                            )
+                            ) or []
                             if transforms:
                                 imported_objs.extend(transforms)
                         print(f"Debug: Transforms found from shapes: {imported_objs}")
@@ -184,11 +186,11 @@ class RizomUVBridge:
                     print(
                         f"Debug: No objects found in namespace, searching for suffix '{self._temp_suffix}' anywhere..."
                     )
-                    all_transforms = pm.ls(type="transform")
+                    all_transforms = cmds.ls(type="transform") or []
                     suffix_objects = [
                         t
                         for t in all_transforms
-                        if t.nodeName().endswith(self._temp_suffix)
+                        if leaf_name(t).endswith(self._temp_suffix)
                     ]
                     print(
                         f"Debug: Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
@@ -196,12 +198,13 @@ class RizomUVBridge:
                     imported_objs = suffix_objects
 
             else:  # .obj
-                imported_objs = pm.importFile(
+                imported_objs = cmds.file(
                     self.export_path,
+                    i=True,
                     namespace=import_namespace,
                     returnNewNodes=True,
                     type="OBJ",
-                )
+                ) or []
                 print(f"Debug: OBJ import returned: {imported_objs}")
 
         except Exception as e:
@@ -209,21 +212,21 @@ class RizomUVBridge:
             # Final fallback: try without namespace
             try:
                 print("Debug: Trying import without namespace as final fallback...")
-                existing_transforms = set(pm.ls(type="transform"))
+                existing_transforms = set(cmds.ls(type="transform") or [])
 
                 if file_ext == ".fbx":
-                    pm.mel.eval(
+                    mel.eval(
                         f'file -import -type "FBX" -ignoreVersion -options "fbx" -pr "{self.export_path}";'
                     )
                 else:
-                    pm.importFile(self.export_path, type="OBJ")
+                    cmds.file(self.export_path, i=True, type="OBJ")
 
-                new_transforms = set(pm.ls(type="transform"))
+                new_transforms = set(cmds.ls(type="transform") or [])
                 imported_objs = list(new_transforms - existing_transforms)
 
                 # Filter to only those with our suffix
                 suffix_objects = [
-                    t for t in imported_objs if t.nodeName().endswith(self._temp_suffix)
+                    t for t in imported_objs if leaf_name(t).endswith(self._temp_suffix)
                 ]
                 print(
                     f"Debug: Fallback without namespace found {len(suffix_objects)} suffix objects: {suffix_objects}"
@@ -264,12 +267,12 @@ class RizomUVBridge:
         duplicates = []
         for orig in original_transforms:
             try:
-                dup = pm.duplicate(orig, rr=True, ic=True)[0]
-                new_name = f"{orig.nodeName()}{self._temp_suffix}"
-                dup = pm.rename(dup, new_name)
+                dup = cmds.duplicate(orig, rr=True, ic=True)[0]
+                new_name = f"{leaf_name(orig)}{self._temp_suffix}"
+                dup = cmds.rename(dup, new_name)
                 duplicates.append(dup)
                 # Store mapping using short (namespace-free) name
-                self._export_name_map[new_name.split(":")[-1]] = orig
+                self._export_name_map[short_name(new_name)] = orig
             except Exception as dup_err:
                 print(f"Debug: Failed to duplicate {orig}: {dup_err}")
         print(
@@ -283,14 +286,14 @@ class RizomUVBridge:
         export_dir = Path(self.export_path).parent
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        pm.select(duplicates, replace=True)
+        cmds.select(duplicates, replace=True)
         print(
             f"Debug: Exporting {len(duplicates)} duplicated objects to: {self.export_path}"
         )
 
         try:
             # Try FBX export first
-            pm.exportSelected(self.export_path, type="FBX export", force=True)
+            cmds.file(self.export_path, exportSelected=True, type="FBX export", force=True)
             print("Debug: FBX export completed successfully")
         except Exception as e:
             print(f"Debug: FBX export failed: {e}")
@@ -298,8 +301,9 @@ class RizomUVBridge:
             try:
                 obj_path = str(Path(self.export_path).with_suffix(".obj"))
                 print(f"Debug: Trying OBJ export to: {obj_path}")
-                pm.exportSelected(
+                cmds.file(
                     obj_path,
+                    exportSelected=True,
                     type="OBJ",
                     force=True,
                     options="groups=1;ptgroups=1;materials=1;smoothing=1;normals=1",
@@ -309,13 +313,13 @@ class RizomUVBridge:
                 print("Debug: OBJ export completed successfully")
             except Exception as obj_error:
                 # Last resort - try exporting to Maya's project directory
-                project_dir = pm.workspace(query=True, rootDirectory=True)
+                project_dir = cmds.workspace(query=True, rootDirectory=True)
                 fallback_path = Path(project_dir) / "rizomuv_temp.fbx"
                 try:
                     print(
                         f"Debug: Trying FBX export to project directory: {fallback_path}"
                     )
-                    pm.exportSelected(str(fallback_path), type="FBX export", force=True)
+                    cmds.file(str(fallback_path), exportSelected=True, type="FBX export", force=True)
                     self._export_path = fallback_path
                     print("Debug: Fallback FBX export completed successfully")
                 except Exception as final_error:
@@ -325,7 +329,7 @@ class RizomUVBridge:
         finally:
             # Remove the temporary duplicates from the scene before re-import
             try:
-                pm.delete(duplicates)
+                cmds.delete(duplicates)
                 print("Debug: Deleted temporary duplicated export nodes.")
             except Exception as cleanup_err:
                 print(f"Debug: Failed to delete duplicates: {cleanup_err}")
@@ -415,7 +419,7 @@ class RizomUVBridge:
         src_list = []
         dst_list = []
         for imp in imported_objects:
-            short = imp.nodeName().split(":")[-1]
+            short = short_name(imp)
             if short in self._export_name_map:
                 dst = self._export_name_map[short]
                 src_list.append(imp)
@@ -464,9 +468,9 @@ class RizomUVBridge:
                         )
 
         print("Debug: Cleaning up imported objects...")
-        pm.delete(imported_objects)
-        pm.namespace(removeNamespace="RizomUVImport", mergeNamespaceWithRoot=True)
-        pm.select(original_objects)
+        cmds.delete(imported_objects)
+        cmds.namespace(removeNamespace="RizomUVImport", mergeNamespaceWithRoot=True)
+        cmds.select(original_objects)
         print("Debug: Cleanup completed.")
 
     # -- Script resolution helpers -----------------------------------------
@@ -539,7 +543,7 @@ if __name__ == "__main__":
     # No hardcoded path needed — AppLauncher discovers RizomUV automatically.
     # To override: RizomUVBridge(r"C:/Program Files/Rizom Lab/.../Rizomuv_VS.exe")
     bridge = RizomUVBridge()
-    objects = pm.ls(pm.selected(), type="transform")
+    objects = cmds.ls(cmds.ls(selection=True) or [], type="transform") or []
 
     # Usage examples:
     #   bridge.process_with_rizomuv(objects, preset="pack")

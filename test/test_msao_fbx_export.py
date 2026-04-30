@@ -10,7 +10,7 @@ except ImportError:
     pass
 
 from mayatk.mat_utils.game_shader import GameShader
-from mayatk.test.base_test import MayaTkTestCase
+from base_test import MayaTkTestCase
 
 
 class TestMsaoFbxExport(MayaTkTestCase):
@@ -18,8 +18,13 @@ class TestMsaoFbxExport(MayaTkTestCase):
         super(TestMsaoFbxExport, self).setUp()
         self.gs = GameShader()
 
-    def test_msao_connection_creates_dummy_attr(self):
-        """Verify that connecting an MSAO map creates the dummy attribute for FBX export."""
+    def test_msao_connection_wires_metallic_ao_roughness(self):
+        """MSAO map (Unity HDRP mask) is split into metallic/AO/roughness channels.
+
+        Updated post-refactor: MSAO no longer creates a single ``MSAO_Map``
+        attribute. The texture is split per Unity HDRP convention:
+        R → TEX_metallic_map, G → TEX_ao_map, A → invert → TEX_roughness_map.
+        """
         if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
             cmds.loadPlugin("shaderFXPlugin")
 
@@ -28,29 +33,30 @@ class TestMsaoFbxExport(MayaTkTestCase):
 
         # Create dummy texture file
         tex_path = os.path.abspath("test_msao.png")
-        # We don't need the file to exist for the connection logic, but let's be safe
         with open(tex_path, "w") as f:
             f.write("dummy")
 
         try:
-            # Connect MSAO
             self.gs.connect_stingray_nodes(tex_path, "MSAO", shader)
 
-            # Check if dummy attribute exists
-            self.assertTrue(
-                shader.hasAttr("MSAO_Map"), "MSAO_Map attribute should exist"
-            )
+            file_nodes = cmds.ls(type="file") or []
+            self.assertTrue(file_nodes, "File node should be created")
 
-            # Check connection
-            # Find file node
-            file_nodes = pm.ls(type="file")
-            self.assertTrue(len(file_nodes) > 0, "File node should be created")
-            file_node = file_nodes[0]
+            # use_*_map toggles must be enabled by the MSAO branch.
+            for flag in ("use_metallic_map", "use_ao_map", "use_roughness_map"):
+                self.assertTrue(
+                    cmds.attributeQuery(flag, node=str(shader), exists=True),
+                    f"{flag} should exist on Stingray shader",
+                )
+                self.assertEqual(cmds.getAttr(f"{shader}.{flag}"), 1)
 
-            # Check if file node is connected to MSAO_Map
+            # Metallic channel must come from one of the file nodes.
+            mtl_inputs = cmds.listConnections(
+                f"{shader}.TEX_metallic_map", source=True, destination=False
+            ) or []
             self.assertTrue(
-                pm.isConnected(file_node.outColor, shader.MSAO_Map),
-                "File node should be connected to MSAO_Map",
+                any(node in file_nodes for node in mtl_inputs),
+                "TEX_metallic_map should be driven by the MSAO file node",
             )
 
         finally:

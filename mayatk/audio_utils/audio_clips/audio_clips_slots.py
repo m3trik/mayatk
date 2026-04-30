@@ -22,7 +22,6 @@ import math
 import os
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
     pass
@@ -552,7 +551,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
                 self.ui.footer.setText("Select an audio track first.")
                 return
 
-        current_frame = float(pm.currentTime(query=True))
+        current_frame = float(cmds.currentTime(query=True))
         self._write_track_keys(tid, current_frame, auto_end=auto_end)
 
         result = AudioClips.sync()
@@ -569,13 +568,13 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         if not cmds.objExists(carrier):
             self.ui.footer.setText(f"'{carrier}' does not exist yet.")
             return
-        pm.select(carrier, replace=True)
+        cmds.select(carrier, replace=True)
         self.ui.footer.setText(f"Selected '{carrier}'.")
 
     def _key_all_tracks(self, widget, tracks, auto_end):
         """Key every track sequentially from the current frame."""
         stagger = widget.option_box.menu.spn_stagger.value()
-        current_frame = float(pm.currentTime(query=True))
+        current_frame = float(cmds.currentTime(query=True))
         cursor = current_frame
         keyed_count = 0
 

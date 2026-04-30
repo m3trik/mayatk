@@ -15,10 +15,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# Dependencies - exclude optional system deps (pymel, qtpy)
+# Dependencies - exclude optional system deps (qtpy)
 dependencies = [
-    "pythontk>=0.8.3",
-    "uitk>=1.1.37",
+    "pythontk>=0.8.4",
+    "uitk>=1.1.39",
 ]
 
 [project.urls]
@@ -32,7 +32,6 @@ readme = {file = "docs/README.md", content-type = "text/markdown"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mayatk*"]
-exclude = ["pymel", "pymel.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.ui", "*.json", "*.txt", "*.md"]

@@ -1,11 +1,19 @@
 # !/usr/bin/python
 # coding=utf-8
+from __future__ import annotations
+
 from typing import Dict, List
-import pymel.core as pm
+
+try:
+    import maya.cmds as cmds
+except ImportError as error:
+    print(__file__, error)
 import pythontk as ptk
 
 # From this package
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+from mayatk.core_utils._core_utils import leaf_name
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class MatTransfer(ptk.LoggingMixin):
@@ -22,21 +30,20 @@ class MatTransfer(ptk.LoggingMixin):
 
     def is_material_related_node(self, node) -> bool:
         """Check if a node is material-related."""
-        if not hasattr(node, "nodeType"):
+        if not (isinstance(node, str) and cmds.objExists(node)):
             return False
-
-        return node.nodeType() in set(ShaderAttributeMap.SHADER_TYPES)
+        return cmds.nodeType(node) in set(ShaderAttributeMap.SHADER_TYPES)
 
     def get_material_assignments(self, obj) -> Dict[str, List]:
         """Get material assignments for an object."""
         assignments = {}
 
-        if not hasattr(obj, "getShapes"):
+        if not (isinstance(obj, str) and cmds.objExists(obj)):
             return assignments
 
-        for shape in obj.getShapes():
-            shape_name = shape.nodeName().split(":")[-1]
-            sgs = shape.listConnections(type="shadingEngine")
+        for shape in NodeUtils.get_shapes(obj):
+            shape_name = leaf_name(shape).split(":")[-1]
+            sgs = cmds.listConnections(shape, type="shadingEngine") or []
             if sgs:
                 assignments[shape_name] = sgs
 
@@ -48,11 +55,13 @@ class MatTransfer(ptk.LoggingMixin):
 
     def handle_object_materials(self, target_obj, material_assignments: Dict) -> None:
         """Simple material handling - let Maya do the heavy lifting."""
-        if not (material_assignments and hasattr(target_obj, "getShapes")):
+        if not material_assignments:
+            return
+        if not (isinstance(target_obj, str) and cmds.objExists(target_obj)):
             return
 
-        for shape in target_obj.getShapes():
-            shape_name = shape.nodeName().split(":")[-1]
+        for shape in NodeUtils.get_shapes(target_obj):
+            shape_name = leaf_name(shape).split(":")[-1]
 
             # Find matching materials
             sgs = self._find_matching_materials(shape_name, material_assignments)
@@ -78,12 +87,11 @@ class MatTransfer(ptk.LoggingMixin):
     def _assign_material(self, shape, sg) -> None:
         """Assign material using Maya's robust duplication."""
         try:
-            sg_name = sg.nodeName().split(":")[-1]
+            sg_name = leaf_name(sg).split(":")[-1]
 
-            if pm.objExists(sg_name):
+            if cmds.objExists(sg_name):
                 # Material already exists locally
-                existing_sg = pm.PyNode(sg_name)
-                pm.sets(existing_sg, edit=True, forceElement=shape)
+                cmds.sets(sg_name, edit=True, forceElement=shape)
                 self.logger.debug(f"Assigned existing material: {sg_name}")
             else:
                 # Use Maya's built-in material import
@@ -96,37 +104,37 @@ class MatTransfer(ptk.LoggingMixin):
         """Import material using Maya's duplicate with upstream nodes."""
         try:
             # Maya handles the entire network automatically
-            duplicated = pm.duplicate(sg, upstreamNodes=True, inputConnections=True)
+            duplicated = cmds.duplicate(sg, upstreamNodes=True, inputConnections=True) or []
 
             # Find the new shading engine
             new_sg = None
             for node in duplicated:
-                if isinstance(node, pm.nt.ShadingEngine):
+                if NodeUtils.node_is(node, "shadingEngine"):
                     new_sg = node
                     break
 
             if new_sg:
                 # Clean up the name
-                clean_name = sg.nodeName().split(":")[-1]
-                if new_sg.nodeName() != clean_name:
+                clean_name = leaf_name(sg).split(":")[-1]
+                if leaf_name(new_sg) != clean_name:
                     try:
-                        new_sg.rename(clean_name)
-                    except:
+                        new_sg = cmds.rename(new_sg, clean_name)
+                    except Exception:
                         pass  # Name might exist
 
                 # Assign to shape
-                pm.sets(new_sg, edit=True, forceElement=shape)
+                cmds.sets(new_sg, edit=True, forceElement=shape)
                 self.logger.debug(f"Imported and assigned material: {clean_name}")
             else:
                 # Fallback - assign original (might be namespaced)
-                pm.sets(sg, edit=True, forceElement=shape)
+                cmds.sets(sg, edit=True, forceElement=shape)
 
         except Exception as e:
             self.logger.warning(f"Material import failed: {e}")
             # Final fallback
             try:
-                pm.sets(sg, edit=True, forceElement=shape)
-            except:
+                cmds.sets(sg, edit=True, forceElement=shape)
+            except Exception:
                 pass
 
 

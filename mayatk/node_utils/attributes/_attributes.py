@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError:
-    pm = None  # type: ignore[assignment]
+    cmds = None  # type: ignore[assignment]
+    mel = None  # type: ignore[assignment]
 
 import pythontk as ptk
+
+from mayatk.core_utils._core_utils import short_name, as_strings
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +106,42 @@ class Attributes(ptk.HelpMixin):
     }
 
     @staticmethod
+    def has_attr(node: str, attr: str) -> bool:
+        """Return True if *attr* exists on *node*."""
+        return bool(cmds.attributeQuery(attr, node=str(node), exists=True))
+
+    @staticmethod
+    def set_plug(plug: str, value: Any, force: bool = False) -> None:
+        """Write *value* to *plug*, optionally bypassing a lock.
+
+        ``value`` may be a scalar or a 3-tuple. Tuples are written as
+        ``type="double3"`` when the plug is a ``float3``/``double3`` compound.
+
+        With ``force=True``, the plug is unlocked for the duration of the
+        write and re-locked afterwards. When ``force=False`` and the plug
+        is locked, the write is silently skipped.
+        """
+        if not cmds.objExists(plug):
+            return
+        locked = bool(cmds.getAttr(plug, lock=True))
+        if locked and not force:
+            # Silently skip — caller did not request a force-write.
+            return
+        if locked and force:
+            cmds.setAttr(plug, lock=False)
+        try:
+            if isinstance(value, (tuple, list)) and cmds.getAttr(plug, type=True) in (
+                "float3",
+                "double3",
+            ):
+                cmds.setAttr(plug, value[0], value[1], value[2], type="double3")
+            else:
+                cmds.setAttr(plug, value)
+        finally:
+            if locked and force:
+                cmds.setAttr(plug, lock=True)
+
+    @staticmethod
     def attr_short_name(long_name: str, node: str = "") -> str:
         """Return the short attribute name for a long attribute name.
 
@@ -122,8 +162,6 @@ class Attributes(ptk.HelpMixin):
         """
         if node:
             try:
-                import maya.cmds as cmds
-
                 short = cmds.attributeQuery(long_name, node=node, shortName=True)
                 if short:
                     return short
@@ -242,27 +280,27 @@ class Attributes(ptk.HelpMixin):
         preset = cls.PRESETS[name]
         for template in preset.templates:
             attr_name = template.long_name
-            for obj in pm.ls(objects):
-                if not obj.hasAttr(attr_name):
+            for obj in cmds.ls(objects) or []:
+                if not cmds.attributeQuery(attr_name, node=str(obj), exists=True):
                     continue
-                curves = pm.listConnections(obj.attr(attr_name), type="animCurve")
+                curves = cmds.listConnections(f"{obj}.{attr_name}", type="animCurve") or []
                 if curves:
-                    pm.delete(curves)
-                obj.deleteAttr(attr_name)
+                    cmds.delete(curves)
+                cmds.deleteAttr(f"{obj}.{attr_name}")
 
     @classmethod
     def create_attributes(cls, objects, template: AttributeTemplate) -> List[str]:
         """Apply an ``AttributeTemplate`` to a list of objects."""
         added: List[str] = []
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             if cls.ensure_attribute(obj, template):
-                added.append(f"{obj.name()}.{template.long_name}")
+                added.append(f"{obj}.{template.long_name}")
         return added
 
     @classmethod
     def ensure_attribute(cls, obj, template: AttributeTemplate) -> bool:
         """Create an attribute on *obj* from *template* if it doesn't already exist."""
-        if obj.hasAttr(template.long_name):
+        if cmds.attributeQuery(template.long_name, node=str(obj), exists=True):
             return True
 
         kwargs: dict = {
@@ -287,16 +325,16 @@ class Attributes(ptk.HelpMixin):
             kwargs["defaultValue"] = template.default_value
 
         try:
-            pm.addAttr(obj, **kwargs)
-            attr = obj.attr(template.long_name)
+            cmds.addAttr(str(obj), **kwargs)
+            plug = f"{obj}.{template.long_name}"
 
             if template.keyable:
-                attr.setKeyable(True)
+                cmds.setAttr(plug, keyable=True)
             else:
-                attr.showInChannelBox(True)
+                cmds.setAttr(plug, channelBox=True)
 
             if template.default_value is not None:
-                attr.set(template.default_value)
+                cmds.setAttr(plug, template.default_value)
 
             return True
         except Exception as e:
@@ -317,12 +355,12 @@ class Attributes(ptk.HelpMixin):
         """Retrieve a node's attributes and their current values.
 
         Parameters:
-            node (pm.nt.DependNode): The target node.
+            node: The target node (str or node object).
             inc (list, optional): Attribute names to include.
             exc (list, optional): Attribute names to exclude (takes priority).
             exc_defaults (bool): If True, exclude attributes still at their default value.
             quiet (bool): Suppress errors during attribute processing.
-            **kwargs: Forwarded to ``pm.listAttr``.
+            **kwargs: Forwarded to ``cmds.listAttr``.
 
         Returns:
             dict: ``{attr_name: value, ...}``
@@ -341,14 +379,15 @@ class Attributes(ptk.HelpMixin):
         }
         list_attr_kwargs.update(kwargs)
 
-        all_attr_names = pm.listAttr(node, **list_attr_kwargs)
+        node = str(node)
+        all_attr_names = cmds.listAttr(node, **list_attr_kwargs) or []
         if exc_defaults:
             for attr_name in all_attr_names:
                 try:
-                    defaults = pm.attributeQuery(attr_name, node=node, listDefault=True)
+                    defaults = cmds.attributeQuery(attr_name, node=str(node), listDefault=True) or []
                     if defaults:
                         default_value = defaults[0]
-                        current_value = pm.getAttr(f"{node}.{attr_name}")
+                        current_value = cmds.getAttr(f"{node}.{attr_name}")
                         if current_value == default_value or (
                             isinstance(current_value, float)
                             and abs(current_value - default_value) < 1e-6
@@ -358,13 +397,13 @@ class Attributes(ptk.HelpMixin):
                     continue
 
         filtered_attr_names = ptk.filter_list(
-            pm.listAttr(node, **list_attr_kwargs), inc, exc
+            cmds.listAttr(node, **list_attr_kwargs) or [], inc, exc
         )
 
         result: dict = {}
         for attr_name in filtered_attr_names:
             try:
-                result[attr_name] = pm.getAttr(f"{node}.{attr_name}")
+                result[attr_name] = cmds.getAttr(f"{node}.{attr_name}")
             except Exception as e:
                 if not quiet:
                     print(f"Error processing attribute '{attr_name}' on '{node}': {e}")
@@ -376,7 +415,7 @@ class Attributes(ptk.HelpMixin):
         """Determine the Maya attribute type string for a given Python value.
 
         Parameters:
-            value: A Python value (bool, int, float, str, list, tuple, pm.Matrix …).
+            value: A Python value (bool, int, float, str, list, tuple …).
 
         Returns:
             str: The corresponding Maya attribute type name (e.g. ``'bool'``,
@@ -411,11 +450,6 @@ class Attributes(ptk.HelpMixin):
                 return "pointArray"
             else:
                 return "compound"
-        elif isinstance(value, pm.Matrix):
-            if value.type == "float":
-                return "fltMatrix"
-            elif value.type == "double":
-                return "matrix"
         return "compound"
 
     @staticmethod
@@ -453,30 +487,30 @@ class Attributes(ptk.HelpMixin):
         Returns:
             dict: Per-object or flat attribute→value mapping.
         """
-        channel_box = pm.melGlobals["gChannelBoxName"]
+        channel_box = mel.eval("$tmp = $gChannelBoxName")
         attributes_dict: dict = {}
 
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             if args:
                 attrs = list(args)
             else:
-                attrs = pm.channelBox(channel_box, query=True, sma=True) or []
+                attrs = cmds.channelBox(channel_box, query=True, sma=True) or []
 
             if include_locked:
-                attrs += pm.listAttr(obj, locked=True)
+                attrs += cmds.listAttr(str(obj), locked=True) or []
             if include_nonkeyable:
-                attrs += pm.listAttr(obj, keyable=False)
+                attrs += cmds.listAttr(str(obj), keyable=False) or []
 
             if as_group:
                 for attr in attrs:
                     attr_name = f"{obj}.{attr}" if include_object_name else attr
-                    attributes_dict[attr_name] = pm.getAttr(f"{obj}.{attr}")
+                    attributes_dict[attr_name] = cmds.getAttr(f"{obj}.{attr}")
             else:
                 obj_attrs = {}
                 for attr in attrs:
-                    obj_attrs[attr] = pm.getAttr(f"{obj}.{attr}")
+                    obj_attrs[attr] = cmds.getAttr(f"{obj}.{attr}")
                 if obj_attrs:
-                    attributes_dict[str(obj)] = obj_attrs
+                    attributes_dict[obj] = obj_attrs
 
         return attributes_dict
 
@@ -497,7 +531,7 @@ class Attributes(ptk.HelpMixin):
         """Set values on existing node attributes.
 
         Parameters:
-            node (str/obj): Target node.
+            node (str): Target node.
             create (bool): If True, create missing attributes via
                 :meth:`create_or_set`.
             quiet (bool): Suppress warnings on failure.
@@ -505,23 +539,26 @@ class Attributes(ptk.HelpMixin):
             lock (bool): Lock the attribute after setting.
             **attributes: ``attr_name=value`` pairs.
         """
-        if isinstance(node, str):
-            node = pm.PyNode(node)
+        node = str(node)
 
         for attr, value in attributes.items():
-            try:
-                if node.attr(attr).isLocked():
-                    pm.warning(f"The attribute '{node}.{attr}' is locked.")
-                    continue
-                pm.setAttr(node.attr(attr), value, keyable=keyable, lock=lock)
-            except pm.MayaAttributeError:
+            # Existence check up front — replaces the original
+            # ``except pm.MayaAttributeError`` branch without swallowing
+            # unrelated RuntimeErrors raised by setAttr.
+            if not cls.has_attr(node, attr):
                 if create:
                     cls.create_or_set(node, keyable=keyable, **{attr: value})
                 elif not quiet:
-                    pm.warning(f"Attribute '{attr}' does not exist on '{node}'.")
+                    cmds.warning(f"Attribute '{attr}' does not exist on '{node}'.")
+                continue
+            try:
+                if cmds.getAttr(f"{node}.{attr}", lock=True):
+                    cmds.warning(f"The attribute '{node}.{attr}' is locked.")
+                    continue
+                cmds.setAttr(f"{node}.{attr}", value, keyable=keyable, lock=lock)
             except Exception as e:
                 if not quiet:
-                    pm.warning(f"Failed to set '{attr}' on '{node}': {e}")
+                    cmds.warning(f"Failed to set '{attr}' on '{node}': {e}")
 
     @classmethod
     def create_or_set(cls, node, keyable=True, **attributes) -> None:
@@ -531,15 +568,14 @@ class Attributes(ptk.HelpMixin):
         (string, stringArray, matrix …) automatically.
 
         Parameters:
-            node (str/obj): Target node.
+            node (str): Target node.
             keyable (bool): Make new attributes keyable.
             **attributes: ``attr_name=value`` pairs.
         """
-        if isinstance(node, str):
-            node = pm.PyNode(node)
+        node = str(node)
 
         for attr, value in attributes.items():
-            if not pm.attributeQuery(attr, node=node, exists=True):
+            if not cmds.attributeQuery(attr, node=node, exists=True):
                 cls._create_attr(node, attr, value, keyable)
             cls._set_value(node, attr, value)
 
@@ -549,24 +585,27 @@ class Attributes(ptk.HelpMixin):
         attr_type = cls.get_type(value)
 
         if attr_type.endswith("3") or attr_type.endswith("2"):
-            node.addAttr(
-                attr_name,
+            cmds.addAttr(
+                node,
+                longName=attr_name,
                 numberOfChildren=len(value),
                 attributeType="compound",
             )
             suffixes = ["X", "Y", "Z"] if attr_type.endswith("3") else ["X", "Y"]
             child_type = attr_type[:-1]
             for i in range(len(value)):
-                node.addAttr(
-                    f"{attr_name}{suffixes[i]}",
+                cmds.addAttr(
+                    node,
+                    longName=f"{attr_name}{suffixes[i]}",
                     attributeType=child_type,
                     parent=attr_name,
                 )
         elif attr_type in cls._DATA_TYPES:
-            node.addAttr(attr_name, keyable=keyable, dataType=attr_type)
+            cmds.addAttr(node, longName=attr_name, keyable=keyable, dataType=attr_type)
         else:
-            node.addAttr(
-                attr_name,
+            cmds.addAttr(
+                node,
+                longName=attr_name,
                 defaultValue=value,
                 keyable=keyable,
                 attributeType=attr_type,
@@ -580,9 +619,9 @@ class Attributes(ptk.HelpMixin):
         if attr_type.endswith("3") or attr_type.endswith("2"):
             suffixes = ["X", "Y", "Z"] if attr_type.endswith("3") else ["X", "Y"]
             for i, comp in enumerate(value):
-                pm.setAttr(f"{node}.{attr_name}{suffixes[i]}", comp)
+                cmds.setAttr(f"{node}.{attr_name}{suffixes[i]}", comp)
         else:
-            pm.setAttr(f"{node}.{attr_name}", value)
+            cmds.setAttr(f"{node}.{attr_name}", value)
 
     @staticmethod
     def create_switch(
@@ -591,24 +630,25 @@ class Attributes(ptk.HelpMixin):
         weighted: bool = False,
         min_value: float = 0.0,
         max_value: float = 1.0,
-    ):
+    ) -> str:
         """Create a bool or float (weighted) switch attribute if it doesn't exist.
 
         Parameters:
-            node (pm.PyNode): Node to add the attribute to.
+            node: Node to add the attribute to (str or node object).
             attr_name (str): Attribute name.
             weighted (bool): Float 0–1 if True, bool if False.
             min_value (float): Min for weighted attribute.
             max_value (float): Max for weighted attribute.
 
         Returns:
-            pm.Attribute: The created or existing attribute.
+            str: The plug string ``"node.attr_name"``.
         """
-        if node.hasAttr(attr_name):
-            return node.attr(attr_name)
+        node = str(node)
+        if cmds.attributeQuery(attr_name, node=node, exists=True):
+            return f"{node}.{attr_name}"
 
         if weighted:
-            pm.addAttr(
+            cmds.addAttr(
                 node,
                 ln=attr_name,
                 at="double",
@@ -618,8 +658,8 @@ class Attributes(ptk.HelpMixin):
                 dv=0,
             )
         else:
-            pm.addAttr(node, ln=attr_name, at="bool", k=True, dv=0)
-        return node.attr(attr_name)
+            cmds.addAttr(node, ln=attr_name, at="bool", k=True, dv=0)
+        return f"{node}.{attr_name}"
 
     # ======================================================================
     # Connect
@@ -634,7 +674,7 @@ class Attributes(ptk.HelpMixin):
             place: Source (placement) node name.
             file: Destination (file) node name.
         """
-        pm.connectAttr(f"{place}.{attr}", f"{file}.{attr}", f=True)
+        cmds.connectAttr(f"{place}.{attr}", f"{file}.{attr}", force=True)
 
     @staticmethod
     def connect_multi(*args, force=True) -> None:
@@ -646,13 +686,13 @@ class Attributes(ptk.HelpMixin):
 
         Example:
             connect_multi(
-                (node1.outColor, node2.aiSurfaceShader),
-                (node1.outColor, node3.baseColor),
+                ("node1.outColor", "node2.aiSurfaceShader"),
+                ("node1.outColor", "node3.baseColor"),
             )
         """
         for frm, to in args:
             try:
-                pm.connectAttr(frm, to, force=force)
+                cmds.connectAttr(str(frm), str(to), force=force)
             except Exception as error:
                 print(f"# Error: {__file__} {error} #")
 
@@ -705,7 +745,6 @@ class Attributes(ptk.HelpMixin):
             ``"keyframe"``, ``"ik"``, ``"motion_path"``, or the raw
             ``nodeType`` string.  ``(None, None)`` if nothing found.
         """
-        import maya.cmds as cmds
         from mayatk.node_utils._node_utils import NodeUtils
 
         if passthrough_types is None:
@@ -783,9 +822,10 @@ class Attributes(ptk.HelpMixin):
         If *obj* is a locator, returns its first child transform (the
         control underneath).  Returns ``None`` when no valid target exists.
         """
-        shape = obj.getShape()
-        if shape and shape.nodeType() == "locator":
-            children = pm.listRelatives(obj, children=True, type="transform")
+        shapes = cmds.listRelatives(str(obj), shapes=True) or []
+        shape = shapes[0] if shapes else None
+        if shape and cmds.nodeType(shape) == "locator":
+            children = cmds.listRelatives(str(obj), children=True, type="transform") or []
             return children[0] if children else None
         return obj
 
@@ -802,7 +842,8 @@ class Attributes(ptk.HelpMixin):
             (``tx``, ``ty`` …) and group-level (``translate``, ``rotate``,
             ``scale``) summaries.
         """
-        objects = pm.ls(objects, transforms=True, long=True)
+
+        objects = cmds.ls(as_strings(objects), transforms=True, long=True) or []
         attr_groups = {
             "translate": ("tx", "ty", "tz"),
             "rotate": ("rx", "ry", "rz"),
@@ -822,11 +863,11 @@ class Attributes(ptk.HelpMixin):
                 group_vals: list = []
                 for attr in attrs:
                     try:
-                        locked = pm.getAttr(f"{obj}.{attr}", lock=True)
+                        locked = cmds.getAttr(f"{obj}.{attr}", lock=True)
                         obj_state[attr] = locked
                         group_vals.append(locked)
                         if unlock and locked:
-                            pm.setAttr(f"{obj}.{attr}", lock=False)
+                            cmds.setAttr(f"{obj}.{attr}", lock=False)
                     except Exception:
                         obj_state[attr] = None
                         group_vals.append(None)
@@ -838,7 +879,10 @@ class Attributes(ptk.HelpMixin):
                 else:
                     obj_state[group] = None
 
-            result[obj.name()] = obj_state
+            # Use leaf (namespace-stripped) name as the key — matches the
+            # legacy ``obj.name()`` semantics so callers reading
+            # this dict (and ``set_lock_state`` below) keep working.
+            result[short_name(obj)] = obj_state
 
         return result
 
@@ -860,20 +904,22 @@ class Attributes(ptk.HelpMixin):
             translate/rotate/scale (bool|None): Bulk lock/unlock groups.
             **kwargs: Individual attribute locks (e.g. ``tx=True``).
         """
-        objects = pm.ls(objects, transforms=True, long=True)
+
+        objects = cmds.ls(as_strings(objects), transforms=True, long=True) or []
 
         for obj in objects:
             obj = cls._resolve_lock_target(obj)
             if obj is None:
                 continue
 
-            if lock_state and obj.name() in lock_state:
-                state = lock_state[obj.name()]
+            key = short_name(obj)
+            if lock_state and key in lock_state:
+                state = lock_state[key]
                 for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
                     lock_val = state.get(attr)
                     if lock_val is not None:
                         try:
-                            pm.setAttr(f"{obj}.{attr}", lock=lock_val)
+                            cmds.setAttr(f"{obj}.{attr}", lock=lock_val)
                         except Exception:
                             pass
                 continue
@@ -888,7 +934,7 @@ class Attributes(ptk.HelpMixin):
                     continue
                 for attr in attrs:
                     try:
-                        pm.setAttr(f"{obj}.{attr}", lock=state)
+                        cmds.setAttr(f"{obj}.{attr}", lock=state)
                     except Exception:
                         pass
 
@@ -896,7 +942,7 @@ class Attributes(ptk.HelpMixin):
                 if state is None:
                     continue
                 try:
-                    pm.setAttr(f"{obj}.{attr}", lock=state)
+                    cmds.setAttr(f"{obj}.{attr}", lock=state)
                 except Exception:
                     pass
 
@@ -937,7 +983,7 @@ class Attributes(ptk.HelpMixin):
         Returns:
             dict: ``{attr_name: value}`` that was stored.
         """
-        nodes = pm.ls(objects)
+        nodes = cmds.ls(objects) or []
         if not nodes:
             return {}
         obj = nodes[0]
@@ -950,7 +996,7 @@ class Attributes(ptk.HelpMixin):
         values: Dict[str, Any] = {}
         for attr in attributes:
             try:
-                values[attr] = pm.getAttr(f"{obj}.{attr}")
+                values[attr] = cmds.getAttr(f"{obj}.{attr}")
             except Exception:
                 pass
 
@@ -971,11 +1017,11 @@ class Attributes(ptk.HelpMixin):
         if not values:
             return
 
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             for attr, value in values.items():
                 try:
-                    if not pm.getAttr(f"{obj}.{attr}", lock=True):
-                        pm.setAttr(f"{obj}.{attr}", value)
+                    if not cmds.getAttr(f"{obj}.{attr}", lock=True):
+                        cmds.setAttr(f"{obj}.{attr}", value)
                 except Exception:
                     pass
 
@@ -987,12 +1033,12 @@ class Attributes(ptk.HelpMixin):
             objects: Target object(s).
             attributes: Attribute names to reset.
         """
-        for node in pm.ls(objects):
+        for node in cmds.ls(objects) or []:
             for attr_name in attributes:
                 try:
-                    defaults = pm.attributeQuery(attr_name, node=node, listDefault=True)
+                    defaults = cmds.attributeQuery(attr_name, node=str(node), listDefault=True) or []
                     if defaults:
-                        pm.setAttr(f"{node}.{attr_name}", defaults[0])
+                        cmds.setAttr(f"{node}.{attr_name}", defaults[0])
                 except Exception:
                     pass
 
@@ -1005,11 +1051,11 @@ class Attributes(ptk.HelpMixin):
             attributes: Attribute names.  If ``None``, uses the
                 current channel-box selection.
         """
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             attrs = attributes or Attributes.get_selected_channels()
             for attr in attrs:
                 try:
-                    pm.mute(f"{obj}.{attr}")
+                    cmds.mute(f"{obj}.{attr}")
                 except Exception:
                     pass
 
@@ -1022,11 +1068,11 @@ class Attributes(ptk.HelpMixin):
             attributes: Attribute names.  If ``None``, uses the
                 current channel-box selection.
         """
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             attrs = attributes or Attributes.get_selected_channels()
             for attr in attrs:
                 try:
-                    pm.mute(f"{obj}.{attr}", disable=True, force=True)
+                    cmds.mute(f"{obj}.{attr}", disable=True, force=True)
                 except Exception:
                     pass
 
@@ -1044,13 +1090,13 @@ class Attributes(ptk.HelpMixin):
             attributes: Attribute names.
             visible (bool): ``True`` to show (keyable), ``False`` to hide.
         """
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             for attr in attributes:
                 try:
                     if visible:
-                        pm.setAttr(f"{obj}.{attr}", keyable=True)
+                        cmds.setAttr(f"{obj}.{attr}", keyable=True)
                     else:
-                        pm.setAttr(f"{obj}.{attr}", keyable=False, channelBox=False)
+                        cmds.setAttr(f"{obj}.{attr}", keyable=False, channelBox=False)
                 except Exception:
                     pass
 
@@ -1062,10 +1108,10 @@ class Attributes(ptk.HelpMixin):
             objects: Target object(s).
             attributes: Attribute names.
         """
-        for obj in pm.ls(objects):
+        for obj in cmds.ls(objects) or []:
             for attr in attributes:
                 try:
-                    pm.setAttr(
+                    cmds.setAttr(
                         f"{obj}.{attr}", lock=True, keyable=False, channelBox=False
                     )
                 except Exception:
@@ -1151,14 +1197,12 @@ class Attributes(ptk.HelpMixin):
         Returns an empty list if the attribute is not an enum.
 
         Parameters:
-            node: Node name (str or PyNode).
+            node: Node name (str or node object).
             attr_name: Short attribute name.
 
         Returns:
             List of ``(label, int_index)`` tuples.
         """
-        import maya.cmds as cmds
-
         node = str(node)
         try:
             enums = cmds.attributeQuery(attr_name, node=node, listEnum=True)
@@ -1213,7 +1257,7 @@ class Attributes(ptk.HelpMixin):
         not an enum.
 
         Parameters:
-            node: Node name (str or PyNode).
+            node: Node name (str or node object).
             attr_name: Short attribute name.
         """
         pairs = Attributes.parse_enum_def(node, attr_name)
@@ -1224,11 +1268,9 @@ class Attributes(ptk.HelpMixin):
         """Return the current enum label for an enum attribute, or ``None``.
 
         Parameters:
-            node: Node name (str or PyNode).
+            node: Node name (str or node object).
             attr_name: Short attribute name.
         """
-        import maya.cmds as cmds
-
         try:
             idx = cmds.getAttr(f"{node}.{attr_name}")
             pairs = Attributes.parse_enum_def(node, attr_name)
@@ -1244,7 +1286,7 @@ class Attributes(ptk.HelpMixin):
         """Return the integer index for an enum label, or ``-1`` if not found.
 
         Parameters:
-            node: Node name (str or PyNode).
+            node: Node name (str or node object).
             attr_name: Short attribute name.
             label: Enum field label to look up.
         """
@@ -1261,7 +1303,7 @@ class Attributes(ptk.HelpMixin):
         Preserves indices so existing keyframes stay valid.
 
         Parameters:
-            nodes: Node name(s) (str, list, or PyNode).
+            nodes: Node name(s) (str, list, or node object).
             attr_name: Short attribute name.
             old_label: Current label to rename.
             new_label: New label.
@@ -1269,8 +1311,6 @@ class Attributes(ptk.HelpMixin):
         Returns:
             ``True`` if at least one node was modified.
         """
-        import maya.cmds as cmds
-
         if not new_label or new_label == old_label:
             return False
         nodes = [
@@ -1309,15 +1349,13 @@ class Attributes(ptk.HelpMixin):
         current maximum).
 
         Parameters:
-            nodes: Node name(s) (str, list, or PyNode).
+            nodes: Node name(s) (str, list, or node object).
             attr_name: Short attribute name.
             new_label: Label to append.
 
         Returns:
             ``True`` on success.
         """
-        import maya.cmds as cmds
-
         if not new_label:
             return False
         nodes = [
@@ -1352,15 +1390,13 @@ class Attributes(ptk.HelpMixin):
         existing keyframes and connections remain valid.
 
         Parameters:
-            nodes: Node name(s) (str, list, or PyNode).
+            nodes: Node name(s) (str, list, or node object).
             attr_name: Short attribute name.
             label: Label to remove.
 
         Returns:
             ``True`` if at least one node was modified.
         """
-        import maya.cmds as cmds
-
         if not label:
             return False
         nodes = [

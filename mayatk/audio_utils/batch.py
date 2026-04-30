@@ -19,11 +19,6 @@ from typing import Iterable, List, Optional
 from mayatk.audio_utils import compositor
 
 try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
-
-try:
     import maya.cmds as cmds
 except ImportError:
     cmds = None
@@ -82,9 +77,9 @@ class _BatchContext:
         if self._is_outer:
             self._batch = _Batch()
             stack.append(self._batch)
-            if self._undo and pm is not None:
-                self._chunk = pm.UndoChunk()
-                self._chunk.__enter__()
+            if self._undo and cmds is not None:
+                cmds.undoInfo(openChunk=True)
+                self._chunk = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -99,8 +94,8 @@ class _BatchContext:
             finally:
                 if stack and stack[-1] is self._batch:
                     stack.pop()
-                if self._chunk is not None:
-                    self._chunk.__exit__(exc_type, exc_val, exc_tb)
+                if self._chunk:
+                    cmds.undoInfo(closeChunk=True)
 
 
 def batch(auto_sync: bool = True, undo: bool = True) -> _BatchContext:
@@ -108,6 +103,6 @@ def batch(auto_sync: bool = True, undo: bool = True) -> _BatchContext:
 
     Parameters:
         auto_sync: If True, compositor.sync() runs on successful exit.
-        undo: If True, wraps the body in a ``pm.UndoChunk``.
+        undo: If True, wraps the body in a Maya undo chunk.
     """
     return _BatchContext(auto_sync=auto_sync, undo=undo)

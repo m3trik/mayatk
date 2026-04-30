@@ -1,11 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
 import os
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
@@ -20,7 +17,7 @@ class HdrManager:
     @property
     def hdr_env(self) -> object:
         """ """
-        node = pm.ls(self.hdr_env_name, exactType="aiSkyDomeLight")
+        node = cmds.ls(self.hdr_env_name, exactType="aiSkyDomeLight")
         try:
             return node[0]
         except IndexError:
@@ -39,7 +36,7 @@ class HdrManager:
                 skyRadius=0,
             )  # turn off skydome and viewport visibility.
             self.hdr_env_transform.hiddenInOutliner.set(1)
-            pm.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
+            cmds.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
 
         file_node = NodeUtils.get_connected_nodes(
             node, node_type="file", direction="incoming", first_match=True
@@ -48,7 +45,7 @@ class HdrManager:
             file_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", texture_node=True
             )
-            pm.connectAttr(file_node.outColor, node.color, force=True)
+            cmds.connectAttr(file_node.outColor, node.color, force=True)
 
         file_node.fileTextureName.set(str(tex))
 
@@ -151,7 +148,7 @@ class HdrManagerSlots(HdrManager):
         """Rotate the HDR map."""
         if self.hdr_env:
             transform = NodeUtils.get_transform_node(self.hdr_env)
-            pm.rotate(
+            cmds.rotate(
                 transform,
                 value,
                 rotateY=True,

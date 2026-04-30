@@ -11,7 +11,7 @@ Tests for CoreUtils class functionality including:
 - Parameter mapping
 """
 import unittest
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -26,7 +26,7 @@ class TestCoreUtils(MayaTkTestCase):
         """Set up test scene with standard geometry."""
         super().setUp()
         # Create test cylinder
-        self.cyl = pm.polyCylinder(
+        self.cyl = cmds.polyCylinder(
             radius=5,
             height=10,
             subdivisionsX=12,
@@ -34,14 +34,14 @@ class TestCoreUtils(MayaTkTestCase):
             subdivisionsZ=1,
             name="cyl",
         )[0]
-        self.cyl_shape = pm.listRelatives(self.cyl, shapes=True)[0]
+        self.cyl_shape = cmds.listRelatives(self.cyl, shapes=True)[0]
         # Get history node for parameter tests
-        self.cyl_hist = pm.listHistory(self.cyl, type="polyCylinder")[0]
+        self.cyl_hist = cmds.ls(cmds.listHistory(self.cyl), type="polyCylinder")[0]
 
     def tearDown(self):
         """Clean up test geometry."""
-        if pm.objExists("cyl"):
-            pm.delete("cyl")
+        if cmds.objExists("cyl"):
+            cmds.delete("cyl")
         super().tearDown()
 
     # -------------------------------------------------------------------------
@@ -60,19 +60,19 @@ class TestCoreUtils(MayaTkTestCase):
 
     def test_get_array_type_with_pymel_vertex_list(self):
         """Test array type detection for PyMEL vertex components."""
-        vertices = pm.ls("cylShape.vtx[:]")
+        vertices = cmds.ls("cylShape.vtx[:]")
         result = CoreUtils.get_array_type(vertices)
         self.assertEqual(result, "vtx")
 
     def test_get_array_type_with_edge(self):
         """Test array type detection for edge components."""
-        edges = pm.ls("cylShape.e[:]")
+        edges = cmds.ls("cylShape.e[:]")
         result = CoreUtils.get_array_type(edges)
         self.assertEqual(result, "e")
 
     def test_get_array_type_with_face(self):
         """Test array type detection for face components."""
-        faces = pm.ls("cylShape.f[:]")
+        faces = cmds.ls("cylShape.f[:]")
         result = CoreUtils.get_array_type(faces)
         self.assertEqual(result, "f")
 
@@ -125,24 +125,24 @@ class TestCoreUtils(MayaTkTestCase):
 
         @CoreUtils.undoable
         def create_and_move_cube():
-            cube = pm.polyCube(name="test_undo_cube")[0]
-            pm.move(cube, 5, 0, 0)
+            cube = cmds.polyCube(name="test_undo_cube")[0]
+            cmds.move(5, 0, 0, cube)
             return cube
 
         # Execute the decorated function
         cube = create_and_move_cube()
-        self.assertTrue(pm.objExists("test_undo_cube"))
+        self.assertTrue(cmds.objExists("test_undo_cube"))
 
         # Undo should remove both the move and creation
-        pm.undo()
-        self.assertFalse(pm.objExists("test_undo_cube"))
+        cmds.undo()
+        self.assertFalse(cmds.objExists("test_undo_cube"))
 
     def test_undoable_decorator_with_exception(self):
         """Test undoable decorator handles exceptions properly."""
 
         @CoreUtils.undoable
         def create_and_fail():
-            pm.polyCube(name="test_exception_cube")
+            cmds.polyCube(name="test_exception_cube")
             raise ValueError("Intentional test error")
 
         # Should raise the exception but still close undo chunk
@@ -150,8 +150,8 @@ class TestCoreUtils(MayaTkTestCase):
             create_and_fail()
 
         # Clean up if cube was created
-        if pm.objExists("test_exception_cube"):
-            pm.delete("test_exception_cube")
+        if cmds.objExists("test_exception_cube"):
+            cmds.delete("test_exception_cube")
 
     def test_selected_decorator(self):
         """Test selected decorator passes selection to function."""
@@ -159,10 +159,10 @@ class TestCoreUtils(MayaTkTestCase):
         class TestClass:
             @CoreUtils.selected
             def get_selection_names(self, selection=None):
-                return [x.name() for x in selection] if selection else []
+                return [x for x in selection] if selection else []
 
         tester = TestClass()
-        pm.select(self.cyl)
+        cmds.select(self.cyl)
         result = tester.get_selection_names()
         self.assertEqual(result, ["cyl"])
 
@@ -174,9 +174,9 @@ class TestCoreUtils(MayaTkTestCase):
         """Test reparent decorator maintains hierarchy."""
 
         # Create a hierarchy
-        parent = pm.group(em=True, name="parent_grp")
-        child = pm.polyCube(name="child_cube")[0]
-        pm.parent(child, parent)
+        parent = cmds.group(em=True, name="parent_grp")
+        child = cmds.polyCube(name="child_cube")[0]
+        cmds.parent(child, parent)
 
         @CoreUtils.reparent
         def operate_on_child(nodes):
@@ -197,9 +197,9 @@ class TestCoreUtils(MayaTkTestCase):
         result = operate_on_child([child, parent])
 
         # Verify child is still under parent
-        self.assertEqual(child.getParent(), parent)
+        self.assertEqual((cmds.listRelatives(str(child), parent=True) or [None])[0], parent)
 
-        pm.delete(parent)
+        cmds.delete(parent)
 
     # -------------------------------------------------------------------------
     # Attribute Tests
@@ -208,14 +208,14 @@ class TestCoreUtils(MayaTkTestCase):
     def test_temporarily_unlock_attributes(self):
         """Test temporarily unlocking attributes."""
         # Lock an attribute
-        self.cyl.translateX.set(lock=True)
-        self.assertTrue(self.cyl.translateX.isLocked())
+        cmds.setAttr(f"{self.cyl}.translateX", lock=True)
+        self.assertTrue(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
         with CoreUtils.temporarily_unlock_attributes(self.cyl, ["translateX"]):
-            self.assertFalse(self.cyl.translateX.isLocked())
+            self.assertFalse(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
         # Should be locked again
-        self.assertTrue(self.cyl.translateX.isLocked())
+        self.assertTrue(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
     def test_filter_attributes(self):
         """Test filtering attributes via Attributes."""
@@ -262,9 +262,9 @@ class TestCoreUtils(MayaTkTestCase):
         )
 
         # Verify change
-        limits = pm.transformLimits(self.cyl, q=True, translationX=True)
+        limits = cmds.transformLimits(self.cyl, q=True, translationX=True)
         self.assertEqual(list(limits), [-5.0, 5.0])
-        enabled = pm.transformLimits(self.cyl, q=True, enableTranslationX=True)
+        enabled = cmds.transformLimits(self.cyl, q=True, enableTranslationX=True)
         self.assertEqual(list(enabled), [True, True])
 
     # -------------------------------------------------------------------------
@@ -287,21 +287,23 @@ class TestCoreUtils(MayaTkTestCase):
     def test_build_mesh_similarity_mapping(self):
         """Test mesh similarity mapping."""
         # Duplicate cylinder
-        cyl2 = pm.duplicate(self.cyl)[0]
-        pm.move(cyl2, 10, 0, 0)
+        cyl2 = cmds.duplicate(self.cyl)[0]
+        cmds.move(10, 0, 0, cyl2)
 
         mapping = CoreUtils.build_mesh_similarity_mapping(source=self.cyl, target=cyl2)
 
-        self.assertIn(self.cyl.name(), mapping)
-        self.assertEqual(mapping[self.cyl.name()], cyl2.name())
+        # Mapping is keyed by short name; production returns string values.
+        cyl_key = str(self.cyl).split("|")[-1]
+        self.assertIn(cyl_key, mapping)
+        self.assertEqual(str(mapping[cyl_key]), str(cyl2).split("|")[-1])
 
     def test_confirm_existence(self):
         """Test confirming object existence."""
         existing, non_existing = CoreUtils.confirm_existence(
-            [self.cyl.name(), "non_existent_obj"]
+            [self.cyl, "non_existent_obj"]
         )
 
-        self.assertIn(self.cyl.name(), existing)
+        self.assertIn(self.cyl, existing)
         self.assertIn("non_existent_obj", non_existing)
 
 
@@ -320,11 +322,11 @@ class TestCoreUtilsEdgeCases(MayaTkTestCase):
 
     def test_convert_array_type_with_invalid_target_type(self):
         """Test converting to invalid target type returns lst unchanged."""
-        cyl = pm.polyCylinder()[0]
+        cyl = cmds.polyCylinder()[0]
         result = CoreUtils.convert_array_type(f"{cyl}.vtx[0]", "invalid_type")
         # Should return PyMEL objects (the 'lst' parameter unchanged)
         self.assertTrue(len(result) > 0)
-        pm.delete(cyl)
+        cmds.delete(cyl)
 
     def test_convert_array_type_with_nonexistent_component(self):
         """Test converting nonexistent component."""
@@ -332,7 +334,7 @@ class TestCoreUtilsEdgeCases(MayaTkTestCase):
             result = CoreUtils.convert_array_type("nonexistent.vtx[0]", "str")
             if result is not None:
                 self.assertIsInstance(result, list)
-        except (RuntimeError, pm.MayaNodeError):
+        except (RuntimeError, RuntimeError):
             pass  # Expected behavior
 
 

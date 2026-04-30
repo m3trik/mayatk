@@ -14,13 +14,40 @@ Tests for EnvUtils class functionality including:
 """
 import os
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.env_utils._env_utils import EnvUtils
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 class TestEnvUtils(MayaTkTestCase):
     """Comprehensive tests for EnvUtils class."""
 
@@ -28,13 +55,13 @@ class TestEnvUtils(MayaTkTestCase):
         """Set up test environment."""
         super().setUp()
         # Ensure we have a known state for some tests
-        self.original_workspace = pm.workspace(q=True, rd=True)
+        self.original_workspace = cmds.workspace(q=True, rd=True)
 
     def tearDown(self):
         """Restore test environment."""
         # Restore workspace if changed
-        if pm.workspace(q=True, rd=True) != self.original_workspace:
-            pm.workspace(self.original_workspace, openWorkspace=True)
+        if cmds.workspace(q=True, rd=True) != self.original_workspace:
+            cmds.workspace(self.original_workspace, openWorkspace=True)
         super().tearDown()
 
     # -------------------------------------------------------------------------
@@ -74,8 +101,8 @@ class TestEnvUtils(MayaTkTestCase):
     def test_get_env_info_scene(self):
         """Test scene-related info."""
         # Save a temp scene to ensure we have a valid scene name
-        temp_file = os.path.join(pm.internalVar(userTmpDir=True), "test_env_utils.ma")
-        pm.renameFile(temp_file)
+        temp_file = os.path.join(cmds.internalVar(userTmpDir=True), "test_env_utils.ma")
+        _pm_rename_file(temp_file)
 
         scene_name = EnvUtils.get_env_info("scene_name")
         self.assertEqual(scene_name, "test_env_utils")
@@ -86,7 +113,7 @@ class TestEnvUtils(MayaTkTestCase):
         self.assertTrue(temp_file.replace("\\", "/").startswith(scene_path))
 
         # Test modified flag
-        pm.polyCube()  # Modify scene
+        cmds.polyCube()  # Modify scene
         is_mod = EnvUtils.get_env_info("scene_modified")
         self.assertTrue(is_mod)
 
@@ -119,15 +146,15 @@ class TestEnvUtils(MayaTkTestCase):
         plugin_name = "objExport"
 
         # Ensure it's unloaded first (if possible/safe)
-        if pm.pluginInfo(plugin_name, q=True, loaded=True):
-            pm.unloadPlugin(plugin_name)
+        if cmds.pluginInfo(plugin_name, q=True, loaded=True):
+            cmds.unloadPlugin(plugin_name)
 
         EnvUtils.load_plugin(plugin_name)
-        self.assertTrue(pm.pluginInfo(plugin_name, q=True, loaded=True))
+        self.assertTrue(cmds.pluginInfo(plugin_name, q=True, loaded=True))
 
         # Test loading already loaded plugin (should not error)
         EnvUtils.load_plugin(plugin_name)
-        self.assertTrue(pm.pluginInfo(plugin_name, q=True, loaded=True))
+        self.assertTrue(cmds.pluginInfo(plugin_name, q=True, loaded=True))
 
     def test_load_plugin_invalid(self):
         """Test loading a non-existent plugin."""

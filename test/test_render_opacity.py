@@ -8,11 +8,22 @@ Tests for the non-animating AttributeManager-based implementation.
 import os
 import unittest
 import pythontk as ptk
-import pymel.core as pm
 import maya.cmds as cmds
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
 from mayatk.mat_utils.mat_snapshot import MatSnapshot
 from base_test import MayaTkTestCase
+
+
+def _get_assigned_mat(transform):
+    """Test helper: get the surface shader material assigned to a transform via shape.SG.surfaceShader."""
+    shapes = cmds.listRelatives(str(transform), shapes=True, ni=True) or []
+    if not shapes:
+        return None
+    sgs = cmds.listConnections(shapes[0], type="shadingEngine") or []
+    if not sgs:
+        return None
+    mats = cmds.listConnections(f"{sgs[0]}.surfaceShader", source=True, destination=False) or []
+    return mats[0] if mats else None
 
 
 class TestOpacityAttributeMode(MayaTkTestCase):
@@ -20,35 +31,35 @@ class TestOpacityAttributeMode(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.cube = pm.polyCube(name="test_cube")[0]
+        self.cube = cmds.polyCube(name="test_cube")[0]
 
     def test_create_adds_fade_attribute(self):
         """create(mode='attribute') adds the 'opacity' float attribute."""
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         self.assertTrue(
-            self.cube.hasAttr("opacity"), "Attribute 'opacity' was not created"
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute 'opacity' was not created"
         )
-        attr = self.cube.attr("opacity")
-        self.assertEqual(attr.get(), 1.0, "Default value should be 1.0")
-        self.assertEqual(attr.getMin(), 0.0, "Min value should be 0.0")
-        self.assertEqual(attr.getMax(), 1.0, "Max value should be 1.0")
-        self.assertTrue(attr.isKeyable(), "Attribute should be keyable")
+        attr = f"{self.cube}.opacity"
+        self.assertEqual(cmds.getAttr(attr), 1.0, "Default value should be 1.0")
+        self.assertEqual(cmds.attributeQuery("opacity", node=str(self.cube), minimum=True)[0], 0.0, "Min value should be 0.0")
+        self.assertEqual(cmds.attributeQuery("opacity", node=str(self.cube), maximum=True)[0], 1.0, "Max value should be 1.0")
+        self.assertTrue(cmds.getAttr(attr, keyable=True), "Attribute should be keyable")
 
     def test_create_does_not_add_keys(self):
         """create(mode='attribute') should NOT add animation keys."""
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
-        anim = pm.listConnections(self.cube, type="animCurve")
+        anim = cmds.listConnections(self.cube, type="animCurve")
         self.assertFalse(anim, "Attribute mode should not create animation curves")
 
     def test_remove_deletes_attribute(self):
         """remove(mode='attribute') deletes the attribute."""
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.assertTrue(self.cube.hasAttr("opacity"))
+        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
 
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
-        self.assertFalse(self.cube.hasAttr("opacity"), "Attribute should be removed")
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute should be removed")
 
 
 class TestOpacityMaterialMode(MayaTkTestCase):
@@ -57,18 +68,18 @@ class TestOpacityMaterialMode(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         try:
-            if not pm.pluginInfo("shaderFXPlugin", query=True, loaded=True):
-                pm.loadPlugin("shaderFXPlugin")
+            if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
+                cmds.loadPlugin("shaderFXPlugin")
         except Exception:
             self.skipTest("shaderFXPlugin not available")
 
-        self.cube = pm.polyCube(name="mat_cube")[0]
-        self.mat = pm.shadingNode("StingrayPBS", asShader=True, name="test_stingray")
-        self.sg = pm.sets(
+        self.cube = cmds.polyCube(name="mat_cube")[0]
+        self.mat = cmds.shadingNode("StingrayPBS", asShader=True, name="test_stingray")
+        self.sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="test_sg"
         )
-        pm.connectAttr(self.mat.outColor, self.sg.surfaceShader)
-        pm.sets(self.sg, forceElement=self.cube)
+        cmds.connectAttr(f"{self.mat}.outColor", f"{self.sg}.surfaceShader")
+        cmds.sets(self.cube, edit=True, forceElement=self.sg)
 
         # Ensure standard graph is loaded
         from mayatk.env_utils._env_utils import EnvUtils
@@ -78,7 +89,7 @@ class TestOpacityMaterialMode(MayaTkTestCase):
             "presets/ShaderFX/Scenes/StingrayPBS/Standard.sfx",
         )
         if os.path.exists(graph):
-            pm.cmds.shaderfx(sfxnode=self.mat.name(), loadGraph=graph)
+            cmds.shaderfx(sfxnode=str(self.mat), loadGraph=graph)
 
     def test_create_loads_transparent_graph(self):
         """create(mode='material') loads transparent graph."""
@@ -89,14 +100,14 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         # Check for transparency/opacity attributes exposed by the Transparency graph
         # Standard graph usually has 'use_color_map', but 'use_opacity_map' implies Transparent graph or similar
         self.assertTrue(
-            self.mat.hasAttr("use_opacity_map"), "Should have loaded transparent graph"
+            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True), "Should have loaded transparent graph"
         )
 
     def test_create_does_not_add_keys(self):
         """create(mode='material') should NOT add animation keys anymore."""
         RenderOpacity.create(objects=[self.cube], mode="material")
 
-        anim = pm.listConnections(self.mat, type="animCurve")
+        anim = cmds.listConnections(self.mat, type="animCurve")
         self.assertFalse(anim, "Material mode should not create animation curves")
 
     def test_mode_switching_cleans_previous_mode(self):
@@ -108,124 +119,100 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         """
         # 1. Start with Material Mode
         RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(self.mat.hasAttr("use_opacity_map"))
+        self.assertTrue(cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True))
         self.assertTrue(
-            self.cube.hasAttr("opacity"),
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
             "Material mode should create opacity proxy attr",
         )
         self.assertTrue(
-            pm.isConnected(self.cube.opacity, self.mat.opacity),
+            cmds.isConnected(f"{self.cube}.opacity", f"{self.mat}.opacity"),
             "Proxy should drive material opacity",
         )
 
         # 2. Switch to Attribute Mode — proxy disconnected, attr recreated
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.assertTrue(self.cube.hasAttr("opacity"), "Attribute should still exist")
+        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute should still exist")
         self.assertFalse(
-            pm.isConnected(self.cube.opacity, self.mat.opacity),
+            cmds.isConnected(f"{self.cube}.opacity", f"{self.mat}.opacity"),
             "Material proxy should be disconnected after switching to attribute mode",
         )
 
         # 3. Switch back to Material Mode — proxy reconnected
         RenderOpacity.create(objects=[self.cube], mode="material")
         self.assertTrue(
-            self.cube.hasAttr("opacity"),
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
             "Material mode should re-create opacity proxy attr",
         )
-        mat_after = (
-            self.cube.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
+        mat_after = _get_assigned_mat(self.cube)
         self.assertTrue(
-            pm.isConnected(self.cube.opacity, mat_after.opacity),
+            cmds.isConnected(f"{self.cube}.opacity", f"{mat_after}.opacity"),
             "Proxy should drive material opacity after switching back",
         )
 
     def test_remove_mode_cleans_all_artifacts(self):
         """mode='remove' removes opacity attr, visibility driver, and proxy."""
         RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(self.cube.hasAttr("opacity"))
+        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
 
         RenderOpacity.create(objects=[self.cube], mode="remove")
 
         # Opacity attribute removed
-        self.assertFalse(self.cube.hasAttr("opacity"), "opacity attr should be removed")
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "opacity attr should be removed")
         # Visibility reset
-        self.assertTrue(self.cube.visibility.get(), "Visibility should be True")
-        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
+        self.assertTrue(cmds.getAttr(f"{self.cube}.visibility"), "Visibility should be True")
+        vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         self.assertFalse(vis_inputs, "Visibility should have no driver")
         # Material opacity not driven
-        if self.mat.hasAttr("opacity"):
-            mat_inputs = self.mat.opacity.inputs(plugs=True)
+        if cmds.attributeQuery("opacity", node=str(self.mat), exists=True):
+            mat_inputs = cmds.listConnections(f"{self.mat}.opacity", source=True, plugs=True) or []
             self.assertFalse(mat_inputs, "Material opacity should not be driven")
 
     def test_remove_cleans_fade_duplicate(self):
         """Remove mode reassigns _Fade duplicates back to original material."""
-        cube2 = pm.polyCube(name="mat_cube_fade")[0]
-        pm.sets(self.sg, forceElement=cube2)
+        cube2 = cmds.polyCube(name="mat_cube_fade")[0]
+        cmds.sets(cube2, edit=True, forceElement=self.sg)
 
         RenderOpacity.create(objects=[self.cube, cube2], mode="material")
 
         # Verify cube2 got a _Fade duplicate
-        mat2 = (
-            cube2.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
-        self.assertIn("_Fade", mat2.name(), "cube2 should have a _Fade material")
+        mat2 = _get_assigned_mat(cube2)
+        self.assertIn("_Fade", mat2, "cube2 should have a _Fade material")
 
         # Remove everything
         RenderOpacity.create(objects=[self.cube, cube2], mode="remove")
 
         # Both cubes should be back on the original material
-        mat_after_1 = (
-            self.cube.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
-        mat_after_2 = (
-            cube2.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
+        mat_after_1 = _get_assigned_mat(self.cube)
+        mat_after_2 = _get_assigned_mat(cube2)
         self.assertEqual(
-            mat_after_1.name(),
-            self.mat.name(),
+            mat_after_1,
+            self.mat,
             "cube1 should be back on original material",
         )
         self.assertEqual(
-            mat_after_2.name(),
-            self.mat.name(),
+            mat_after_2,
+            self.mat,
             "cube2 should be back on original material",
         )
-        self.assertFalse(self.cube.hasAttr("opacity"))
-        self.assertFalse(cube2.hasAttr("opacity"))
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(cube2), exists=True))
 
     def test_material_mode_splits_shared_material(self):
         """Material mode should enforce unique materials for independent fading."""
         # Create a second cube sharing the same material
-        cube2 = pm.polyCube(name="mat_cube_2")[0]
-        pm.sets(self.sg, forceElement=cube2)
+        cube2 = cmds.polyCube(name="mat_cube_2")[0]
+        cmds.sets(cube2, edit=True, forceElement=self.sg)
 
         # Apply to both
         RenderOpacity.create(objects=[self.cube, cube2], mode="material")
 
         # Verify materials are different
-        mat1 = (
-            self.cube.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
-        mat2 = (
-            cube2.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
+        mat1 = _get_assigned_mat(self.cube)
+        mat2 = _get_assigned_mat(cube2)
 
         self.assertNotEqual(mat1, mat2, "Materials should have been split")
-        self.assertTrue(pm.isConnected(self.cube.opacity, mat1.opacity))
-        self.assertTrue(pm.isConnected(cube2.opacity, mat2.opacity))
+        self.assertTrue(cmds.isConnected(f"{self.cube}.opacity", f"{mat1}.opacity"))
+        self.assertTrue(cmds.isConnected(f"{cube2}.opacity", f"{mat2}.opacity"))
 
     # ------------------------------------------------------------------
     # Texture restoration after graph swap
@@ -247,7 +234,7 @@ class TestOpacityMaterialMode(MayaTkTestCase):
             "metallic": ("TEX_metallic_map", "outColor"),
         }
         for logical, (attr_name, out_plug) in slots.items():
-            if not self.mat.hasAttr(attr_name):
+            if not cmds.attributeQuery(attr_name, node=str(self.mat), exists=True):
                 continue
             # Create a file node with a synthetic but unique path
             file_node = cmds.shadingNode("file", asTexture=True, isColorManaged=True)
@@ -260,15 +247,15 @@ class TestOpacityMaterialMode(MayaTkTestCase):
             )
             # Enable the toggle so the map is active
             toggle = attr_name.replace("TEX_", "use_", 1)
-            if self.mat.hasAttr(toggle):
-                self.mat.attr(toggle).set(1.0)
+            if cmds.attributeQuery(toggle, node=str(self.mat), exists=True):
+                cmds.setAttr(f"{self.mat}.{toggle}", 1.0)
             expected[logical] = fake_path
         return expected
 
     def _get_connected_texture_path(self, mat, attr_name):
         """Return the fileTextureName of the file node connected to *attr_name*, or None."""
         full = f"{mat}.{attr_name}"
-        if not cmds.objExists(full):
+        if not cmds.objExists(str(full)):
             return None
         files = cmds.listConnections(full, source=True, destination=False, type="file")
         if not files:
@@ -299,11 +286,7 @@ class TestOpacityMaterialMode(MayaTkTestCase):
 
         # The material may have been replaced if it was shared; resolve the
         # actual material assigned after create().
-        mat_after = (
-            self.cube.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
+        mat_after = _get_assigned_mat(self.cube)
 
         # Verify textures are reconnected on the post-swap material.
         slots = {
@@ -331,18 +314,14 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         self.assertTrue(expected, "setUp should have connected at least one texture")
 
         # Share material with a second cube
-        cube2 = pm.polyCube(name="mat_cube_split")[0]
-        pm.sets(self.sg, forceElement=cube2)
+        cube2 = cmds.polyCube(name="mat_cube_split")[0]
+        cmds.sets(cube2, edit=True, forceElement=self.sg)
 
         RenderOpacity.create(objects=[self.cube, cube2], mode="material")
 
         # Resolve the actual materials assigned to each object after create.
         for obj in [self.cube, cube2]:
-            mat_after = (
-                obj.getShape()
-                .listConnections(type="shadingEngine")[0]
-                .surfaceShader.inputs()[0]
-            )
+            mat_after = _get_assigned_mat(obj)
             for logical, attr_name in {
                 "baseColor": "TEX_color_map",
                 "normal": "TEX_normal_map",
@@ -366,21 +345,17 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         Fixed: 2026-02-13
         """
         # Set a known scalar value on the Standard graph
-        if self.mat.hasAttr("use_color_map"):
-            self.mat.use_color_map.set(0.0)  # Disable color map
+        if cmds.attributeQuery("use_color_map", node=str(self.mat), exists=True):
+            cmds.setAttr(f"{self.mat}.use_color_map", 0.0)  # Disable color map
 
         RenderOpacity.create(objects=[self.cube], mode="material")
 
-        mat_after = (
-            self.cube.getShape()
-            .listConnections(type="shadingEngine")[0]
-            .surfaceShader.inputs()[0]
-        )
+        mat_after = _get_assigned_mat(self.cube)
 
         # The transparent graph also has use_color_map; it should be restored to 0.
-        if mat_after.hasAttr("use_color_map"):
+        if cmds.attributeQuery("use_color_map", node=mat_after, exists=True):
             self.assertAlmostEqual(
-                mat_after.use_color_map.get(),
+                cmds.getAttr(f"{mat_after}.use_color_map"),
                 0.0,
                 places=4,
                 msg="Scalar value 'use_color_map' was not restored after graph swap",
@@ -397,7 +372,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.cube = pm.polyCube(name="vis_cube")[0]
+        self.cube = cmds.polyCube(name="vis_cube")[0]
 
     def test_no_condition_node_created(self):
         """create(mode='attribute') must NOT create a condition-node driver.
@@ -407,8 +382,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
-        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
-        conds = [n for n in (vis_inputs or []) if isinstance(n, pm.nt.Condition)]
+        vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
+        conds = [n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"]
         self.assertFalse(
             conds, "No condition node should drive visibility after create"
         )
@@ -420,18 +395,18 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Set opacity keyframes
-        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
         # Sync
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
         # Verify visibility keyframes match (use full attr path to avoid
         # picking up the shape's visibility attribute in the query).
-        vis_times = pm.keyframe(
+        vis_times = cmds.keyframe(
             f"{self.cube}.visibility", q=True, tc=True
         )
-        vis_values = pm.keyframe(
+        vis_values = cmds.keyframe(
             f"{self.cube}.visibility", q=True, vc=True
         )
         self.assertEqual(vis_times, [1.0, 15.0])
@@ -443,18 +418,18 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.7)
-        pm.setKeyframe(self.cube, attribute="opacity", time=10, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.7)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=10, value=0.0)
 
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
-        vis_values = pm.keyframe(
+        vis_values = cmds.keyframe(
             f"{self.cube}.visibility", q=True, vc=True
         )
         self.assertAlmostEqual(vis_values[0], 1.0, msg="0.7 should coerce to 1")
         self.assertAlmostEqual(vis_values[1], 0.0, msg="0.0 should stay 0")
 
-        out_tans = pm.keyTangent(
+        out_tans = cmds.keyTangent(
             f"{self.cube}.visibility", q=True, outTangentType=True
         )
         self.assertTrue(
@@ -465,20 +440,20 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
     def test_sync_does_not_key_shape_visibility(self):
         """Shape node visibility must not receive keyframes.
 
-        Bug: pm.setKeyframe(obj, attribute='visibility') propagated to
+        Bug: cmds.setKeyframe(obj, attribute='visibility') propagated to
         both transform AND shape.  Fixed by using explicit attr path.
         Fixed: 2026-03-25
         """
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
-        shape = self.cube.getShape()
-        shape_vis_keys = pm.keyframe(
+        shape = (cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None])[0]
+        shape_vis_keys = cmds.keyframe(
             f"{shape}.visibility", q=True, tc=True
         )
         self.assertFalse(
@@ -491,13 +466,13 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
-        vis_times = pm.keyframe(
+        vis_times = cmds.keyframe(
             f"{self.cube}.visibility", q=True, tc=True
         )
         self.assertEqual(len(vis_times), 2, "Should still be exactly 2 keys")
@@ -508,8 +483,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
 
-        self.assertTrue(self.cube.visibility.get(), "Visibility should reset to True")
-        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
+        self.assertTrue(cmds.getAttr(f"{self.cube}.visibility"), "Visibility should reset to True")
+        vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         self.assertFalse(
             vis_inputs,
             "Visibility should not be driven after remove",
@@ -523,20 +498,20 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         condition-node approach.
         """
         # Simulate legacy state: create a condition node manually
-        cond = pm.createNode(
-            "condition", name=f"{self.cube.nodeName()}_VisDriver"
+        cond = cmds.createNode(
+            "condition", name=f"{self.cube.split('|')[-1].split(':')[-1]}_VisDriver"
         )
-        cond.operation.set(2)
-        cond.secondTerm.set(0.0)
-        cond.colorIfTrueR.set(1.0)
-        cond.colorIfFalseR.set(0.0)
-        pm.connectAttr(cond.outColorR, self.cube.visibility, force=True)
+        cmds.setAttr(f"{cond}.operation", 2)
+        cmds.setAttr(f"{cond}.secondTerm", 0.0)
+        cmds.setAttr(f"{cond}.colorIfTrueR", 1.0)
+        cmds.setAttr(f"{cond}.colorIfFalseR", 0.0)
+        cmds.connectAttr(f"{cond}.outColorR", f"{self.cube}.visibility", force=True)
 
         # Now create opacity (new code) — should clean up the legacy node
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
-        vis_inputs = pm.listConnections(self.cube.visibility, source=True)
-        conds = [n for n in (vis_inputs or []) if isinstance(n, pm.nt.Condition)]
+        vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
+        conds = [n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"]
         self.assertFalse(
             conds,
             "Legacy condition node should be removed on create",
@@ -544,27 +519,27 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
     def test_foreign_condition_not_removed(self):
         """A non-VisDriver condition driving visibility must not be touched."""
-        foreign = pm.createNode("condition", name="foreign_cond")
-        foreign.operation.set(0)
-        foreign.colorIfTrueR.set(1.0)
-        foreign.colorIfFalseR.set(0.0)
-        pm.connectAttr(foreign.outColorR, self.cube.visibility, force=True)
+        foreign = cmds.createNode("condition", name="foreign_cond")
+        cmds.setAttr(f"{foreign}.operation", 0)
+        cmds.setAttr(f"{foreign}.colorIfTrueR", 1.0)
+        cmds.setAttr(f"{foreign}.colorIfFalseR", 0.0)
+        cmds.connectAttr(f"{foreign}.outColorR", f"{self.cube}.visibility", force=True)
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Foreign condition should still be there
-        inputs = self.cube.visibility.inputs()
+        inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         self.assertTrue(inputs, "Visibility should still have a driver")
         self.assertEqual(
-            inputs[0].name(),
+            inputs[0],
             "foreign_cond",
             "Foreign condition should not have been replaced",
         )
 
         # Cleanup
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
-        if pm.objExists(foreign):
-            pm.delete(foreign)
+        if cmds.objExists(foreign):
+            cmds.delete(foreign)
 
     def test_remove_handles_locked_visibility(self):
         """remove() must not crash when visibility is locked.
@@ -575,15 +550,15 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Lock visibility between create and remove
-        self.cube.visibility.lock()
+        cmds.setAttr(f"{self.cube}.visibility", lock=True)
 
         # Should not raise
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
 
         # Attribute should be gone regardless
-        self.assertFalse(self.cube.hasAttr("opacity"))
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
         # Unlock for teardown
-        self.cube.visibility.unlock()
+        cmds.setAttr(f"{self.cube}.visibility", lock=False)
 
 
 class TestPrepareForExport(MayaTkTestCase):
@@ -593,23 +568,23 @@ class TestPrepareForExport(MayaTkTestCase):
     root Animator with empty paths and can't be mapped per-object)."""
 
     def test_syncs_manually_keyed_opacity(self):
-        cube = pm.polyCube(name="manual_keyed_cube")[0]
+        cube = cmds.polyCube(name="manual_keyed_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
 
         # Hand-author opacity keys WITHOUT going through key_fade / behaviors
-        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
-        pm.setKeyframe(cube, attribute="opacity", time=60, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=60, value=0.0)
 
         # Pre-condition: no visibility keys yet — would silently fail in Unity
         self.assertEqual(
-            pm.keyframe(cube, attribute="visibility", q=True, keyframeCount=True), 0
+            cmds.keyframe(cube, attribute="visibility", q=True, keyframeCount=True), 0
         )
 
         synced = RenderOpacity.prepare_for_export(objects=[cube])
 
-        self.assertIn(cube.name(), synced)
-        vis_count = pm.keyframe(
+        self.assertIn(cube, synced)
+        vis_count = cmds.keyframe(
             cube, attribute="visibility", q=True, keyframeCount=True
         )
         self.assertGreaterEqual(
@@ -619,7 +594,7 @@ class TestPrepareForExport(MayaTkTestCase):
         )
 
     def test_idempotent(self):
-        cube = pm.polyCube(name="already_synced_cube")[0]
+        cube = cmds.polyCube(name="already_synced_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
         # key_fade dual-keys both channels already
         RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
@@ -630,44 +605,44 @@ class TestPrepareForExport(MayaTkTestCase):
         )
 
     def test_scene_wide_scan(self):
-        c1 = pm.polyCube(name="scan_a")[0]
-        c2 = pm.polyCube(name="scan_b")[0]
-        c3 = pm.polyCube(name="scan_c_no_anim")[0]
+        c1 = cmds.polyCube(name="scan_a")[0]
+        c2 = cmds.polyCube(name="scan_b")[0]
+        c3 = cmds.polyCube(name="scan_c_no_anim")[0]
         RenderOpacity.create(objects=[c1, c2, c3], mode="attribute")
 
         # Only c1 and c2 get opacity animation (c3 has the attr but no keys)
-        pm.setKeyframe(c1, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(c1, attribute="opacity", time=30, value=1.0)
-        pm.setKeyframe(c2, attribute="opacity", time=10, value=1.0)
-        pm.setKeyframe(c2, attribute="opacity", time=40, value=0.0)
+        cmds.setKeyframe(c1, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(c1, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(c2, attribute="opacity", time=10, value=1.0)
+        cmds.setKeyframe(c2, attribute="opacity", time=40, value=0.0)
 
         # objects=None → scene-wide scan
         synced = RenderOpacity.prepare_for_export()
 
-        self.assertIn(c1.name(), synced)
-        self.assertIn(c2.name(), synced)
+        self.assertIn(c1, synced)
+        self.assertIn(c2, synced)
         self.assertNotIn(
-            c3.name(), synced, "Object without opacity keys must be skipped"
+            c3, synced, "Object without opacity keys must be skipped"
         )
 
     def test_multi_segment_animation(self):
         """fade-in → hold → fade-out → hold → fade-in produces matching
         visibility keys at every opacity transition boundary."""
-        cube = pm.polyCube(name="multi_segment_cube")[0]
+        cube = cmds.polyCube(name="multi_segment_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
 
         # 5-segment opacity authoring
-        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=20, value=1.0)
-        pm.setKeyframe(cube, attribute="opacity", time=50, value=1.0)
-        pm.setKeyframe(cube, attribute="opacity", time=70, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=100, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=120, value=1.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=20, value=1.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=50, value=1.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=70, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=100, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=120, value=1.0)
 
         RenderOpacity.prepare_for_export(objects=[cube])
 
-        vis_times = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
-        vis_vals = pm.keyframe(cube, attribute="visibility", q=True, vc=True)
+        vis_times = cmds.keyframe(cube, attribute="visibility", q=True, tc=True)
+        vis_vals = cmds.keyframe(cube, attribute="visibility", q=True, vc=True)
         self.assertEqual(
             sorted(vis_times),
             [1, 20, 50, 70, 100, 120],
@@ -682,24 +657,24 @@ class TestPrepareForExport(MayaTkTestCase):
     def test_preserves_manual_visibility_keys(self):
         """When the user has authored more visibility keys than opacity keys,
         prepare_for_export must NOT clobber that manual authoring."""
-        cube = pm.polyCube(name="manual_vis_cube")[0]
+        cube = cmds.polyCube(name="manual_vis_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
 
         # 2 opacity keys, 4 manually-authored visibility keys.
         # Use long-name plug path to target only the transform — pm.setKeyframe
         # with attribute="visibility" hits the shape too and double-counts.
-        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=100, value=1.0)
-        vis_plug = f"{cube.longName()}.visibility"
+        cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=100, value=1.0)
+        vis_plug = f"{cmds.ls(str(cube), l=True)[0]}.visibility"
         for t, v in [(1, 0), (25, 1), (50, 0), (100, 1)]:
-            pm.setKeyframe(vis_plug, time=t, value=v)
+            cmds.setKeyframe(vis_plug, time=t, value=v)
 
         synced = RenderOpacity.prepare_for_export(objects=[cube])
         self.assertNotIn(
-            cube.name(), synced, "Should not resync — user has authored visibility"
+            cube, synced, "Should not resync — user has authored visibility"
         )
 
-        vis_times = pm.keyframe(vis_plug, q=True, tc=True)
+        vis_times = cmds.keyframe(vis_plug, q=True, tc=True)
         self.assertEqual(
             sorted(set(vis_times)), [1, 25, 50, 100],
             "Manual visibility keyframes must be preserved verbatim",
@@ -708,19 +683,19 @@ class TestPrepareForExport(MayaTkTestCase):
     def test_partial_opacity_values_coerce_to_visible(self):
         """Sub-1.0 opacity (e.g. 0.3) must produce visibility=1 — only
         a literal 0.0 marks the object as fully hidden."""
-        cube = pm.polyCube(name="partial_opa_cube")[0]
+        cube = cmds.polyCube(name="partial_opa_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
 
-        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=10, value=0.001)  # epsilon-visible
-        pm.setKeyframe(cube, attribute="opacity", time=20, value=0.5)
-        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=10, value=0.001)  # epsilon-visible
+        cmds.setKeyframe(cube, attribute="opacity", time=20, value=0.5)
+        cmds.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
 
         RenderOpacity.prepare_for_export(objects=[cube])
 
         vis_vals = sorted(zip(
-            pm.keyframe(cube, attribute="visibility", q=True, tc=True),
-            pm.keyframe(cube, attribute="visibility", q=True, vc=True),
+            cmds.keyframe(cube, attribute="visibility", q=True, tc=True),
+            cmds.keyframe(cube, attribute="visibility", q=True, vc=True),
         ))
         self.assertEqual(vis_vals, [(1, 0.0), (10, 1.0), (20, 1.0), (30, 1.0)])
 
@@ -729,23 +704,23 @@ class TestPrepareForExport(MayaTkTestCase):
         carry the Renderers. The Unity importer descends to add controllers
         on child Renderers, so the Maya side must still produce a usable
         visibility curve on the parent."""
-        parent = pm.group(empty=True, name="opacity_parent_loc")
-        child = pm.polyCube(name="child_mesh")[0]
-        pm.parent(child, parent)
+        parent = cmds.group(empty=True, name="opacity_parent_loc")
+        child = cmds.polyCube(name="child_mesh")[0]
+        cmds.parent(child, parent)
 
         RenderOpacity.create(objects=[parent], mode="attribute")
-        pm.setKeyframe(parent, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(parent, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(parent, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(parent, attribute="opacity", time=30, value=1.0)
 
         synced = RenderOpacity.prepare_for_export(objects=[parent])
-        self.assertIn(parent.name(), synced)
+        self.assertIn(parent, synced)
 
         # Visibility on parent gets keyed; child geometry inherits via Maya
         # transform vis. The Unity importer reads m_Enabled@Renderer on the
         # child; Maya FBX export propagates parent visibility to child
         # m_Enabled in the absence of overrides.
         self.assertGreater(
-            pm.keyframe(parent, attribute="visibility", q=True, keyframeCount=True),
+            cmds.keyframe(parent, attribute="visibility", q=True, keyframeCount=True),
             0,
             "Parent visibility must be keyed even when geometry lives on child",
         )
@@ -753,13 +728,13 @@ class TestPrepareForExport(MayaTkTestCase):
     def test_prepare_after_key_fade_is_noop(self):
         """key_fade already dual-keys; prepare_for_export must be a no-op
         on top of it (idempotency under the canonical happy path)."""
-        cube = pm.polyCube(name="key_fade_cube")[0]
+        cube = cmds.polyCube(name="key_fade_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
         RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
 
-        vis_before = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
+        vis_before = cmds.keyframe(cube, attribute="visibility", q=True, tc=True)
         synced = RenderOpacity.prepare_for_export(objects=[cube])
-        vis_after = pm.keyframe(cube, attribute="visibility", q=True, tc=True)
+        vis_after = cmds.keyframe(cube, attribute="visibility", q=True, tc=True)
 
         self.assertEqual(synced, [])
         self.assertEqual(vis_before, vis_after, "Visibility keys must be untouched")
@@ -768,27 +743,27 @@ class TestPrepareForExport(MayaTkTestCase):
         """Stray shape.visibility keys must not inflate the visibility
         count and falsely satisfy the resync trigger.
 
-        Bug surface: ``pm.keyframe(obj, attribute='visibility')`` queries
+        Bug surface: ``cmds.keyframe(obj, attribute='visibility')`` queries
         BOTH transform.visibility and shape.visibility — if some other
         tool keyed shape.visibility, our count would exceed opacity_count
         and we'd skip resync even though transform.visibility is empty
         (which is what the FBX exporter actually reads)."""
-        cube = pm.polyCube(name="shape_keyed_cube")[0]
+        cube = cmds.polyCube(name="shape_keyed_cube")[0]
         RenderOpacity.create(objects=[cube], mode="attribute")
 
         # Hand-author opacity, but only key SHAPE visibility (transform
         # vis stays unkeyed — this is the silent-failure scenario)
-        pm.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
-        shape = cube.getShape()
+        cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
+        shape = (cmds.listRelatives(str(cube), shapes=True, ni=True) or [None])[0]
         if shape is not None:
             for t, v in [(1, 0), (10, 1), (20, 0), (30, 1)]:
-                pm.setKeyframe(f"{shape.longName()}.visibility", time=t, value=v)
+                cmds.setKeyframe(f"{cmds.ls(str(shape), l=True)[0]}.visibility", time=t, value=v)
 
         synced = RenderOpacity.prepare_for_export(objects=[cube])
 
         self.assertIn(
-            cube.name(), synced,
+            cube, synced,
             "Must resync transform.visibility despite shape.visibility keys "
             "— FBX export reads transform vis, not shape",
         )
@@ -797,13 +772,13 @@ class TestPrepareForExport(MayaTkTestCase):
         """Plain objects (no opacity attr) must not trigger errors when
         passed to prepare_for_export — common case during scene-wide
         operations that pass mixed selections."""
-        plain = pm.polyCube(name="plain_cube")[0]
-        opacity_obj = pm.polyCube(name="opacity_cube")[0]
+        plain = cmds.polyCube(name="plain_cube")[0]
+        opacity_obj = cmds.polyCube(name="opacity_cube")[0]
         RenderOpacity.create(objects=[opacity_obj], mode="attribute")
-        pm.setKeyframe(opacity_obj, attribute="opacity", time=1, value=0.0)
-        pm.setKeyframe(opacity_obj, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(opacity_obj, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(opacity_obj, attribute="opacity", time=30, value=1.0)
 
         synced = RenderOpacity.prepare_for_export(objects=[plain, opacity_obj])
 
-        self.assertEqual(synced, [opacity_obj.name()])
-        self.assertFalse(plain.hasAttr("opacity"))
+        self.assertEqual(synced, [opacity_obj])
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(plain), exists=True))

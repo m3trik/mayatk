@@ -13,11 +13,11 @@ Tests for XformUtils class functionality including:
 - Orientation (aim, orient to vector, get orientation)
 """
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.xform_utils._xform_utils import XformUtils
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestXformUtils(MayaTkTestCase):
@@ -27,20 +27,20 @@ class TestXformUtils(MayaTkTestCase):
         """Set up test scene with standard geometry."""
         super().setUp()
         # Create test geometries
-        self.cube1 = pm.polyCube(name="test_cube1")[0]
-        self.cube2 = pm.polyCube(name="test_cube2")[0]
-        self.sphere = pm.polySphere(name="test_sphere")[0]
+        self.cube1 = cmds.polyCube(name="test_cube1")[0]
+        self.cube2 = cmds.polyCube(name="test_cube2")[0]
+        self.sphere = cmds.polySphere(name="test_sphere")[0]
 
         # Position objects at known locations
-        pm.move(self.cube1, 5, 0, 0, absolute=True)
-        pm.move(self.cube2, 0, 5, 0, absolute=True)
-        pm.move(self.sphere, 0, 0, 5, absolute=True)
+        cmds.move(5, 0, 0, self.cube1, absolute=True)
+        cmds.move(0, 5, 0, self.cube2, absolute=True)
+        cmds.move(0, 0, 5, self.sphere, absolute=True)
 
     def tearDown(self):
         """Clean up test geometry."""
         for obj in ["test_cube1", "test_cube2", "test_sphere", "target_helper"]:
-            if pm.objExists(obj):
-                pm.delete(obj)
+            if cmds.objExists(obj):
+                cmds.delete(obj)
         super().tearDown()
 
     # -------------------------------------------------------------------------
@@ -75,23 +75,23 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_move_to_object(self):
         """Test moving one object to another's position."""
-        cube2_pos = pm.xform(self.cube2, query=True, worldSpace=True, translation=True)
+        cube2_pos = cmds.xform(self.cube2, query=True, worldSpace=True, translation=True)
         XformUtils.move_to(self.cube1, self.cube2)
-        cube1_pos = pm.xform(self.cube1, query=True, worldSpace=True, translation=True)
+        cube1_pos = cmds.xform(self.cube1, query=True, worldSpace=True, translation=True)
         for i in range(3):
             self.assertAlmostEqual(cube1_pos[i], cube2_pos[i], places=2)
 
     def test_move_to_group(self):
         """Test moving multiple objects as a group."""
         # Create a group of objects
-        c1 = pm.polyCube()[0]
-        c2 = pm.polyCube()[0]
-        pm.move(c1, 0, 0, 0)
-        pm.move(c2, 2, 0, 0)
+        c1 = cmds.polyCube()[0]
+        c2 = cmds.polyCube()[0]
+        cmds.move(0, 0, 0, c1)
+        cmds.move(2, 0, 0, c2)
 
         # Target
-        target = pm.polySphere()[0]
-        pm.move(target, 10, 10, 10)
+        target = cmds.polySphere()[0]
+        cmds.move(10, 10, 10, target)
 
         # Move as group
         XformUtils.move_to([c1, c2], target, group_move=True)
@@ -101,32 +101,32 @@ class TestXformUtils(MayaTkTestCase):
         # Shift is (9, 10, 10).
         # c1 should be at (9, 10, 10), c2 at (11, 10, 10)
 
-        c1_pos = pm.xform(c1, q=True, ws=True, t=True)
-        c2_pos = pm.xform(c2, q=True, ws=True, t=True)
+        c1_pos = cmds.xform(c1, q=True, ws=True, t=True)
+        c2_pos = cmds.xform(c2, q=True, ws=True, t=True)
 
         self.assertAlmostEqual(c1_pos[0], 9.0, delta=1e-4)
         self.assertAlmostEqual(c2_pos[0], 11.0, delta=1e-4)
 
-        pm.delete(c1, c2, target)
+        cmds.delete(c1, c2, target)
 
     def test_drop_to_grid(self):
         """Test dropping object to grid."""
-        pm.move(self.cube1, 5, 10, 5, absolute=True)
+        cmds.move(5, 10, 5, self.cube1, absolute=True)
         XformUtils.drop_to_grid(self.cube1, align="Min")
 
         # Check bounding box min Y is approx 0
-        bbox = pm.exactWorldBoundingBox(self.cube1)
+        bbox = cmds.exactWorldBoundingBox(self.cube1)
         self.assertAlmostEqual(bbox[1], 0.0, places=4)
 
     def test_reset_translation(self):
         """Test resetting translation."""
-        pm.move(self.cube1, 10, 20, 30)
-        original_pos = pm.xform(self.cube1, q=True, ws=True, t=True)
+        cmds.move(10, 20, 30, self.cube1)
+        original_pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
 
         XformUtils.reset_translation(self.cube1)
 
         # Position should be preserved
-        new_pos = pm.xform(self.cube1, q=True, ws=True, t=True)
+        new_pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
         self.assertEqual(new_pos, original_pos)
 
         # But translation values might be different if pivots changed,
@@ -135,15 +135,15 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_set_translation_to_pivot(self):
         """Test setting translation to pivot."""
-        pm.move(self.cube1, 10, 0, 0)
+        cmds.move(10, 0, 0, self.cube1)
         # Move pivot away
-        pm.xform(self.cube1, ws=True, rp=(15, 0, 0))
+        cmds.xform(self.cube1, ws=True, rp=(15, 0, 0))
 
         XformUtils.set_translation_to_pivot(self.cube1)
 
         # Object translation should now be 15, 0, 0 (or close, depending on implementation details)
         # The method moves the object so its transform center matches the pivot
-        trans = pm.xform(self.cube1, q=True, ws=True, t=True)
+        trans = cmds.xform(self.cube1, q=True, ws=True, t=True)
         self.assertAlmostEqual(trans[0], 15.0)
 
     # -------------------------------------------------------------------------
@@ -153,24 +153,24 @@ class TestXformUtils(MayaTkTestCase):
     def test_match_scale(self):
         """Test matching scale of objects."""
         # Target is 2x2x2
-        pm.scale(self.cube2, 2, 2, 2)
+        cmds.scale(2, 2, 2, self.cube2)
 
         # Source is 1x1x1
         XformUtils.match_scale(self.cube1, self.cube2)
 
-        scale = pm.getAttr(self.cube1.scale)
+        scale = cmds.getAttr(f"{self.cube1}.scale")[0]
         self.assertAlmostEqual(scale[0], 2.0)
 
     def test_scale_connected_edges(self):
         """Test scaling connected edges."""
         # Select some edges on the sphere
         edges = [f"{self.sphere}.e[0]", f"{self.sphere}.e[1]"]
-        pm.select(edges)
+        cmds.select(edges)
 
         # Get initial vertex positions
-        vtxs = pm.polyListComponentConversion(edges, tv=True)
-        vtxs = pm.ls(vtxs, flatten=True)
-        initial_pos = [v.getPosition(space="world") for v in vtxs]
+        vtxs = cmds.polyListComponentConversion(edges, tv=True)
+        vtxs = cmds.ls(vtxs, flatten=True)
+        initial_pos = [cmds.pointPosition(v, world=True) for v in vtxs]
 
         # Call without explicit objects to satisfy the @selected decorator
         # which seems to assume implicit selection for static methods
@@ -179,7 +179,7 @@ class TestXformUtils(MayaTkTestCase):
         # Vertices should have moved further apart
         # Simple check: bounding box of vertices should be larger
         # But exact math check is complex. Just ensure they moved.
-        final_pos = [v.getPosition(space="world") for v in vtxs]
+        final_pos = [cmds.pointPosition(v, world=True) for v in vtxs]
         self.assertNotEqual(initial_pos, final_pos)
 
     # -------------------------------------------------------------------------
@@ -188,37 +188,37 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_store_and_restore_transforms(self):
         """Test storing and restoring transforms."""
-        pm.move(self.cube1, 10, 20, 30)
-        pm.rotate(self.cube1, 45, 45, 0)
+        cmds.move(10, 20, 30, self.cube1)
+        cmds.rotate(45, 45, 0, self.cube1)
 
         # Store
         XformUtils.store_transforms(self.cube1, prefix="test")
-        self.assertTrue(pm.hasAttr(self.cube1, "test_worldMatrix"))
+        self.assertTrue(cmds.attributeQuery("test_worldMatrix", node=str(self.cube1), exists=True))
 
         # Move it somewhere else
-        pm.move(self.cube1, 0, 0, 0)
-        pm.rotate(self.cube1, 0, 0, 0)
+        cmds.move(0, 0, 0, self.cube1)
+        cmds.rotate(0, 0, 0, self.cube1)
 
         # Restore
         XformUtils.restore_transforms(self.cube1, prefix="test")
 
-        pos = pm.xform(self.cube1, q=True, ws=True, t=True)
+        pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
         self.assertAlmostEqual(pos[0], 10.0)
         self.assertAlmostEqual(pos[1], 20.0)
         self.assertAlmostEqual(pos[2], 30.0)
 
     def test_freeze_transforms(self):
         """Test freeze transforms."""
-        pm.move(self.cube1, 10, 10, 10)
-        pm.rotate(self.cube1, 45, 0, 0)
+        cmds.move(10, 10, 10, self.cube1)
+        cmds.rotate(45, 0, 0, self.cube1)
 
         XformUtils.freeze_transforms(self.cube1, translate=True, rotate=True)
 
-        trans = pm.getAttr(self.cube1.translate)
-        rot = pm.getAttr(self.cube1.rotate)
+        trans = cmds.getAttr(f"{self.cube1}.translate")[0]
+        rot = cmds.getAttr(f"{self.cube1}.rotate")[0]
 
-        self.assertEqual(trans, pm.dt.Vector(0, 0, 0))
-        self.assertEqual(rot, pm.dt.Vector(0, 0, 0))
+        self.assertEqual(tuple(trans), (0.0, 0.0, 0.0))
+        self.assertEqual(tuple(rot), (0.0, 0.0, 0.0))
 
         # Position should still be 10, 10, 10 in world space (geometry moved)
         # But pivot is at origin if not preserved?
@@ -228,7 +228,7 @@ class TestXformUtils(MayaTkTestCase):
         # The docstring says "Maya's makeIdentity automatically preserves world-space pivot positions".
 
         # Let's verify world position of geometry
-        bbox = pm.exactWorldBoundingBox(self.cube1)
+        bbox = cmds.exactWorldBoundingBox(self.cube1)
         center = [
             (bbox[0] + bbox[3]) / 2,
             (bbox[1] + bbox[4]) / 2,
@@ -238,17 +238,23 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_freeze_to_opm(self):
         """Test freezing to Offset Parent Matrix."""
-        pm.move(self.cube1, 10, 10, 10)
+        cmds.move(10, 10, 10, self.cube1)
 
         XformUtils.freeze_to_opm(self.cube1)
 
         # Translate should be zero
-        trans = pm.getAttr(self.cube1.translate)
-        self.assertEqual(trans, pm.dt.Vector(0, 0, 0))
+        trans = cmds.getAttr(f"{self.cube1}.translate")[0]
+        self.assertEqual(tuple(trans), (0.0, 0.0, 0.0))
 
-        # OPM should be set
-        opm = pm.getAttr(self.cube1.offsetParentMatrix)
-        self.assertNotEqual(opm, pm.dt.Matrix())  # Should not be identity
+        # OPM should be set — flat 16-element list; identity has 1s on the diagonal.
+        opm = cmds.getAttr(f"{self.cube1}.offsetParentMatrix")
+        identity = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+        self.assertNotEqual(opm, identity)
 
     # -------------------------------------------------------------------------
     # Pivot Operations Tests
@@ -256,7 +262,7 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_get_operation_axis_pos(self):
         """Test getting pivot position for operations."""
-        pm.move(self.cube1, 10, 10, 10)
+        cmds.move(10, 10, 10, self.cube1)
 
         # Center
         pos = XformUtils.get_operation_axis_pos(self.cube1, "center")
@@ -274,13 +280,13 @@ class TestXformUtils(MayaTkTestCase):
     def test_align_pivot_to_selection(self):
         """Test aligning pivot to selection."""
         # Move cube2
-        pm.move(self.cube2, 20, 0, 0)
+        cmds.move(20, 0, 0, self.cube2)
 
         # Align cube1 pivot to cube2
         XformUtils.align_pivot_to_selection(self.cube1, self.cube2, translate=True)
 
         # Cube1 should have moved to Cube2
-        pos = pm.xform(self.cube1, q=True, ws=True, t=True)
+        pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
         self.assertAlmostEqual(pos[0], 20.0)
 
     def test_reset_pivot_transforms(self):
@@ -290,34 +296,34 @@ class TestXformUtils(MayaTkTestCase):
         causing it to exit immediately when the ``objects`` parameter was provided.
         Fixed: 2026-02-27
         """
-        pm.move(self.cube1, 10, 0, 0)
+        cmds.move(10, 0, 0, self.cube1)
         # Move pivot away from geometry center
-        pm.xform(self.cube1, ws=True, rp=(0, 0, 0))
+        cmds.xform(self.cube1, ws=True, rp=(0, 0, 0))
 
         # Pass objects explicitly — before the fix this was a no-op
         XformUtils.reset_pivot_transforms(self.cube1)
 
         # Pivot should now be re-centred on the object's bounding box
-        rp = pm.xform(self.cube1, q=True, ws=True, rp=True)
+        rp = cmds.xform(self.cube1, q=True, ws=True, rp=True)
         self.assertAlmostEqual(rp[0], 10.0, delta=0.5)
 
     def test_transfer_pivot(self):
         """Test transferring pivot."""
-        pm.move(self.cube1, 10, 0, 0)
-        pm.move(self.cube2, 20, 0, 0)
+        cmds.move(10, 0, 0, self.cube1)
+        cmds.move(20, 0, 0, self.cube2)
 
         # Transfer pivot from cube1 to cube2
         XformUtils.transfer_pivot([self.cube1, self.cube2], translate=True)
 
         # Cube2 pivot should be at Cube1 location (10, 0, 0)
-        rp = pm.xform(self.cube2, q=True, ws=True, rp=True)
+        rp = cmds.xform(self.cube2, q=True, ws=True, rp=True)
         self.assertAlmostEqual(rp[0], 10.0)
 
     def test_bake_pivot(self):
         """Test baking pivot."""
-        pm.move(self.cube1, 10, 0, 0)
+        cmds.move(10, 0, 0, self.cube1)
         # Rotate pivot
-        pm.xform(self.cube1, ro=(0, 45, 0))
+        cmds.xform(self.cube1, ro=(0, 45, 0))
 
         XformUtils.bake_pivot(self.cube1, orientation=True)
 
@@ -336,8 +342,8 @@ class TestXformUtils(MayaTkTestCase):
         target = (0, 10, 0)
         XformUtils.aim_object_at_point(self.cube1, target)
 
-        rot = pm.getAttr(self.cube1.rotate)
-        self.assertNotEqual(rot, pm.dt.Vector(0, 0, 0))
+        rot = cmds.getAttr(f"{self.cube1}.rotate")[0]
+        self.assertNotEqual(tuple(rot), (0.0, 0.0, 0.0))
 
     def test_aim_object_at_point_multi_no_leak(self):
         """Verify that aiming multiple objects cleans up all constraints.
@@ -347,38 +353,38 @@ class TestXformUtils(MayaTkTestCase):
         ``target_pos`` was an existing transform name.
         Fixed: 2026-02-27
         """
-        c1 = pm.polyCube(name="aim_test_a")[0]
-        c2 = pm.polyCube(name="aim_test_b")[0]
-        pm.move(c1, -5, 0, 0)
-        pm.move(c2, 5, 0, 0)
+        c1 = cmds.polyCube(name="aim_test_a")[0]
+        c2 = cmds.polyCube(name="aim_test_b")[0]
+        cmds.move(-5, 0, 0, c1)
+        cmds.move(5, 0, 0, c2)
 
-        constraint_count_before = len(pm.ls(type="aimConstraint"))
+        constraint_count_before = len(cmds.ls(type="aimConstraint"))
         XformUtils.aim_object_at_point([c1, c2], (0, 10, 0))
-        constraint_count_after = len(pm.ls(type="aimConstraint"))
+        constraint_count_after = len(cmds.ls(type="aimConstraint"))
 
         # All constraints should be cleaned up
         self.assertEqual(constraint_count_before, constraint_count_after)
 
         # No leftover 'target_helper' node
-        self.assertFalse(pm.objExists("target_helper"))
+        self.assertFalse(cmds.objExists("target_helper"))
 
-        pm.delete(c1, c2)
+        cmds.delete(c1, c2)
 
     def test_aim_object_at_existing_target_not_deleted(self):
         """Verify that aiming at an existing transform does not delete it.
 
-        Bug: ``pm.delete(const, target)`` unconditionally deleted the target
+        Bug: ``cmds.delete(const, target)`` unconditionally deleted the target
         even when it was a user-supplied transform, not a temporary helper.
         Fixed: 2026-02-27
         """
-        target = pm.polySphere(name="aim_target_sphere")[0]
-        pm.move(target, 0, 10, 0)
+        target = cmds.polySphere(name="aim_target_sphere")[0]
+        cmds.move(0, 10, 0, target)
 
         XformUtils.aim_object_at_point(self.cube1, target)
 
         # The user's target must still exist
-        self.assertTrue(pm.objExists("aim_target_sphere"))
-        pm.delete(target)
+        self.assertTrue(cmds.objExists("aim_target_sphere"))
+        cmds.delete(target)
 
     def test_orient_to_vector(self):
         """Test orienting to vector."""
@@ -386,7 +392,7 @@ class TestXformUtils(MayaTkTestCase):
 
         # X axis should point up (0, 1, 0)
         # Check world matrix
-        m = pm.xform(self.cube1, q=True, m=True, ws=True)
+        m = cmds.xform(self.cube1, q=True, m=True, ws=True)
         # X axis is first 3 elements
         self.assertAlmostEqual(m[0], 0.0, places=4)
         self.assertAlmostEqual(m[1], 1.0, places=4)
@@ -394,7 +400,7 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_get_orientation(self):
         """Test getting orientation."""
-        pm.rotate(self.cube1, 0, 90, 0)
+        cmds.rotate(0, 90, 0, self.cube1)
 
         # Get as vector
         vectors = XformUtils.get_orientation(self.cube1, returned_type="vector")
@@ -411,12 +417,12 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
     def setUp(self):
         """Set up test scene."""
         super().setUp()
-        self.cube1 = pm.polyCube(name="test_cube1")[0]
+        self.cube1 = cmds.polyCube(name="test_cube1")[0]
 
     def tearDown(self):
         """Clean up."""
-        if pm.objExists("test_cube1"):
-            pm.delete("test_cube1")
+        if cmds.objExists("test_cube1"):
+            cmds.delete("test_cube1")
         super().tearDown()
 
     def test_convert_axis_invalid(self):
@@ -431,11 +437,11 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
 
     def test_freeze_transforms_locked(self):
         """Test freezing locked attributes."""
-        self.cube1.translateX.set(lock=True)
+        cmds.setAttr(f"{self.cube1}.translateX", lock=True)
         # Should unlock, freeze, and relock (if force=True)
         XformUtils.freeze_transforms(self.cube1, translate=True, force=True)
-        self.assertEqual(self.cube1.translateX.get(), 0.0)
-        self.assertTrue(self.cube1.translateX.isLocked())
+        self.assertEqual(cmds.getAttr(f"{self.cube1}.translateX"), 0.0)
+        self.assertTrue(cmds.getAttr(f"{self.cube1}.translateX", lock=True))
 
     def test_align_using_three_points_identity(self):
         """Verify 3-point align maps source frame onto target frame.
@@ -446,25 +452,25 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
         Fixed: 2026-02-27
         """
         # Source plane at origin, target plane at (10, 0, 0) with a 90-deg Y rotation
-        src = pm.polyPlane(name="src_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
-        tgt = pm.polyPlane(name="tgt_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
-        pm.move(tgt, 10, 0, 0)
-        pm.rotate(tgt, 0, 90, 0)
+        src = cmds.polyPlane(name="src_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
+        tgt = cmds.polyPlane(name="tgt_plane", w=4, h=4, sx=1, sy=1, ax=(0, 1, 0))[0]
+        cmds.move(10, 0, 0, tgt)
+        cmds.rotate(0, 90, 0, tgt)
 
-        src_verts = pm.ls(f"{src}.vtx[0:2]", flatten=True)
-        tgt_verts = pm.ls(f"{tgt}.vtx[0:2]", flatten=True)
+        src_verts = cmds.ls(f"{src}.vtx[0:2]", flatten=True)
+        tgt_verts = cmds.ls(f"{tgt}.vtx[0:2]", flatten=True)
 
         XformUtils.align_using_three_points(src_verts + tgt_verts)
 
         # After alignment, the first 3 source vertices should be very close
         # to the corresponding target vertices.
         for sv, tv in zip(src_verts, tgt_verts):
-            sp = pm.pointPosition(sv, w=True)
-            tp = pm.pointPosition(tv, w=True)
+            sp = cmds.pointPosition(sv, w=True)
+            tp = cmds.pointPosition(tv, w=True)
             for i in range(3):
                 self.assertAlmostEqual(sp[i], tp[i], places=3)
 
-        pm.delete(src, tgt)
+        cmds.delete(src, tgt)
 
     def test_align_vertices_no_selection(self):
         """Verify align_vertices doesn't crash when nothing is selected.
@@ -474,7 +480,7 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
         selected.
         Fixed: 2026-02-27
         """
-        pm.select(clear=True)
+        cmds.select(clear=True)
         # Should return gracefully (inViewMessage), not IndexError
         XformUtils.align_vertices(mode=3)
 
@@ -485,29 +491,29 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
         ran after the position was already accessed.
         Fixed: 2026-02-27
         """
-        cube = pm.polyCube(name="align_vert_test")[0]
-        pm.select(f"{cube}.vtx[0]")
+        cube = cmds.polyCube(name="align_vert_test")[0]
+        cmds.select(f"{cube}.vtx[0]")
         # Should not raise
         XformUtils.align_vertices(mode=3)
-        pm.delete(cube)
+        cmds.delete(cube)
 
     def test_align_vertices_mode_x(self):
         """Verify align_vertices mode=3 (X) aligns X coords to last selected."""
-        cube = pm.polyCube(name="align_mode_test", sx=2, sy=2, sz=2)[0]
-        verts = pm.ls(f"{cube}.vtx[*]", flatten=True)
+        cube = cmds.polyCube(name="align_mode_test", sx=2, sy=2, sz=2)[0]
+        verts = cmds.ls(f"{cube}.vtx[*]", flatten=True)
 
         # Select 3 vertices — the last one's X will be the reference
-        pm.select([verts[0], verts[1], verts[2]])
-        ref_x = pm.xform(verts[2], q=True, t=True, ws=True)[0]
+        cmds.select([verts[0], verts[1], verts[2]])
+        ref_x = cmds.xform(verts[2], q=True, t=True, ws=True)[0]
 
         XformUtils.align_vertices(mode=3)  # align X
 
         # All selected verts should now share the reference X
         for v in [verts[0], verts[1], verts[2]]:
-            pos = pm.xform(v, q=True, t=True, ws=True)
+            pos = cmds.xform(v, q=True, t=True, ws=True)
             self.assertAlmostEqual(pos[0], ref_x, places=4)
 
-        pm.delete(cube)
+        cmds.delete(cube)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,11 @@
 """Tree rendering, formatting, and selection management for the hierarchy manager UI.
 
 Extracted from HierarchyManagerController to isolate presentation logic
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from orchestration and state management.  All Controller state is accessed
 via ``self._ctrl``.
 """
@@ -10,9 +15,9 @@ import re
 from pathlib import Path
 from typing import Dict, List, Any
 
+import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
-import pymel.core as pm
 
 import mayatk.env_utils.hierarchy_manager.tree_utils as tree_utils
 from mayatk.ui_utils.node_icons import NodeIcons
@@ -51,14 +56,14 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
             return
 
         try:
-            current_scene = pm.sceneName()
+            current_scene = cmds.file(query=True, sceneName=True)
             scene_name = "Current Scene"
             if current_scene:
                 scene_name = Path(current_scene).stem or "Untitled Scene"
 
             tree_widget.clear()
 
-            all_transforms = pm.ls(type="transform")
+            all_transforms = cmds.ls(type="transform")
             self.logger.debug(
                 f"Current scene has {len(all_transforms)} total transforms"
             )
@@ -68,7 +73,7 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
             reference_objects = []
             default_cameras = []
             for transform in all_transforms:
-                node_name = transform.nodeName()
+                node_name = transform.split("|")[-1]
 
                 if self._ctrl._is_default_maya_camera(transform):
                     default_cameras.append(node_name)
@@ -103,7 +108,7 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
                 self.logger.debug(f"Default cameras excluded: {default_cameras}")
 
             if filtered_transforms:
-                transform_names = [t.nodeName() for t in filtered_transforms[:10]]
+                transform_names = [t.split("|")[-1] for t in filtered_transforms[:10]]
                 self.logger.debug(
                     f"Current scene objects: {transform_names}{'...' if len(filtered_transforms) > 10 else ''}"
                 )
@@ -152,13 +157,17 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
             return
 
         if self.logger.isEnabledFor(10):  # DEBUG level
-            root_count = sum(1 for t in transforms if t.getParent() is None)
+            root_count = sum(
+                1
+                for t in transforms
+                if not cmds.listRelatives(t, parent=True, fullPath=True)
+            )
             child_count = len(transforms) - root_count
             self.logger.debug(
                 f"Reference hierarchy structure: {root_count} roots, "
                 f"{child_count} children"
             )
-            example_names = [t.nodeName() for t in transforms[:10]]
+            example_names = [t.split("|")[-1] for t in transforms[:10]]
             self.logger.debug(
                 f"Example transforms: {example_names}"
                 f"{'...' if len(transforms) > 10 else ''}"

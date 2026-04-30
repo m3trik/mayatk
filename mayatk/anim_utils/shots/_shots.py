@@ -8,9 +8,12 @@ and — via :meth:`ShotStore.active` — the same live instance.
 
 Persistence is pluggable: call :meth:`ShotStore.set_persistence` with a
 backend that implements ``save(data)`` / ``load() -> dict | None``.
-:class:`MayaScenePersistence` is the default backend when PyMEL is
+:class:`MayaScenePersistence` is the default backend when Maya is
 available.
 """
+import maya.cmds as cmds
+import maya.mel as mel
+
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -25,10 +28,6 @@ from typing import (
 )
 from contextlib import contextmanager
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 try:
     from qtpy.QtCore import QSettings
@@ -50,10 +49,10 @@ _DEFAULT_FPS = 24.0
 
 def _get_scene_fps() -> float:
     """Return the current Maya scene framerate, or *_DEFAULT_FPS* outside Maya."""
-    if pm is None:
+    if cmds is None:
         return _DEFAULT_FPS
     try:
-        return float(pm.mel.eval("float $fps = `currentTimeUnitToFPS`"))
+        return float(mel.eval("float $fps = `currentTimeUnitToFPS`"))
     except Exception:
         return _DEFAULT_FPS
 
@@ -114,10 +113,9 @@ class MayaScenePersistence:
         self._install_scene_jobs()
 
     def save(self, data: Dict[str, Any]) -> None:
-        if pm is None:
+        if cmds is None:
             return
         import json
-        import maya.cmds as cmds
         from mayatk.node_utils._node_utils import NodeUtils
 
         # Persistence writes must not pollute the undo queue.  They
@@ -127,21 +125,21 @@ class MayaScenePersistence:
         cmds.undoInfo(stateWithoutFlush=False)
         try:
             node = NodeUtils.ensure_data_node(self._node_name, self._attr_name)
-            node.attr(self._attr_name).set(json.dumps(data))
+            cmds.setAttr(f"{node}.{self._attr_name}", json.dumps(data), type="string")
         finally:
             cmds.undoInfo(stateWithoutFlush=True)
 
     def load(self) -> Optional[Dict[str, Any]]:
-        if pm is None:
+        if cmds is None:
             return None
         import json
 
-        if not pm.objExists(self._node_name):
+        if not cmds.objExists(self._node_name):
             return None
-        node = pm.PyNode(self._node_name)
-        if not node.hasAttr(self._attr_name):
+        node = self._node_name
+        if not cmds.attributeQuery(self._attr_name, node=node, exists=True):
             return None
-        raw = node.attr(self._attr_name).get()
+        raw = cmds.getAttr(f"{node}.{self._attr_name}")
         if not raw:
             return None
         return json.loads(raw)
@@ -546,12 +544,12 @@ class ShotStore:
     def active(cls) -> "ShotStore":
         """Return the current active store, creating one if needed.
 
-        If a persistence backend is configured (or PyMEL is available),
+        If a persistence backend is configured (or Maya is available),
         saved data is loaded automatically on first access.
         """
         if cls._active is None:
             persistence = cls._persistence
-            if persistence is None and pm is not None:
+            if persistence is None and cmds is not None:
                 persistence = MayaScenePersistence()
                 cls._persistence = persistence
             if persistence is not None:
@@ -782,7 +780,10 @@ class ShotStore:
         if objects is None:
             objects = []
         else:
-            objects = _resolve_long_names(objects) or list(objects)
+            # Preserve the caller's name form (short or long).  Live DAG-path
+            # reconciliation happens lazily via _reconcile_stale_paths when
+            # the stored names no longer resolve.
+            objects = list(objects)
         new_id = max((s.shot_id for s in self.shots), default=-1) + 1
         block = ShotBlock(
             shot_id=new_id,
@@ -822,8 +823,8 @@ class ShotStore:
         if name is not None:
             shot.name = name
         if objects is not None:
-            resolved = _resolve_long_names(objects)
-            shot.objects = sorted(set(resolved or objects))
+            # Keep the caller's name form; lazy reconciliation handles renames.
+            shot.objects = sorted(set(objects))
         if description is not None:
             shot.description = description
         if locked is not None:

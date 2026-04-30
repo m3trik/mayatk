@@ -9,7 +9,6 @@ Tests for NurbsUtils class functionality including:
 - Lofting operations
 """
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 import importlib
 import mayatk.nurbs_utils._nurbs_utils as nu_mod
@@ -17,6 +16,7 @@ import mayatk.nurbs_utils._nurbs_utils as nu_mod
 importlib.reload(nu_mod)
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestNurbsUtils(MayaTkTestCase):
@@ -25,15 +25,15 @@ class TestNurbsUtils(MayaTkTestCase):
     def setUp(self):
         """Set up test scene."""
         super().setUp()
-        self.sphere1 = pm.circle(name="test_nurbs_circle1")[0]
-        self.sphere2 = pm.circle(name="test_nurbs_circle2")[0]
-        pm.move(self.sphere2, 10, 0, 0)
+        self.sphere1 = cmds.circle(name="test_nurbs_circle1")[0]
+        self.sphere2 = cmds.circle(name="test_nurbs_circle2")[0]
+        cmds.move(10, 0, 0, self.sphere2)
 
     def tearDown(self):
         """Clean up."""
         for obj in ["test_nurbs_circle1", "test_nurbs_circle2"]:
-            if pm.objExists(obj):
-                pm.delete(obj)
+            if cmds.objExists(obj):
+                cmds.delete(obj)
         super().tearDown()
 
     def test_create_curve_between_two_objects(self):

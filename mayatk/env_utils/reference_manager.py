@@ -8,16 +8,62 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.core_utils._core_utils import CoreUtils
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
+
+
+class _FileRef:
+    """Lightweight cmds-based stand-in for pm.system.FileReference."""
+
+    __slots__ = ("_ref_node",)
+
+    def __init__(self, ref_node: str):
+        self._ref_node = ref_node
+
+    @property
+    def namespace(self) -> str:
+        ns = cmds.referenceQuery(self._ref_node, namespace=True) or ""
+        return ns.lstrip(":")
+
+    @property
+    def path(self) -> str:
+        return cmds.referenceQuery(self._ref_node, filename=True, withoutCopyNumber=True)
+
+    def remove(self):
+        cmds.file(removeReference=True, referenceNode=self._ref_node)
+
+    def load(self):
+        cmds.file(loadReference=self._ref_node)
+
+    def importContents(self, removeNamespace: bool = False):
+        file_path = self.path
+        cmds.file(file_path, importReference=True)
+        if removeNamespace:
+            ns = self.namespace
+            if ns and cmds.namespace(exists=ns):
+                cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
+
+
+def _list_file_refs():
+    """Return _FileRef objects for all top-level references in the scene."""
+    result = []
+    for rn in (cmds.ls(type="reference") or []):
+        if rn == "sharedReferenceNode":
+            continue
+        try:
+            result.append(_FileRef(rn))
+        except RuntimeError:
+            pass
+    return result
 
 
 class AssemblyManager:
@@ -26,9 +72,9 @@ class AssemblyManager:
         """Get the current scene references.
 
         Returns:
-            list: A list of FileReference objects representing the current scene references.
+            list: A list of _FileRef objects representing the current scene references.
         """
-        return pm.system.listReferences()
+        return _list_file_refs()
 
     @classmethod
     def create_assembly_definition(cls, namespace: str, file_path: str) -> str:
@@ -42,25 +88,22 @@ class AssemblyManager:
             str: The name of the created representation, or None if the creation failed.
         """
         try:
-            # Validate file path
-            if not pm.util.path(file_path).exists():
-                pm.displayError(f"File does not exist: {file_path}")
+            if not os.path.exists(file_path):
+                cmds.warning(f"File does not exist: {file_path}")
                 return None
 
-            # Create assembly definition
             assembly_name = f"{namespace}_assembly"
-            assembly_node = pm.assembly(name=assembly_name, type="assemblyDefinition")
+            assembly_node = cmds.assembly(name=assembly_name, type="assemblyDefinition")
 
-            # Create representation
-            rep_name = pm.assembly(
+            cmds.assembly(
                 assembly_node, edit=True, createRepresentation="Scene", input=file_path
             )
-            representations = pm.assembly(
+            representations = cmds.assembly(
                 assembly_node, query=True, listRepresentations=True
             )
             return representations[0] if representations else None
         except Exception as e:
-            pm.displayError(f"Failed to create assembly definition for {file_path}")
+            cmds.warning(f"Failed to create assembly definition for {file_path}")
             return None
 
     @classmethod
@@ -77,10 +120,10 @@ class AssemblyManager:
             bool: True if the representation was successfully set as active, False otherwise.
         """
         try:
-            pm.assembly(assembly_node, edit=True, active=representation_name)
+            cmds.assembly(assembly_node, edit=True, active=representation_name)
             return True
         except Exception as e:
-            pm.displayError(f"Failed to set active representation for {assembly_node}")
+            cmds.warning(f"Failed to set active representation for {assembly_node}")
             return False
 
     @classmethod
@@ -133,9 +176,9 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     @property
     def current_references(self):
         """Get the current scene references.
-        Returns a list of FileReference objects.
+        Returns a list of _FileRef objects.
         """
-        return pm.system.listReferences()
+        return _list_file_refs()
 
     def _matches_prefilter_regex(self, filename):
         """Check if a file is an auto-save file based on its name."""
@@ -298,7 +341,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         if not os.path.exists(file_path):
             file_not_found_error_msg = f"File not found: {file_path}"
             self.logger.error(file_not_found_error_msg)
-            pm.displayError(file_not_found_error_msg)
+            cmds.warning(file_not_found_error_msg)
             return False
 
         # Check if the file is fully accessible (not virtual)
@@ -313,7 +356,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
                 f"- There is an issue accessing the file (ex. permissions)\n"
                 f"Error details: {str(e)}"
             )
-            pm.displayError(error_msg)
+            cmds.warning(error_msg)
             return False
 
         # Normalize the file path to ensure consistent comparison
@@ -328,23 +371,17 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         sanitized_namespace = self.sanitize_namespace(namespace)
 
         try:
-            # Proceed with adding the reference since it's not already referenced
-            ref = pm.createReference(file_path, namespace=sanitized_namespace)
-            if ref is None or not hasattr(ref, "_refNode") or ref._refNode is None:
+            cmds.file(file_path, reference=True, namespace=sanitized_namespace)
+            # Validate that a reference node was actually created
+            rn = cmds.file(file_path, q=True, referenceNode=True)
+            if not rn or cmds.nodeType(rn) != "reference":
                 raise RuntimeError(
-                    f"Failed to create reference for {file_path}. Reference object or its _refNode attribute is None."
+                    f"Failed to create reference for {file_path}. No valid reference node found."
                 )
-            assert ref._refNode.type() == "reference"
-
             return True
-        except AssertionError:
-            pm.displayError(
-                f"Reference created for {file_path} did not result in a valid reference node."
-            )
-            return False
         except RuntimeError as e:
             if "Could not open file" in str(e):
-                pm.displayError(
+                cmds.warning(
                     f"Could not open file: {file_path} (Maya RuntimeError: {str(e)})"
                 )
             else:
@@ -362,7 +399,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
                 if ref.namespace in ptk.make_iterable(namespaces)
             ]
 
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             for ref in all_references:
                 try:
                     ref.importContents(removeNamespace=remove_namespace)
@@ -490,7 +527,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     "Did you mean '{scenes}'? Auto-correcting for this operation."
                 )
                 try:
-                    pm.displayWarning(msg)
+                    cmds.warning(msg)
                 except Exception:
                     pass
                 self.logger.warning(msg)
@@ -585,9 +622,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     def _format_table_item(self, item, file_path: str) -> None:
         """Apply enable/disable state based on whether the file is the current scene."""
         norm_fp = os.path.normcase(os.path.normpath(file_path))
-        current_scene = (
-            os.path.normcase(os.path.normpath(pm.sceneName())) if pm.sceneName() else ""
-        )
+        _scene = cmds.file(q=True, sceneName=True) or ""
+        current_scene = os.path.normcase(os.path.normpath(_scene)) if _scene else ""
         is_current_scene = norm_fp == current_scene
 
         if is_current_scene:
@@ -626,7 +662,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Filter out disabled items (current scene) from selection data
         selected_data = set()
-        current_scene = os.path.normpath(pm.sceneName()) if pm.sceneName() else ""
+        _scene = cmds.file(q=True, sceneName=True) or ""
+        current_scene = os.path.normpath(_scene) if _scene else ""
 
         # Clear selection of any disabled items (current scene) immediately
         items_to_deselect = []
@@ -693,10 +730,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         try:
             t.clearSelection()
             current_references = self.current_references
+            _scene = cmds.file(q=True, sceneName=True) or ""
             current_scene = (
-                os.path.normcase(os.path.normpath(pm.sceneName()))
-                if pm.sceneName()
-                else ""
+                os.path.normcase(os.path.normpath(_scene)) if _scene else ""
             )
 
             # Create a mapping from file paths to namespaces for current references
@@ -987,7 +1023,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             if pattern:
                 # Resolve the {scenes} placeholder to the workspace's scenes folder
                 try:
-                    scenes_folder = pm.workspace.fileRules.get("scene", "scenes")
+                    scenes_folder = cmds.workspace(fileRuleEntry="scene") or "scenes"
                 except Exception:
                     scenes_folder = "scenes"
 
@@ -1153,10 +1189,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             # This handles removal (truncation) and addition (extension) automatically
             t.setRowCount(len(file_names))
 
+            _scene = cmds.file(q=True, sceneName=True) or ""
             current_scene = (
-                os.path.normcase(os.path.normpath(pm.sceneName()))
-                if pm.sceneName()
-                else ""
+                os.path.normcase(os.path.normpath(_scene)) if _scene else ""
             )
 
             # Build a set of referenced file paths for fast lookup
@@ -1328,7 +1363,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return False
 
         try:
-            pm.openFile(file_path, force=True)
+            cmds.file(file_path, open=True, force=True)
             self.logger.info(f"Opened scene: {file_path}")
         except Exception as e:
             self.logger.error(f"Failed to open scene: {e}")
@@ -1342,11 +1377,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             try:
                 new_workspace = EnvUtils.find_workspace_using_path(file_path)
                 if new_workspace:
-                    current_workspace = pm.workspace(q=True, rd=True)
+                    current_workspace = cmds.workspace(q=True, rd=True)
                     if os.path.normcase(
                         os.path.normpath(current_workspace)
                     ) != os.path.normcase(os.path.normpath(new_workspace)):
-                        pm.workspace(new_workspace, openWorkspace=True)
+                        cmds.workspace(new_workspace, openWorkspace=True)
                         self.logger.info(f"Set workspace to: {new_workspace}")
                     else:
                         self.logger.debug("Workspace already correct")
@@ -1441,7 +1476,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Pre-populate with current scene name if available, with case formatting applied
         default_name = ""
-        current_scene = pm.sceneName()
+        current_scene = cmds.file(q=True, sceneName=True) or ""
         if current_scene:
             base_name = os.path.basename(current_scene).split(".")[0]
             # If the current scene already includes the configured suffix, strip it
@@ -1475,7 +1510,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         if subfolder_structure_text:
             # Resolve the {scenes} placeholder to the workspace's scenes folder
             try:
-                scenes_folder = pm.workspace.fileRules.get("scene", "scenes")
+                scenes_folder = cmds.workspace(fileRuleEntry="scene") or "scenes"
             except Exception:
                 scenes_folder = "scenes"
 
@@ -1515,7 +1550,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 return
 
         try:
-            pm.saveAs(new_path, type="mayaAscii")
+            cmds.file(rename=new_path)
+            cmds.file(save=True, type="mayaAscii")
             self.logger.info(f"Saved scene to: {new_path}")
             self.refresh_file_list(invalidate=True)
         except Exception as e:
@@ -2103,7 +2139,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     "Team Folder with restricted permissions)."
                 )
                 try:
-                    pm.displayWarning(msg)
+                    cmds.warning(msg)
                 except Exception:
                     pass
                 self.logger.warning(msg)

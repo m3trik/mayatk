@@ -11,11 +11,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
 try:
-    import pymel.core as pm
-except ImportError:
-    pm = None  # type: ignore[assignment]
-
-try:
     import maya.cmds as cmds
 except ImportError:
     cmds = None  # type: ignore[assignment]
@@ -192,8 +187,8 @@ def apply_behavior(
             their position in the object's behavior list rather than
             relying on hardcoded template anchors.
     """
-    if pm is None:
-        raise RuntimeError("Maya (pymel) is required to apply behaviors")
+    if cmds is None:
+        raise RuntimeError("Maya (cmds) is required to apply behaviors")
 
     template = load_behavior(behavior_name, search_path)
 
@@ -203,8 +198,8 @@ def apply_behavior(
         apply_audio_clip(obj, start, end, source_path=source_path)
         return
 
-    node = pm.PyNode(obj)
-    has_opacity = node.hasAttr("opacity")
+    node = str(obj)
+    has_opacity = cmds.attributeQuery("opacity", node=node, exists=True)
 
     # Auto-create opacity attribute when the template targets visibility.
     # This ensures the dual-keying path is always taken, producing both
@@ -253,8 +248,8 @@ def apply_behavior(
                 itt = "stepnext" if tan == "step" else tan
                 # Use explicit plug path to target the transform only —
                 # the kwarg form (attribute=) also hits the shape node.
-                attr_plug = f"{node.longName()}.{target_attr}"
-                pm.setKeyframe(
+                attr_plug = f"{(cmds.ls(node, long=True) or [node])[0]}.{target_attr}"
+                cmds.setKeyframe(
                     attr_plug,
                     time=k["time"],
                     value=k["value"],
@@ -268,16 +263,16 @@ def apply_behavior(
                 if mirror_to_vis:
                     # Use longName to target only the transform —
                     # short names also match the shape node.
-                    vis_plug = f"{node.longName()}.visibility"
+                    vis_plug = f"{(cmds.ls(node, long=True) or [node])[0]}.visibility"
                     t = k["time"]
-                    pm.setKeyframe(
+                    cmds.setKeyframe(
                         vis_plug,
                         time=t,
                         value=1.0 if k["value"] > 0 else 0.0,
                         inTangentType="stepnext",
                         outTangentType="step",
                     )
-                    # Belt-and-suspenders: pm.setKeyframe may not
+                    # Belt-and-suspenders: cmds.setKeyframe may not
                     # honour stepnext on creation — force via keyTangent.
                     cmds.keyTangent(
                         vis_plug,
@@ -321,7 +316,7 @@ def verify_behavior(
         end: Last frame of the scene range.
         search_path: Optional custom behaviors directory.
         keyframe_fn: Callable ``(obj, attribute, time) -> list``.
-            Defaults to ``pm.keyframe(obj, q=True, at=attr, time=(t, t))``.
+            Defaults to ``cmds.keyframe(obj, q=True, at=attr, time=(t, t))``.
             Only used for ``exact`` mode.
 
     Returns:
@@ -334,13 +329,18 @@ def verify_behavior(
     if verify_mode == "audio_clip":
         return _verify_audio_clip(obj, start, end)
 
+    # No object in the scene → no keys → cannot verify.  Bail out so
+    # cmds.keyframe doesn't raise on a non-existent name.
+    if cmds is not None and not cmds.objExists(obj):
+        return False
+
     if keyframe_fn is None and verify_mode == "exact":
         if cmds is not None:
             keyframe_fn = lambda o, attr, t: cmds.keyframe(
                 o, q=True, at=attr, time=(t, t)
             )
-        elif pm is not None:
-            keyframe_fn = lambda o, attr, t: pm.keyframe(
+        elif cmds is not None:
+            keyframe_fn = lambda o, attr, t: cmds.keyframe(
                 o, q=True, at=attr, time=(t, t)
             )
         else:
@@ -350,8 +350,8 @@ def verify_behavior(
     # verify the attribute where keys were actually placed.
     if cmds is not None:
         _has_opacity = cmds.objExists(f"{obj}.opacity")
-    elif pm is not None:
-        _has_opacity = pm.objExists(f"{obj}.opacity")
+    elif cmds is not None:
+        _has_opacity = cmds.objExists(f"{obj}.opacity")
     else:
         _has_opacity = False
 
@@ -398,8 +398,8 @@ def _verify_values_in_range(
     # Query all keyframe values on this attribute within the shot range.
     if cmds is not None:
         vals = cmds.keyframe(obj, q=True, at=attr, time=(start, end), valueChange=True)
-    elif pm is not None:
-        vals = pm.keyframe(obj, q=True, at=attr, time=(start, end), valueChange=True)
+    elif cmds is not None:
+        vals = cmds.keyframe(obj, q=True, at=attr, time=(start, end), valueChange=True)
     else:
         return False
 
@@ -682,9 +682,9 @@ def apply_to_shots(
             a behavior template.
         exists_fn: Callable ``(name) -> bool`` that checks whether an
             object exists in the scene.  Defaults to
-            ``pymel.core.objExists``.
+            ``cmds.objExists``.
         has_keys_fn: Callable ``(obj, start, end) -> bool``.  Defaults
-            to checking keyframes in range via ``pm.keyframe``.
+            to checking keyframes in range via ``cmds.keyframe``.
 
     Returns:
         Dict with ``"applied"`` and ``"skipped"`` lists of dicts
@@ -705,9 +705,9 @@ def apply_to_shots(
             # New audio with a source_path counts as "buildable".
             if entry.get("source_path"):
                 return True
-        if pm is None:
+        if cmds is None:
             return False
-        return pm.objExists(obj_name)
+        return cmds.objExists(obj_name)
 
     if exists_fn is None:
         exists_fn = _default_exists
@@ -715,10 +715,10 @@ def apply_to_shots(
     def _default_has_keys(obj_name, start, end, entry=None):
         if entry is not None and _is_audio(entry):
             return _verify_audio_clip(obj_name, start, end)
-        if pm is None:
+        if cmds is None:
             return False
         try:
-            keys = pm.keyframe(obj_name, q=True, time=(start, end), tc=True)
+            keys = cmds.keyframe(obj_name, q=True, time=(start, end), tc=True)
             return bool(keys)
         except Exception:
             return False
@@ -816,27 +816,37 @@ def apply_to_shots(
                 )
                 continue
 
-            # Positional anchor: distribute evenly across the shot.
-            # List position always wins over the YAML template default.
-            # 1 behavior  → 0.0                (start)
+            # Positional anchor: distribute evenly across the shot when
+            # an object carries 2+ behaviors.  For a single behavior the
+            # YAML template's anchor (e.g. ``anchor: end`` for fade_out)
+            # must be respected — overriding to 0.0 here would place
+            # every fade_out at the shot start.
             # 2 behaviors → 0.0, 1.0           (start, end)
             # 3 behaviors → 0.0, 0.5, 1.0      (start, middle, end)
             # N behaviors → idx / max(total-1, 1)
             idx = obj_indices.get(obj_name, 0)
             obj_indices[obj_name] = idx + 1
             total = obj_counts.get(obj_name, 1)
-            anchor = idx / max(total - 1, 1)
 
             source_path = entry.get("source_path", "") or ""
             try:
-                apply_fn(
-                    obj_name,
-                    behavior,
-                    shot.start,
-                    shot.end,
-                    source_path=source_path,
-                    anchor_override=anchor,
-                )
+                if total > 1:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                        anchor_override=idx / max(total - 1, 1),
+                    )
+                else:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                    )
             except TypeError:
                 apply_fn(obj_name, behavior, shot.start, shot.end)
             applied.append(

@@ -4,8 +4,8 @@
 
 Two kinds of Maya event sources are unified under one cleanup path:
 
-1. ``pm.scriptJob`` events (``SelectionChanged``, ``timeChanged``, …) —
-   multiplexed so at most one ``pm.scriptJob`` exists per event name.
+1. ``cmds.scriptJob`` events (``SelectionChanged``, ``timeChanged``, …) —
+   multiplexed so at most one ``cmds.scriptJob`` exists per event name.
 2. ``maya.api.OpenMaya.MMessage`` callbacks (``addConnectionCallback``,
    ``addAttributeChangedCallback``, …) — registered through SJM so they
    share the same ``owner`` / ``unsubscribe`` / widget-destroy machinery.
@@ -27,14 +27,12 @@ Usage::
 """
 from __future__ import annotations
 
+import maya.cmds as cmds
+
 import itertools
 import logging
 from typing import Any, Callable, Dict, List, Optional, Set
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +40,7 @@ _SCENE_CHANGE_EVENTS = frozenset({"SceneOpened", "NewSceneOpened"})
 
 
 class _Subscription:
-    """Internal subscription record for a ``pm.scriptJob`` listener."""
+    """Internal subscription record for a ``cmds.scriptJob`` listener."""
 
     __slots__ = ("token", "event", "callback", "owner", "ephemeral")
 
@@ -73,7 +71,7 @@ class _OMSubscription:
 class ScriptJobManager:
     """Centralized Maya scriptJob event dispatcher.
 
-    Creates at most one ``pm.scriptJob`` per Maya event name and
+    Creates at most one ``cmds.scriptJob`` per Maya event name and
     multiplexes it to any number of subscriber callbacks.
 
     Ephemeral subscriptions (``ephemeral=True``) are automatically
@@ -282,19 +280,19 @@ class ScriptJobManager:
         """Create the shared scriptJob for *event* if it doesn't exist yet."""
         if event in self._jobs:
             return
-        if pm is None:
+        if cmds is None:
             return
-        job_id = pm.scriptJob(event=[event, lambda e=event: self._dispatch(e)])
+        job_id = cmds.scriptJob(event=[event, lambda e=event: self._dispatch(e)])
         self._jobs[event] = job_id
         logger.debug("ScriptJobManager: created job %d for %r", job_id, event)
 
     def _kill_job(self, event: str) -> None:
         """Kill the scriptJob for *event* and remove it from tracking."""
         job_id = self._jobs.pop(event, None)
-        if job_id is not None and pm is not None:
+        if job_id is not None and cmds is not None:
             try:
-                if pm.scriptJob(exists=job_id):
-                    pm.scriptJob(kill=job_id, force=True)
+                if cmds.scriptJob(exists=job_id):
+                    cmds.scriptJob(kill=job_id, force=True)
                     logger.debug(
                         "ScriptJobManager: killed job %d for %r", job_id, event
                     )

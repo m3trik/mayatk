@@ -4,7 +4,87 @@ import tempfile
 from pathlib import Path
 from typing import Union, Optional, Dict, List, Any
 import pythontk as ptk
-import pymel.core as pm
+import maya.cmds as cmds
+import maya.mel as mel
+
+
+def _node_name(node) -> str:
+    """Leaf name (with namespace prefix preserved) for node or string."""
+    if node is None:
+        return ""
+    if hasattr(node, "nodeName"):
+        try:
+            return node.nodeName()
+        except Exception:
+            pass
+    return str(node).split("|")[-1]
+
+
+def _full_path(node) -> str:
+    """Long DAG path for node or string."""
+    if node is None:
+        return ""
+    if hasattr(node, "fullPath"):
+        try:
+            return node.fullPath()
+        except Exception:
+            pass
+    s = str(node)
+    long_paths = cmds.ls(s, long=True) or [s]
+    return long_paths[0]
+
+
+def _get_parent(node):
+    """Single immediate parent — works for node or string."""
+    if hasattr(node, "getParent"):
+        try:
+            return node.getParent()
+        except Exception:
+            pass
+    parents = cmds.listRelatives(str(node), parent=True, fullPath=True) or []
+    return parents[0] if parents else None
+
+
+def _get_children(node, **kwargs):
+    """Children — works for node or string."""
+    if hasattr(node, "getChildren"):
+        try:
+            return node.getChildren(**kwargs) or []
+        except Exception:
+            pass
+    cmds_kwargs = {"children": True, "fullPath": True}
+    if "type" in kwargs:
+        cmds_kwargs["type"] = kwargs["type"]
+    if kwargs.get("allDescendents"):
+        cmds_kwargs.pop("children", None)
+        cmds_kwargs["allDescendents"] = True
+    return cmds.listRelatives(str(node), **cmds_kwargs) or []
+
+
+def _get_shapes(node, **kwargs):
+    """Shape children — works for node or string."""
+    if hasattr(node, "getShapes"):
+        try:
+            return node.getShapes(**kwargs) or []
+        except Exception:
+            pass
+    cmds_kwargs = {"shapes": True, "fullPath": True}
+    if kwargs.get("noIntermediate"):
+        cmds_kwargs["noIntermediate"] = True
+    if kwargs.get("allDescendents"):
+        cmds_kwargs["allDescendents"] = True
+    return cmds.listRelatives(str(node), **cmds_kwargs) or []
+
+
+def _rename(node, new_name) -> str:
+    """Rename node-or-string node; returns the resulting name."""
+    if hasattr(node, "rename"):
+        try:
+            node.rename(new_name)
+            return _node_name(node)
+        except Exception:
+            pass
+    return cmds.rename(str(node), new_name)
 
 
 class FBXImporter:
@@ -100,10 +180,10 @@ class FBXImporter:
         """Import FBX file for analysis purposes."""
         try:
             # Clean up existing namespace if it exists
-            if pm.namespace(exists=namespace):
-                pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+            if cmds.namespace(exists=namespace):
+                cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
 
-            pm.namespace(add=namespace)
+            cmds.namespace(add=namespace)
 
             # Import FBX for analysis
             imported_transforms = self._import_fbx_file(source_file, namespace)
@@ -121,9 +201,9 @@ class FBXImporter:
         """Configure FBX import settings for consistent imports including materials."""
         try:
             # Only set FBX settings if FBX plugin is loaded
-            if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+            if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
                 try:
-                    pm.loadPlugin("fbxmaya", quiet=True)
+                    cmds.loadPlugin("fbxmaya", quiet=True)
                     self.logger.debug("Loaded FBX plugin")
                 except Exception as e:
                     self.logger.warning(f"Could not load FBX plugin: {e}")
@@ -132,7 +212,7 @@ class FBXImporter:
             # Check if FBX commands are available (use catchQuiet to suppress script editor noise)
             fbx_commands_available = False
             try:
-                result = pm.mel.eval('catchQuiet(`FBXImportMode -v "add"`)')
+                result = mel.eval('catchQuiet(`FBXImportMode -v "add"`)')
                 fbx_commands_available = result == 0
             except Exception:
                 pass
@@ -162,7 +242,7 @@ class FBXImporter:
                 failed = []
                 for cmd in settings:
                     try:
-                        if pm.mel.eval(f"catchQuiet(`{cmd}`)") != 0:
+                        if mel.eval(f"catchQuiet(`{cmd}`)") != 0:
                             failed.append(cmd.split()[0])
                     except Exception:
                         failed.append(cmd.split()[0])
@@ -194,8 +274,8 @@ class FBXImporter:
             self._setup_fbx_import_settings()
 
             # Get objects before import to detect new ones
-            objects_before = set(pm.ls(assemblies=True))
-            transforms_before = set(pm.ls(type="transform"))
+            objects_before = set(cmds.ls(assemblies=True))
+            transforms_before = set(cmds.ls(type="transform"))
 
             # Handle name conflicts - temporarily rename root namespace objects
             # that might conflict with FBX import to ensure complete import
@@ -217,11 +297,11 @@ class FBXImporter:
                 # Primary method: Use FBX MEL command
                 # The scriptEditorInfo trick suppresses noisy setAttr warnings
                 # that Maya's FBX importer emits for malformed UV set paths
-                pm.scriptEditorInfo(suppressErrors=True, suppressWarnings=True)
+                cmds.scriptEditorInfo(suppressErrors=True, suppressWarnings=True)
                 try:
-                    pm.mel.eval(f'FBXImport -file "{fbx_path}"')
+                    mel.eval(f'FBXImport -file "{fbx_path}"')
                 finally:
-                    pm.scriptEditorInfo(suppressErrors=False, suppressWarnings=False)
+                    cmds.scriptEditorInfo(suppressErrors=False, suppressWarnings=False)
                 import_success = True
                 self.logger.debug("FBX import completed using MEL command")
             except Exception as mel_error:
@@ -230,7 +310,7 @@ class FBXImporter:
                 # Fallback method: Use pm.mel.eval with file command
                 try:
                     # Use Maya's file command with FBX type via MEL
-                    pm.mel.eval(
+                    mel.eval(
                         f'file -i -type "FBX" -ignoreVersion -ra true -mergeNamespacesOnClash false -rpr "temp_import" -options "fbx" -pr "{fbx_path}"'
                     )
                     import_success = True
@@ -240,14 +320,14 @@ class FBXImporter:
                 except Exception as file_error:
                     self.logger.debug(f"File command import failed: {file_error}")
 
-                    # Final fallback: Use PyMEL's importFile directly
+                    # Final fallback: Use cmds.file directly
                     try:
-                        pm.importFile(fbx_path, i=True, type="FBX")
+                        cmds.file(fbx_path, i=True, type="FBX")
                         import_success = True
-                        self.logger.debug("FBX import completed using PyMEL importFile")
-                    except Exception as pymel_error:
+                        self.logger.debug("FBX import completed using cmds.file fallback")
+                    except Exception as fallback_error:
                         self.logger.error(
-                            f"All FBX import methods failed. MEL: {mel_error}, file: {file_error}, PyMEL: {pymel_error}"
+                            f"All FBX import methods failed. MEL: {mel_error}, file: {file_error}, fallback: {fallback_error}"
                         )
                         return None
 
@@ -256,8 +336,8 @@ class FBXImporter:
                 return None
 
             # Find newly imported objects
-            objects_after = set(pm.ls(assemblies=True))
-            transforms_after = set(pm.ls(type="transform"))
+            objects_after = set(cmds.ls(assemblies=True))
+            transforms_after = set(cmds.ls(type="transform"))
 
             new_assemblies = list(objects_after - objects_before)
             new_transforms = list(transforms_after - transforms_before)
@@ -273,14 +353,14 @@ class FBXImporter:
             # DEBUG: Show what was actually imported before namespace operations
             self.logger.debug("=== FBX IMPORT DEBUG: PRE-NAMESPACE ANALYSIS ===")
             self.logger.debug(
-                f"New assemblies: {[a.nodeName() for a in new_assemblies]}"
+                f"New assemblies: {[_node_name(a) for a in new_assemblies]}"
             )
 
             # Show hierarchy structure of imported objects
             root_imports = []
             child_imports = []
             for transform in new_transforms:
-                parent = transform.getParent()
+                parent = _get_parent(transform)
                 if parent is None:
                     root_imports.append(transform)
                 else:
@@ -289,16 +369,16 @@ class FBXImporter:
             self.logger.debug(
                 f"Pre-namespace: {len(root_imports)} roots, {len(child_imports)} children"
             )
-            self.logger.debug(f"Root imports: {[r.nodeName() for r in root_imports]}")
+            self.logger.debug(f"Root imports: {[_node_name(r) for r in root_imports]}")
 
             # Show some examples of the hierarchy
             for root in root_imports[:2]:  # Show first 2 roots
-                children = root.getChildren(type="transform")
+                children = _get_children(root, type="transform")
                 self.logger.debug(
-                    f"  {root.nodeName()} has {len(children)} direct children"
+                    f"  {_node_name(root)} has {len(children)} direct children"
                 )
                 if children:
-                    child_names = [c.nodeName() for c in children[:5]]
+                    child_names = [_node_name(c) for c in children[:5]]
                     self.logger.debug(
                         f"    Children: {child_names}{'...' if len(children) > 5 else ''}"
                     )
@@ -308,7 +388,7 @@ class FBXImporter:
             # Move imported objects to namespace
             if namespace and namespace != ":":
                 # Store the original transform names before moving
-                original_transform_names = [t.nodeName() for t in new_transforms]
+                original_transform_names = [_node_name(t) for t in new_transforms]
 
                 # For FBX imports, we need to move ALL transforms to namespace, not just assemblies
                 # The previous approach of only moving assemblies breaks the hierarchy
@@ -316,19 +396,18 @@ class FBXImporter:
                     f"Moving ALL {len(new_transforms)} transforms to namespace {namespace}"
                 )
 
-                # Filter out any invalid transforms before moving to namespace
+                # Filter out any invalid transforms before moving to namespace.
+                # Use the long path so that ambiguous short names (e.g. parent
+                # and child both named "A") resolve to a unique node.
                 filtered_transforms = []
                 for transform in new_transforms:
                     try:
-                        # Verify object actually exists and is valid
-                        # Use longName() for unambiguous lookup (short names
-                        # can match multiple DAG objects at different levels).
-                        long_name = transform.longName()
-                        if pm.objExists(long_name):
-                            filtered_transforms.append(transform)
+                        long_paths = cmds.ls(str(transform), long=True) or []
+                        if long_paths:
+                            filtered_transforms.append(long_paths[0])
                         else:
                             self.logger.debug(
-                                f"Skipping non-existent object: {long_name}"
+                                f"Skipping non-existent object: {transform}"
                             )
                     except Exception as e:
                         self.logger.debug(
@@ -340,7 +419,7 @@ class FBXImporter:
                 self._move_objects_to_namespace(filtered_transforms, namespace)
 
                 # Log what we actually moved
-                moved_names = [t.nodeName() for t in filtered_transforms[:10]]
+                moved_names = [_node_name(t) for t in filtered_transforms[:10]]
                 self.logger.debug(
                     f"Moved transforms (first 10): {moved_names}{'...' if len(filtered_transforms) > 10 else ''}"
                 )
@@ -361,7 +440,7 @@ class FBXImporter:
 
                 # Method 1: Query all transform nodes in namespace
                 try:
-                    query_result = pm.ls(f"{namespace}:*", type="transform")
+                    query_result = cmds.ls(f"{namespace}:*", type="transform")
                     namespaced_transforms.extend(query_result)
                     self.logger.debug(
                         f"Method 1 - Found {len(query_result)} transforms in namespace query"
@@ -372,11 +451,11 @@ class FBXImporter:
                 # Method 2: Query all objects in namespace and filter for transforms
                 if not namespaced_transforms:
                     try:
-                        all_namespace_objects = pm.ls(f"{namespace}:*")
+                        all_namespace_objects = cmds.ls(f"{namespace}:*")
                         filtered_transforms = [
                             obj
                             for obj in all_namespace_objects
-                            if pm.nodeType(obj) == "transform"
+                            if cmds.nodeType(obj) == "transform"
                         ]
                         namespaced_transforms.extend(filtered_transforms)
                         self.logger.debug(
@@ -394,17 +473,17 @@ class FBXImporter:
                                 -1
                             ]  # Remove any existing namespace
                             namespaced_name = f"{namespace}:{clean_name}"
-                            if pm.objExists(namespaced_name):
+                            if cmds.objExists(namespaced_name):
                                 try:
                                     reconstructed_transforms.append(
-                                        pm.PyNode(namespaced_name)
+                                        namespaced_name
                                     )
                                     self.logger.debug(
                                         f"Reconstructed: {namespaced_name}"
                                     )
                                 except Exception as e:
                                     self.logger.debug(
-                                        f"Could not create PyNode for {namespaced_name}: {e}"
+                                        f"Could not create node for {namespaced_name}: {e}"
                                     )
 
                         namespaced_transforms.extend(reconstructed_transforms)
@@ -418,7 +497,7 @@ class FBXImporter:
                 if not namespaced_transforms:
                     try:
                         # List all objects under this namespace recursively
-                        all_ns_objects = pm.ls(f"{namespace}:*", recursive=True)
+                        all_ns_objects = cmds.ls(f"{namespace}:*", recursive=True)
                         recursive_transforms = [
                             obj
                             for obj in all_ns_objects
@@ -435,11 +514,11 @@ class FBXImporter:
                 if not namespaced_transforms:
                     try:
                         # Get ALL transforms in the scene and filter for our namespace
-                        all_transforms = pm.ls(type="transform")
+                        all_transforms = cmds.ls(type="transform")
                         namespace_filtered = [
                             t
                             for t in all_transforms
-                            if t.nodeName().startswith(f"{namespace}:")
+                            if _node_name(t).startswith(f"{namespace}:")
                         ]
                         namespaced_transforms.extend(namespace_filtered)
                         self.logger.debug(
@@ -455,12 +534,12 @@ class FBXImporter:
                         pattern_objects = []
                         for root_name in ["INTERACTIVE", "STATIC"]:
                             namespaced_root = f"{namespace}:{root_name}"
-                            if pm.objExists(namespaced_root):
-                                root_obj = pm.PyNode(namespaced_root)
+                            if cmds.objExists(namespaced_root):
+                                root_obj = namespaced_root
                                 pattern_objects.append(root_obj)
 
                                 # Recursively get ALL descendants
-                                all_descendants = root_obj.getChildren(
+                                all_descendants = _get_children(root_obj, 
                                     allDescendents=True, type="transform"
                                 )
                                 pattern_objects.extend(all_descendants)
@@ -486,9 +565,9 @@ class FBXImporter:
                     seen_paths = set()
                     for transform in namespaced_transforms:
                         try:
-                            fp = transform.fullPath()
+                            fp = _full_path(transform)
                         except Exception:
-                            fp = transform.nodeName()
+                            fp = _node_name(transform)
                         if fp not in seen_paths:
                             unique_transforms.append(transform)
                             seen_paths.add(fp)
@@ -504,7 +583,7 @@ class FBXImporter:
 
                 if namespaced_transforms:
                     # Log some examples of what we found
-                    example_names = [t.nodeName() for t in namespaced_transforms[:5]]
+                    example_names = [_node_name(t) for t in namespaced_transforms[:5]]
                     self.logger.debug(
                         f"Example transforms: {example_names}{'...' if len(namespaced_transforms) > 5 else ''}"
                     )
@@ -516,7 +595,7 @@ class FBXImporter:
                     final_roots = []
                     final_children = []
                     for transform in namespaced_transforms:
-                        parent = transform.getParent()
+                        parent = _get_parent(transform)
                         if parent is None:
                             final_roots.append(transform)
                         else:
@@ -526,7 +605,7 @@ class FBXImporter:
                         f"Post-namespace: {len(final_roots)} roots, {len(final_children)} children"
                     )
                     self.logger.debug(
-                        f"Final root objects: {[r.nodeName() for r in final_roots]}"
+                        f"Final root objects: {[_node_name(r) for r in final_roots]}"
                     )
 
                     # Check if we lost the hierarchy structure during namespace operations
@@ -544,10 +623,10 @@ class FBXImporter:
                         )
                         missing_found = 0
                         for child_import in child_imports[:10]:  # Check first 10
-                            expected_name = f"{namespace}:{child_import.nodeName()}"
-                            if pm.objExists(expected_name):
+                            expected_name = f"{namespace}:{_node_name(child_import)}"
+                            if cmds.objExists(expected_name):
                                 try:
-                                    missing_child = pm.PyNode(expected_name)
+                                    missing_child = expected_name
                                     if missing_child not in namespaced_transforms:
                                         namespaced_transforms.append(missing_child)
                                         missing_found += 1
@@ -572,7 +651,7 @@ class FBXImporter:
                 else:
                     # Final fallback: return empty list but log detailed info
                     try:
-                        all_namespaces = pm.namespaceInfo(listOnlyNamespaces=True)
+                        all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True)
                         namespace_exists = namespace in all_namespaces
                         self.logger.warning(
                             f"Could not find transforms in namespace {namespace} (exists: {namespace_exists}). "
@@ -591,7 +670,7 @@ class FBXImporter:
                         # Debug: Try to list what's actually in the namespace
                         if namespace_exists:
                             try:
-                                ns_contents = pm.ls(f"{namespace}:*")
+                                ns_contents = cmds.ls(f"{namespace}:*")
                                 self.logger.debug(
                                     f"Namespace {namespace} contains {len(ns_contents)} objects"
                                 )
@@ -600,7 +679,7 @@ class FBXImporter:
                                 for obj in ns_contents[
                                     :20
                                 ]:  # Limit to first 20 for brevity
-                                    obj_type = pm.nodeType(obj)
+                                    obj_type = cmds.nodeType(obj)
                                     object_types[obj_type] = (
                                         object_types.get(obj_type, 0) + 1
                                     )
@@ -640,8 +719,8 @@ class FBXImporter:
                 return
 
             # Ensure namespace exists
-            if not pm.namespace(exists=namespace):
-                pm.namespace(add=namespace)
+            if not cmds.namespace(exists=namespace):
+                cmds.namespace(add=namespace)
 
             # Collect all materials and shading engines connected to these objects
             materials_to_move = set()
@@ -650,10 +729,10 @@ class FBXImporter:
             # First pass: collect all materials and shading engines
             for obj in objects:
                 try:
-                    obj_node = pm.PyNode(obj) if not isinstance(obj, pm.PyNode) else obj
+                    obj_node = str(obj)
 
                     # Get all shapes under this transform (including children)
-                    shapes = obj_node.getShapes(allDescendents=True)
+                    shapes = _get_shapes(obj_node, allDescendents=True)
 
                     for shape in shapes:
                         try:
@@ -707,15 +786,15 @@ class FBXImporter:
             # Move materials first (but skip default materials)
             for material in materials_to_move:
                 try:
-                    mat_name = material.nodeName()
+                    mat_name = _node_name(material)
                     # Skip default Maya materials
                     if mat_name in ["lambert1", "particleCloud1", "shaderGlow1"]:
                         continue
 
                     if ":" not in mat_name:  # Only move if not already namespaced
                         new_mat_name = f"{namespace}:{mat_name}"
-                        if not pm.objExists(new_mat_name):
-                            material.rename(new_mat_name)
+                        if not cmds.objExists(new_mat_name):
+                            _rename(material, new_mat_name)
                             self.logger.debug(
                                 f"Moved material {mat_name} to {new_mat_name}"
                             )
@@ -725,50 +804,82 @@ class FBXImporter:
             # Move shading engines (but skip default ones)
             for sg in shading_engines_to_move:
                 try:
-                    sg_name = sg.nodeName()
+                    sg_name = _node_name(sg)
                     # Skip default Maya shading engines
                     if sg_name in ["initialShadingGroup", "initialParticleSE"]:
                         continue
 
                     if ":" not in sg_name:  # Only move if not already namespaced
                         new_sg_name = f"{namespace}:{sg_name}"
-                        if not pm.objExists(new_sg_name):
-                            sg.rename(new_sg_name)
+                        if not cmds.objExists(new_sg_name):
+                            _rename(sg, new_sg_name)
                             self.logger.debug(
                                 f"Moved shading engine {sg_name} to {new_sg_name}"
                             )
                 except Exception as e:
                     self.logger.debug(f"Could not move shading engine {sg}: {e}")
 
-            # Move geometry objects
+            # Move geometry objects.
+            # Capture UUIDs upfront so renames don't lose track when the input
+            # list contains nodes whose short names collide (e.g. a parent and
+            # child both called "A" — cmds.rename on "A" is ambiguous).
+            #
+            # First normalize each input to a unique long DAG path to
+            # disambiguate short-name collisions, THEN map to UUID. Without
+            # this, cmds.ls(short_name, uuid=True) returns multiple UUIDs and
+            # taking [0] would lose distinct nodes.
+            seen_uuids = set()
+            obj_uuids = []
             for obj in objects:
                 try:
-                    # Get the object as PyNode for reliable operations
-                    obj_node = pm.PyNode(obj) if not isinstance(obj, pm.PyNode) else obj
+                    s = str(obj)
+                    long_paths = cmds.ls(s, long=True) or []
+                    if not long_paths:
+                        continue
+                    # If short name is ambiguous, prefer the path that matches
+                    # the input string; otherwise just take the first.
+                    long_path = long_paths[0]
+                    for lp in long_paths:
+                        if lp == s or lp.endswith("|" + s):
+                            long_path = lp
+                            break
+                    uids = cmds.ls(long_path, uuid=True) or []
+                    if uids and uids[0] not in seen_uuids:
+                        seen_uuids.add(uids[0])
+                        obj_uuids.append(uids[0])
+                except Exception:
+                    continue
 
-                    # Rename to move to namespace.
-                    # NOTE: Do NOT pre-check pm.objExists(new_name) — that uses
-                    # the short name which matches ANY object with the same leaf
-                    # name regardless of hierarchy level.  Maya allows duplicate
-                    # short names under different parents (distinguished by DAG
-                    # path), so rename() will succeed naturally.  The old check
-                    # was a false-positive trap that appended '_1' to nodes like
-                    # WHEELS_GRP that legitimately appear at multiple hierarchy
-                    # levels, corrupting the comparison paths.
-                    original_name = obj_node.nodeName()
+            # Sort UUIDs deepest-first by current path depth so child renames
+            # never alter a pending parent path. (Maya can silently fail to
+            # rename "A" → "ns:A" when a same-named child is still under it.)
+            def _depth(uid):
+                m = cmds.ls(uid, long=True) or []
+                return m[0].count("|") if m else 0
+
+            obj_uuids.sort(key=_depth, reverse=True)
+
+            for uid in obj_uuids:
+                try:
+                    matches = cmds.ls(uid, long=True) or []
+                    if not matches:
+                        continue
+                    obj_node = matches[0]
+
+                    original_name = _node_name(obj_node)
                     # Strip any existing namespace prefix (e.g. FBX ControlData
                     # namespace) to avoid creating nested namespaces that the
-                    # re-query (pm.ls("ns:*")) would miss.
+                    # re-query (cmds.ls("ns:*")) would miss.
                     clean_name = original_name.split(":")[-1]
                     new_name = f"{namespace}:{clean_name}"
 
-                    obj_node.rename(new_name)
+                    _rename(obj_node, new_name)
                     moved_count += 1
                     self.logger.debug(f"Moved geometry {original_name} to {new_name}")
 
                 except Exception as e:
                     self.logger.warning(
-                        f"Failed to move object {obj} to namespace: {e}"
+                        f"Failed to move object {uid} to namespace: {e}"
                     )
 
             self.logger.debug(
@@ -794,16 +905,16 @@ class FBXImporter:
                 return renamed_objects
 
             # Get current root namespace transform objects
-            root_transforms = pm.ls(assemblies=True, type="transform")
+            root_transforms = cmds.ls(assemblies=True, type="transform")
 
             if not root_transforms:
                 return renamed_objects
 
             # Log what we're checking for conflicts
             root_names = [
-                t.nodeName().split(":")[-1]
+                _node_name(t).split(":")[-1]
                 for t in root_transforms
-                if ":" not in t.nodeName()
+                if ":" not in _node_name(t)
             ]
 
             if root_names:
@@ -814,7 +925,7 @@ class FBXImporter:
                 # Temporarily rename root objects to avoid conflicts during FBX import
                 for transform in root_transforms:
                     try:
-                        original_name = transform.nodeName()
+                        original_name = _node_name(transform)
 
                         # Only rename objects in root namespace (no ":" in name)
                         if ":" in original_name:
@@ -825,14 +936,14 @@ class FBXImporter:
 
                         # Make sure temp name is unique
                         counter = 1
-                        while pm.objExists(temp_name):
+                        while cmds.objExists(temp_name):
                             temp_name = (
                                 f"_temp_import_conflict_{original_name}_{counter}"
                             )
                             counter += 1
 
                         # Rename the object temporarily
-                        transform.rename(temp_name)
+                        _rename(transform, temp_name)
                         renamed_objects[temp_name] = original_name
 
                         self.logger.debug(
@@ -877,7 +988,7 @@ class FBXImporter:
 
             for temp_name, original_name in renamed_objects.items():
                 try:
-                    if not pm.objExists(temp_name):
+                    if not cmds.objExists(temp_name):
                         self.logger.debug(
                             f"Temp object {temp_name} no longer exists (already cleaned up)"
                         )
@@ -890,7 +1001,7 @@ class FBXImporter:
                     # and will auto-suffix when truly ambiguous — either way the
                     # object is preserved rather than destroyed.
                     try:
-                        pm.rename(temp_name, original_name)
+                        _rename(cmds, temp_name, original_name)
                         restored_count += 1
                         self.logger.debug(f"Restored {temp_name} → {original_name}")
                     except Exception as rename_err:
@@ -946,23 +1057,23 @@ class MayaImporter:
                 return {"namespace": namespace, "transforms": []}
 
             # Clean up existing namespace if it exists
-            if pm.namespace(exists=namespace):
+            if cmds.namespace(exists=namespace):
                 self.logger.debug(f"Cleaning up existing namespace: {namespace}")
-                pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+                cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
 
             # Create the namespace
             self.logger.debug(f"Creating namespace: {namespace}")
-            pm.namespace(add=namespace)
+            cmds.namespace(add=namespace)
 
             # Get list of namespaces before import to detect what Maya actually creates
-            namespaces_before = set(pm.namespaceInfo(listOnlyNamespaces=True))
+            namespaces_before = set(cmds.namespaceInfo(listOnlyNamespaces=True))
 
             # Get list of transform nodes before import
-            transforms_before = set(pm.ls(type="transform"))
+            transforms_before = set(cmds.ls(type="transform"))
 
             # Import the file into the namespace to avoid name clashes
             # Use options to reduce warnings and conflicts
-            imported_nodes = pm.importFile(
+            imported_nodes = cmds.file(
                 str(source_file),
                 namespace=namespace,
                 returnNewNodes=True,
@@ -975,11 +1086,11 @@ class MayaImporter:
                 return None
 
             # Find newly imported transform nodes
-            transforms_after = set(pm.ls(type="transform"))
+            transforms_after = set(cmds.ls(type="transform"))
             new_transforms = list(transforms_after - transforms_before)
 
             # Get list of namespaces after import to detect what Maya actually created
-            namespaces_after = set(pm.namespaceInfo(listOnlyNamespaces=True))
+            namespaces_after = set(cmds.namespaceInfo(listOnlyNamespaces=True))
             new_namespaces = namespaces_after - namespaces_before
 
             # Find temp namespaces that were actually created
@@ -1005,7 +1116,7 @@ class MayaImporter:
                 namespace_object_counts = {}
                 for ns in temp_namespaces_created:
                     try:
-                        objects = pm.ls(f"{ns}:*")
+                        objects = cmds.ls(f"{ns}:*")
                         namespace_object_counts[ns] = len(objects)
                     except:
                         namespace_object_counts[ns] = 0
@@ -1021,7 +1132,7 @@ class MayaImporter:
             # Method 2: Double-check with transform namespace detection
             if new_transforms:
                 # Check the namespace of the first transform to verify
-                first_transform_name = new_transforms[0].nodeName()
+                first_transform_name = _node_name(new_transforms[0])
                 if ":" in first_transform_name:
                     transform_namespace = first_transform_name.split(":")[0]
                     if transform_namespace != actual_namespace:
@@ -1035,7 +1146,7 @@ class MayaImporter:
                 # Debug: Check all transforms to see their namespaces
                 namespaces_found = set()
                 for transform in new_transforms[:5]:  # Check first 5
-                    transform_name = transform.nodeName()
+                    transform_name = _node_name(transform)
                     if ":" in transform_name:
                         ns = transform_name.split(":")[0]
                         namespaces_found.add(ns)
@@ -1073,13 +1184,13 @@ class MayaImporter:
         """Import Maya file for analysis purposes."""
         try:
             # Clean up existing namespace if it exists
-            if pm.namespace(exists=namespace):
-                pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+            if cmds.namespace(exists=namespace):
+                cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
 
-            pm.namespace(add=namespace)
+            cmds.namespace(add=namespace)
 
             # Import for analysis with consistent options
-            imported_nodes = pm.importFile(
+            imported_nodes = cmds.file(
                 str(source_file),
                 namespace=namespace,
                 returnNewNodes=True,
@@ -1167,7 +1278,7 @@ class CameraTracker(ptk.LoggingMixin):
                 for camera_name in cameras_to_delete:
                     try:
                         # camera_name is already the transform name
-                        camera_transform = pm.PyNode(camera_name)
+                        camera_transform = camera_name
                         camera_transforms.append(camera_transform)
                     except Exception as e:
                         self.logger.warning(
@@ -1175,7 +1286,7 @@ class CameraTracker(ptk.LoggingMixin):
                         )
 
                 if camera_transforms:
-                    pm.delete(camera_transforms)
+                    cmds.delete(camera_transforms)
                     self.logger.debug(
                         f"Successfully deleted {len(camera_transforms)} camera transforms"
                     )
@@ -1191,17 +1302,17 @@ class CameraTracker(ptk.LoggingMixin):
     def _get_scene_cameras(self):
         """Get all camera transform names in the scene."""
         try:
-            cameras = pm.ls(type="camera")
+            cameras = cmds.ls(type="camera")
             # Get the transform nodes (parents) of the camera shapes
             camera_transforms = []
             for cam in cameras:
                 try:
-                    transform = cam.getParent()
+                    transform = _get_parent(cam)
                     if transform:
-                        camera_transforms.append(transform.nodeName())
+                        camera_transforms.append(_node_name(transform))
                 except:
                     # If we can't get the parent, use the camera name directly
-                    camera_transforms.append(cam.nodeName())
+                    camera_transforms.append(_node_name(cam))
             return set(camera_transforms)
         except Exception as e:
             self.logger.error(f"Failed to get scene cameras: {e}")
@@ -1307,7 +1418,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                 # Also track the original requested namespace if different (Maya-specific logic)
                 if (
                     actual_namespace != requested_namespace
-                    and pm.namespace(exists=requested_namespace)
+                    and cmds.namespace(exists=requested_namespace)
                     and requested_namespace not in self._active_namespaces
                 ):
                     self._track_namespace(requested_namespace)
@@ -1396,13 +1507,13 @@ class NamespaceSandbox(ptk.LoggingMixin):
         try:
             # Get all transform nodes in the namespace
             if namespace:
-                nodes = pm.ls(f"{namespace}:*", type="transform")
+                nodes = cmds.ls(f"{namespace}:*", type="transform")
             else:
-                nodes = pm.ls(type="transform")
+                nodes = cmds.ls(type="transform")
 
             available_transforms = {}
             for node in nodes:
-                base_name = self._clean_namespace_name(node.nodeName())
+                base_name = self._clean_namespace_name(_node_name(node))
                 available_transforms[base_name] = node
 
             found_objects = []
@@ -1416,7 +1527,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
             # Second pass: fuzzy matching (only if enabled)
             if self.fuzzy_matching:
                 found_names = [
-                    self._clean_namespace_name(obj.nodeName()) for obj in found_objects
+                    self._clean_namespace_name(_node_name(obj)) for obj in found_objects
                 ]
                 unmatched_targets = target_set - set(found_names)
 
@@ -1451,9 +1562,9 @@ class NamespaceSandbox(ptk.LoggingMixin):
         try:
             # Get full hierarchy paths
             if namespace:
-                nodes = pm.ls(f"{namespace}:*", type="transform", long=True)
+                nodes = cmds.ls(f"{namespace}:*", type="transform", long=True)
             else:
-                nodes = pm.ls(type="transform", long=True)
+                nodes = cmds.ls(type="transform", long=True)
 
             # Convert to hierarchy paths (using | separator like Maya)
             available_paths = []
@@ -1463,7 +1574,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                 # Convert Maya long name to hierarchy path
                 hierarchy_path = node.replace("|", "|").replace(f"{namespace}:", "")
                 available_paths.append(hierarchy_path)
-                path_to_node[hierarchy_path] = pm.PyNode(node)
+                path_to_node[hierarchy_path] = node
 
             # Create target paths (assume they're just node names for now)
             target_paths = [f"|{name}" for name in target_objects]
@@ -1495,20 +1606,20 @@ class NamespaceSandbox(ptk.LoggingMixin):
         """
         try:
             if namespace:
-                nodes = pm.ls(f"{namespace}:*", type="transform", long=True)
+                nodes = cmds.ls(f"{namespace}:*", type="transform", long=True)
             else:
-                nodes = pm.ls(type="transform", long=True)
+                nodes = cmds.ls(type="transform", long=True)
 
             hierarchy_data = {}
 
             for node in nodes:
-                node_obj = pm.PyNode(node)
-                clean_name = self._clean_namespace_name(node_obj.nodeName())
+                node_obj = node
+                clean_name = self._clean_namespace_name(_node_name(node_obj))
 
                 hierarchy_data[clean_name] = {
                     "node": node_obj,
-                    "parent": node_obj.getParent(),
-                    "children": node_obj.getChildren(type="transform"),
+                    "parent": _get_parent(node_obj),
+                    "children": _get_children(node_obj, type="transform"),
                     "world_matrix": node_obj.getMatrix(worldSpace=True),
                     "local_matrix": node_obj.getMatrix(worldSpace=False),
                     "full_path": node,
@@ -1537,7 +1648,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                 return True
 
             # Check if namespace actually exists in Maya
-            if not pm.namespace(exists=namespace):
+            if not cmds.namespace(exists=namespace):
                 self.logger.debug(f"Namespace {namespace} does not exist in Maya")
                 # Remove from tracking anyway
                 self._active_namespaces = [
@@ -1548,10 +1659,10 @@ class NamespaceSandbox(ptk.LoggingMixin):
             # Delete the imported objects if provided
             if imported_objects:
                 existing_objects = [
-                    obj for obj in imported_objects if pm.objExists(obj)
+                    obj for obj in imported_objects if cmds.objExists(obj)
                 ]
                 if existing_objects:
-                    pm.delete(existing_objects)
+                    cmds.delete(existing_objects)
                     self.logger.debug(
                         f"Deleted {len(existing_objects)} imported objects"
                     )
@@ -1559,12 +1670,12 @@ class NamespaceSandbox(ptk.LoggingMixin):
             # Clean up namespace if it exists and has objects
             try:
                 # List objects in namespace before deleting
-                namespace_objects = pm.ls(f"{namespace}:*")
+                namespace_objects = cmds.ls(f"{namespace}:*")
                 self.logger.debug(
                     f"Removing namespace {namespace} with {len(namespace_objects)} objects"
                 )
 
-                pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+                cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
                 self.logger.debug(f"Removed namespace: {namespace}")
             except Exception as e:
                 self.logger.debug(f"Namespace cleanup handled gracefully: {e}")
@@ -1624,7 +1735,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
             )
 
         # Also check what temp namespaces actually exist in Maya
-        all_namespaces = pm.namespaceInfo(listOnlyNamespaces=True)
+        all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True)
         temp_namespaces_in_maya = [
             ns for ns in all_namespaces if ns.startswith("temp_import_")
         ]
@@ -1675,7 +1786,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                     camera_transforms = []
                     for camera_name in cameras_to_delete:
                         try:
-                            camera_transform = pm.PyNode(camera_name)
+                            camera_transform = camera_name
                             camera_transforms.append(camera_transform)
                         except Exception as e:
                             self.logger.warning(
@@ -1683,7 +1794,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                             )
 
                     if camera_transforms:
-                        pm.delete(camera_transforms)
+                        cmds.delete(camera_transforms)
                         self.logger.debug(
                             f"Successfully deleted {len(camera_transforms)} root namespace cameras"
                         )
@@ -1723,7 +1834,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
         )
 
         # Final check - see if any temp namespaces remain
-        remaining_namespaces = pm.namespaceInfo(listOnlyNamespaces=True)
+        remaining_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True)
         remaining_temp_namespaces = [
             ns for ns in remaining_namespaces if ns.startswith("temp_import_")
         ]
@@ -1739,7 +1850,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
         This is a nuclear option for cleaning up orphaned temp namespaces
         from previous failed runs.
         """
-        all_namespaces = pm.namespaceInfo(listOnlyNamespaces=True)
+        all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True)
         all_temp_namespaces = [
             ns for ns in all_namespaces if ns.startswith("temp_import_")
         ]
@@ -1755,12 +1866,12 @@ class NamespaceSandbox(ptk.LoggingMixin):
         cleaned_count = 0
         for namespace in all_temp_namespaces:
             try:
-                if pm.namespace(exists=namespace):
-                    objects = pm.ls(f"{namespace}:*")
+                if cmds.namespace(exists=namespace):
+                    objects = cmds.ls(f"{namespace}:*")
                     self.logger.debug(
                         f"Force removing namespace {namespace} with {len(objects)} objects"
                     )
-                    pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+                    cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
                     cleaned_count += 1
                     self.logger.debug(f"Force removed namespace: {namespace}")
             except Exception as e:
@@ -1774,10 +1885,10 @@ class NamespaceSandbox(ptk.LoggingMixin):
         self.logger.warning(f"Force cleaned up {cleaned_count} temp namespaces")
 
     def export_objects_to_temp(self, target_objects: List[str]) -> Optional[Path]:
-        """Export objects to temporary file using pm.ls() for robust object handling."""
+        """Export objects to temporary file using cmds.ls() for robust object handling."""
         try:
-            # pm.ls() handles the input normalization automatically
-            objects_to_export = pm.ls(target_objects, type="transform")
+            # cmds.ls() handles the input normalization automatically
+            objects_to_export = cmds.ls(target_objects, type="transform")
 
             if not objects_to_export:
                 self.logger.error("No valid transform objects to export")
@@ -1792,8 +1903,13 @@ class NamespaceSandbox(ptk.LoggingMixin):
                 )
                 return temp_file
 
-            pm.select(objects_to_export)
-            pm.exportSelected(str(temp_file), type="mayaAscii", force=True)
+            cmds.select(objects_to_export)
+            cmds.file(
+                str(temp_file),
+                exportSelected=True,
+                type="mayaAscii",
+                force=True,
+            )
 
             self.logger.info(
                 f"Exported {len(objects_to_export)} objects to temporary file"
@@ -1889,10 +2005,10 @@ class NamespaceSandbox(ptk.LoggingMixin):
                 self.logger.notice(f"[DRY-RUN] Would clean up namespace: {namespace}")
                 return True
 
-            if not pm.namespace(exists=namespace):
+            if not cmds.namespace(exists=namespace):
                 return True
 
-            pm.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+            cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
             self.logger.debug(f"Cleaned up analysis namespace: {namespace}")
             return True
 

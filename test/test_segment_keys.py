@@ -52,7 +52,35 @@ if pm is not None:
 
 # Import directly from module
 from mayatk.anim_utils.segment_keys import SegmentKeys
+import maya.cmds as cmds
 
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 # Conditional import of base test class
 try:
     from test.base_test import MayaTkTestCase
@@ -76,15 +104,15 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         hold keys up to the next segment start are included in the earlier segment.
         This prevents overlap/collapses during downstream shifting/staggering.
         """
-        cube = pm.polyCube(name="TestCube")[0]
+        cube = cmds.polyCube(name="TestCube")[0]
 
         # Create two distinct segments: 0-10 and 20-30
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
 
         # Static gap 10-20 (flat)
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
-        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
 
         # Collect segments (default behavior absorbs trailing holds)
         # We set exclude_next_start=False to ensure the boundary key at 20 is included
@@ -119,15 +147,15 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
     @unittest.skipIf(pm is None, "Requires Maya")
     def test_segment_keyframe_isolation_ignore_holds_active_only(self):
         """Verify ignore_holds=True keeps active-only segments (no trailing holds)."""
-        cube = pm.polyCube(name="TestCubeIgnoreHolds")[0]
+        cube = cmds.polyCube(name="TestCubeIgnoreHolds")[0]
 
         # Create two distinct segments: 0-10 and 20-30
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
 
         # Static gap 10-20 (flat)
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
-        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
 
         segments = SegmentKeys.collect_segments(
             [cube], split_static=True, ignore_holds=True
@@ -147,9 +175,9 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
     @unittest.skipIf(pm is None, "Requires Maya")
     def test_print_scene_info(self):
         """Test print_scene_info runs without error."""
-        cube = pm.polyCube(name="print_test")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cube = cmds.polyCube(name="print_test")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
 
         # Should run without error
         SegmentKeys.print_scene_info([cube])
@@ -370,19 +398,19 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         if pm is None:
             self.skipTest("PyMEL not available")
         super().setUp()
-        pm.newFile(force=True)
+        _pm_new_file(force=True)
 
     def test_collect_segments_no_animation(self):
         """collect_segments with no animation returns empty."""
-        cube = pm.polyCube(name="testCube")[0]
+        cube = cmds.polyCube(name="testCube")[0]
         result = SegmentKeys.collect_segments([cube])
         self.assertEqual(result, [])
 
     def test_collect_segments_single_object(self):
         """collect_segments with single animated object."""
-        cube = pm.polyCube(name="testCube")[0]
-        pm.setKeyframe(cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(cube, attribute="translateX", time=10, value=10)
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
 
         result = SegmentKeys.collect_segments([cube])
 
@@ -393,14 +421,14 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_multiple_objects(self):
         """collect_segments with multiple animated objects."""
-        cube1 = pm.polyCube(name="cube1")[0]
-        cube2 = pm.polyCube(name="cube2")[0]
+        cube1 = cmds.polyCube(name="cube1")[0]
+        cube2 = cmds.polyCube(name="cube2")[0]
 
-        pm.setKeyframe(cube1, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(cube1, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(cube1, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube1, attribute="translateX", time=10, value=10)
 
-        pm.setKeyframe(cube2, attribute="translateY", time=20, value=0)
-        pm.setKeyframe(cube2, attribute="translateY", time=30, value=20)
+        cmds.setKeyframe(cube2, attribute="translateY", time=20, value=0)
+        cmds.setKeyframe(cube2, attribute="translateY", time=30, value=20)
 
         result = SegmentKeys.collect_segments([cube1, cube2])
 
@@ -408,11 +436,11 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_with_ignore(self):
         """collect_segments respects ignore parameter."""
-        cube = pm.polyCube(name="testCube")[0]
-        pm.setKeyframe(cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(cube, attribute="translateX", time=10, value=10)
-        pm.setKeyframe(cube, attribute="visibility", time=1, value=1)
-        pm.setKeyframe(cube, attribute="visibility", time=10, value=0)
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(cube, attribute="visibility", time=1, value=1)
+        cmds.setKeyframe(cube, attribute="visibility", time=10, value=0)
 
         # Collect without ignore - should have segments
         result_all = SegmentKeys.collect_segments([cube])
@@ -430,17 +458,17 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_split_static(self):
         """collect_segments with split_static splits on static gaps."""
-        cube = pm.polyCube(name="testCube")[0]
+        cube = cmds.polyCube(name="testCube")[0]
 
         # First animation segment
-        pm.setKeyframe(cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(cube, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
 
         # Static gap (same value)
-        pm.setKeyframe(cube, attribute="translateX", time=20, value=10)
+        cmds.setKeyframe(cube, attribute="translateX", time=20, value=10)
 
         # Second animation segment
-        pm.setKeyframe(cube, attribute="translateX", time=30, value=20)
+        cmds.setKeyframe(cube, attribute="translateX", time=30, value=20)
 
         # We set exclude_next_start=False to include the boundary key
         result = SegmentKeys.collect_segments(
@@ -468,10 +496,10 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         - Default (ignore_holds=False): segment expands to end at 20 and includes key 20
         - ignore_holds=True: segment stays active-only (ends at 10) and excludes key 20
         """
-        cube = pm.polyCube(name="hold_last_seg")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        cube = cmds.polyCube(name="hold_last_seg")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
 
         segs_default = SegmentKeys.collect_segments([cube], split_static=True)
         self.assertEqual(len(segs_default), 1)
@@ -496,10 +524,10 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         at least one active segment to exist.
         Fixed: 2026-04-04
         """
-        cube = pm.polyCube(name="holdOnlyCube")[0]
-        pm.setKeyframe(cube, t=1, v=5, at="tx")
-        pm.setKeyframe(cube, t=10, v=5, at="tx")
-        pm.setKeyframe(cube, t=20, v=5, at="tx")
+        cube = cmds.polyCube(name="holdOnlyCube")[0]
+        cmds.setKeyframe(cube, t=1, v=5, at="tx")
+        cmds.setKeyframe(cube, t=10, v=5, at="tx")
+        cmds.setKeyframe(cube, t=20, v=5, at="tx")
 
         # With ignore_holds=True and motion_only=True: no segments (correct)
         segs_ignore = SegmentKeys.collect_segments(
@@ -534,12 +562,12 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         for the hold portion.
         Fixed: 2026-04-04
         """
-        cube = pm.polyCube(name="motionHold")[0]
-        pm.setKeyframe(cube, t=1, v=0, at="tx")
-        pm.setKeyframe(cube, t=5, v=5, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=15, v=10, at="tx")
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        cube = cmds.polyCube(name="motionHold")[0]
+        cmds.setKeyframe(cube, t=1, v=0, at="tx")
+        cmds.setKeyframe(cube, t=5, v=5, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=15, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
 
         segs_no = SegmentKeys.collect_segments(
             [cube],
@@ -572,17 +600,17 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         (default), it is treated as always active and can bridge static gaps in other
         channels, producing a single merged segment.
         """
-        cube = pm.polyCube(name="vis_bridge")[0]
+        cube = cmds.polyCube(name="vis_bridge")[0]
 
         # Two translateX active segments with a static gap
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
-        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
 
         # Visibility holds across the entire range (no change)
-        pm.setKeyframe(cube, t=0, v=1, at="visibility")
-        pm.setKeyframe(cube, t=30, v=1, at="visibility")
+        cmds.setKeyframe(cube, t=0, v=1, at="visibility")
+        cmds.setKeyframe(cube, t=30, v=1, at="visibility")
 
         segs_bridge = SegmentKeys.collect_segments(
             [cube],
@@ -609,15 +637,15 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_full_pipeline(self):
         """Test full collect -> group pipeline."""
-        cube1 = pm.polyCube(name="cube1")[0]
-        cube2 = pm.polyCube(name="cube2")[0]
+        cube1 = cmds.polyCube(name="cube1")[0]
+        cube2 = cmds.polyCube(name="cube2")[0]
 
         # Overlapping animation
-        pm.setKeyframe(cube1, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(cube1, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(cube1, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube1, attribute="translateX", time=10, value=10)
 
-        pm.setKeyframe(cube2, attribute="translateY", time=5, value=0)
-        pm.setKeyframe(cube2, attribute="translateY", time=15, value=20)
+        cmds.setKeyframe(cube2, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(cube2, attribute="translateY", time=15, value=20)
 
         # Collect
         segments = SegmentKeys.collect_segments([cube1, cube2])
@@ -631,23 +659,23 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_filter_curves_by_ignore_with_real_curves(self):
         """Test filtering with real animation curves."""
-        cube = pm.polyCube(name="testCube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result = SegmentKeys._filter_curves_by_ignore(curves, None)
         self.assertEqual(len(result), len(curves))
 
     def test_filter_curves_by_ignore_visibility(self):
         """Test filtering visibility curves."""
-        cube = pm.polyCube(name="testCube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=0, v=1, at="visibility")
-        pm.setKeyframe(cube, t=10, v=0, at="visibility")
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=1, at="visibility")
+        cmds.setKeyframe(cube, t=10, v=0, at="visibility")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result = SegmentKeys._filter_curves_by_ignore(curves, "visibility")
 
         # Should have 1 curve (tx), visibility filtered out
@@ -656,8 +684,8 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_group_by_overlap_no_overlap(self):
         """Test grouping non-overlapping segments creates separate groups."""
-        obj1 = pm.polyCube(name="obj1")[0]
-        obj2 = pm.polyCube(name="obj2")[0]
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
 
         data = [
             {
@@ -683,8 +711,8 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_group_by_overlap_touching_inclusive(self):
         """Test grouping touching segments with inclusive=True."""
-        obj1 = pm.polyCube(name="obj1")[0]
-        obj2 = pm.polyCube(name="obj2")[0]
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
 
         data = [
             {
@@ -717,8 +745,8 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_group_by_overlap_with_overlap(self):
         """Test grouping overlapping segments into single group."""
-        obj1 = pm.polyCube(name="obj1")[0]
-        obj2 = pm.polyCube(name="obj2")[0]
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
 
         data = [
             {
@@ -745,17 +773,17 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_get_active_animation_segments_with_static_gap(self):
         """Test detecting active segments with static gaps."""
-        cube = pm.polyCube(name="testCube")[0]
+        cube = cmds.polyCube(name="testCube")[0]
 
         # Animated segment 1
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
         # Static gap
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
         # Animated segment 2
-        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, stepped, _kf = SegmentKeys._get_active_animation_segments(curves)
 
         # Should have 2 segments
@@ -773,19 +801,18 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         the case where both boundary keys are outside the shot range.
         Fixed: 2025-07-17
         """
-        import maya.cmds as cmds
 
-        cube = pm.polyCube(name="steppedCube")[0]
+        cube = cmds.polyCube(name="steppedCube")[0]
 
         # Wide stepped interval: value holds at 37.35 until t=18388, then
         # jumps to -40.  Rate-based check would have used
         # abs(-40 - 37.35) / 17988 ≈ 0.0043 > 0.001, but stepped tangent
         # handling skips that and uses a simple value-change check instead.
-        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
-        pm.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=-40, at="ry")
         cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, _, _kf = SegmentKeys._get_active_animation_segments(
             curves, motion_only=True, motion_rate=1e-3,
         )
@@ -807,12 +834,11 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         in-range keyframes.
         Fixed: 2025-07-17
         """
-        import maya.cmds as cmds
 
-        cube = pm.polyCube(name="steppedPassCube")[0]
+        cube = cmds.polyCube(name="steppedPassCube")[0]
 
-        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
-        pm.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=-40, at="ry")
         cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
 
         # Collect with a shot range that excludes both keys.
@@ -839,16 +865,15 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         clip; only the in-range jump at t2 matters.
         Fixed: 2025-07-17
         """
-        import maya.cmds as cmds
 
-        cube = pm.polyCube(name="steppedPartialCube")[0]
+        cube = cmds.polyCube(name="steppedPartialCube")[0]
 
         # Stepped interval: t1=1434 outside [1560,1800], t2=1785 inside.
-        pm.setKeyframe(cube, t=1434, v=0, at="ry")
-        pm.setKeyframe(cube, t=1785, v=1, at="ry")
+        cmds.setKeyframe(cube, t=1434, v=0, at="ry")
+        cmds.setKeyframe(cube, t=1785, v=1, at="ry")
         cmds.keyTangent(str(cube), e=True, t=(1434, 1434), ott="step")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, _, _kf = SegmentKeys._get_active_animation_segments(
             curves,
             motion_only=True,
@@ -870,17 +895,16 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         should produce no active segment at all.
         Fixed: 2025-07-17
         """
-        import maya.cmds as cmds
 
-        cube = pm.polyCube(name="stepHoldCube")[0]
+        cube = cmds.polyCube(name="stepHoldCube")[0]
 
         # Stepped hold: value stays 37.35 for entire interval.
-        pm.setKeyframe(cube, t=0, v=37.35, at="ry")
-        pm.setKeyframe(cube, t=400, v=37.35, at="ry")
-        pm.setKeyframe(cube, t=18388, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=0, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=37.35, at="ry")
         cmds.keyTangent(str(cube), e=True, t=(0, 400), ott="step")
 
-        curves = pm.listConnections(cube, type="animCurve", s=True, d=False) or []
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, _, _kf = SegmentKeys._get_active_animation_segments(
             curves, motion_only=True, motion_rate=1e-3,
         )
@@ -896,15 +920,15 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
         if pm is None:
             self.skipTest("Maya not available")
         super().setUp()
-        pm.newFile(force=True)
+        _pm_new_file(force=True)
 
     def test_collect_segments_time_range(self):
         """collect_segments respects time_range parameter."""
-        cube = pm.polyCube(name="time_range_cube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=20, v=20, at="tx")
-        pm.setKeyframe(cube, t=30, v=30, at="tx")
+        cube = cmds.polyCube(name="time_range_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=20, at="tx")
+        cmds.setKeyframe(cube, t=30, v=30, at="tx")
 
         # Range excluding 0 and 30
         segments = SegmentKeys.collect_segments([cube], time_range=(5, 25))
@@ -917,13 +941,13 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_selected_keys(self):
         """collect_segments respects selected_keys_only parameter."""
-        cube = pm.polyCube(name="sel_keys_cube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
-        pm.setKeyframe(cube, t=20, v=20, at="tx")
+        cube = cmds.polyCube(name="sel_keys_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=20, at="tx")
 
         # Select only the key at frame 10
-        pm.selectKey(cube, t=(10, 10))
+        cmds.selectKey(cube, t=(10, 10))
 
         segments = SegmentKeys.collect_segments([cube], selected_keys_only=True)
 
@@ -934,9 +958,9 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_channel_box(self):
         """collect_segments respects channel_box_attrs parameter."""
-        cube = pm.polyCube(name="cb_cube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=0, v=0, at="ty")
+        cube = cmds.polyCube(name="cb_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="ty")
 
         # Filter for tx only
         segments = SegmentKeys.collect_segments(
@@ -950,14 +974,14 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_exclude_next_start(self):
         """collect_segments respects exclude_next_start parameter."""
-        cube = pm.polyCube(name="exclude_next_cube")[0]
+        cube = cmds.polyCube(name="exclude_next_cube")[0]
         # Segment 1: 0-10
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
         # Static gap 10-20
-        pm.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
         # Segment 2: 20-30
-        pm.setKeyframe(cube, t=30, v=20, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
 
         # Default: exclude_next_start=True
         # Segment 1 should end at 20 (trailing hold) but exclude next start if it was adjacent?
@@ -982,12 +1006,12 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_collect_segments_static_tolerance(self):
         """collect_segments respects static_tolerance."""
-        cube = pm.polyCube(name="tol_cube")[0]
+        cube = cmds.polyCube(name="tol_cube")[0]
 
         # Case 1: Flat curve (change = 0)
-        pm.cutKey(cube)
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=0, at="tx")
+        cmds.cutKey(cube)
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=0, at="tx")
 
         segs_flat = SegmentKeys.collect_segments(
             [cube], split_static=True, static_tolerance=1e-4
@@ -995,9 +1019,9 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(segs_flat), 0, "Flat curve should be static")
 
         # Case 2: Small change (0.1), Large tolerance (1.0) -> Static
-        pm.cutKey(cube)
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        pm.setKeyframe(cube, t=10, v=0.1, at="tx")
+        cmds.cutKey(cube)
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=0.1, at="tx")
 
         segs_static = SegmentKeys.collect_segments(
             [cube], split_static=True, static_tolerance=1.0
@@ -1018,14 +1042,14 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_merge_groups_sharing_curves(self):
         """merge_groups_sharing_curves merges groups sharing an animation curve."""
-        cube1 = pm.polyCube(name="c1")[0]
-        cube2 = pm.polyCube(name="c2")[0]
+        cube1 = cmds.polyCube(name="c1")[0]
+        cube2 = cmds.polyCube(name="c2")[0]
 
         # Create a curve and connect to both
-        pm.setKeyframe(cube1, t=0, v=0, at="tx")
-        pm.setKeyframe(cube1, t=10, v=10, at="tx")
-        curve = pm.listConnections(cube1.tx, type="animCurve")[0]
-        pm.connectAttr(curve.output, cube2.tx, force=True)
+        cmds.setKeyframe(cube1, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube1, t=10, v=10, at="tx")
+        curve = cmds.listConnections(f"{cube1}.tx", type="animCurve")[0]
+        cmds.connectAttr(f"{curve}.output", f"{cube2}.tx", force=True)
 
         # Create separate groups with overlapping time ranges
         groups = [
@@ -1055,11 +1079,11 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
 
     def test_shift_curves_locked(self):
         """shift_curves handles locked curves gracefully."""
-        cube = pm.polyCube(name="locked_cube")[0]
-        pm.setKeyframe(cube, t=0, v=0, at="tx")
-        curve = pm.listConnections(cube.tx, type="animCurve")[0]
+        cube = cmds.polyCube(name="locked_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        curve = cmds.listConnections(f"{cube}.tx", type="animCurve")[0]
 
-        curve.setLocked(True)
+        cmds.lockNode(curve, lock=True)
 
         # Should not raise exception
         try:
@@ -1067,7 +1091,7 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
         except Exception as e:
             self.fail(f"shift_curves raised exception on locked curve: {e}")
         finally:
-            curve.setLocked(False)
+            cmds.lockNode(curve, lock=False)
 
 
 if __name__ == "__main__":

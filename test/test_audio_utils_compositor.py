@@ -55,7 +55,7 @@ class TestSyncCreate(MayaTkTestCase):
         result = _compositor.sync()
         self.assertEqual(len(result["created"]), 1)
         node = result["created"][0]
-        self.assertTrue(cmds.objExists(node))
+        self.assertTrue(cmds.objExists(str(node)))
         self.assertEqual(cmds.nodeType(node), "audio")
 
     def test_created_node_has_marker(self):
@@ -142,12 +142,12 @@ class TestSyncDelete(MayaTkTestCase):
         _file_map.set_path("del_track", wav)
         _compositor.sync()
         node = _compositor.find_dg_node_for_track("del_track")
-        self.assertTrue(cmds.objExists(node))
+        self.assertTrue(cmds.objExists(str(node)))
 
         _events.delete_track("del_track")
         result = _compositor.sync()
         self.assertIn(node, result["deleted"])
-        self.assertFalse(cmds.objExists(node))
+        self.assertFalse(cmds.objExists(str(node)))
 
     def test_delete_on_all_keys_removed(self):
         wav = _make_wav("del_keys")
@@ -158,7 +158,7 @@ class TestSyncDelete(MayaTkTestCase):
 
         _events.remove_key("del_keys", frame=10)
         _compositor.sync()
-        self.assertFalse(cmds.objExists(node))
+        self.assertFalse(cmds.objExists(str(node)))
 
 
 class TestUnmanagedNodesIgnored(MayaTkTestCase):
@@ -171,7 +171,7 @@ class TestUnmanagedNodesIgnored(MayaTkTestCase):
 
         # Compositor sync with no tracks defined — must not delete it.
         _compositor.sync()
-        self.assertTrue(cmds.objExists(user_node))
+        self.assertTrue(cmds.objExists(str(user_node)))
         self.assertAlmostEqual(cmds.getAttr(f"{user_node}.offset"), 77.0)
 
 

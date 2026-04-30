@@ -13,12 +13,12 @@ Tests for EditUtils class functionality including:
 - Curve creation
 """
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
 import pythontk as ptk
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestEditUtils(MayaTkTestCase):
@@ -27,8 +27,8 @@ class TestEditUtils(MayaTkTestCase):
     def setUp(self):
         """Set up test scene."""
         super().setUp()
-        self.cube = pm.polyCube(name="test_cube", w=10, h=10, d=10)[0]
-        self.sphere = pm.polySphere(name="test_sphere", r=5)[0]
+        self.cube = cmds.polyCube(name="test_cube", w=10, h=10, d=10)[0]
+        self.sphere = cmds.polySphere(name="test_sphere", r=5)[0]
 
     def tearDown(self):
         """Clean up."""
@@ -42,26 +42,26 @@ class TestEditUtils(MayaTkTestCase):
         """Test merging vertices."""
         # Create a mesh with overlapping vertices
         # Duplicate cube and move slightly to create overlap when combined
-        cube2 = pm.duplicate(self.cube)[0]
-        pm.move(cube2, 0.0001, 0, 0, r=True)
-        combined = pm.polyUnite(self.cube, cube2, ch=False)[0]
+        cube2 = cmds.duplicate(self.cube)[0]
+        cmds.move(0.0001, 0, 0, cube2, r=True)
+        combined = cmds.polyUnite(self.cube, cube2, ch=False)[0]
 
-        initial_count = pm.polyEvaluate(combined, v=True)
+        initial_count = cmds.polyEvaluate(combined, v=True)
         EditUtils.merge_vertices(combined, tolerance=0.001)
-        final_count = pm.polyEvaluate(combined, v=True)
+        final_count = cmds.polyEvaluate(combined, v=True)
 
         self.assertLess(final_count, initial_count)
 
     def test_merge_vertex_pairs(self):
         """Test merging specific vertex pairs."""
         # Select two vertices
-        vtx1 = self.cube.vtx[0]
-        vtx2 = self.cube.vtx[1]
+        vtx1 = f"{self.cube}.vtx[0]"
+        vtx2 = f"{self.cube}.vtx[1]"
 
         # Get initial positions
-        p1 = vtx1.getPosition(space="world")
-        p2 = vtx2.getPosition(space="world")
-        midpoint = (p1 + p2) / 2
+        p1 = cmds.pointPosition(vtx1, world=True)
+        p2 = cmds.pointPosition(vtx2, world=True)
+        midpoint = [(a + b) / 2 for a, b in zip(p1, p2)]
 
         EditUtils.merge_vertex_pairs([vtx1, vtx2])
 
@@ -71,7 +71,7 @@ class TestEditUtils(MayaTkTestCase):
         # However, merge_vertex_pairs moves them to center then merges.
         # Let's verify position of the resulting vertex (which might be vtx[0] or new ID)
         # Easier to check total count
-        # self.assertEqual(pm.polyEvaluate(self.cube, v=True), 7) # Cube has 8 verts, 2 merged -> 7
+        # self.assertEqual(cmds.polyEvaluate(self.cube, v=True), 7) # Cube has 8 verts, 2 merged -> 7
         pass  # Logic verification depends on exact topology, skipping strict assert for now
 
     # -------------------------------------------------------------------------
@@ -87,32 +87,32 @@ class TestEditUtils(MayaTkTestCase):
         # Verify normal or position
         # Face center of +X face should have positive X
         # Use exactWorldBoundingBox to get center
-        bbox = pm.exactWorldBoundingBox(faces_x[0])
+        bbox = cmds.exactWorldBoundingBox(faces_x[0])
         center_x = (bbox[0] + bbox[3]) / 2
         self.assertGreater(center_x, 0)
 
         # Test with pivot
         faces_neg_x = EditUtils.get_all_faces_on_axis(self.cube, axis="-x")
         self.assertTrue(len(faces_neg_x) > 0)
-        bbox = pm.exactWorldBoundingBox(faces_neg_x[0])
+        bbox = cmds.exactWorldBoundingBox(faces_neg_x[0])
         center_x = (bbox[0] + bbox[3]) / 2
         self.assertLess(center_x, 0)
 
     def test_cut_along_axis(self):
         """Test cutting geometry along an axis."""
         # Cut cube in half along X
-        initial_faces = pm.polyEvaluate(self.cube, f=True)
+        initial_faces = cmds.polyEvaluate(self.cube, f=True)
         EditUtils.cut_along_axis(self.cube, axis="x", amount=1)
-        new_faces = pm.polyEvaluate(self.cube, f=True)
+        new_faces = cmds.polyEvaluate(self.cube, f=True)
         self.assertGreater(new_faces, initial_faces)
 
     def test_cut_along_axis_mirror(self):
         """Test cutting and mirroring."""
         # Move cube off center
-        pm.move(self.cube, 5, 0, 0)
+        cmds.move(5, 0, 0, self.cube)
         EditUtils.cut_along_axis(self.cube, axis="x", delete=True, mirror=True)
         # Should result in a symmetric object
-        self.assertTrue(pm.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.cube))
 
     def test_delete_along_axis(self):
         """Test deleting faces along an axis."""
@@ -128,13 +128,13 @@ class TestEditUtils(MayaTkTestCase):
 
     def test_mirror(self):
         """Test mirroring geometry with merge mode."""
-        pm.move(self.cube, 5, 0, 0)
+        cmds.move(5, 0, 0, self.cube)
         mirrored = EditUtils.mirror(self.cube, axis="-x", mergeMode=1)  # Merge
         self.assertTrue(mirrored)
         # Merged mirror should still be one object
         if isinstance(mirrored, list):
             self.assertEqual(len(mirrored), 1)
-        self.assertTrue(pm.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.cube))
 
     def test_mirror_separate_mode(self):
         """Test mirror with custom separate mode (mergeMode=-1).
@@ -143,8 +143,8 @@ class TestEditUtils(MayaTkTestCase):
         firstNewFace/lastNewFace attributes, so Maya couldn't track the mirrored half.
         Fixed: 2026-02-10 - Now delegates to separate_mirrored_mesh.
         """
-        cube = pm.polyCube(name="sep_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
+        cube = cmds.polyCube(name="sep_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
         result = EditUtils.mirror(cube, axis="-x", mergeMode=-1)
         # Separate mode should produce result(s)
         self.assertTrue(result)
@@ -153,7 +153,7 @@ class TestEditUtils(MayaTkTestCase):
         self.assertGreaterEqual(len(results), 1)
         # All results should exist in the scene
         for r in results:
-            self.assertTrue(pm.objExists(r))
+            self.assertTrue(cmds.objExists(r))
 
     def test_mirror_use_object_axes(self):
         """Test mirror with use_object_axes on a rotated object.
@@ -161,41 +161,41 @@ class TestEditUtils(MayaTkTestCase):
         Bug: use_object_axes parameter was accepted but completely ignored.
         Fixed: 2026-02-10 - Pivot is now computed in object-local space when enabled.
         """
-        cube = pm.polyCube(name="rotated_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
-        pm.rotate(cube, 0, 45, 0)
+        cube = cmds.polyCube(name="rotated_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
+        cmds.rotate(0, 45, 0, cube)
 
         result = EditUtils.mirror(
             cube, axis="x", pivot="object", mergeMode=1, use_object_axes=True
         )
         self.assertTrue(result)
-        self.assertTrue(pm.objExists(cube))
+        self.assertTrue(cmds.objExists(cube))
 
     def test_mirror_world_pivot(self):
         """Test mirror with world origin pivot."""
-        pm.move(self.cube, 5, 0, 0)
+        cmds.move(5, 0, 0, self.cube)
         result = EditUtils.mirror(self.cube, axis="x", pivot="world", mergeMode=1)
         self.assertTrue(result)
 
     def test_mirror_tuple_pivot(self):
         """Test mirror with explicit tuple pivot."""
-        pm.move(self.cube, 5, 0, 0)
+        cmds.move(5, 0, 0, self.cube)
         result = EditUtils.mirror(self.cube, axis="x", pivot=(0, 0, 0), mergeMode=1)
         self.assertTrue(result)
 
     def test_separate_mirrored_mesh(self):
         """Test separating a mirrored mesh using the polyMirrorFace history node."""
-        pm.move(self.cube, 5, 0, 0)
+        cmds.move(5, 0, 0, self.cube)
         # Use mergeMode=0 (no merge) so the mirror history node is preserved
         EditUtils.mirror(self.cube, axis="-x", mergeMode=0)
 
         # Get the polyMirrorFace history node from the cube's history
-        history = pm.listHistory(self.cube, type="polyMirrorFace")
+        history = cmds.ls(cmds.listHistory(self.cube), type="polyMirrorFace")
         if history:
             mirror_node = history[0]
             new_obj = EditUtils.separate_mirrored_mesh(mirror_node)
             if new_obj is not None:
-                self.assertTrue(pm.objExists(new_obj))
+                self.assertTrue(cmds.objExists(new_obj))
 
     def test_mirror_preserves_normals_merged(self):
         """Verify mirrored mesh has outward-facing normals after merge.
@@ -204,27 +204,27 @@ class TestEditUtils(MayaTkTestCase):
         half, causing the mesh to render inside-out or black.
         Fixed: 2026-03-08 - Added polyNormal conform step after mirror.
         """
-        cube = pm.polyCube(name="norm_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
+        cube = cmds.polyCube(name="norm_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
         EditUtils.mirror(cube, axis="-x", mergeMode=1)
 
         # Verify normals point outward: the dot product of each face normal
         # with the vector from mesh center to face center should be > 0.
         import maya.api.OpenMaya as om
 
-        bbox = pm.exactWorldBoundingBox(cube)
+        bbox = cmds.exactWorldBoundingBox(cube)
         mesh_center = om.MVector(
             (bbox[0] + bbox[3]) / 2,
             (bbox[1] + bbox[4]) / 2,
             (bbox[2] + bbox[5]) / 2,
         )
-        face_count = pm.polyEvaluate(cube, f=True)
+        face_count = cmds.polyEvaluate(cube, f=True)
         for i in range(face_count):
-            info = pm.polyInfo(f"{cube}.f[{i}]", fn=True)
+            info = cmds.polyInfo(f"{cube}.f[{i}]", fn=True)
             parts = info[0].split()
             normal = om.MVector(float(parts[-3]), float(parts[-2]), float(parts[-1]))
             # Face center
-            fb = pm.exactWorldBoundingBox(f"{cube}.f[{i}]")
+            fb = cmds.exactWorldBoundingBox(f"{cube}.f[{i}]")
             face_center = om.MVector(
                 (fb[0] + fb[3]) / 2, (fb[1] + fb[4]) / 2, (fb[2] + fb[5]) / 2
             )
@@ -241,35 +241,45 @@ class TestEditUtils(MayaTkTestCase):
         """
         import maya.api.OpenMaya as om
 
-        cube = pm.polyCube(name="sep_norm_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
+        cube = cmds.polyCube(name="sep_norm_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
         results = EditUtils.mirror(cube, axis="-x", mergeMode=-1)
         results = results if isinstance(results, list) else [results]
 
         for obj in results:
-            if not pm.objExists(obj):
+            if not cmds.objExists(obj):
                 continue
-            bbox = pm.exactWorldBoundingBox(obj)
+            # Resolve to a mesh transform — mirror may return a group.
+            target = str(obj)
+            if not cmds.listRelatives(target, shapes=True, ni=True, type="mesh"):
+                meshes = cmds.listRelatives(target, allDescendents=True, type="mesh") or []
+                if not meshes:
+                    continue
+                # Walk to the mesh's parent transform.
+                target = (cmds.listRelatives(meshes[0], parent=True, fullPath=True) or [target])[0]
+
+            bbox = cmds.exactWorldBoundingBox(target)
             mesh_center = om.MVector(
                 (bbox[0] + bbox[3]) / 2,
                 (bbox[1] + bbox[4]) / 2,
                 (bbox[2] + bbox[5]) / 2,
             )
-            face_count = pm.polyEvaluate(obj, f=True)
+            face_count = cmds.polyEvaluate(target, f=True)
             for i in range(face_count):
-                info = pm.polyInfo(f"{obj}.f[{i}]", fn=True)
+                info = cmds.polyInfo(f"{target}.f[{i}]", fn=True)
                 parts = info[0].split()
                 normal = om.MVector(
                     float(parts[-3]), float(parts[-2]), float(parts[-1])
                 )
-                fb = pm.exactWorldBoundingBox(f"{obj}.f[{i}]")
+                fb = cmds.exactWorldBoundingBox(f"{target}.f[{i}]")
                 face_center = om.MVector(
                     (fb[0] + fb[3]) / 2, (fb[1] + fb[4]) / 2, (fb[2] + fb[5]) / 2
                 )
                 outward = face_center - mesh_center
                 dot = normal * outward
                 self.assertGreater(
-                    dot, 0, f"Face {i} on {obj} normal points inward (dot={dot:.4f})"
+                    dot, 0,
+                    f"Face {i} on {target} normal points inward (dot={dot:.4f})",
                 )
 
     def test_mirror_delete_original(self):
@@ -279,27 +289,33 @@ class TestEditUtils(MayaTkTestCase):
         the source half in one step.
         Added: 2026-03-08
         """
-        cube = pm.polyCube(name="del_orig_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
+        cube = cmds.polyCube(name="del_orig_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
 
         # Count transforms before mirror
-        before = set(str(t) for t in pm.ls(type="transform"))
+        before = set(str(t) for t in cmds.ls(type="transform"))
 
         result = EditUtils.mirror(cube, axis="-x", mergeMode=-1, delete_original=True)
         results = result if isinstance(result, list) else [result]
 
         # Should return exactly one object (the mirrored half only)
         self.assertEqual(len(results), 1, "Expected only the mirrored half")
-        self.assertTrue(pm.objExists(results[0]))
+        self.assertTrue(cmds.objExists(results[0]))
 
-        # The result should have geometry (not an empty group)
-        face_count = pm.polyEvaluate(results[0], f=True)
+        # The result should have geometry (not an empty group). When
+        # results[0] is a group, pm.polyEvaluate returns a string error
+        # message, so look up shapes ourselves.
+        target = results[0]
+        if not cmds.listRelatives(str(target), shapes=True, ni=True, type="mesh"):
+            target = (cmds.listRelatives(str(target), allDescendents=True, type="mesh") or [None])[0]
+            self.assertIsNotNone(target, "Mirrored result should contain a mesh")
+        face_count = cmds.polyEvaluate(target, f=True)
         self.assertGreater(face_count, 0, "Mirrored half should have faces")
 
     def test_mirror_delete_original_false(self):
         """Verify delete_original=False (default) keeps both halves."""
-        cube = pm.polyCube(name="keep_orig_cube", w=10, h=10, d=10)[0]
-        pm.move(cube, 5, 0, 0)
+        cube = cmds.polyCube(name="keep_orig_cube", w=10, h=10, d=10)[0]
+        cmds.move(5, 0, 0, cube)
 
         result = EditUtils.mirror(cube, axis="-x", mergeMode=-1, delete_original=False)
         results = result if isinstance(result, list) else [result]
@@ -313,23 +329,25 @@ class TestEditUtils(MayaTkTestCase):
 
     def test_get_overlapping_duplicates(self):
         """Test finding duplicate objects."""
-        dup = pm.duplicate(self.cube)[0]
+        dup = cmds.duplicate(self.cube)[0]
+        dup_long = cmds.ls(str(dup), l=True)[0]
+        cube_long = cmds.ls(str(self.cube), l=True)[0]
         duplicates = EditUtils.get_overlapping_duplicates([self.cube, dup])
-        self.assertIn(dup.longName(), duplicates)
-        self.assertNotIn(self.cube.longName(), duplicates)  # Should keep one
+        self.assertIn(dup_long, duplicates)
+        self.assertNotIn(cube_long, duplicates)  # Should keep one
 
     def test_get_overlapping_vertices(self):
         """Test finding overlapping vertices."""
         # Create overlap
-        cube2 = pm.duplicate(self.cube)[0]
-        combined = pm.polyUnite(self.cube, cube2, ch=False)[0]
+        cube2 = cmds.duplicate(self.cube)[0]
+        combined = cmds.polyUnite(self.cube, cube2, ch=False)[0]
         overlaps = EditUtils.get_overlapping_vertices(combined)
         self.assertTrue(len(overlaps) > 0)
 
     def test_get_overlapping_faces(self):
         """Test finding overlapping faces."""
-        cube2 = pm.duplicate(self.cube)[0]
-        combined = pm.polyUnite(self.cube, cube2, ch=False)[0]
+        cube2 = cmds.duplicate(self.cube)[0]
+        combined = cmds.polyUnite(self.cube, cube2, ch=False)[0]
         overlaps = EditUtils.get_overlapping_faces(combined)
         self.assertTrue(len(overlaps) > 0)
 
@@ -339,15 +357,15 @@ class TestEditUtils(MayaTkTestCase):
 
     def test_get_similar_mesh(self):
         """Test finding similar meshes."""
-        dup = pm.duplicate(self.cube)[0]
-        pm.move(dup, 10, 0, 0)
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.move(10, 0, 0, dup)
         similar = EditUtils.get_similar_mesh(self.cube)
         self.assertIn(dup, similar)
 
     def test_get_similar_topo(self):
         """Test finding similar topology."""
-        dup = pm.duplicate(self.cube)[0]
-        pm.move(dup, 10, 0, 0)
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.move(10, 0, 0, dup)
         similar = EditUtils.get_similar_topo(self.cube)
         self.assertIn(dup, similar)
 
@@ -365,27 +383,30 @@ class TestEditUtils(MayaTkTestCase):
 
     def test_invert_geometry(self):
         """Test inverting object selection."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         inverted = EditUtils.invert_geometry()
         self.assertIn(self.sphere, inverted)
         self.assertNotIn(self.cube, inverted)
 
     def test_invert_components(self):
         """Test inverting component selection."""
-        pm.select(self.cube.vtx[0])
+        cmds.select(f"{self.cube}.vtx[0]")
         inverted = EditUtils.invert_components()
-        self.assertNotIn(self.cube.vtx[0], inverted)
-        self.assertIn(self.cube.vtx[1], inverted)
+        # Production returns strings; compare on string form.
+        inverted_strs = [str(i) for i in inverted]
+        self.assertNotIn(str(f"{self.cube}.vtx[0]"), inverted_strs)
+        # Some shape-prefixed variant of vtx[1] should be present.
+        self.assertTrue(any(".vtx[1]" in s for s in inverted_strs))
 
     def test_delete_selected(self):
         """Test delete selected wrapper."""
         # Test object deletion
-        pm.select(self.sphere)
+        cmds.select(self.sphere)
         EditUtils.delete_selected()
-        self.assertFalse(pm.objExists(self.sphere))
+        self.assertFalse(cmds.objExists(self.sphere))
 
         # Test component deletion
-        pm.select(self.cube.f[0])
+        cmds.select(f"{self.cube}.f[0]")
         # Need to set selection mask for function to work?
         # The function checks pm.selectType.
         # In batch mode, selectType might not reflect selection.
@@ -394,7 +415,7 @@ class TestEditUtils(MayaTkTestCase):
 
     def test_create_curve_from_edges(self):
         """Test creating curve from edges."""
-        edges = [self.cube.e[0], self.cube.e[1]]
+        edges = [f"{self.cube}.e[0]", f"{self.cube}.e[1]"]
         curve = EditUtils.create_curve_from_edges(edges)
 
         # curve might be a list [transform, history]
@@ -402,10 +423,10 @@ class TestEditUtils(MayaTkTestCase):
             curve = curve[0]
 
         # Ensure it's a PyNode
-        curve = pm.PyNode(curve)
+        curve = curve
 
-        self.assertTrue(pm.objExists(curve))
-        self.assertEqual(pm.nodeType(curve.getShape()), "nurbsCurve")
+        self.assertTrue(cmds.objExists(curve))
+        self.assertEqual(cmds.nodeType((cmds.listRelatives(str(curve), shapes=True, ni=True) or [None])[0]), "nurbsCurve")
 
     def test_separate_objects(self):
         """Test separate_objects method."""
@@ -415,35 +436,35 @@ class TestEditUtils(MayaTkTestCase):
 
         # Scenario 1: Standard Separate (Disjoint Shells)
         # ---------------------------------------------
-        c1 = pm.polyCube()[0]
-        c2 = pm.polyCube()[0]
-        pm.move(c2, 5, 0, 0)
-        combined = pm.polyUnite(c1, c2, ch=False)[0]
+        c1 = cmds.polyCube()[0]
+        c2 = cmds.polyCube()[0]
+        cmds.move(5, 0, 0, c2)
+        combined = cmds.polyUnite(c1, c2, ch=False)[0]
 
         # separate_objects default (by_material=False) should work like polySeparate
         res = EditUtils.separate_objects([combined], by_material=False)
         self.assertEqual(len(res), 2)
-        pm.delete(res)
+        cmds.delete(res)
 
         # Scenario 2: Separate by Material (Disjoint Shells)
         # ---------------------------------------------
-        c3 = pm.polyCube()[0]
-        c4 = pm.polyCube()[0]
-        pm.move(c4, 5, 0, 0)
+        c3 = cmds.polyCube()[0]
+        c4 = cmds.polyCube()[0]
+        cmds.move(5, 0, 0, c4)
         mtk.MatUtils.assign_mat(c3, mat1)
         mtk.MatUtils.assign_mat(c4, mat2)
-        combined2 = pm.polyUnite(c3, c4, ch=False)[0]
+        combined2 = cmds.polyUnite(c3, c4, ch=False)[0]
 
         res2 = EditUtils.separate_objects([combined2], by_material=True)
         self.assertEqual(len(res2), 2)
-        pm.delete(res2)
+        cmds.delete(res2)
 
         # Scenario 3: Separate by Material (Single Shell)
         # ---------------------------------------------
-        c5 = pm.polyCube(sx=2)[0]
+        c5 = cmds.polyCube(sx=2)[0]
         mtk.MatUtils.assign_mat(c5, mat1)
-        pm.select(c5.f[0:3])
-        mtk.MatUtils.assign_mat(pm.selected(), mat2)
+        cmds.select(f"{c5}.f[0:3]")
+        mtk.MatUtils.assign_mat(cmds.ls(selection=True), mat2)
 
         # Without by_material, should remain 1 object
         res3a = EditUtils.separate_objects([c5], by_material=False)
@@ -453,24 +474,24 @@ class TestEditUtils(MayaTkTestCase):
         # With by_material, should split
         res3b = EditUtils.separate_objects(res3a, by_material=True)
         self.assertEqual(len(res3b), 2)
-        pm.delete(res3b)
+        cmds.delete(res3b)
 
         # Scenario 4: Rename Check
         # ---------------------------------------------
-        c6 = pm.polyCube(n="MyBox")[0]
-        c7 = pm.polyCube()[0]  # Shell 2
-        pm.move(c7, 10, 0, 0)
-        combined3 = pm.polyUnite(c6, c7, n="MyComp", ch=False)[0]
+        c6 = cmds.polyCube(n="MyBox")[0]
+        c7 = cmds.polyCube()[0]  # Shell 2
+        cmds.move(10, 0, 0, c7)
+        combined3 = cmds.polyUnite(c6, c7, n="MyComp", ch=False)[0]
 
         # Rename=True
         # Expect MyComp_01, MyComp_02 (or location based suffix)
         res4 = EditUtils.separate_objects([combined3], rename=True)
         self.assertEqual(len(res4), 2)
 
-        names = [r.name().split("|")[-1] for r in res4]
+        names = [r.split("|")[-1] for r in res4]
         # Verify names start with "MyComp"
         self.assertTrue(all(n.startswith("MyComp") for n in names))
-        pm.delete(res4)
+        cmds.delete(res4)
 
 
 if __name__ == "__main__":

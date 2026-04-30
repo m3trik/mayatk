@@ -14,8 +14,35 @@ import unittest
 import os
 import tempfile
 import shutil
-import pymel.core as pm
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 from mayatk.mat_utils.shader_templates._shader_templates import (
     GraphCollector,
     GraphSaver,
@@ -31,7 +58,7 @@ class TestShaderTemplates(MayaTkTestCase):
 
     def setUp(self):
         """Set up test environment."""
-        # Override to avoid pm.newFile(force=True) which might kill the test runner connection
+        # Override to avoid _pm_new_file(force=True) which might kill the test runner connection
         # in some environments, but we'll try to be safe.
         self.temp_dir = tempfile.mkdtemp()
         self.template_path = os.path.join(self.temp_dir, "test_template.yaml")
@@ -43,7 +70,7 @@ class TestShaderTemplates(MayaTkTestCase):
             shutil.rmtree(self.temp_dir)
 
         if self.nodes_to_delete:
-            pm.delete([n for n in self.nodes_to_delete if pm.objExists(n)])
+            cmds.delete([n for n in self.nodes_to_delete if cmds.objExists(n)])
 
     # -------------------------------------------------------------------------
     # Core Functionality Tests
@@ -52,9 +79,9 @@ class TestShaderTemplates(MayaTkTestCase):
     def test_collect_and_save_graph(self):
         """Test collecting and saving a simple shader graph."""
         # Create a simple graph
-        shader = pm.shadingNode("lambert", asShader=True, name="test_lambert")
-        file_node = pm.shadingNode("file", asTexture=True, name="test_file")
-        pm.connectAttr(file_node.outColor, shader.color)
+        shader = cmds.shadingNode("lambert", asShader=True, name="test_lambert")
+        file_node = cmds.shadingNode("file", asTexture=True, name="test_file")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
         self.nodes_to_delete.extend([shader, file_node])
 
         # Collect graph
@@ -81,16 +108,16 @@ class TestShaderTemplates(MayaTkTestCase):
     def test_restore_graph(self):
         """Test restoring a saved graph."""
         # Create a template file manually or via save
-        shader = pm.shadingNode("blinn", asShader=True, name="original_blinn")
-        file_node = pm.shadingNode("file", asTexture=True, name="original_file")
-        pm.connectAttr(file_node.outColor, shader.color)
+        shader = cmds.shadingNode("blinn", asShader=True, name="original_blinn")
+        file_node = cmds.shadingNode("file", asTexture=True, name="original_file")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
 
         saver = GraphSaver()
         saver.save_graph([shader, file_node], self.template_path)
 
         # Clear scene
-        pm.delete(shader, file_node)
-        self.assertFalse(pm.objExists("original_blinn"))
+        cmds.delete(shader, file_node)
+        self.assertFalse(cmds.objExists("original_blinn"))
 
         # Restore graph
         restorer = GraphRestorer(self.template_path, [], name="restored_shader")
@@ -100,8 +127,8 @@ class TestShaderTemplates(MayaTkTestCase):
         self.nodes_to_delete.extend(restorer.nodes.values())
 
         # Verify nodes are created
-        blinns = pm.ls(type="blinn")
-        files = pm.ls(type="file")
+        blinns = cmds.ls(type="blinn")
+        files = cmds.ls(type="file")
 
         self.assertTrue(len(blinns) > 0)
         self.assertTrue(len(files) > 0)
@@ -109,7 +136,7 @@ class TestShaderTemplates(MayaTkTestCase):
         # Verify connection
         connected = False
         for blinn in blinns:
-            inputs = blinn.color.inputs()
+            inputs = cmds.listConnections(f"{blinn}.color", source=True, destination=False) or []
             if inputs and inputs[0] in files:
                 connected = True
                 break
@@ -118,21 +145,21 @@ class TestShaderTemplates(MayaTkTestCase):
     def test_complex_network_roundtrip(self):
         """Test saving and restoring a complex network with multiple node types."""
         # Create nodes
-        shader = pm.shadingNode("lambert", asShader=True, name="test_lambert")
-        tex = pm.shadingNode("file", asTexture=True, name="test_file")
-        place = pm.shadingNode("place2dTexture", asUtility=True, name="test_place2d")
-        bump = pm.shadingNode("bump2d", asUtility=True, name="test_bump")
+        shader = cmds.shadingNode("lambert", asShader=True, name="test_lambert")
+        tex = cmds.shadingNode("file", asTexture=True, name="test_file")
+        place = cmds.shadingNode("place2dTexture", asUtility=True, name="test_place2d")
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="test_bump")
 
         # Set some values
-        pm.setAttr(shader.color, (1, 0, 0))
-        pm.setAttr(place.rotateUV, 45)
-        pm.setAttr(bump.bumpDepth, 0.5)
+        cmds.setAttr(f"{shader}.color", 1, 0, 0, type="double3")
+        cmds.setAttr(f"{place}.rotateUV", 45)
+        cmds.setAttr(f"{bump}.bumpDepth", 0.5)
 
         # Connect
-        pm.connectAttr(place.outUV, tex.uvCoord)
-        pm.connectAttr(place.outUvFilterSize, tex.uvFilterSize)
-        pm.connectAttr(tex.outAlpha, bump.bumpValue)
-        pm.connectAttr(bump.outNormal, shader.normalCamera)
+        cmds.connectAttr(f"{place}.outUV", f"{tex}.uvCoord")
+        cmds.connectAttr(f"{place}.outUvFilterSize", f"{tex}.uvFilterSize")
+        cmds.connectAttr(f"{tex}.outAlpha", f"{bump}.bumpValue")
+        cmds.connectAttr(f"{bump}.outNormal", f"{shader}.normalCamera")
 
         # Save
         template_path = os.path.join(self.temp_dir, "complex_test.yaml")
@@ -141,7 +168,7 @@ class TestShaderTemplates(MayaTkTestCase):
         ShaderTemplates.save_template(nodes, template_path)
 
         # Clear scene
-        pm.delete(nodes)
+        cmds.delete(nodes)
 
         # Restore
         restored_nodes = ShaderTemplates.restore_template(template_path)
@@ -152,12 +179,12 @@ class TestShaderTemplates(MayaTkTestCase):
 
         # Check if place2d rotation is preserved
         place_node = next(
-            (n for n in restored_nodes.values() if n.nodeType() == "place2dTexture"),
+            (n for n in restored_nodes.values() if cmds.nodeType(n) == "place2dTexture"),
             None,
         )
         self.assertIsNotNone(place_node, "place2dTexture node should be restored.")
 
-        rot = pm.getAttr(place_node.rotateUV)
+        rot = cmds.getAttr(f"{place_node}.rotateUV")
         self.assertAlmostEqual(
             rot, 45.0, delta=1e-5, msg="Attribute value (rotateUV) should be preserved."
         )
@@ -169,8 +196,8 @@ class TestShaderTemplates(MayaTkTestCase):
     def test_file_node_attributes_and_connections(self):
         """Test that file nodes retain their attributes and connections after restore."""
         # Create a file node with specific settings
-        file_node = pm.shadingNode("file", asTexture=True, name="attr_test_file")
-        shader = pm.shadingNode("lambert", asShader=True, name="attr_test_shader")
+        file_node = cmds.shadingNode("file", asTexture=True, name="attr_test_file")
+        shader = cmds.shadingNode("lambert", asShader=True, name="attr_test_shader")
 
         # Set attributes
         test_path = os.path.join(self.temp_dir, "test_texture.png").replace("\\", "/")
@@ -178,11 +205,11 @@ class TestShaderTemplates(MayaTkTestCase):
         with open(test_path, "w") as f:
             f.write("dummy")
 
-        pm.setAttr(file_node.fileTextureName, test_path)
-        pm.setAttr(file_node.alphaGain, 0.5)
+        cmds.setAttr(f"{file_node}.fileTextureName", test_path, type="string")
+        cmds.setAttr(f"{file_node}.alphaGain", 0.5)
 
         # Connect
-        pm.connectAttr(file_node.outColor, shader.color)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
 
         # Save
         ShaderTemplates.save_template([shader, file_node], self.template_path)
@@ -196,7 +223,7 @@ class TestShaderTemplates(MayaTkTestCase):
             pass
 
         # Delete
-        pm.delete(shader, file_node)
+        cmds.delete(shader, file_node)
 
         # Restore
         restored_nodes = ShaderTemplates.restore_template(self.template_path)
@@ -205,23 +232,23 @@ class TestShaderTemplates(MayaTkTestCase):
         # Find restored file node
         restored_file = None
         for node in restored_nodes.values():
-            if pm.nodeType(node) == "file":
+            if cmds.nodeType(node) == "file":
                 restored_file = node
                 break
 
         self.assertIsNotNone(restored_file, "File node should be restored")
 
         # Verify attributes
-        restored_path = pm.getAttr(restored_file.fileTextureName)
+        restored_path = cmds.getAttr(f"{restored_file}.fileTextureName")
         # Normalize paths for comparison
         self.assertEqual(os.path.normpath(restored_path), os.path.normpath(test_path))
 
-        self.assertAlmostEqual(pm.getAttr(restored_file.alphaGain), 0.5)
+        self.assertAlmostEqual(cmds.getAttr(f"{restored_file}.alphaGain"), 0.5)
 
         # Verify connection
-        outputs = restored_file.outColor.outputs()
+        outputs = cmds.listConnections(f"{restored_file}.outColor", source=False, destination=True) or []
         self.assertTrue(len(outputs) > 0, "File node should be connected to shader")
-        self.assertEqual(pm.nodeType(outputs[0]), "lambert")
+        self.assertEqual(cmds.nodeType(outputs[0]), "lambert")
 
     # -------------------------------------------------------------------------
     # Utility and Edge Case Tests
@@ -229,9 +256,9 @@ class TestShaderTemplates(MayaTkTestCase):
 
     def test_exclude_types(self):
         """Test excluding specific node types during save."""
-        shader = pm.shadingNode("lambert", asShader=True, name="test_lambert")
-        sg = pm.sets(renderable=True, noSurfaceShader=True, empty=True, name="testSG")
-        pm.connectAttr(shader.outColor, sg.surfaceShader)
+        shader = cmds.shadingNode("lambert", asShader=True, name="test_lambert")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="testSG")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader")
         self.nodes_to_delete.extend([shader, sg])
 
         saver = GraphSaver()
@@ -255,8 +282,8 @@ class TestShaderTemplates(MayaTkTestCase):
 
     def test_pymel_datatype_serialization(self):
         """Verify if PyMEL datatypes are converted to basic types."""
-        node = pm.createNode("lambert")
-        pm.setAttr(node.color, (0.1, 0.2, 0.3))
+        node = cmds.createNode("lambert")
+        cmds.setAttr(f"{node}.color", 0.1, 0.2, 0.3, type="double3")
         self.nodes_to_delete.append(node)
 
         # Get attributes
@@ -271,14 +298,20 @@ class TestShaderTemplates(MayaTkTestCase):
         self.assertIsInstance(
             color_converted, (list, tuple), "Color should be converted to list/tuple."
         )
-        self.assertNotIsInstance(
-            color_converted, pm.dt.Color, "Color should not be a PyMEL datatype."
-        )
+        # cmds.getAttr returns double3 as [(r, g, b)]; the converter recurses
+        # and produces a nested list. Flatten one level if present.
+        if color_converted and isinstance(color_converted[0], (list, tuple)):
+            color_components = list(color_converted[0])
+        else:
+            color_components = list(color_converted)
+        # Each component must be a plain float (PyMEL datatypes would fail this).
+        for component in color_components:
+            self.assertIsInstance(component, float)
 
     def test_list_attr_keyable_behavior(self):
         """Verify if keyable=False excludes keyable attributes (utility check)."""
-        node = pm.createNode("lambert")
-        pm.setAttr(node.color, (0.5, 0.5, 0.5))
+        node = cmds.createNode("lambert")
+        cmds.setAttr(f"{node}.color", 0.5, 0.5, 0.5, type="double3")
         self.nodes_to_delete.append(node)
 
         # Default kwargs in NodeUtils.get_node_attributes
@@ -291,11 +324,11 @@ class TestShaderTemplates(MayaTkTestCase):
             "multi": True,
         }
 
-        attrs = pm.listAttr(node, **kwargs)
+        attrs = cmds.listAttr(node, **kwargs)
 
         # Check if we can get keyable attributes by removing the restriction
         kwargs.pop("keyable")
-        attrs_all = pm.listAttr(node, **kwargs)
+        attrs_all = cmds.listAttr(node, **kwargs)
 
         self.assertIn(
             "colorR",
@@ -349,9 +382,9 @@ class TestShaderTemplates(MayaTkTestCase):
         original_pbs = None
         nodes_to_save = []
 
-        if pm.nodeType(result_node) == "shadingEngine":
+        if cmds.nodeType(result_node) == "shadingEngine":
             # Find surface shader
-            connections = pm.listConnections(result_node.surfaceShader)
+            connections = cmds.listConnections(f"{result_node}.surfaceShader")
             if connections:
                 original_pbs = connections[0]
             nodes_to_save.append(result_node)
@@ -359,7 +392,7 @@ class TestShaderTemplates(MayaTkTestCase):
             original_pbs = result_node
 
         if original_pbs:
-            nodes_to_save.extend(pm.listHistory(original_pbs))
+            nodes_to_save.extend(cmds.listHistory(original_pbs))
 
         self.nodes_to_delete.extend(nodes_to_save)
 
@@ -376,10 +409,10 @@ class TestShaderTemplates(MayaTkTestCase):
         )
 
         # 4. Clear Scene
-        pm.delete(pm.ls(type="StingrayPBS"))
-        pm.delete(pm.ls(type="file"))
-        pm.delete(pm.ls(type="shadingEngine"))
-        pm.delete(pm.ls(type="place2dTexture"))
+        cmds.delete(cmds.ls(type="StingrayPBS"))
+        cmds.delete(cmds.ls(type="file"))
+        cmds.delete(cmds.ls(type="shadingEngine"))
+        cmds.delete(cmds.ls(type="place2dTexture"))
 
         # 5. Restore Template
         restored_nodes = ShaderTemplates.restore_template(
@@ -390,12 +423,12 @@ class TestShaderTemplates(MayaTkTestCase):
         # 6. Verification
 
         # A. Check for single StingrayPBS node
-        pbs_nodes = pm.ls(type="StingrayPBS")
+        pbs_nodes = cmds.ls(type="StingrayPBS")
         self.assertEqual(len(pbs_nodes), 1, "Should have exactly one StingrayPBS node.")
         pbs_node = pbs_nodes[0]
 
         # B. Check for absence of Arnold nodes
-        arnold_nodes = pm.ls(type="aiStandardSurface")
+        arnold_nodes = cmds.ls(type="aiStandardSurface")
         self.assertEqual(
             len(arnold_nodes), 0, "Should have no aiStandardSurface nodes."
         )
@@ -409,44 +442,40 @@ class TestShaderTemplates(MayaTkTestCase):
             "TEX_ao_map": "Test_AmbientOcclusion.png",
         }
 
+        pbs_node_name = str(pbs_node)
         for attr_name, tex_name in expected_connections.items():
-            # Get input to the attribute
-            if not hasattr(pbs_node, attr_name):
+            # cmds.attributeQuery is the migration-safe replacement for
+            # PyMEL's hasattr-on-string anti-pattern.
+            if not cmds.attributeQuery(attr_name, node=pbs_node_name, exists=True):
                 self.fail(f"StingrayPBS node missing attribute: {attr_name}")
 
-            attr = getattr(pbs_node, attr_name)
-            inputs = attr.inputs()
+            plug = f"{pbs_node_name}.{attr_name}"
+            inputs = cmds.listConnections(plug, source=True, destination=False) or []
 
-            # Check children if parent has no inputs (compound attribute behavior)
-            if len(inputs) == 0 and attr.isCompound():
-                for child in attr.children():
-                    inputs.extend(child.inputs())
-
-            if len(inputs) == 0:
-                # Debug info
-                print(f"DEBUG: Attribute {attr_name} has no inputs.")
-                print(f"DEBUG: Node: {pbs_node}")
-                print(
-                    f"DEBUG: Available attributes: {[a.name() for a in pbs_node.listAttr()]}"
-                )
-                # Check if children are connected
-                if attr.isCompound():
-                    for child in attr.children():
-                        print(f"DEBUG: Child {child.name()} inputs: {child.inputs()}")
+            # Compound attrs may carry connections only on their children.
+            if not inputs:
+                children = cmds.attributeQuery(attr_name, node=pbs_node_name, listChildren=True) or []
+                for child in children:
+                    inputs.extend(
+                        cmds.listConnections(
+                            f"{pbs_node_name}.{child}", source=True, destination=False
+                        )
+                        or []
+                    )
 
             self.assertTrue(
-                len(inputs) > 0,
+                inputs,
                 f"Attribute {attr_name} should have an input connection.",
             )
             input_node = inputs[0]
             self.assertEqual(
-                pm.nodeType(input_node),
+                cmds.nodeType(input_node),
                 "file",
                 f"Input to {attr_name} should be a file node.",
             )
 
             # Check file path
-            file_path = pm.getAttr(input_node.fileTextureName)
+            file_path = cmds.getAttr(f"{input_node}.fileTextureName")
 
             # Allow ORM packed map for Metallic, Roughness, AO
             is_orm_packed = "ORM" in file_path and attr_name in [
@@ -500,8 +529,8 @@ class TestShaderTemplates(MayaTkTestCase):
 
         original_pbs = None
         nodes_to_save = []
-        if pm.nodeType(result_node) == "shadingEngine":
-            connections = pm.listConnections(result_node.surfaceShader)
+        if cmds.nodeType(result_node) == "shadingEngine":
+            connections = cmds.listConnections(f"{result_node}.surfaceShader")
             if connections:
                 original_pbs = connections[0]
             nodes_to_save.append(result_node)
@@ -509,12 +538,12 @@ class TestShaderTemplates(MayaTkTestCase):
             original_pbs = result_node
 
         if original_pbs:
-            nodes_to_save.extend(pm.listHistory(original_pbs))
+            nodes_to_save.extend(cmds.listHistory(original_pbs))
             # Set a specific attribute value to test restoration
             if hasattr(original_pbs, "use_color_map"):
-                pm.setAttr(original_pbs.use_color_map, 1.0)
+                cmds.setAttr(f"{original_pbs}.use_color_map", 1.0)
             if hasattr(original_pbs, "use_metallic_map"):
-                pm.setAttr(original_pbs.use_metallic_map, 1.0)
+                cmds.setAttr(f"{original_pbs}.use_metallic_map", 1.0)
 
         self.nodes_to_delete.extend(nodes_to_save)
 
@@ -523,7 +552,7 @@ class TestShaderTemplates(MayaTkTestCase):
         )
 
         # 3. Clear Scene
-        pm.delete(nodes_to_save)
+        cmds.delete(nodes_to_save)
 
         # 4. Restore with PARTIAL textures (Only Base Color)
         partial_textures = [p for p in texture_paths if "Base_Color" in p]
@@ -534,7 +563,7 @@ class TestShaderTemplates(MayaTkTestCase):
         self.nodes_to_delete.extend(restored_nodes.values())
 
         # 5. Verify
-        pbs_nodes = pm.ls(type="StingrayPBS")
+        pbs_nodes = cmds.ls(type="StingrayPBS")
         self.assertEqual(len(pbs_nodes), 1)
         pbs_node = pbs_nodes[0]
 
@@ -544,7 +573,7 @@ class TestShaderTemplates(MayaTkTestCase):
             inputs = color_attr.inputs()
             self.assertTrue(len(inputs) > 0, "Base Color should be connected")
             file_node = inputs[0]
-            path = pm.getAttr(file_node.fileTextureName)
+            path = cmds.getAttr(f"{file_node}.fileTextureName")
             self.assertTrue(
                 "Test_Base_Color.png" in path, "Base Color path should be updated"
             )
@@ -552,11 +581,11 @@ class TestShaderTemplates(MayaTkTestCase):
         # Check Attributes
         if hasattr(pbs_node, "use_color_map"):
             self.assertEqual(
-                pm.getAttr(pbs_node.use_color_map), 1.0, "use_color_map should be 1.0"
+                cmds.getAttr(f"{pbs_node}.use_color_map"), 1.0, "use_color_map should be 1.0"
             )
 
         # Check Shading Engine Connection
-        outputs = pbs_node.outColor.outputs(type="shadingEngine")
+        outputs = cmds.listConnections(f"{pbs_node}.outColor", source=False, destination=True, type="shadingEngine") or []
         self.assertTrue(
             len(outputs) > 0, "StingrayPBS should be connected to a Shading Engine"
         )

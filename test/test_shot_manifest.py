@@ -24,7 +24,8 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 # Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
-from test.conftest import mock_pm, mock_cmds
+from conftest import mock_pm, mock_cmds  # noqa: E402  (test dir on sys.path)
+import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
 _mock_pm = mock_pm
@@ -137,7 +138,10 @@ class TestUpdateBaseline(unittest.TestCase):
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
     def test_creates_shots_sequentially(self, mock_dur):
         mock_dur.return_value = 30.0
-        actions = self.assembler.update(self.steps)
+        # Use initial_shot_length=30 so cursor placement matches the
+        # 30-frame contract this test asserts (resolve_duration uses
+        # initial_shot_length, not the mocked compute_duration).
+        actions = self.assembler.update(self.steps, initial_shot_length=30)
 
         self.assertEqual(actions["A01"], "created")
         self.assertEqual(actions["A02"], "created")
@@ -194,7 +198,12 @@ class TestUpdateWithRanges(unittest.TestCase):
             "A02": (250.0, 350.0),
             "A03": (400.0, 500.0),
         }
-        actions = self.assembler.update(self.steps, ranges=ranges)
+        # initial_shot_length=100 so resolve_duration uses 100, matching
+        # the user-supplied range widths (extend_only floor would otherwise
+        # stretch each shot to 200f and ignore the upper bound).
+        actions = self.assembler.update(
+            self.steps, ranges=ranges, initial_shot_length=100
+        )
 
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 100.0)
@@ -234,7 +243,10 @@ class TestUpdateWithRanges(unittest.TestCase):
         """Steps without explicit ranges should use cursor placement."""
         mock_dur.return_value = 30.0
         ranges = {"A01": (100.0, 200.0)}  # only A01 has a range
-        actions = self.assembler.update(self.steps, ranges=ranges)
+        # initial_shot_length=30 so cursor-placed shots have 30-frame durations.
+        actions = self.assembler.update(
+            self.steps, ranges=ranges, initial_shot_length=30
+        )
 
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 100.0)
@@ -557,7 +569,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
             if isinstance(step_data, BuilderStep) and step_data.step_id == "A01":
                 bg = item.background(COL_START)
                 self.assertEqual(
-                    bg.color().name(),
+                    bg.color(),
                     "#3d2828",
                     "Collision cell should have rose background",
                 )
@@ -1068,10 +1080,11 @@ class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
 
         # Ensure pymel.core mock has undoInfo (may be lost when
         # test_sequencer.py runs first and clobbers sys.modules)
-        import pymel.core as pm
+        import maya.cmds as _cmds
 
-        if not hasattr(pm, "undoInfo") or not callable(pm.undoInfo):
-            pm.undoInfo = MagicMock()
+        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
+
+            _cmds.undoInfo = MagicMock()
 
         self.ctrl.build()
 
@@ -1206,10 +1219,11 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_manifest_cls.return_value = mock_builder
 
-        import pymel.core as pm
+        import maya.cmds as _cmds
 
-        if not hasattr(pm, "undoInfo") or not callable(pm.undoInfo):
-            pm.undoInfo = MagicMock()
+        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
+
+            _cmds.undoInfo = MagicMock()
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1246,10 +1260,11 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_manifest_cls.return_value = mock_builder
 
-        import pymel.core as pm
+        import maya.cmds as _cmds
 
-        if not hasattr(pm, "undoInfo") or not callable(pm.undoInfo):
-            pm.undoInfo = MagicMock()
+        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
+
+            _cmds.undoInfo = MagicMock()
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1310,10 +1325,11 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         )
         mock_manifest_cls.return_value = mock_builder
 
-        import pymel.core as pm
+        import maya.cmds as _cmds
 
-        if not hasattr(pm, "undoInfo") or not callable(pm.undoInfo):
-            pm.undoInfo = MagicMock()
+        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
+
+            _cmds.undoInfo = MagicMock()
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1646,10 +1662,7 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-
-        import pymel.core as pm
-
-        pm.undoInfo = MagicMock()
+        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
 
         self.ctrl.build()
 
@@ -1708,10 +1721,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-
-        import pymel.core as pm
-
-        pm.undoInfo = MagicMock()
+        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
 
         with patch(
             "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
@@ -1974,10 +1984,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-
-        import pymel.core as pm
-
-        pm.undoInfo = MagicMock()
+        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
 
         # CSV order: A01, A02, B01(new), A03
         self.ctrl._steps = _make_steps("A01", "A02", "B01", "A03")
@@ -1997,10 +2004,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-
-        import pymel.core as pm
-
-        pm.undoInfo = MagicMock()
+        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
 
         # CSV order: A01, B01(new), B02(new), A02, A03
         self.ctrl._steps = _make_steps("A01", "B01", "B02", "A02", "A03")
@@ -2020,10 +2024,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-
-        import pymel.core as pm
-
-        pm.undoInfo = MagicMock()
+        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
 
         # CSV order: B01(new), A01, A02, A03
         self.ctrl._steps = _make_steps("B01", "A01", "A02", "A03")
@@ -2479,17 +2480,42 @@ class TestStoreAssess(unittest.TestCase):
         shot = self.store.shots[0]
         self.assertEqual(result[shot.shot_id], "valid")
 
+    def _patch_cmds_ls(self, return_value):
+        """Patch ``cmds.ls`` on the *real* maya.cmds module.
+
+        ``import maya.cmds as cmds`` rebinds via the maya module's .cmds
+        attribute (not via sys.modules), so when conftest replaces
+        sys.modules['maya.cmds'] with a MagicMock, production code still
+        gets the real cmds. We patch the real module directly so the
+        production-side import sees the mocked ``ls``.
+
+        Routes only the object-existence calls (``cmds.ls([objs],
+        long=True)``) used by ``ShotStore.assess``; defers anything else
+        to the real cmds.ls so unrelated scene queries (animCurves, etc.)
+        keep working.
+        """
+        import maya
+        real_cmds = maya.cmds
+        original_ls = real_cmds.ls
+
+        def smart_ls(*args, **kwargs):
+            if args and isinstance(args[0], list) and kwargs.get("long") is True:
+                return return_value
+            return original_ls(*args, **kwargs)
+
+        return patch.object(real_cmds, "ls", side_effect=smart_ls)
+
     def test_all_objects_exist(self):
         self.store.define_shot("A01", 1, 30, ["|obj_a", "|obj_b"])
-        _mock_cmds.ls.return_value = ["|obj_a", "|obj_b"]
-        result = self.store.assess()
+        with self._patch_cmds_ls(["|obj_a", "|obj_b"]):
+            result = self.store.assess()
         shot = self.store.shots[0]
         self.assertEqual(result[shot.shot_id], "valid")
 
     def test_missing_object(self):
         self.store.define_shot("A01", 1, 30, ["|obj_a", "|obj_b"])
-        _mock_cmds.ls.return_value = ["|obj_a"]  # only 1 of 2
-        result = self.store.assess()
+        with self._patch_cmds_ls(["|obj_a"]):  # only 1 of 2
+            result = self.store.assess()
         shot = self.store.shots[0]
         self.assertEqual(result[shot.shot_id], "missing_object")
 
@@ -3301,25 +3327,52 @@ class TestAssessAudioStatus(unittest.TestCase):
         return_value=30,
     )
     def test_default_audio_exists_fn(self, mock_dur):
-        """Default audio_exists_fn delegates to cmds.ls(name, type='audio')."""
+        """Default audio_exists_fn delegates to cmds.ls(name, type='audio').
+
+        Patches ``_default_audio_exists`` directly so the assertion exercises
+        the default audio-exists code path (calling ``cmds.ls(name,
+        type='audio')``) without needing to mock cmds globally — global
+        cmds patches break unrelated scene-discovery calls.
+        """
         steps = [self._make_step_with_audio()]
         builder = ShotManifest(self.store)
         builder.update(steps)
 
-        _mock_cmds.ls.return_value = ["narration_A01"]
-        try:
+        import maya
+        real_cmds = maya.cmds
+
+        captured_calls = []
+
+        original_ls = real_cmds.ls
+
+        def smart_ls(*args, **kwargs):
+            # Intercept only the audio-existence query; defer everything
+            # else to the real cmds.ls so scene discovery still works.
+            if (
+                len(args) == 1
+                and args[0] == "narration_A01"
+                and kwargs.get("type") == "audio"
+            ):
+                captured_calls.append((args, kwargs))
+                return ["narration_A01"]
+            return original_ls(*args, **kwargs)
+
+        with patch(
+            "mayatk.anim_utils.shots.shot_manifest._shot_manifest.AudioUtils.has_track",
+            return_value=False,
+        ), patch.object(real_cmds, "ls", side_effect=smart_ls):
             results = builder.assess(
                 steps,
                 exists_fn=lambda n: True,
-                # audio_exists_fn intentionally omitted â€” exercises default
+                # audio_exists_fn intentionally omitted — exercises default
             )
-            audio_st = self._find_audio_status(results[0])
-            self.assertIsNotNone(audio_st)
-            self.assertTrue(audio_st.exists)
-            _mock_cmds.ls.assert_any_call("narration_A01", type="audio")
-        finally:
-            _mock_cmds.ls.reset_mock()
-            _mock_cmds.ls.return_value = []
+        audio_st = self._find_audio_status(results[0])
+        self.assertIsNotNone(audio_st)
+        self.assertTrue(audio_st.exists)
+        self.assertTrue(
+            captured_calls,
+            "cmds.ls('narration_A01', type='audio') was not called",
+        )
 
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
@@ -3410,7 +3463,8 @@ class TestSetClipBehavior(unittest.TestCase):
             return_value=True,
         ) as mock_v:
             result = verify_behavior("node", "set_clip", 1, 30)
-        mock_v.assert_called_once_with("node", 1)
+        # _verify_audio_clip takes the full (obj, start, end) tuple.
+        mock_v.assert_called_once_with("node", 1, 30)
         self.assertTrue(result)
 
     def test_verify_returns_false_when_clip_missing(self):
@@ -3485,7 +3539,10 @@ class TestSetClipBehavior(unittest.TestCase):
             "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
         ) as mock_apply:
             apply_behavior("my_node", "set_clip", 1, 30, source_path="/audio/clip.wav")
-        mock_apply.assert_called_once_with("my_node", 1, source_path="/audio/clip.wav")
+        # apply_audio_clip now requires both start AND end.
+        mock_apply.assert_called_once_with(
+            "my_node", 1, 30, source_path="/audio/clip.wav"
+        )
 
     def test_apply_behavior_defaults_empty_source_path(self):
         """apply_behavior passes empty source_path by default."""
@@ -3495,7 +3552,9 @@ class TestSetClipBehavior(unittest.TestCase):
             "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
         ) as mock_apply:
             apply_behavior("my_node", "set_clip", 1, 30)
-        mock_apply.assert_called_once_with("my_node", 1, source_path="")
+        # apply_audio_clip now requires both start AND end (end is the
+        # upper bound for the off-key).
+        mock_apply.assert_called_once_with("my_node", 1, 30, source_path="")
 
     def test_apply_audio_clip_warns_when_no_node_no_source(self):
         """apply_audio_clip logs warning when node missing and no source_path."""
@@ -3508,7 +3567,8 @@ class TestSetClipBehavior(unittest.TestCase):
             "mayatk.anim_utils.shots.shot_manifest.behaviors",
             level="WARNING",
         ) as cm:
-            apply_audio_clip("missing_node", 10.0)
+            # apply_audio_clip now requires both start and end.
+            apply_audio_clip("missing_node", 10.0, 40.0)
         self.assertTrue(any("missing_node" in m for m in cm.output))
 
     def tearDown(self):

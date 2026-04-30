@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import pymel.core as pm
 from base_test import MayaTkTestCase
 from tentacle.slots.maya.editors import Editors
+import maya.cmds as cmds
 
 
 class TestTentacleEditors(MayaTkTestCase):
@@ -12,81 +12,54 @@ class TestTentacleEditors(MayaTkTestCase):
         # Mock the loaded_ui.editors attribute access
         self.mock_switchboard.loaded_ui = MagicMock()
         self.mock_switchboard.loaded_ui.editors = MagicMock()
+        # Avoid QShortcut construction during slot init: a falsy sequence
+        # makes _update_repeat_last_shortcut return before reaching Qt.
+        self.mock_switchboard.configurable.repeat_last_shortcut.get.return_value = ""
 
         self.editors = Editors(self.mock_switchboard)
 
     def test_b009_time_range_toggle(self):
-        """Test b009 toggles Time and Range sliders intelligently."""
+        """Test b009 toggles Time and Range sliders intelligently.
 
-        # Helper to set visibility state
-        def set_visibility(time_vis, range_vis):
-            # We mock pm.mel.isUIComponentVisible to return specific values
-            # However, since we might be running in real Maya, let's try to mock the specific call
-            # But pm.mel is dynamic.
-            pass
+        Production code uses ``mel.eval('isUIComponentVisible "X"')`` to query
+        visibility and ``mel.eval('ToggleTimeSlider')`` / ``mel.eval('ToggleRangeSlider')``
+        to toggle. We patch ``mel.eval`` and inspect the strings it received.
+        """
+        with patch("tentacle.slots.maya.editors.mel") as mock_mel:
+            def make_eval(time_vis, range_vis, calls):
+                def _eval(cmd):
+                    calls.append(cmd)
+                    if cmd == 'isUIComponentVisible "Time Slider"':
+                        return time_vis
+                    if cmd == 'isUIComponentVisible "Range Slider"':
+                        return range_vis
+                    return None
+                return _eval
 
-        # Since we are in a Maya environment, we can't easily mock pm.mel attributes directly
-        # if we are doing integration tests.
-        # But for this specific logic, we want to unit test the logic flow.
-
-        # We can patch 'pymel.core.mel.isUIComponentVisible' and 'pymel.core.mel.ToggleTimeSlider' etc.
-        # But given pymel.core.mel is a wrapper, we might need to patch the Mel class or the call.
-
-        # Let's rely on standard unittest.mock on the module level if possible,
-        # or just mock the pymel.core used in editors.py
-
-        with patch("tentacle.slots.maya.editors.pm.mel") as mock_mel:
             # Case 1: Both Hidden -> Toggle Both ON
-            mock_mel.isUIComponentVisible.side_effect = lambda x: False
-
+            calls = []
+            mock_mel.eval.side_effect = make_eval(False, False, calls)
             self.editors.b009()
-
-            # Verify toggles called
-            self.assertTrue(mock_mel.ToggleTimeSlider.called)
-            self.assertTrue(mock_mel.ToggleRangeSlider.called)
-
-            mock_mel.reset_mock()
+            self.assertIn("ToggleTimeSlider", calls)
+            self.assertIn("ToggleRangeSlider", calls)
 
             # Case 2: Both Visible -> Toggle Both OFF
-            mock_mel.isUIComponentVisible.side_effect = lambda x: True
-
+            calls = []
+            mock_mel.eval.side_effect = make_eval(True, True, calls)
             self.editors.b009()
+            self.assertIn("ToggleTimeSlider", calls)
+            self.assertIn("ToggleRangeSlider", calls)
 
-            self.assertTrue(mock_mel.ToggleTimeSlider.called)
-            self.assertTrue(mock_mel.ToggleRangeSlider.called)
-
-            mock_mel.reset_mock()
-
-            # Case 3: Time Visible, Range Hidden -> Toggle Time OFF (Hide All)
-            def side_effect(arg):
-                if arg == "Time Slider":
-                    return True
-                if arg == "Range Slider":
-                    return False
-                return False
-
-            mock_mel.isUIComponentVisible.side_effect = side_effect
-
+            # Case 3: Time Visible, Range Hidden -> Toggle Time OFF
+            calls = []
+            mock_mel.eval.side_effect = make_eval(True, False, calls)
             self.editors.b009()
+            self.assertIn("ToggleTimeSlider", calls)
+            self.assertNotIn("ToggleRangeSlider", calls)
 
-            self.assertTrue(mock_mel.ToggleTimeSlider.called)
-            self.assertFalse(
-                mock_mel.ToggleRangeSlider.called
-            )  # Should NOT toggle range (which would turn it ON)
-
-            mock_mel.reset_mock()
-
-            # Case 4: Time Hidden, Range Visible -> Toggle Range OFF (Hide All)
-            def side_effect(arg):
-                if arg == "Time Slider":
-                    return False
-                if arg == "Range Slider":
-                    return True
-                return False
-
-            mock_mel.isUIComponentVisible.side_effect = side_effect
-
+            # Case 4: Time Hidden, Range Visible -> Toggle Range OFF
+            calls = []
+            mock_mel.eval.side_effect = make_eval(False, True, calls)
             self.editors.b009()
-
-            self.assertFalse(mock_mel.ToggleTimeSlider.called)
-            self.assertTrue(mock_mel.ToggleRangeSlider.called)
+            self.assertNotIn("ToggleTimeSlider", calls)
+            self.assertIn("ToggleRangeSlider", calls)

@@ -1,4 +1,3 @@
-import pymel.core as pm
 import maya.cmds as cmds
 import math
 
@@ -22,12 +21,12 @@ class TestPivotTransferScenarios(MayaTkTestCase):
         # If we use matchTransform, we expect the axes of the manip handle to match.
 
         # We can create a temporary locator, match it to the pivot, and get its matrix?
-        loc = pm.spaceLocator()
-        pm.matchTransform(loc, obj, piv=True, pos=True, rot=True)
+        loc = cmds.spaceLocator()[0]
+        cmds.matchTransform(loc, obj, piv=True, pos=True, rot=True)
         # Note: If obj has rotateAxis, matchTransform -piv includes that in the rotation of the locator?
         # Let's verify.
-        mat = pm.xform(loc, q=True, ws=True, matrix=True)
-        pm.delete(loc)
+        mat = cmds.xform(loc, q=True, ws=True, matrix=True)
+        cmds.delete(loc)
         return mat
 
     def _assert_matrices_close(self, mat1, mat2):
@@ -38,10 +37,10 @@ class TestPivotTransferScenarios(MayaTkTestCase):
     def test_transfer_from_rotated_source(self):
         """Source is rotated. Target is identity."""
         print("\n--- test_transfer_from_rotated_source ---")
-        s = pm.polyCube(n="source")[0]
-        t = pm.polyCube(n="target")[0]
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
 
-        pm.rotate(s, 45, 45, 0)
+        cmds.rotate(45, 45, 0, s)
 
         # Transfer
         XformUtils.transfer_pivot([s, t], rotate=True, world_space=True)
@@ -54,14 +53,14 @@ class TestPivotTransferScenarios(MayaTkTestCase):
     def test_transfer_to_frozen_target(self):
         """Source is rotated. Target is frozen (geometry rotated, transform identity)."""
         print("\n--- test_transfer_to_frozen_target ---")
-        s = pm.polyCube(n="source")[0]
-        t = pm.polyCube(n="target")[0]
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
 
-        pm.rotate(s, 45, 0, 0)
+        cmds.rotate(45, 0, 0, s)
 
         # Rotate and freeze target
-        pm.rotate(t, 0, 90, 0)
-        pm.makeIdentity(t, apply=True, r=True)
+        cmds.rotate(0, 90, 0, t)
+        cmds.makeIdentity(t, apply=True, r=True)
 
         # Transfer
         XformUtils.transfer_pivot([s, t], rotate=True, world_space=True)
@@ -73,17 +72,17 @@ class TestPivotTransferScenarios(MayaTkTestCase):
     def test_transfer_from_frozen_with_edited_pivot(self):
         """Source is frozen but has modified pivot (rotateAxis). Target is identity."""
         print("\n--- test_transfer_from_frozen_with_edited_pivot ---")
-        s = pm.polyCube(n="source")[0]
-        t = pm.polyCube(n="target")[0]
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
 
         # Rotate source and freeze
-        pm.rotate(s, 0, 45, 0)
-        pm.makeIdentity(s, apply=True, r=True)
+        cmds.rotate(0, 45, 0, s)
+        cmds.makeIdentity(s, apply=True, r=True)
         # Pivot is now 0,0,0 (World aligned). Object appears rotated.
 
         # Manually edit source pivot to align with 'something' (e.g. 45 deg)
         # We can set rotateAxis
-        pm.xform(s, ra=[0, 45, 0])
+        cmds.xform(s, ra=[0, 45, 0])
         # Now source pivot is rotated 45 deg, but transform rotate is 0.
 
         # Transfer to target
@@ -96,21 +95,21 @@ class TestPivotTransferScenarios(MayaTkTestCase):
     def test_transfer_preserve_target_pos(self):
         """Ensure transfer pivot (Rotation only) doesn't move Pivot Position if translate=False."""
         print("\n--- test_transfer_preserve_target_pos ---")
-        s = pm.polyCube(n="source")[0]
-        t = pm.polyCube(n="target")[0]
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
 
-        pm.move(s, 10, 0, 0)
-        pm.rotate(s, 0, 45, 0)
+        cmds.move(10, 0, 0, s)
+        cmds.rotate(0, 45, 0, s)
 
-        pm.move(t, -10, 0, 0)
+        cmds.move(-10, 0, 0, t)
 
-        orig_pos = pm.xform(t, q=True, ws=True, rp=True)
+        orig_pos = cmds.xform(t, q=True, ws=True, rp=True)
 
         XformUtils.transfer_pivot(
             [s, t], rotate=True, translate=False, world_space=True
         )
 
-        new_pos = pm.xform(t, q=True, ws=True, rp=True)
+        new_pos = cmds.xform(t, q=True, ws=True, rp=True)
 
         # Orientation should match
         m1 = self._get_pivot_matrix(s)

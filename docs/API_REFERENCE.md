@@ -51,9 +51,9 @@ Places a function's operations into Maya's undo queue as a single chunk.
 def batch_operation():
     """All operations will be grouped in Maya's undo queue"""
     # Multiple Maya operations here
-    pm.polyCube()
-    pm.polySphere()
-    pm.polyCylinder()
+    cmds.polyCube()
+    cmds.polySphere()
+    cmds.polyCylinder()
 ```
 
 ### Core Functions
@@ -82,7 +82,7 @@ center_size = mtk.get_bounding_box("pCube1", "centroid|size")
 Check if a node is a group (transform with no shape children).
 
 **Parameters:**
-- `node` (str|PyNode): Node to check
+- `node` (str): Node to check
 
 **Returns:**
 - bool: True if node is a group, False otherwise
@@ -196,7 +196,7 @@ Create a new Maya node.
 - `**kwargs`: Additional node creation parameters
 
 **Returns:**
-- PyNode: Created node
+- str: Created node name
 
 ```python
 # Create a transform node
@@ -210,7 +210,7 @@ material = mtk.create_node("lambert", name="myMaterial")
 Get node connections.
 
 **Parameters:**
-- `node` (str|PyNode): Node to query
+- `node` (str): Node to query
 - `incoming` (bool): Include incoming connections
 - `outgoing` (bool): Include outgoing connections
 
@@ -227,7 +227,7 @@ connections = mtk.get_connections("pCube1", incoming=True, outgoing=True)
 Set multiple attributes on a node.
 
 **Parameters:**
-- `node` (str|PyNode): Target node
+- `node` (str): Target node
 - `attributes` (dict): Attribute name/value pairs
 
 ```python
@@ -242,7 +242,7 @@ mtk.set_attributes("pCube1", {
 Get multiple attribute values from a node.
 
 **Parameters:**
-- `node` (str|PyNode): Source node
+- `node` (str): Source node
 - `attributes` (list): List of attribute names
 
 **Returns:**
@@ -291,7 +291,7 @@ Align objects to each other or a target.
 
 **Parameters:**
 - `objects` (list): Objects to align
-- `target` (str|PyNode, optional): Target object for alignment
+- `target` (str, optional): Target object for alignment
 - `axis` (str): Alignment axis
 - `mode` (str): Alignment mode ('min', 'max', 'center')
 
@@ -512,7 +512,7 @@ Create a new material.
 - `name` (str, optional): Material name
 
 **Returns:**
-- PyNode: Created material
+- str: Created material name
 
 ```python
 material = mtk.create_material("blinn", name="myBlinn")
@@ -522,7 +522,7 @@ material = mtk.create_material("blinn", name="myBlinn")
 Assign material to objects.
 
 **Parameters:**
-- `material` (str|PyNode): Material to assign
+- `material` (str): Material to assign
 - `objects` (str|list): Objects to assign material to
 
 ```python

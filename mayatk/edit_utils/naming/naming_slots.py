@@ -1,9 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
 try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except ImportError:
+    cmds = None
+
 import pythontk as ptk
 from uitk import Signals
 from uitk.widgets.mixins.tooltip_mixin import fmt
@@ -118,16 +120,16 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         text = widget.text()
         if text:
             # First deselect all to avoid issues with the outliner
-            pm.select(clear=True)
+            cmds.select(clear=True)
             # Filter objects based on locators_only option
             if locators_only:
-                objects = pm.ls(type="locator")
+                objects = cmds.ls(type="locator")
                 # Get the transform nodes for the locator shapes
-                objects = [obj.getParent() for obj in objects if obj.getParent()]
+                objects = [(cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[0] for obj in objects if (cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[0]]
             else:
-                objects = pm.ls()
+                objects = cmds.ls()
 
-            obj_names = [obj.shortName().split("|")[-1] for obj in objects]
+            obj_names = [obj.split("|")[-1].split("|")[-1] for obj in objects]
             found_names = ptk.find_str(
                 text, obj_names, regex=regex, ignore_case=ign_case
             )
@@ -135,16 +137,16 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             found_objects = [
                 obj for obj, name in zip(objects, obj_names) if name in found_names
             ]
-            pm.select(found_objects)
+            cmds.select(found_objects)
 
             # Print user-friendly result
             object_type = "locators" if locators_only else "objects"
             if found_objects:
-                pm.displayInfo(
+                om.MGlobal.displayInfo(
                     f"Found and selected {len(found_objects)} {object_type} matching '{text}'"
                 )
             else:
-                pm.warning(f"No {object_type} found matching '{text}'")
+                cmds.warning(f"No {object_type} found matching '{text}'")
 
     def txt001_init(self, widget):
         """Initialize Rename"""
@@ -185,9 +187,9 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         valid_suffixes = self.valid_suffixes if retain_suffix else None
 
         use_all = self.ui.header.menu.cmb_scope.currentText() == "All Objects"
-        selection = pm.selected() if not use_all else pm.ls()
+        selection = cmds.ls(selection=True) or [] if not use_all else cmds.ls()
         if not selection:
-            pm.warning(
+            cmds.warning(
                 "Nothing selected. Set Scope to 'All Objects' in the header menu to operate on the entire scene."
             )
             return
@@ -208,7 +210,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         # Print user-friendly result
         filter_info = f" matching '{find}'" if find and not ignore_find else ""
         suffix_info = " (with suffix retention)" if retain_suffix else ""
-        pm.displayInfo(
+        om.MGlobal.displayInfo(
             f"Renamed {object_count} object(s){filter_info} to pattern '{to}'{suffix_info}"
         )
 
@@ -227,9 +229,9 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         case = widget.option_box.menu.cmb001.currentText()
 
         use_all = self.ui.header.menu.cmb_scope.currentText() == "All Objects"
-        objects = pm.ls(objectsOnly=1) if use_all else pm.ls(sl=1)
+        objects = cmds.ls(objectsOnly=1) if use_all else cmds.ls(sl=1)
         if not objects:
-            pm.warning(
+            cmds.warning(
                 "Nothing selected. Set Scope to 'All Objects' in the header menu to operate on the entire scene."
             )
             return
@@ -290,7 +292,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         except AttributeError:
             independent_groups = False
 
-        selection = pm.ls(sl=True, objectsOnly=True, type="transform")
+        selection = cmds.ls(sl=True, objectsOnly=True, type="transform")
         self.append_location_based_suffix(
             selection,
             first_obj_as_ref=first_obj_as_ref,
@@ -322,7 +324,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def tb002(self, widget):
         """Strip Chars"""
-        sel = pm.selected()
+        sel = cmds.ls(selection=True) or []
         kwargs = {
             "num_chars": widget.option_box.menu.s000.value(),
             "trailing": widget.option_box.menu.chk005.isChecked(),
@@ -416,7 +418,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def tb003(self, widget):
         """Suffix By Type"""
-        objects = pm.ls(sl=True, objectsOnly=True)
+        objects = cmds.ls(sl=True, objectsOnly=True)
 
         kwargs = {
             "group_suffix": widget.option_box.menu.tb003_txt000.text(),

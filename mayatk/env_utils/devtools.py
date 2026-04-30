@@ -64,7 +64,7 @@ class DevTools(CoreUtils):
         """Find the file path of a Python module or object.
 
         Parameters:
-            name (str): The name of the module or object (e.g. 'os', 'pymel.core.selected').
+            name (str): The name of the module or object (e.g. 'os', 'os.path.join').
 
         Returns:
             (str|None): The absolute path to the file if found, else None.
@@ -389,7 +389,7 @@ class DevTools(CoreUtils):
         except ImportError:
             pass
 
-        # Python qualified name  (e.g. pymel.core.selected)
+        # Python qualified name  (e.g. os.path.join)
         parts = name.rsplit(".", 1)
         if len(parts) == 2:
             try:

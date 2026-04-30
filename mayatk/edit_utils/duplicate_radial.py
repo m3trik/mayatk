@@ -1,15 +1,19 @@
 # !/usr/bin/python
 # coding=utf-8
+from __future__ import annotations
+
 import re
 from typing import List, Dict, Tuple, Union
 import pythontk as ptk
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 # from this package:
 from mayatk.core_utils.preview import Preview
+from mayatk.core_utils._core_utils import short_name
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk import DisplayUtils
 from mayatk import XformUtils
 from mayatk.edit_utils.naming._naming import Naming
@@ -19,7 +23,7 @@ class DuplicateRadial(ptk.LoggingMixin):
 
     @staticmethod
     def duplicate_radial(
-        objects: List["pm.PyNode"],
+        objects: List[str],
         num_copies: int,
         start_angle: float = 0,
         end_angle: float = 360,
@@ -35,11 +39,11 @@ class DuplicateRadial(ptk.LoggingMixin):
         instance: bool = False,
         combine: bool = False,
         suffix: bool = True,
-    ) -> Dict["pm.PyNode", List["pm.PyNode"]]:
+    ) -> Dict[str, List[str]]:
         """Duplicate objects in a radial pattern.
 
         Parameters:
-            objects (List[pm.PyNode]): List of objects to duplicate.
+            objects (List[str]): List of objects to duplicate.
             num_copies (int): Number of copies to create.
             start_angle (float): Starting angle for duplication.
             end_angle (float): Ending angle for duplication.
@@ -57,7 +61,7 @@ class DuplicateRadial(ptk.LoggingMixin):
             suffix (bool): Whether to add a suffix to the duplicated objects.
 
         Returns:
-            Dict[pm.PyNode, List[pm.PyNode]]: Mapping of original objects to their duplicates.
+            Dict[str, List[str]]: Mapping of original objects to their duplicates.
 
         Raises:
             ValueError: If invalid parameters are provided.
@@ -86,7 +90,7 @@ class DuplicateRadial(ptk.LoggingMixin):
                 instance,
             )
 
-            pm.delete(driven_group)
+            cmds.delete(driven_group)
             DuplicateRadial._cleanup_original(node, keep_original)
 
             finalized = DuplicateRadial._finalize_output(
@@ -108,55 +112,55 @@ class DuplicateRadial(ptk.LoggingMixin):
     @classmethod
     def _finalize_output(
         cls,
-        node: "pm.PyNode",
-        copies: List["pm.PyNode"],
+        node: str,
+        copies: List[str],
         keep_original: bool,
         combine: bool,
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         if combine:
-            combined = pm.polyUnite(copies, ch=False, mergeUVSets=True)[0]
-            combined = pm.rename(combined, f"{node}_radialCombined")
-            pm.delete(
-                pm.listRelatives(
-                    combined, shapes=True, noIntermediate=True, type="transform"
-                )
+            combined = cmds.polyUnite(copies, ch=False, mergeUVSets=True)[0]
+            combined = cmds.rename(combined, f"{node}_radialCombined")
+            transforms_under = cmds.listRelatives(
+                combined, shapes=True, noIntermediate=True, type="transform"
             )
+            if transforms_under:
+                cmds.delete(transforms_under)
             cls.logger.debug(f"Combined all instances into: {combined}")
             return [combined]
 
         clean_copies = []
         for copy in copies:
-            parent = pm.listRelatives(copy, parent=True, fullPath=True)
+            parent = cmds.listRelatives(copy, parent=True, fullPath=True)
             if parent:
-                pm.parent(copy, world=True)
+                copy = cmds.parent(copy, world=True)[0]
                 if not keep_original:
-                    pm.delete(parent[0])
+                    cmds.delete(parent[0])
             clean_copies.append(copy)
 
         group_name = f"{node}_radialGroup"
-        container_group = pm.group(clean_copies, name=group_name)
+        container_group = cmds.group(clean_copies, name=group_name)
         cls.logger.debug(f"Grouped all instances under: {container_group}")
 
         return clean_copies
 
     @classmethod
-    def _cleanup_original(cls, node: pm.PyNode, keep_original: bool) -> None:
+    def _cleanup_original(cls, node: str, keep_original: bool) -> None:
         if not keep_original:
             cls.logger.debug(f"Deleting original node: {node}")
-            pm.delete(node)
+            cmds.delete(node)
 
     @classmethod
     def _prepare_driven_group(
         cls,
-        node: "pm.PyNode",
+        node: str,
         rotate: Tuple[float, float, float],
         scale: Tuple[float, float, float],
         translate: Tuple[float, float, float],
         offset: Tuple[float, float, float],
         pivot: Union[str, Tuple[float, float, float]],
         instance: bool = False,
-    ) -> Tuple["pm.PyNode", "pm.PyNode", Tuple[float, float, float]]:
-        driven_node = pm.duplicate(node, rr=True, instanceLeaf=instance)[0]
+    ) -> Tuple[str, str, Tuple[float, float, float]]:
+        driven_node = cmds.duplicate(node, rr=True, instanceLeaf=instance)[0]
         cls.logger.debug(f"[{node}] Duplicated original → driven node: {driven_node}")
 
         cls._apply_initial_transformations(driven_node, rotate, scale, translate)
@@ -164,14 +168,14 @@ class DuplicateRadial(ptk.LoggingMixin):
         pivot_pos = XformUtils.get_operation_axis_pos(driven_node, pivot)
         cls.logger.debug(f"[{driven_node}] Rotation pivot (world-space): {pivot_pos}")
 
-        group_node = pm.group(em=True)
-        pm.xform(group_node, ws=True, t=(0, 0, 0))
+        group_node = cmds.group(em=True)
+        cmds.xform(group_node, ws=True, t=(0, 0, 0))
 
         pivot_offset_pos = [pivot_pos[i] + offset[i] for i in range(3)]
         cls.logger.debug(f"Setting rotate and scale pivot to: {pivot_offset_pos}")
-        pm.xform(group_node, ws=True, rp=pivot_offset_pos, sp=pivot_offset_pos)
+        cmds.xform(group_node, ws=True, rp=pivot_offset_pos, sp=pivot_offset_pos)
 
-        pm.parent(driven_node, group_node)
+        driven_node = cmds.parent(driven_node, group_node)[0]
         cls.logger.debug(f"[{driven_node}] Wrapped in group: {group_node}")
 
         return group_node, driven_node, pivot_pos
@@ -188,69 +192,24 @@ class DuplicateRadial(ptk.LoggingMixin):
             raise ValueError("weight_curve must be between 0.0 and 1.0")
 
     @classmethod
-    def _calculate_final_pivot_matrix(
-        cls,
-        manip_pivot_matrix: "pm.datatypes.Matrix",
-        offset: Tuple[float, float, float],
-    ) -> "pm.datatypes.Matrix":
-        offset_matrix = pm.datatypes.TransformationMatrix()
-        offset_matrix.translate = pm.datatypes.Vector(offset)
-        final_pivot_matrix = manip_pivot_matrix * offset_matrix.asMatrix()
-        cls.logger.debug(f"Offset matrix: {offset_matrix}")
-        return final_pivot_matrix
-
-    @classmethod
     def _apply_initial_transformations(
         cls,
-        node: "pm.PyNode",
+        node: str,
         rotate: Tuple[float, float, float],
         scale: Tuple[float, float, float],
         translate: Tuple[float, float, float],
     ) -> None:
         cls.logger.debug(f"Applying initial rotation to {node}: {rotate}")
-        pm.rotate(node, rotate, r=True)
+        cmds.rotate(rotate[0], rotate[1], rotate[2], node, r=True)
         cls.logger.debug(f"Applying scale to {node}: {scale}")
-        pm.scale(node, scale, relative=True)
+        cmds.scale(scale[0], scale[1], scale[2], node, relative=True)
         cls.logger.debug(f"Applying translation to {node}: {translate}")
-        pm.move(node, translate, relative=True)
-
-    @classmethod
-    def _create_group_node(cls, node: "pm.PyNode") -> "pm.PyNode":
-        # Check the parent of the node
-        parent_node = node.getParent()
-
-        # Debug statement to show parent info
-        cls.logger.debug(f"Parent node for {node}: {parent_node}")
-
-        # Create a group node for the given object
-        group_node = pm.group(node, absolute=True)
-
-        # If the group node's parent is itself, skip parenting
-        if group_node == parent_node:
-            cls.logger.debug(
-                f"{group_node} is already correctly parented, no action needed."
-            )
-        else:
-            # Ensure parent_node is not None and group_node is not already under the parent_node
-            if parent_node:
-                try:
-                    pm.parent(group_node, parent_node)
-                    cls.logger.debug(f"Parenting {group_node} under {parent_node}")
-                except Exception as e:
-                    cls.logger.debug(
-                        f"Failed to parent {group_node} under {parent_node}: {e}"
-                    )
-            else:
-                cls.logger.debug(
-                    f"{node} has no valid parent node, skipping parenting operation."
-                )
-
-        return group_node
+        cmds.move(translate[0], translate[1], translate[2], node, relative=True)
 
     @classmethod
     def _create_and_transform_instances(
         cls,
-        group_node: "pm.PyNode",
+        group_node: str,
         num_copies: int,
         rotate_axis: str,
         start_angle: float,
@@ -258,8 +217,8 @@ class DuplicateRadial(ptk.LoggingMixin):
         translate: Tuple[float, float, float],
         weight_bias: float,
         weight_curve: float,
-        instance: bool,  # <-- add this parameter
-    ) -> List["pm.PyNode"]:
+        instance: bool,
+    ) -> List[str]:
         rotation_index = {"x": 0, "y": 1, "z": 2}[rotate_axis]
         total_rotation = end_angle - start_angle
         weight_factor = 2 * abs(weight_bias - 0.5)
@@ -267,10 +226,11 @@ class DuplicateRadial(ptk.LoggingMixin):
 
         for i in range(num_copies):
             if instance:
-                copy_group = pm.instance(group_node, leaf=True)[0]
+                copy_group = cmds.instance(group_node, leaf=True)[0]
             else:
-                copy_group = pm.duplicate(group_node, rr=True)[0]
-            copy = copy_group.getChildren()[0]
+                copy_group = cmds.duplicate(group_node, rr=True)[0]
+            children = cmds.listRelatives(copy_group, children=True, fullPath=True) or []
+            copy = children[0]
             copies.append(copy)
             cls.logger.debug(
                 f"Creating {'instance' if instance else 'duplicate'} {i}: {copy}"
@@ -288,11 +248,19 @@ class DuplicateRadial(ptk.LoggingMixin):
             current_rotation[rotation_index] = start_angle + total_rotation * f_x
             cls.logger.debug(f"Rotation factor for instance {i}: {f_x}")
             cls.logger.debug(f"Applying rotation to instance {i}: {current_rotation}")
-            pm.rotate(copy_group, current_rotation, r=True, os=True, fo=True)
+            cmds.rotate(
+                current_rotation[0],
+                current_rotation[1],
+                current_rotation[2],
+                copy_group,
+                r=True,
+                os=True,
+                fo=True,
+            )
 
             t = [translate[j] * f_x for j in range(3)]
             cls.logger.debug(f"Applying translation to instance {i}: {t}")
-            pm.move(copy_group, t)
+            cmds.move(t[0], t[1], t[2], copy_group)
             DisplayUtils.add_to_isolation_set(copy)
             cls.logger.debug(
                 f"{'Instance' if instance else 'Duplicate'} {i} added to isolation set: {copy}"
@@ -399,32 +367,33 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
 
     def regroup_copies(self):
         """Regroup the instances under their original parent group."""
-        pm.undoInfo(openChunk=True)
-        for copies in self.copies.values():
-            if not all(pm.objExists(copy) for copy in copies):
-                # If any copy in the set doesn't exist, skip to the next set.
-                continue
+        cmds.undoInfo(openChunk=True)
+        try:
+            for copies in self.copies.values():
+                if not all(cmds.objExists(copy) for copy in copies):
+                    continue
 
-            first_obj_name = copies[0].name()
-            name = re.sub(r"\d+$", "", first_obj_name)
-            name += "_array"
-            unique_name = Naming.generate_unique_name(name)
+                first_obj_name = short_name(copies[0])
+                name = re.sub(r"\d+$", "", first_obj_name)
+                name += "_array"
+                unique_name = Naming.generate_unique_name(name)
 
-            # Find the parent of the parent of the first object and use it as a parent for the new group
-            original_parent = copies[0].getParent().getParent()
+                # Find grandparent of the first object — used as parent for the new group
+                first_parent = NodeUtils.get_parent(copies[0])
+                original_parent = NodeUtils.get_parent(first_parent) if first_parent else None
 
-            for copy in copies[1:]:
-                copy_group = copy.getParent()
-                pm.parent(copy, world=True)
-                pm.delete(copy_group)
+                for copy in copies[1:]:
+                    copy_group = NodeUtils.get_parent(copy)
+                    cmds.parent(copy, world=True)
+                    if copy_group:
+                        cmds.delete(copy_group)
 
-            new_group = pm.group(copies, n=unique_name)
+                new_group = cmds.group(copies, n=unique_name)
 
-            # If original_parent exists then parent the new_group under original_parent
-            if original_parent is not None:
-                pm.parent(new_group, original_parent)
-
-        pm.undoInfo(closeChunk=True)
+                if original_parent is not None:
+                    cmds.parent(new_group, original_parent)
+        finally:
+            cmds.undoInfo(closeChunk=True)
 
 
 # -----------------------------------------------------------------------------
